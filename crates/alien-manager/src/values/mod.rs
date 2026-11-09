@@ -142,6 +142,7 @@ impl ValueStore {
     /// Every value in the scope, sorted by slot.
     pub async fn list(&self, scope: &ValueScope) -> Result<Vec<StoredValue>> {
         let mut values = self.backend.list(scope).await?;
+        values.retain(|v| v.slot.served_digest().is_none());
         values.sort_by(|a, b| a.slot.cmp(&b.slot));
         Ok(values)
     }
@@ -153,8 +154,53 @@ impl ValueStore {
         slot_prefix: &str,
     ) -> Result<Vec<StoredValue>> {
         let mut values = self.backend.list_prefix(scope, slot_prefix).await?;
+        values.retain(|v| v.slot.served_digest().is_none());
         values.sort_by(|a, b| a.slot.cmp(&b.slot));
         Ok(values)
+    }
+
+    /// Remembers that the values with these `(variable name, digest)` pairs
+    /// were served to a workload, a runner or an operator. Only the digest is
+    /// kept, never the value. The history lets a later report that still
+    /// carries a value that has since changed or been deleted be redacted.
+    /// Nothing is written when the store refuses writes: such a store never
+    /// received a value to serve.
+    pub async fn record_served(
+        &self,
+        scope: &ValueScope,
+        served: &[(String, String)],
+    ) -> Result<()> {
+        if self.refuse_writes || served.is_empty() {
+            return Ok(());
+        }
+        let known = self.served(scope).await?;
+        for (name, digest) in served {
+            if known.iter().any(|(_, have)| have == digest) {
+                continue;
+            }
+            let stored = StoredValue {
+                slot: ValueSlot::served(digest),
+                kind: ValueKind::Plain,
+                value: name.clone(),
+                updated_at: now_in_stored_precision(),
+            };
+            self.backend.put(scope, &stored).await?;
+        }
+        Ok(())
+    }
+
+    /// The `(variable name, digest)` pairs of every value served so far.
+    pub async fn served(&self, scope: &ValueScope) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .backend
+            .list_prefix(scope, "served:")
+            .await?
+            .into_iter()
+            .filter_map(|stored| {
+                let digest = stored.slot.served_digest()?.to_string();
+                Some((stored.value, digest))
+            })
+            .collect())
     }
 
     /// Whether `candidate` equals the stored value. A missing slot is no match.

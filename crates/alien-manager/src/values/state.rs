@@ -21,38 +21,59 @@ pub struct HeldValues {
     scope: Option<String>,
     /// Name and value of each variable that comes from a held value.
     variables: Vec<(String, String)>,
-    /// Name and planned digest of each `env:` slot the sender planned.
+    /// Name and digest of each variable to redact when its value is found in
+    /// state, including values served before and since changed or deleted.
     planned: Vec<(String, String)>,
+    /// Slot and text of each held input whose variables could not be found
+    /// because the stack that maps them is gone: redacted wherever the text
+    /// appears as a variable's whole value.
+    by_content: Vec<(String, String)>,
 }
 
 impl HeldValues {
     /// What a step that loaded `held` (the deployment with its values filled
     /// in) runs with. The step keeps these through its checkpoints, so a value
     /// changed on the manager while the step runs is still kept out of the
-    /// state the step saves.
-    pub fn of_step(
+    /// state the step saves. Each variable's digest is added to the history
+    /// of served values, see [`ValueStore::record_served`].
+    pub async fn of_step(
         values: Option<&ValueStore>,
         config: &ManagerConfig,
         deployment: &DeploymentRecord,
         held: &DeploymentRecord,
         stack: Option<&Stack>,
     ) -> Result<Self> {
-        if values.is_none() {
+        let Some(values) = values else {
             return Ok(Self::default());
-        }
+        };
+        let scope = scope_of(deployment)?;
+        let planned = planned_env_digests(deployment);
+        let variables = held_variables(
+            config,
+            deployment,
+            held,
+            stack,
+            &planned
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        let served = variables
+            .iter()
+            .map(|(name, value)| {
+                alien_deployment::value_digest(&scope, &format!("env:{name}"), value)
+                    .map(|digest| (name.clone(), digest))
+                    .map_err(|e| ErrorData::internal(e.message))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        values
+            .record_served(&ValueScope::deployment(&deployment.id)?, &served)
+            .await?;
         Ok(Self {
-            scope: Some(scope_of(deployment)?),
-            variables: held_variables(
-                config,
-                deployment,
-                held,
-                stack,
-                &planned_env_digests(deployment)
-                    .into_iter()
-                    .map(|(name, _)| name)
-                    .collect::<Vec<_>>(),
-            )?,
-            planned: planned_env_digests(deployment),
+            scope: Some(scope),
+            variables,
+            planned,
+            by_content: Vec::new(),
         })
     }
 
@@ -77,15 +98,27 @@ impl HeldValues {
         };
         let scope = ValueScope::deployment(&deployment.id)?;
         let stored = values.list(&scope).await?;
-        let planned = planned_env_digests(deployment);
+        let mut planned = planned_env_digests(deployment);
+        planned.extend(values.served(&scope).await?);
         if stored.is_empty() && planned.is_empty() {
             return Ok(Self::default());
         }
         let held = with_stored_values(deployment, &stored);
-        let stack = if stored.iter().any(|value| value.slot.input_id().is_some()) {
+        let has_inputs = stored.iter().any(|value| value.slot.input_id().is_some());
+        let stack = if has_inputs {
             release_stack(release_store, deployment).await?
         } else {
             None
+        };
+        let by_content = match (&stack, has_inputs) {
+            (None, true) => {
+                tracing::warn!(
+                    deployment_id = %deployment.id,
+                    "The release of the deployment is missing, so stack inputs cannot be mapped to variables; redacting held input values by their content"
+                );
+                held_input_texts(&stored)
+            }
+            _ => Vec::new(),
         };
         let slots = stored
             .iter()
@@ -96,6 +129,7 @@ impl HeldValues {
             scope: Some(scope.as_str().to_string()),
             variables: held_variables(config, deployment, &held, stack.as_ref(), &slots)?,
             planned,
+            by_content,
         })
     }
 
@@ -109,7 +143,10 @@ impl HeldValues {
         )?;
         alien_deployment::redact_held_values(stack_state, scope, &self.variables).map_err(|e| {
             ErrorData::internal(format!("Could not redact held values: {}", e.message))
-        })
+        })?;
+        alien_deployment::redact_values_by_content(stack_state, scope, &self.by_content).map_err(
+            |e| ErrorData::internal(format!("Could not redact held values: {}", e.message)),
+        )
     }
 
     /// Puts the held values back into a saved `stack_state`.
@@ -149,6 +186,22 @@ async fn release_stack(
             ))
         })?;
     Ok(release.and_then(|release| release.stacks.get(&deployment.platform).cloned()))
+}
+
+/// The texts a held input's value takes as a variable: a string as it is,
+/// anything else as JSON.
+fn held_input_texts(stored: &[StoredValue]) -> Vec<(String, String)> {
+    stored
+        .iter()
+        .filter(|value| value.slot.input_id().is_some())
+        .filter_map(|value| {
+            let text = match serde_json::from_str::<serde_json::Value>(&value.value).ok()? {
+                serde_json::Value::String(text) => text,
+                other => other.to_string(),
+            };
+            Some((value.slot.to_string(), text))
+        })
+        .collect()
 }
 
 fn scope_of(deployment: &DeploymentRecord) -> Result<String> {
@@ -454,8 +507,9 @@ mod tests {
         let held = held_record(&store, &deployment).await;
         let config = ManagerConfig::default();
         let stack = deployment.supplied_stacks.as_ref().unwrap().current.clone();
-        let step =
-            HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref()).unwrap();
+        let step = HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref())
+            .await
+            .unwrap();
         let mut state = state_running_with(CANARY, INPUT_CANARY);
         let original = serde_json::to_value(&state).unwrap();
 
@@ -527,8 +581,9 @@ mod tests {
         let held = held_record(&store, &deployment).await;
         let config = ManagerConfig::default();
         let stack = deployment.supplied_stacks.as_ref().unwrap().current.clone();
-        let step =
-            HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref()).unwrap();
+        let step = HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref())
+            .await
+            .unwrap();
 
         // The values change on the manager after the step loaded them.
         put(&store, "dep_1", "env:API_URL", "replacement").await;
@@ -625,8 +680,9 @@ mod tests {
         let held = held_record(&store, &deployment).await;
         let config = ManagerConfig::default();
         let stack = deployment.supplied_stacks.as_ref().unwrap().current.clone();
-        let step =
-            HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref()).unwrap();
+        let step = HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref())
+            .await
+            .unwrap();
         let mut state = state_running_with(CANARY, "same");
         let original = serde_json::to_value(&state).unwrap();
 
@@ -680,5 +736,107 @@ mod tests {
             "{}",
             saved_json(&state)
         );
+        assert!(
+            !saved_json(&state).contains(INPUT_CANARY),
+            "a held input is redacted by its content: {}",
+            saved_json(&state)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_served_input_value_is_still_redacted_after_the_input_is_changed_and_deleted() {
+        let (_dir, store) = store().await;
+        let url = put(&store, "dep_1", "env:API_URL", CANARY).await;
+        let endpoint = put(
+            &store,
+            "dep_1",
+            "input:endpoint",
+            &format!("\"{INPUT_CANARY}\""),
+        )
+        .await;
+        let deployment = record(vec![
+            slot_ref("env:API_URL", &url),
+            slot_ref("input:endpoint", &endpoint),
+        ]);
+        let held = held_record(&store, &deployment).await;
+        let stack = deployment.supplied_stacks.as_ref().unwrap().current.clone();
+        HeldValues::of_step(
+            Some(&store),
+            &ManagerConfig::default(),
+            &deployment,
+            &held,
+            stack.as_ref(),
+        )
+        .await
+        .unwrap();
+
+        let scope = ValueScope::deployment("dep_1").unwrap();
+        put(&store, "dep_1", "env:API_URL", "another-url").await;
+        put(&store, "dep_1", "input:endpoint", "\"another-endpoint\"").await;
+        store
+            .delete(&scope, &"env:API_URL".parse().unwrap())
+            .await
+            .unwrap();
+        store
+            .delete(&scope, &"input:endpoint".parse().unwrap())
+            .await
+            .unwrap();
+        let mut deleted = record(Vec::new());
+        deleted.supplied_stacks = None;
+        let mut state = state_running_with(CANARY, INPUT_CANARY);
+
+        HeldValues::current(
+            Some(&store),
+            &ManagerConfig::default(),
+            &NoReleases,
+            &deleted,
+            Some(&state),
+        )
+        .await
+        .unwrap()
+        .redact(Some(&mut state))
+        .unwrap();
+
+        assert!(
+            !saved_json(&state).contains(CANARY),
+            "{}",
+            saved_json(&state)
+        );
+        assert!(
+            !saved_json(&state).contains(INPUT_CANARY),
+            "{}",
+            saved_json(&state)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_history_of_served_values_holds_digests_only_and_is_not_listed() {
+        let (_dir, store) = store().await;
+        let url = put(&store, "dep_1", "env:API_URL", CANARY).await;
+        let deployment = record(vec![slot_ref("env:API_URL", &url)]);
+        let held = held_record(&store, &deployment).await;
+        HeldValues::of_step(
+            Some(&store),
+            &ManagerConfig::default(),
+            &deployment,
+            &held,
+            None,
+        )
+        .await
+        .unwrap();
+        let scope = ValueScope::deployment("dep_1").unwrap();
+
+        let served = store.served(&scope).await.unwrap();
+        assert_eq!(served, vec![("API_URL".to_string(), url)]);
+        let listed = store.list(&scope).await.unwrap();
+        assert_eq!(listed.len(), 1, "only the value itself is listed");
+        assert_eq!(listed[0].slot.as_str(), "env:API_URL");
+        assert!(store
+            .list_prefix(&scope, "served:")
+            .await
+            .unwrap()
+            .is_empty());
+        let raw = format!("{served:?}");
+        assert!(!raw.contains(CANARY));
     }
 }

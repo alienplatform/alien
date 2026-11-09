@@ -77,6 +77,27 @@ impl ValueSlot {
         self.0.strip_prefix("input:")
     }
 
+    /// The slot that records one served value by its digest. It is never
+    /// listed or addressable through the API.
+    pub(crate) fn served(digest: &str) -> Self {
+        Self(format!("{SERVED_PREFIX}{digest}"))
+    }
+
+    /// The digest, for the slot of a served value.
+    pub(crate) fn served_digest(&self) -> Option<&str> {
+        self.0.strip_prefix(SERVED_PREFIX)
+    }
+
+    /// Reads a slot name from a backend, which also holds served-value slots.
+    pub(crate) fn from_stored(s: &str) -> Result<Self> {
+        match s.strip_prefix(SERVED_PREFIX) {
+            Some(digest) if !digest.is_empty() && digest.chars().all(|c| c.is_ascii_hexdigit()) => {
+                Ok(Self(s.to_string()))
+            }
+            _ => s.parse(),
+        }
+    }
+
     /// The slot of one environment variable of a dynamic container.
     pub fn container_env(container: &str, name: &str) -> Result<Self> {
         format!("cenv.{container}.{name}").parse()
@@ -118,6 +139,8 @@ fn valid_container_name(name: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
+
+const SERVED_PREFIX: &str = "served:";
 
 impl FromStr for ValueSlot {
     type Err = AlienError<ErrorData>;

@@ -60,7 +60,7 @@ impl SqliteValueBackend {
     fn parse(row: &turso::Row) -> Result<StoredValue> {
         let p = RowParser::new(row);
         let read = |e: alien_error::AlienError| ErrorData::internal(e.message);
-        let slot: ValueSlot = p.string(0, "slot").map_err(read)?.parse()?;
+        let slot = ValueSlot::from_stored(&p.string(0, "slot").map_err(read)?)?;
         let kind = match p.string(1, "kind").map_err(read)?.as_str() {
             "plain" => ValueKind::Plain,
             "secret" => ValueKind::Secret,

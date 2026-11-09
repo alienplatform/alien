@@ -40,9 +40,9 @@ pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
 pub use helpers::{
     check_deployer_secrets, collect_environment_info, environment_snapshot_hash,
-    redact_held_values, redact_planned_values, restore_held_values, secrets_digest_key_is_set,
-    set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
-    value_digest,
+    redact_held_values, redact_planned_values, redact_values_by_content, restore_held_values,
+    secrets_digest_key_is_set, set_ephemeral_secrets_digest_key, set_secrets_digest_key,
+    set_secrets_digest_key_if_unset, value_digest,
 };
 pub use observe::run_observe_pass;
 

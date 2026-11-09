@@ -139,7 +139,7 @@ impl ValueBackend for KvValueBackend {
                         ),
                     }));
                 };
-                let slot: ValueSlot = slot.parse()?;
+                let slot = ValueSlot::from_stored(slot)?;
                 let record = self.cipher.open(scope, &slot, &entry.value).await?;
                 let stored = StoredValue::decode(slot.clone(), &record)?;
                 found.insert(slot, stored);

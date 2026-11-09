@@ -1122,7 +1122,8 @@ impl DeploymentLoop {
                 &deployment,
                 &held,
                 deployment_stack.as_ref(),
-            )?;
+            )
+            .await?;
             step_values.restore(state.stack_state.as_mut())?;
             Ok::<_, AlienError<crate::error::ErrorData>>((held, generated.slots, step_values))
         }

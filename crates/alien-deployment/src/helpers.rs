@@ -1671,6 +1671,47 @@ pub fn redact_planned_values(
     })
 }
 
+/// Replaces every compute environment entry whose value equals one of
+/// `values` (`slot` and value) with `alien-held:<digest of that slot>`,
+/// whatever the entry is named. For state whose environment names are not
+/// known, because the stack that maps held inputs to variables is gone.
+/// Empty values are skipped. An entry that only happens to equal a held value
+/// is replaced too: that is the cost of not knowing the names.
+pub fn redact_values_by_content(
+    stack_state: &mut StackState,
+    scope: &str,
+    values: &[(String, String)],
+) -> Result<()> {
+    let markers = values
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(slot, value)| {
+            Ok((
+                value.as_str(),
+                format!("{HELD_VALUE_PREFIX}{}", value_digest(scope, slot, value)?),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if markers.is_empty() {
+        return Ok(());
+    }
+    for resource_state in stack_state.resources.values_mut() {
+        let configs = std::iter::once(&mut resource_state.config)
+            .chain(resource_state.previous_config.as_mut());
+        for config in configs {
+            let Some(environment) = compute_environment_mut(config) else {
+                continue;
+            };
+            for current in environment.values_mut() {
+                if let Some((_, marker)) = markers.iter().find(|(value, _)| *value == current) {
+                    *current = marker.clone();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Undoes [`redact_held_values`] for the values `held` now has. A marker for
 /// a value that has since changed stays, so it differs from the desired
 /// environment and the resource is updated.

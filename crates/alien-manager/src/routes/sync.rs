@@ -628,6 +628,7 @@ async fn acquired_deployment_response(
         &held,
         deployment_stack.as_ref(),
     )
+    .await
     .and_then(|step_values| step_values.restore(served.stack_state.as_mut()))
     .map_err(|e| e.into_generic())?;
     let mut deployment =
@@ -1204,6 +1205,23 @@ mod tests {
         Vec<ReconcileData>,
         Vec<Vec<crate::values::ValueMeta>>,
     ) {
+        sync_operator_reporting_for(record, targets, values, stack, stack_state, false).await
+    }
+
+    /// With `release_gone`, the deployment's release is one the manager no
+    /// longer has.
+    async fn sync_operator_reporting_for(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+        stack_state: Option<Value>,
+        release_gone: bool,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1225,7 +1243,11 @@ mod tests {
             .await
             .expect("current release");
         let mut record = record;
-        record.current_release_id = Some(current_release.id.clone());
+        record.current_release_id = Some(if release_gone {
+            "rel_gone".to_string()
+        } else {
+            current_release.id.clone()
+        });
 
         let reconciled = Arc::new(Mutex::new(Vec::new()));
         let mut store = MockDeploymentStore::new();
@@ -1446,8 +1468,16 @@ mod tests {
     }
 
     async fn sync_with_management_resolver(
+        record: DeploymentRecord,
+        credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+    ) -> UnresolvableManagementSync {
+        sync_with_values(record, credential_resolver, None).await
+    }
+
+    async fn sync_with_values(
         mut record: DeploymentRecord,
         credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+        values: Option<Arc<crate::values::ValueStore>>,
     ) -> UnresolvableManagementSync {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
@@ -1518,7 +1548,7 @@ mod tests {
             gave_back.lock().expect("release log").push(claim);
             Ok(())
         });
-        let state = test_app_state(
+        let mut state = test_app_state(
             temp.path(),
             Arc::new(store),
             release_store,
@@ -1526,6 +1556,7 @@ mod tests {
             db,
         )
         .await;
+        state.values = values;
 
         let body = json!({
             "deploymentId": record.id,
@@ -1932,25 +1963,8 @@ mod tests {
         assert!(!seen.contains(&value), "{seen}");
     }
 
-    /// An Operator reports a stack state that still carries a value the
-    /// manager holds, which the user replaced after the deployment loaded it.
-    /// Neither the old nor the new value reaches the control plane.
-    #[tokio::test]
-    async fn an_operator_report_is_redacted_of_a_replaced_held_value() {
-        use crate::values::{ValueKind, ValueScope, ValueSlot};
-        const OLD: &str = "canary-old-6c13f0";
-        const NEW: &str = "canary-new-a94e27";
-
-        let dir = tempfile::tempdir().expect("values directory");
-        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
-        let scope = ValueScope::deployment("dep_test").expect("scope");
-        let slot: ValueSlot = "env:API_URL".parse().expect("slot");
-        let planned = values
-            .put(&scope, &slot, ValueKind::Plain, OLD.to_string())
-            .await
-            .expect("stored")
-            .digest;
-        let mut record = deployment_record_with_state("running", None);
+    /// A deployment config that plans `slots` and nothing else.
+    fn planning_config(slots: Vec<alien_core::ValueSlotRef>) -> alien_core::DeploymentConfig {
         let mut config = alien_core::DeploymentConfig::builder()
             .deployment_name("test".to_string())
             .stack_settings(StackSettings::default())
@@ -1963,26 +1977,32 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(Default::default())
             .build();
-        config.value_slots = vec![alien_core::ValueSlotRef {
-            slot: "env:API_URL".to_string(),
+        config.value_slots = slots;
+        config
+    }
+
+    fn plain_slot_ref(slot: &str, digest: String) -> alien_core::ValueSlotRef {
+        alien_core::ValueSlotRef {
+            slot: slot.to_string(),
             kind: alien_core::EnvironmentVariableType::Plain,
-            digest: planned,
+            digest,
             env_name: None,
             targets: None,
-        }];
-        record.deployment_config = Some(config);
-        values
-            .put(&scope, &slot, ValueKind::Plain, NEW.to_string())
-            .await
-            .expect("replaced");
+        }
+    }
 
+    /// The state an Operator reports for one running worker with `env`.
+    fn reported_state_with_env(env: &[(&str, &str)]) -> StackState {
         let mut worker = alien_core::Worker::new("api".to_string())
             .code(alien_core::WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("default".to_string())
             .build();
-        worker.environment = [("API_URL".to_string(), OLD.to_string())].into();
+        worker.environment = env
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
         let resource = alien_core::Resource::new(worker);
         let mut reported = StackState::new(Platform::Kubernetes);
         reported.resources.insert(
@@ -2007,6 +2027,37 @@ mod tests {
                 external_binding: false,
             },
         );
+        reported
+    }
+
+    /// An Operator reports a stack state that still carries a value the
+    /// manager holds, which the user replaced after the deployment loaded it.
+    /// Neither the old nor the new value reaches the control plane.
+    #[tokio::test]
+    async fn an_operator_report_is_redacted_of_a_replaced_held_value() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const OLD: &str = "canary-old-6c13f0";
+        const NEW: &str = "canary-new-a94e27";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        let slot: ValueSlot = "env:API_URL".parse().expect("slot");
+        let planned = values
+            .put(&scope, &slot, ValueKind::Plain, OLD.to_string())
+            .await
+            .expect("stored")
+            .digest;
+        let mut record = deployment_record_with_state("running", None);
+        record.deployment_config = Some(planning_config(vec![plain_slot_ref(
+            "env:API_URL",
+            planned,
+        )]));
+        values
+            .put(&scope, &slot, ValueKind::Plain, NEW.to_string())
+            .await
+            .expect("replaced");
+        let reported = reported_state_with_env(&[("API_URL", OLD)]);
 
         let (_, reconciled, _) = sync_operator_reporting(
             record,
@@ -2028,6 +2079,116 @@ mod tests {
         );
         assert!(!seen.contains(OLD), "{seen}");
         assert!(!seen.contains(NEW), "{seen}");
+    }
+
+    /// An Operator was served a held value, which the user then replaced and
+    /// deleted. Its next report still carries the value it was served: it must
+    /// not reach the control plane, though the manager no longer holds it.
+    #[tokio::test]
+    async fn an_operator_report_is_redacted_of_a_value_served_then_changed_then_deleted() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const SERVED: &str = "canary-served-3f7a1c";
+        const CHANGED: &str = "canary-changed-82d0e5";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        let slot: ValueSlot = "env:API_URL".parse().expect("slot");
+        let digest = values
+            .put(&scope, &slot, ValueKind::Plain, SERVED.to_string())
+            .await
+            .expect("stored")
+            .digest;
+        let mut pull = pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        pull.deployment_config = Some(planning_config(vec![plain_slot_ref("env:API_URL", digest)]));
+
+        let served = sync_with_values(
+            pull,
+            Arc::new(UnresolvableManagementIdentity),
+            Some(values.clone()),
+        )
+        .await;
+        assert_eq!(served.status, StatusCode::OK, "{}", served.response);
+        let target = serde_json::to_string(&served.response["target"]).expect("target json");
+        assert!(target.contains(SERVED), "the Operator was served the value");
+
+        values
+            .put(&scope, &slot, ValueKind::Plain, CHANGED.to_string())
+            .await
+            .expect("changed");
+        values.delete(&scope, &slot).await.expect("deleted");
+
+        let (_, reconciled, _) = sync_operator_reporting(
+            deployment_record_with_state("running", None),
+            None,
+            Some(values),
+            Stack::new("app".to_string()).build(),
+            Some(
+                serde_json::to_value(reported_state_with_env(&[("API_URL", SERVED)]))
+                    .expect("state json"),
+            ),
+        )
+        .await;
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        let seen = reconciled
+            .iter()
+            .map(|data| serde_json::to_string(&data.state).unwrap())
+            .collect::<String>();
+        assert!(
+            seen.contains("alien-held:"),
+            "the report was redacted: {seen}"
+        );
+        assert!(!seen.contains(SERVED), "{seen}");
+        assert!(!seen.contains(CHANGED), "{seen}");
+    }
+
+    /// A report for a deployment whose release is gone can't map held stack
+    /// inputs to variables. It is still accepted, with the input's value
+    /// redacted by its content.
+    #[tokio::test]
+    async fn an_operator_report_with_a_gone_release_is_accepted_and_redacted_by_content() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const INPUT: &str = "canary-input-5e0a17";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        values
+            .put(
+                &ValueScope::deployment("dep_test").expect("scope"),
+                &"input:endpoint".parse::<ValueSlot>().expect("slot"),
+                ValueKind::Plain,
+                format!("\"{INPUT}\""),
+            )
+            .await
+            .expect("stored");
+
+        let (_, reconciled, _) = sync_operator_reporting_for(
+            deployment_record_with_state("running", None),
+            None,
+            Some(values),
+            Stack::new("app".to_string()).build(),
+            Some(
+                serde_json::to_value(reported_state_with_env(&[("ENDPOINT", INPUT)]))
+                    .expect("state json"),
+            ),
+            true,
+        )
+        .await;
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        let seen = reconciled
+            .iter()
+            .map(|data| serde_json::to_string(&data.state).unwrap())
+            .collect::<String>();
+        assert!(
+            seen.contains("alien-held:"),
+            "the report was redacted: {seen}"
+        );
+        assert!(!seen.contains(INPUT), "{seen}");
     }
 
     #[tokio::test]
@@ -3984,6 +4145,7 @@ pub(crate) async fn build_pull_target(
 
     let manager_url = state.config.base_url();
 
+    let stored_record = deployment;
     let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
         .await
         .map_err(|e| e.into_response())?;
@@ -4022,6 +4184,16 @@ pub(crate) async fn build_pull_target(
             .await
             .map_err(|e| e.into_response())?;
     let deployment: &DeploymentRecord = &held;
+
+    crate::values::HeldValues::of_step(
+        state.values.as_deref(),
+        &state.config,
+        stored_record,
+        deployment,
+        Some(&stack),
+    )
+    .await
+    .map_err(|e| e.into_response())?;
 
     let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
         Ok(variables) => variables,
