@@ -1,0 +1,42 @@
+{
+  "id": "acme-ai",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Whether this deployment gets the ai.",
+      "env": [],
+      "id": "ai_enabled",
+      "kind": "boolean",
+      "label": "Create ai",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "main": {
+      "config": {
+        "id": "main",
+        "type": "ai"
+      },
+      "dependencies": [],
+      "description": "The ai the acme services share.",
+      "displayName": "Primary ai",
+      "enabledWhen": "ai_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

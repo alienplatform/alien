@@ -1,0 +1,48 @@
+name = "acme-env"
+platforms = ["aws"]
+
+# Values may be strings, numbers or booleans; a number or a boolean is kept as text.
+[container.inline]
+image = "ghcr.io/acme/inline:1.0.0"
+cpu = 1
+memory = "1Gi"
+env = { NODE_ENV = "production", PORT = 3000, RATIO = 0.75, DEBUG = false }
+
+# One env file given as a string.
+[container.one-file]
+image = "ghcr.io/acme/one-file:1.0.0"
+cpu = 1
+memory = "1Gi"
+env-file = "config/base.env"
+
+# Files are read in order, a later file wins, and `env` wins over every file.
+[container.merged]
+image = "ghcr.io/acme/merged:1.0.0"
+cpu = 1
+memory = "1Gi"
+env-file = ["config/base.env", "config/regional.env"]
+env = { LOG_LEVEL = "error", EXTRA = "1" }
+
+# A value can come from a stack input; both containers share the input.
+[container.with-inputs]
+image = "ghcr.io/acme/with-inputs:1.0.0"
+cpu = 1
+memory = "1Gi"
+env = { MODE = "inputs", API_TOKEN = { input = "api_token" }, REGION = { input = "region", type = "plain" } }
+
+[container.with-inputs-too]
+image = "ghcr.io/acme/with-inputs:1.0.0"
+cpu = 1
+memory = "1Gi"
+env = { API_TOKEN = { input = "api_token" } }
+
+[input.api_token]
+kind = "secret"
+label = "API token"
+description = "Token the containers present to the control plane."
+
+[input.region]
+kind = "string"
+provided-by = "deployer"
+label = "Region"
+description = "Region the containers report from."

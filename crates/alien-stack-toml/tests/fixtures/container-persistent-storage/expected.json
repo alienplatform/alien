@@ -1,0 +1,282 @@
+{
+  "id": "acme-volumes",
+  "permissions": {
+    "profiles": {
+      "default-volume": {},
+      "custom-mount": {},
+      "cache-volume": {},
+      "explicit-backups": {},
+      "hourly-backups": {},
+      "long-retention": {},
+      "encrypted": {}
+    }
+  },
+  "resources": {
+    "volume-key": {
+      "config": {
+        "id": "volume-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "default-volume": {
+      "config": {
+        "id": "default-volume",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/db:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "default-volume",
+        "persistentStorage": {
+          "mountPath": "/data",
+          "size": "50Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "custom-mount": {
+      "config": {
+        "id": "custom-mount",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/db:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "custom-mount",
+        "persistentStorage": {
+          "mountPath": "/var/lib/db",
+          "size": "200Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "cache-volume": {
+      "config": {
+        "id": "cache-volume",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/cache:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "2Gi",
+          "min": "2Gi"
+        },
+        "permissions": "cache-volume",
+        "persistentStorage": {
+          "backups": {
+            "enabled": false,
+            "intervalHours": 24,
+            "retentionDays": 7
+          },
+          "mountPath": "/data",
+          "size": "20Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "explicit-backups": {
+      "config": {
+        "id": "explicit-backups",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/db:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "explicit-backups",
+        "persistentStorage": {
+          "backups": {
+            "enabled": true,
+            "intervalHours": 24,
+            "retentionDays": 7
+          },
+          "mountPath": "/data",
+          "size": "20Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "hourly-backups": {
+      "config": {
+        "id": "hourly-backups",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/db:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "hourly-backups",
+        "persistentStorage": {
+          "backups": {
+            "enabled": true,
+            "intervalHours": 1,
+            "retentionDays": 7
+          },
+          "mountPath": "/data",
+          "size": "20Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "long-retention": {
+      "config": {
+        "id": "long-retention",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/db:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "long-retention",
+        "persistentStorage": {
+          "backups": {
+            "enabled": true,
+            "intervalHours": 24,
+            "retentionDays": 90
+          },
+          "mountPath": "/data",
+          "size": "20Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "encrypted": {
+      "config": {
+        "id": "encrypted",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/db:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "encrypted",
+        "persistentStorage": {
+          "backups": {
+            "enabled": true,
+            "intervalHours": 12,
+            "retentionDays": 30
+          },
+          "encryptionKey": {
+            "id": "volume-key",
+            "type": "key"
+          },
+          "mountPath": "/data",
+          "size": "20Gi"
+        },
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

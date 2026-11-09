@@ -1,0 +1,373 @@
+{
+  "id": "acme-toolchains",
+  "permissions": {
+    "profiles": {
+      "prebuilt": {},
+      "rust-default": {},
+      "rust-nested": {},
+      "typescript-default": {},
+      "typescript-named": {},
+      "python-default": {},
+      "python-full": {},
+      "docker-default": {},
+      "docker-full": {},
+      "processor": {}
+    }
+  },
+  "resources": {
+    "prebuilt": {
+      "config": {
+        "id": "prebuilt",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/prebuilt:2.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "prebuilt",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "rust-default": {
+      "config": {
+        "id": "rust-default",
+        "type": "container",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "rust-default",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "rust-default",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "rust-nested": {
+      "config": {
+        "id": "rust-nested",
+        "type": "container",
+        "code": {
+          "src": "services/nested",
+          "toolchain": {
+            "binaryName": "rust-nested",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "rust-nested",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "typescript-default": {
+      "config": {
+        "id": "typescript-default",
+        "type": "container",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "type": "typescript"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "typescript-default",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "typescript-named": {
+      "config": {
+        "id": "typescript-named",
+        "type": "container",
+        "code": {
+          "src": "services/web",
+          "toolchain": {
+            "binaryName": "server",
+            "type": "typescript"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "typescript-named",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "python-default": {
+      "config": {
+        "id": "python-default",
+        "type": "container",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "command": [
+              "python",
+              "-m",
+              "app"
+            ],
+            "type": "python"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "python-default",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "python-full": {
+      "config": {
+        "id": "python-full",
+        "type": "container",
+        "code": {
+          "src": "services/api",
+          "toolchain": {
+            "command": [
+              "gunicorn",
+              "app:server"
+            ],
+            "package": "acme-api",
+            "pythonVersion": "3.12",
+            "type": "python"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "python-full",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "docker-default": {
+      "config": {
+        "id": "docker-default",
+        "type": "container",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "docker-default",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "docker-full": {
+      "config": {
+        "id": "docker-full",
+        "type": "container",
+        "code": {
+          "src": "services/go",
+          "toolchain": {
+            "buildArgs": {
+              "GO_VERSION": "1.23",
+              "FEATURES": "tls,metrics"
+            },
+            "dockerfile": "docker/Dockerfile.prod",
+            "target": "runtime",
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "docker-full",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "agent": {
+      "config": {
+        "id": "agent",
+        "type": "daemon",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "dockerfile": "agent/Dockerfile",
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "processor": {
+      "config": {
+        "id": "processor",
+        "type": "worker",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "command": [
+              "python",
+              "processor.py"
+            ],
+            "type": "python"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "processor",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

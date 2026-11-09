@@ -1,0 +1,23 @@
+{
+  "id": "acme-registry",
+  "resources": {
+    "images": {
+      "config": {
+        "id": "images",
+        "type": "artifact-registry",
+        "replicationRegions": [
+          "us-west-2",
+          "eu-west-1"
+        ]
+      },
+      "dependencies": [],
+      "description": "Container images built for the acme services.",
+      "displayName": "Image registry",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

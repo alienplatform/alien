@@ -9,12 +9,24 @@ use std::path::{Path, PathBuf};
 
 use alien_core::Stack;
 
+/// Every fixture directory, or only those named in `FIXTURE` (a space separated list) while
+/// working on one.
 fn fixtures() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let only: Option<Vec<String>> = std::env::var("FIXTURE")
+        .ok()
+        .map(|names| names.split_whitespace().map(str::to_string).collect());
     let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&root)
         .expect("fixtures directory is readable")
         .map(|entry| entry.expect("fixture entry is readable").path())
         .filter(|path| path.is_dir())
+        .filter(|path| {
+            only.as_ref().is_none_or(|names| {
+                names
+                    .iter()
+                    .any(|name| path.file_name().is_some_and(|file| file == name.as_str()))
+            })
+        })
         .collect();
     fixtures.sort();
     fixtures
@@ -29,20 +41,7 @@ fn typescript_stack(fixture: &Path) -> Stack {
 #[test]
 fn toml_stacks_match_their_typescript_equivalents() {
     let fixtures = fixtures();
-    let names: Vec<String> = fixtures
-        .iter()
-        .map(|fixture| fixture.file_name().unwrap().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(
-        names,
-        [
-            "bare-metal-worker",
-            "inputs",
-            "minimal",
-            "pools",
-            "sandbox-runtime"
-        ]
-    );
+    assert!(!fixtures.is_empty(), "no fixture matched");
 
     for fixture in fixtures {
         let toml_stack = alien_stack_toml::load(&fixture.join("alien.toml"))

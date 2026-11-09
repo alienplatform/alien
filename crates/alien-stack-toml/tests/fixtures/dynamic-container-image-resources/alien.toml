@@ -1,0 +1,21 @@
+name = "acme-dynamic-images"
+platforms = ["aws"]
+dynamic-container-image-resources = ["api", "scheduler"]
+
+[container.api]
+image = "ghcr.io/acme/api:3.1.0"
+cpu = 1
+memory = "1Gi"
+ports = [8080]
+
+[container.scheduler]
+image = "ghcr.io/acme/scheduler:3.1.0"
+cpu = 1
+memory = "1Gi"
+ports = [9090]
+
+[container.unlisted]
+image = "ghcr.io/acme/unlisted:1.0.0"
+cpu = 1
+memory = "1Gi"
+ports = [7070]

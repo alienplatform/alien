@@ -1,0 +1,129 @@
+{
+  "id": "acme-processor",
+  "permissions": {
+    "profiles": {
+      "processor": {
+        "jobs": [
+          "queue/data-read"
+        ],
+        "uploads": [
+          "storage/data-read"
+        ],
+        "state": [
+          "kv/data-write"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "uploads": {
+      "config": {
+        "id": "uploads",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "state": {
+      "config": {
+        "id": "state",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "processor": {
+      "config": {
+        "id": "processor",
+        "type": "worker",
+        "code": {
+          "src": "workers/processor",
+          "toolchain": {
+            "binaryName": "processor",
+            "type": "typescript"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": true,
+        "concurrencyLimit": 25,
+        "environment": {
+          "BATCH_LIMIT": "500",
+          "REGION": "global"
+        },
+        "links": [
+          {
+            "id": "jobs",
+            "type": "queue"
+          },
+          {
+            "id": "uploads",
+            "type": "storage"
+          },
+          {
+            "id": "state",
+            "type": "kv"
+          }
+        ],
+        "memoryMb": 2048,
+        "permissions": "processor",
+        "publicEndpoints": [
+          {
+            "name": "hooks",
+            "wildcardSubdomains": false
+          }
+        ],
+        "readinessProbe": {
+          "method": "GET",
+          "path": "/ready"
+        },
+        "timeoutSeconds": 600,
+        "triggers": [
+          {
+            "batch": {
+              "maxMessages": 20,
+              "maxWindowSeconds": 45
+            },
+            "queue": {
+              "id": "jobs",
+              "type": "queue"
+            },
+            "type": "queue"
+          },
+          {
+            "events": [
+              "created"
+            ],
+            "storage": {
+              "id": "uploads",
+              "type": "storage"
+            },
+            "type": "storage"
+          },
+          {
+            "cron": "0 */6 * * *",
+            "type": "schedule"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

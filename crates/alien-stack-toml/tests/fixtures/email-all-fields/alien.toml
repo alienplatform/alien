@@ -1,0 +1,19 @@
+name = "acme-email"
+platforms = ["aws"]
+
+[storage.inbox]
+[queue.mail-events]
+
+[email.notifications]
+display-name = "Notification mail"
+description = "Sends product mail and receives replies."
+lifecycle = "frozen"
+remote-access = true
+domains = ["mail.acme.example", "alerts.acme.example"]
+inbound = "inbox"
+events = "mail-events"
+
+[email.digests]
+domains = ["digest.acme.example"]
+inbound = { storage = "inbox" }
+events = { queue = "mail-events" }

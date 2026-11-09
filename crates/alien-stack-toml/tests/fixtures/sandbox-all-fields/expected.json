@@ -1,0 +1,106 @@
+{
+  "id": "acme-sandbox",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the code runner.",
+      "env": [],
+      "id": "runner_enabled",
+      "kind": "boolean",
+      "label": "Create code runner",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "runner": {
+      "config": {
+        "id": "runner",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://acme-bundles/runner/{region}/rootfs.tar",
+          "type": "image"
+        },
+        "defaultPolicy": {
+          "allow": [
+            "api.acme.example",
+            "*.cdn.acme.example:443"
+          ]
+        },
+        "egress": "internet",
+        "lifecycle": {
+          "idlePauseSeconds": 600,
+          "maxLifetimeSeconds": 7200
+        },
+        "limits": {
+          "cpu": "2",
+          "disk": "8Gi",
+          "maxProcesses": 256,
+          "memory": "4Gi"
+        },
+        "previewPorts": [
+          3000,
+          8080
+        ],
+        "privateBaseImage": "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/base:1.0",
+        "privilegedSupervisor": {
+          "commandUid": 1000
+        }
+      },
+      "dependencies": [],
+      "description": "Runs customer code in isolation.",
+      "displayName": "Code runner",
+      "enabledWhen": "runner_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    },
+    "builder": {
+      "config": {
+        "id": "builder",
+        "type": "sandbox",
+        "code": {
+          "src": "crates/builder",
+          "toolchain": {
+            "binaryName": "builder",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "defaultPolicy": "internet",
+        "egress": "none",
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "mirror": {
+      "config": {
+        "id": "mirror",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://acme-bundles/mirror/{region}/rootfs.tar",
+          "type": "image"
+        },
+        "egress": {
+          "domains": [
+            "mirror.acme.example"
+          ],
+          "mode": "allowDomains"
+        },
+        "lifecycle": {}
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

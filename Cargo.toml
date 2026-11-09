@@ -171,6 +171,7 @@ hyper-util = "0.1"
 indexmap = "2.2.6"
 strsim = "0.11"
 insta = "1"
+jsonschema = "0.30"
 zstd = "0.13"
 lambda-extension = "0.12"
 lambda_http = { version = "0.17", default-features = false, features = ["apigw_http", "tracing"] }

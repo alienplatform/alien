@@ -1,0 +1,130 @@
+{
+  "id": "acme-worker-resources",
+  "permissions": {
+    "profiles": {
+      "sized": {},
+      "megabytes": {},
+      "defaults": {},
+      "hour": {},
+      "probed": {}
+    }
+  },
+  "resources": {
+    "sized": {
+      "config": {
+        "id": "sized",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/sized:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "concurrencyLimit": 5,
+        "environment": {},
+        "links": [],
+        "memoryMb": 1536,
+        "permissions": "sized",
+        "publicEndpoints": [],
+        "timeoutSeconds": 90,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "megabytes": {
+      "config": {
+        "id": "megabytes",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/megabytes:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "megabytes",
+        "publicEndpoints": [],
+        "timeoutSeconds": 45,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "defaults": {
+      "config": {
+        "id": "defaults",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/defaults:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "defaults",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "hour": {
+      "config": {
+        "id": "hour",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/hour:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "hour",
+        "publicEndpoints": [],
+        "readinessProbe": {
+          "path": "/up"
+        },
+        "timeoutSeconds": 3600,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "probed": {
+      "config": {
+        "id": "probed",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/probed:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "probed",
+        "publicEndpoints": [
+          {
+            "name": "main",
+            "wildcardSubdomains": false
+          }
+        ],
+        "readinessProbe": {
+          "method": "HEAD"
+        },
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "id": "acme-email",
+  "resources": {
+    "inbox": {
+      "config": {
+        "id": "inbox",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "mail-events": {
+      "config": {
+        "id": "mail-events",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "notifications": {
+      "config": {
+        "id": "notifications",
+        "type": "email",
+        "domains": [
+          "mail.acme.example",
+          "alerts.acme.example"
+        ],
+        "events": {
+          "queue": {
+            "id": "mail-events",
+            "type": "queue"
+          }
+        },
+        "inbound": {
+          "storage": {
+            "id": "inbox",
+            "type": "storage"
+          }
+        }
+      },
+      "dependencies": [],
+      "description": "Sends product mail and receives replies.",
+      "displayName": "Notification mail",
+      "lifecycle": "frozen",
+      "remoteAccess": true
+    },
+    "digests": {
+      "config": {
+        "id": "digests",
+        "type": "email",
+        "domains": [
+          "digest.acme.example"
+        ],
+        "events": {
+          "queue": {
+            "id": "mail-events",
+            "type": "queue"
+          }
+        },
+        "inbound": {
+          "storage": {
+            "id": "inbox",
+            "type": "storage"
+          }
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

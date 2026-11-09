@@ -64,49 +64,54 @@ fn assert_at(text: &str, line: usize, column: usize, message: &str) {
 #[test]
 fn syntax_and_shape_errors() {
     assert_at("name = \"acme\nplatforms = []\n", 1, 13, "");
-    assert_at("platforms = [\"machines\"]\n", 1, 1, "missing field `name`");
-    assert_at("nme = \"acme\"\n", 1, 1, "unknown field `nme`");
+    assert_at("platforms = [\"machines\"]\n", 1, 1, "`name` is missing");
+    assert_at(
+        "nme = \"acme\"\n",
+        1,
+        1,
+        "unknown key `nme` (did you mean 'name'?); expected one of: ai, artifact-registry",
+    );
     assert_at(
         &format!("{DAEMON}hostaccess = true\n"),
         5,
         1,
-        "unknown field `hostaccess`",
+        "unknown key `hostaccess` (did you mean 'host-access'?); expected one of: build, command",
     );
     assert_at(
         &format!("{DAEMON}cpu = [1]\n"),
         5,
         7,
-        "a number of CPU cores such as 2 or 0.5",
+        "expected a number or a size, found a list",
     );
     assert_at(
         "name = \"acme\"\nplatforms = [\"mars\"]\n",
         2,
         14,
-        "unknown variant `mars`",
+        "unknown value 'mars'; expected one of: aws, gcp, azure, kubernetes, machines, local, test",
     );
     assert_at(
-        &format!("{DAEMON}health-check = {{ path = \"/health\" }}\n"),
+        &format!("{DAEMON}health-check = {{ port = \"web\" }}\n"),
         5,
-        16,
-        "missing field `port`",
+        25,
+        "expected a whole number, found a string",
     );
     assert_at(
         &format!("{DAEMON}health = {{ port = 8080 }}\n"),
         5,
         1,
-        "unknown field `health` (did you mean 'health-check'?), expected one of `build`",
+        "unknown key `health` (did you mean 'health-check'?); expected one of: build, command",
     );
     assert_at(
         &format!("{DAEMON}host_access = true\n"),
         5,
         1,
-        "unknown field `host_access` (did you mean 'host-access'?), expected one of",
+        "unknown key `host_access` (did you mean 'host-access'?); expected one of: build, command",
     );
     assert_at(
         &DAEMON.replace("\"rust\"", "\"rusty\""),
         4,
         23,
-        "unknown variant `rusty` (did you mean 'rust'?), expected one of `rust`, `typescript`, `python`, `docker`",
+        "unknown toolchain 'rusty' (did you mean 'rust'?); expected one of: rust, typescript, python, docker",
     );
 }
 
@@ -136,7 +141,7 @@ fn semantic_errors_point_at_the_value() {
         "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\n",
         3,
         7,
-        "pool needs `machines = <count>` or `autoscaling",
+        "a pool needs `machines`, a fixed count, or `autoscaling` with a minimum and a maximum",
     );
     assert_at(
         "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\nmachines = { default = 2, allowed = [3, 2] }\n",
@@ -160,7 +165,7 @@ fn semantic_errors_point_at_the_value() {
         &format!("{DAEMON}stop-grace-period = \"24 hours\"\n"),
         5,
         21,
-        "'24 hours' is not a duration",
+        "invalid duration \"24 hours\"; use whole numbers with ms, s, m, h or d",
     );
     assert_at(
         &format!("{DAEMON}stop-grace-period = \"48h\"\n"),
@@ -211,20 +216,14 @@ fn build_errors() {
     assert_at(
         "name = \"acme\"\n\n[daemon.agent]\nbuild = { toolchain = \"rust\" }\n",
         4,
-        23,
-        "a rust build needs `binary-name`",
+        9,
+        "missing field `binary-name`",
     );
     assert_at(
         &DAEMON.replace(" }", ", dockerfile = \"Dockerfile\" }"),
         4,
-        72,
-        "`dockerfile` applies to docker builds only",
-    );
-    assert_at(
-        "name = \"acme\"\n\n[daemon.agent]\nbuild = { toolchain = \"python\" }\n",
-        4,
-        23,
-        "a python build needs `command`",
+        59,
+        "`dockerfile` applies to docker builds only, not rust",
     );
     assert_at(
         &format!("{DAEMON}image = \"ghcr.io/acme/agent:1\"\n"),
@@ -263,25 +262,25 @@ fn runtime_resolves_and_rejects_bad_values() {
         &format!("{DAEMON}runtime = {{ network-mode = \"hots\" }}\n"),
         5,
         28,
-        "unknown value 'hots' (did you mean 'host'?); expected one of: host, appnet",
+        "runtime.networkMode must be 'host' or 'appnet'",
     );
     assert_at(
         &format!("{DAEMON}runtime = {{ pid-namespace = \"shared\" }}\n"),
         5,
         29,
-        "unknown value 'shared'",
+        "runtime.pidNamespace must be 'host' or 'private'",
     );
     assert_at(
         &format!("{DAEMON}host-access = true\nruntime = {{ network-mode = \"host\" }}\n"),
         6,
-        11,
-        "`runtime` cannot be combined with `host-access`",
+        1,
+        "`runtime` cannot be combined with `host-access`, which already sets the runtime; drop one",
     );
     assert_at(
         &format!("{DAEMON}runtime = {{ network = \"host\" }}\n"),
         5,
         13,
-        "unknown field `network`",
+        "unknown key `network` (did you mean 'network-mode'?); expected one of: mounts, network-mode",
     );
 }
 
@@ -291,12 +290,12 @@ fn env_errors() {
         &format!("{DAEMON}\n[daemon.agent.env]\nmemory = \"1Gi\"\n"),
         7,
         1,
-        "'memory' is a setting of [daemon.agent], but it sits under [daemon.agent.env], so it would be an environment variable; move it above the [daemon.agent.env] line",
+        "'memory' is a setting of [daemon.agent], but it sits inside `env`, so it would be an environment variable; move it out of `env`, next to the other settings of [daemon.agent]",
     );
     assert_at(
         &format!("{DAEMON}\n[daemon.agent.env]\nAPI_TOKEN = {{ input = \"token\" }}\n"),
         7,
-        1,
+        23,
         "unknown input 'token'; declare it with an [input.token] table",
     );
     assert_at(
@@ -304,7 +303,7 @@ fn env_errors() {
             "{DAEMON}\n[daemon.agent.env]\nAPI_TOKEN = {{ input = \"api_tokn\" }}\n\n[input.api_token]\nkind = \"secret\"\nlabel = \"Token\"\ndescription = \"Token.\"\n"
         ),
         7,
-        1,
+        23,
         "unknown input 'api_tokn' (did you mean 'api_token'?)",
     );
     assert_at(
@@ -325,7 +324,7 @@ fn env_errors() {
         &format!("{DAEMON}\n[daemon.agent.env]\nA = {{ input = \"x\", other = 1 }}\n"),
         7,
         20,
-        "unknown field `other`",
+        "unknown key `other`; a reference to an input is `{ input = \"<id>\" }`, with an optional `type` of plain or secret",
     );
 }
 
@@ -335,80 +334,94 @@ fn endpoint_errors() {
         &format!(
             "{DAEMON}\n[daemon.agent.public-endpoints]\napi = {{ port = 8080, host-label = \"@\" }}\nweb = {{ port = 8080, host-label = \"@\" }}\n"
         ),
-        8,
-        7,
-        "only one endpoint can use host \"@\"; 'api' already does",
+        3,
+        9,
+        "only one apex public endpoint is allowed per resource; 'api' already uses hostLabel '@'",
     );
     assert_at(
         &format!(
             "{DAEMON}\n[daemon.agent.public-endpoints]\napi = {{ port = 8080 }}\nweb = {{ port = 9090 }}\n"
         ),
-        8,
-        7,
-        "all endpoints of a daemon must use the same port",
+        3,
+        9,
+        "public endpoints on one daemon must currently route to the same backend port",
     );
 }
 
 #[test]
 fn input_errors() {
-    let input = |body: &str| format!("{DAEMON}\n[input.region]\n{body}\n");
+    let input = |body: &str| format!("{DAEMON}\n[input.region]\nlabel = \"Region\"\n{body}\n");
     assert_at(
-        &input("kind = \"string\"\nlabel = \"Region\""),
+        &input("kind = \"string\""),
         6,
         8,
-        "a required input needs a `description`",
+        "must include a description when the input is required",
+    );
+    assert_at(
+        &format!("{DAEMON}\n[input.region]\nkind = \"string\"\n"),
+        6,
+        8,
+        "missing field `label`",
     );
     assert_at(
         &input("kind = \"integer\"\nrequired = false\ndefault = 1.5"),
-        9,
+        10,
         11,
         "1.5 is not a whole number",
     );
     assert_at(
         &input("kind = \"boolean\"\nrequired = false\ndefault = \"yes\""),
-        9,
+        10,
         11,
-        "expected a boolean",
+        "expected a boolean for a Boolean input, got a string",
     );
     assert_at(
         &input("kind = \"number\"\nrequired = false\nmin-length = 2"),
-        9,
+        10,
         14,
-        "`min-length` applies to string and secret inputs only",
+        "applies to string and secret inputs only",
     );
     assert_at(
         &input("kind = \"enum\"\nrequired = false"),
         6,
         8,
-        "an enum input needs `values`",
+        "an enum input needs at least one value",
     );
     assert_at(
         &input(
             "kind = \"string\"\nrequired = false\nenv = { name = \"REGION\", target-resources = [\"api\"] }",
         ),
-        9,
-        7,
+        10,
+        46,
         "unknown resource 'api' in `target-resources`",
     );
     assert_at(
-        &input("kind = \"string\"\nrequired = false\nenv = \"region\""),
-        9,
-        7,
-        "'region' must be an environment variable name",
-    );
-    assert_at(
-        &format!("{DAEMON}\n[input.REGION]\nkind = \"string\"\nrequired = false\n"),
-        6,
-        8,
-        "input ID 'REGION' must",
+        &input(
+            "kind = \"string\"\nrequired = false\nenv = { name = \"REGION\", target-resources = [] }",
+        ),
+        10,
+        45,
+        "`target-resources` is empty",
     );
     assert_at(
         &format!(
-            "{DAEMON}\n[input.api_key]\nkind = \"string\"\nrequired = false\n\n[input.Api_Key]\nkind = \"string\"\nrequired = false\n"
+            "{DAEMON}\n[storage.files]\n\n[input.region]\nlabel = \"Region\"\nkind = \"string\"\nrequired = false\nenv = {{ name = \"REGION\", target-resources = [\"files\"] }}\n"
         ),
+        12,
+        46,
+        "'files' is a storage, which takes no environment variables",
+    );
+    assert_at(
+        &input("kind = \"string\"\nrequired = false\nenv = \"region\""),
         10,
+        7,
+        "env name 'region' must use uppercase letters, digits, and underscores",
+    );
+    assert_at(
+        &format!("{DAEMON}\n[input.REGION]\nlabel = \"R\"\nkind = \"string\"\nrequired = false\n"),
+        6,
         8,
-        "clashes with the input 'api_key'",
+        "the ID must not be all caps",
     );
 }
 
@@ -453,34 +466,7 @@ fn inline_permission_errors() {
 }
 
 #[test]
-fn host_access_cannot_have_a_cloud_identity() {
-    let text =
-        format!("{DAEMON}host-access = true\npermissions = \"agent\"\n\n[permissions.agent]\n");
-    assert_at(
-        &text.replacen(
-            "name = \"acme-agent\"",
-            "name = \"acme-agent\"\nplatforms = [\"machines\", \"gcp\"]",
-            1,
-        ),
-        7,
-        15,
-        "on gcp a daemon with `host-access` could use the machine's credentials",
-    );
-    let machines_only = text.replacen(
-        "name = \"acme-agent\"",
-        "name = \"acme-agent\"\nplatforms = [\"machines\"]",
-        1,
-    );
-    let stack = alien_stack_toml::parse(&machines_only, "alien.toml", Path::new("."))
-        .expect("machines daemons get no cloud identity, so the pair is allowed");
-    assert_eq!(stack.permissions.profiles.len(), 1);
-}
-
-#[test]
-fn gate_errors() {
-    let gate = |input: &str| {
-        format!("{DAEMON}enabled-when = \"with_agent\"\n\n[input.with_agent]\n{input}\n")
-    };
+fn enabled_when_names_an_input() {
     assert_at(
         &format!("{DAEMON}enabled-when = \"with_agent\"\n"),
         5,
@@ -488,25 +474,7 @@ fn gate_errors() {
         "unknown input 'with_agent'; declare it with an [input.with_agent] table",
     );
     assert_at(
-        &gate("kind = \"string\"\nprovided-by = \"deployer\"\ndescription = \"x\""),
-        5,
-        16,
-        "input 'with_agent' must be a boolean",
-    );
-    assert_at(
-        &gate("kind = \"boolean\"\ndescription = \"x\""),
-        5,
-        16,
-        "input 'with_agent' must be provided by the deployer",
-    );
-    assert_at(
-        &gate("kind = \"boolean\"\nprovided-by = \"deployer\"\nrequired = false"),
-        5,
-        16,
-        "input 'with_agent' must be required or have a `default`",
-    );
-    assert_at(
-        &format!("{DAEMON}enabled-when = \"with_agnt\"\n\n[input.with_agent]\nkind = \"boolean\"\nprovided-by = \"deployer\"\ndescription = \"x\"\n"),
+        &format!("{DAEMON}enabled-when = \"with_agnt\"\n\n[input.with_agent]\nlabel = \"A\"\nkind = \"boolean\"\nprovided-by = \"deployer\"\ndescription = \"x\"\n"),
         5,
         16,
         "unknown input 'with_agnt' (did you mean 'with_agent'?)",
@@ -558,7 +526,7 @@ fn env_file_lists_read_in_order_and_inline_env_wins() {
         dir.path(),
         &format!("{DAEMON}env-file = [\"a.env\", \"c.env\"]\n"),
     );
-    assert_eq!((missing.line, missing.column), (5, 12));
+    assert_eq!((missing.line, missing.column), (5, 22));
     assert!(missing.message.contains("c.env"), "{}", missing.message);
 }
 

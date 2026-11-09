@@ -18,7 +18,15 @@ mkdir -p "$package"
 printf '{ "name": "@alienplatform/core", "type": "module", "exports": "./index.ts" }\n' >"$package/package.json"
 printf 'export * from "%s/packages/core/src/index.ts"\n' "$repo" >"$package/index.ts"
 
-for fixture in "$here"/*/; do
+# With arguments, only those fixtures are regenerated: regenerate.sh pools sandbox-runtime
+if [ "$#" -gt 0 ]; then
+  fixtures=()
+  for name in "$@"; do fixtures+=("$here/$name/"); done
+else
+  fixtures=("$here"/*/)
+fi
+
+for fixture in "${fixtures[@]}"; do
   name="$(basename "$fixture")"
   cp "$fixture/alien.ts" "$scratch/$name.ts"
   (cd "$scratch" && bun -e "const config = await import('./$name.ts'); console.log(JSON.stringify(config.default, null, 2))") \

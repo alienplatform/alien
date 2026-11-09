@@ -1,0 +1,223 @@
+{
+  "id": "acme-access",
+  "permissions": {
+    "profiles": {
+      "reader": {
+        "uploads": [
+          "storage/data-read"
+        ],
+        "sessions": [
+          "kv/data-read"
+        ]
+      },
+      "writer": {
+        "uploads": [
+          "storage/data-read",
+          "storage/data-write"
+        ],
+        "jobs": [
+          "queue/data-write"
+        ]
+      },
+      "plain": {},
+      "everything": {
+        "*": [
+          "storage/data-read",
+          "kv/data-read"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "uploads": {
+      "config": {
+        "id": "uploads",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "sessions": {
+      "config": {
+        "id": "sessions",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "writer": {
+      "config": {
+        "id": "writer",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/writer:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "uploads",
+            "type": "storage"
+          },
+          {
+            "id": "jobs",
+            "type": "queue"
+          }
+        ],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "writer",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "viewer": {
+      "config": {
+        "id": "viewer",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/viewer:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "uploads",
+            "type": "storage"
+          },
+          {
+            "id": "sessions",
+            "type": "kv"
+          }
+        ],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "reader",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "auditor": {
+      "config": {
+        "id": "auditor",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/auditor:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "reader",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "plain": {
+      "config": {
+        "id": "plain",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/plain:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "plain",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "sweeper": {
+      "config": {
+        "id": "sweeper",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/sweeper:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "everything",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

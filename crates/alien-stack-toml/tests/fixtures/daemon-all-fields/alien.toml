@@ -1,0 +1,27 @@
+name = "acme-agent"
+platforms = ["machines", "aws"]
+
+[pool.edge]
+cpu = 2
+memory = "8Gi"
+machines = 4
+
+[storage.reports]
+
+[daemon.agent]
+build = { toolchain = "rust", binary-name = "acme-agent", src = "agent" }
+pool = "edge"
+command = ["acme-agent", "--mode", "resident"]
+commands-enabled = true
+cpu = 0.5
+memory = "512Mi"
+stop-grace-period = "2m"
+health-check = { port = 9100, path = "/healthz", method = "HEAD", timeout = "3s", failure-threshold = 4 }
+runtime = { network-mode = "host", pid-namespace = "host", privileged = true, user = "0", mounts = [{ source = "/var/lib/acme", target = "/state", options = "ro" }, { source = "/etc/acme", target = "/config" }] }
+links = ["reports"]
+permissions = { reports = ["storage/data-write"] }
+env = { AGENT_MODE = "resident", AGENT_BATCH = 50 }
+
+[daemon.agent.public-endpoints]
+status = { port = 9100, host-label = "status", wildcard-subdomains = true }
+control = { port = 9100, host-label = "control" }

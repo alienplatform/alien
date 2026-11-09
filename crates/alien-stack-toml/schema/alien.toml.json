@@ -3,6 +3,34 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "Ai": {
+      "additionalProperties": false,
+      "description": "Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack's external-bindings map; the executor then skips the cloud controller.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
     "Architecture": {
       "description": "CPU architecture.",
       "enum": [
@@ -11,438 +39,74 @@
       ],
       "type": "string"
     },
-    "Autoscaling": {
+    "ArtifactRegistry": {
       "additionalProperties": false,
-      "description": "Autoscaling bounds.",
+      "description": "Represents an artifact registry for storing container images and other build artifacts.\nThis is a high-level wrapper resource that provides a cloud-agnostic interface over\nAWS ECR, GCP Artifact Registry, and Azure Container Registry.\n\n# Platform Mapping\n- **AWS**: Implicitly exists as the AWS account and region\n- **GCP**: Explicitly configured per project and location (Artifact Registry API enabled)\n- **Azure**: Explicitly provisioned Azure Container Registry instance\n\nThe actual repository management and permissions are handled through the bindings API.",
       "properties": {
-        "max": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/Choice"
-            }
-          ],
-          "description": "Most machines: a number, or a range each deployment picks from."
-        },
-        "min": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/Choice"
-            }
-          ],
-          "description": "Fewest machines: a number, or a range each deployment picks from."
-        }
-      },
-      "required": [
-        "max",
-        "min"
-      ],
-      "type": "object"
-    },
-    "Build": {
-      "additionalProperties": false,
-      "description": "How to build a daemon from source.",
-      "properties": {
-        "binary-name": {
-          "default": null,
-          "description": "Name of the binary to build (rust, required; typescript, defaults to the package name).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "build-args": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": null,
-          "description": "Build arguments (docker).",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "command": {
-          "default": null,
-          "description": "Process argv that starts the application (python, required).",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "dockerfile": {
-          "default": null,
-          "description": "Dockerfile path relative to `src` (docker). Defaults to \"Dockerfile\".",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "package": {
-          "default": null,
-          "description": "Workspace package to install (python). Omit for a single-package project.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "python-version": {
-          "default": null,
-          "description": "Python version of the runtime image (python). Defaults to 3.12.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "src": {
-          "default": null,
-          "description": "Source directory, relative to where `alien` runs. Defaults to \".\".",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target": {
-          "default": null,
-          "description": "Multi-stage build target (docker).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "toolchain": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/Toolchain"
-            }
-          ],
-          "description": "Which build to run: \"rust\", \"typescript\", \"python\" or \"docker\". Go and other languages use \"docker\"."
-        }
-      },
-      "required": [
-        "toolchain"
-      ],
-      "type": "object"
-    },
-    "Choice": {
-      "anyOf": [
-        {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        {
-          "$ref": "#/definitions/ChoiceRange"
-        }
-      ],
-      "description": "A count: one number, or a range a deployment picks from."
-    },
-    "ChoiceRange": {
-      "additionalProperties": false,
-      "description": "A range a deployment picks from; `default` applies when it does not pick.",
-      "properties": {
-        "allowed": {
-          "description": "The fewest and the most the deployer may choose, `[min, max]`.",
-          "items": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "maxItems": 2,
-          "minItems": 2,
-          "type": "array"
-        },
-        "default": {
-          "description": "Used when the deployer does not choose.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "allowed",
-        "default"
-      ],
-      "type": "object"
-    },
-    "Cpu": {
-      "anyOf": [
-        {
-          "format": "int64",
-          "type": "integer"
-        },
-        {
-          "format": "double",
-          "type": "number"
-        },
-        {
+        "description": {
           "type": "string"
-        }
-      ],
-      "description": "CPU cores: a number such as 2 or 0.5, or a quantity string such as \"500m\"."
-    },
-    "Daemon": {
-      "additionalProperties": false,
-      "description": "A daemon: a long-running process on every machine of its pool.",
-      "properties": {
-        "build": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Build"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Build the daemon from source, for example `{ toolchain = \"rust\", binary-name = \"acme-agent\" }`. Set this or `image`."
         },
-        "command": {
-          "default": null,
-          "description": "Command to run instead of the image's default.",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "cpu": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Cpu"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "CPU cores reserved for the daemon. Defaults to 0.1."
-        },
-        "enabled-when": {
-          "default": null,
-          "description": "Create this daemon only when this deployer-provided boolean `[input.<id>]` is true.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "env": {
-          "additionalProperties": {
-            "$ref": "#/definitions/EnvValue"
-          },
-          "description": "Environment variables: literal values, or `{ input = \"<id>\" }` to take the value of a stack input. These win over `env-file`.",
-          "type": "object"
-        },
-        "env-file": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/OneOrMany_for_String"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "One file, or a list of files, of `KEY=value` lines, relative to alien.toml, read when the stack is loaded. Later files win over earlier ones."
-        },
-        "health-check": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/HealthCheck"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "HTTP health check."
-        },
-        "host-access": {
-          "default": false,
-          "description": "Full access to the host: privileged, the host's PID namespace and network, the host's `/` mounted at `/host`, running as root (uid 0).",
-          "type": "boolean"
-        },
-        "image": {
-          "default": null,
-          "description": "Run a prebuilt container image. Set this or `build`.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "display-name": {
+          "type": "string"
         },
         "lifecycle": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceLifecycle"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Who owns the daemon after setup. Defaults to \"live\" (each release updates it)."
-        },
-        "links": {
-          "default": [],
-          "description": "Resources this daemon uses, by ID.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "memory": {
-          "default": null,
-          "description": "Memory reserved for the daemon, for example \"4Gi\". Defaults to \"128Mi\".",
-          "type": [
-            "string",
-            "null"
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
           ]
         },
-        "permissions": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Permissions"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Gives the daemon a cloud identity: the name of a `[permissions.<name>]` profile, or the grants themselves, `{ <resource-id> = [\"storage/data-read\"] }`, which make a profile named after the daemon. Omit for none. On AWS, GCP and Azure it cannot be combined with `host-access`."
-        },
-        "pool": {
-          "default": null,
-          "description": "Pool to run on. Omit to run on every pool.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "public-endpoints": {
-          "additionalProperties": {
-            "$ref": "#/definitions/Endpoint"
-          },
-          "description": "Public HTTP endpoints, by name.",
-          "type": "object"
-        },
-        "runtime": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Runtime"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Container runtime settings for anything between the defaults and `host-access`, for example `{ network-mode = \"host\" }` to bind the daemon's ports on the machine itself. Cannot be combined with `host-access`."
-        },
-        "stop-grace-period": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Duration"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "How long the daemon may take to stop on updates, drains and deletes: seconds, or a duration such as \"10m\" or \"24h\". At most 24 hours."
-        }
-      },
-      "type": "object"
-    },
-    "DataDisk": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/definitions/DataDiskRange"
-        }
-      ],
-      "description": "A data disk size: one size, or a range a deployment picks from."
-    },
-    "DataDiskRange": {
-      "additionalProperties": false,
-      "description": "Data disk sizes a deployment picks from, as quantities such as \"50Gi\" or \"1Ti\".",
-      "properties": {
-        "allowed": {
-          "description": "The smallest and the largest size the deployer may choose, `[min, max]`.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 2,
-          "minItems": 2,
-          "type": "array"
-        },
-        "default": {
-          "description": "Used when the deployer does not choose.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "allowed",
-        "default"
-      ],
-      "type": "object"
-    },
-    "Duration": {
-      "anyOf": [
-        {
-          "format": "int64",
-          "type": "integer"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "A duration: whole seconds, or a string such as \"90s\", \"10m\" or \"24h\"."
-    },
-    "Endpoint": {
-      "additionalProperties": false,
-      "description": "A public HTTP endpoint.",
-      "properties": {
-        "host-label": {
-          "default": null,
-          "description": "Host label under the deployment's domain. \"@\" is the domain itself. Defaults to the endpoint name.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "port": {
-          "description": "Port the daemon serves on.",
-          "format": "uint16",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "wildcard-subdomains": {
-          "default": false,
-          "description": "Also route every subdomain of the host label.",
+        "remote-access": {
           "type": "boolean"
+        },
+        "replication-regions": {
+          "description": "AWS-only: regions to replicate container images to.\nECR private image replication ensures images pushed in the registry's home region\nare automatically available in these additional regions (required when Lambda or\nother compute runs in a different region from the registry).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "AuthoredAutoscaling": {
+      "additionalProperties": false,
+      "description": "Machine counts an autoscaling pool moves between.",
+      "properties": {
+        "max": {
+          "$ref": "#/definitions/ComputeChoice",
+          "description": "Most machines."
+        },
+        "min": {
+          "$ref": "#/definitions/ComputeChoice",
+          "description": "Fewest machines."
         }
       },
       "required": [
-        "port"
+        "min",
+        "max"
       ],
       "type": "object"
     },
-    "EnvMapping": {
+    "AuthoredEnvMapping": {
       "additionalProperties": false,
-      "description": "An environment variable for chosen resources.",
+      "description": "One environment variable an input is delivered as.",
       "properties": {
         "name": {
-          "description": "The variable name.",
+          "description": "Environment variable name: uppercase letters, digits and underscores.",
           "type": "string"
         },
         "target-resources": {
-          "default": null,
-          "description": "IDs of the resources that get it. A trailing `*` matches a prefix.",
+          "description": "Resource IDs or `prefix*` patterns that get the variable. Every workload when unset.",
           "items": {
             "type": "string"
           },
-          "type": [
-            "array",
-            "null"
-          ]
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/definitions/StackInputEnvironmentVariableType",
+          "description": "Whether the variable is plain or secret. Defaults from the input kind."
         }
       },
       "required": [
@@ -450,115 +114,1160 @@
       ],
       "type": "object"
     },
-    "EnvTarget": {
+    "AuthoredInput": {
+      "additionalProperties": false,
+      "description": "A stack input as written in a stack file.",
+      "properties": {
+        "default": {
+          "$ref": "#/definitions/InputValue",
+          "description": "Value used when none is provided. Secrets have none."
+        },
+        "description": {
+          "description": "Helper text shown where the value is asked for. Required when the input is.",
+          "type": "string"
+        },
+        "env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/AuthoredEnvMapping"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/definitions/AuthoredEnvMapping"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "Environment variables the input's value is set as: a name, a table, or a list of them."
+        },
+        "format": {
+          "description": "Semantic format such as `url`, for string and secret inputs.",
+          "type": "string"
+        },
+        "generate": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "$ref": "#/definitions/StackInputGenerate",
+              "description": "Let Alien generate the value. Secret, developer-provided inputs only."
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/definitions/StackInputKind",
+          "description": "Input primitive kind."
+        },
+        "label": {
+          "description": "Human-facing field label.",
+          "type": "string"
+        },
+        "max": {
+          "$ref": "#/definitions/InputValue",
+          "description": "Largest value, for number and integer inputs."
+        },
+        "max-items": {
+          "description": "Most items, for string-list inputs.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max-length": {
+          "description": "Longest string, for string and secret inputs.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "$ref": "#/definitions/InputValue",
+          "description": "Smallest value, for number and integer inputs."
+        },
+        "min-items": {
+          "description": "Fewest items, for string-list inputs.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min-length": {
+          "description": "Shortest string, for string and secret inputs.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pattern": {
+          "description": "Whole-value pattern, for string and secret inputs.",
+          "type": "string"
+        },
+        "placeholder": {
+          "description": "Example shown in the field.",
+          "type": "string"
+        },
+        "platforms": {
+          "description": "Platforms where the input applies.",
+          "items": {
+            "$ref": "#/definitions/Platform"
+          },
+          "type": "array"
+        },
+        "provided-by": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StackInputProvider"
+            },
+            {
+              "description": "Who can provide the value. The developer when unset.",
+              "items": {
+                "$ref": "#/definitions/StackInputProvider"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "required": {
+          "description": "Whether a value is needed before deployment can proceed. True when unset.",
+          "type": "boolean"
+        },
+        "values": {
+          "description": "Accepted values, for enum inputs.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "when": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/StackInputCondition",
+              "description": "Only applies when a boolean input has this value."
+            }
+          ],
+          "description": "Ask only when this boolean input is true: the ID of the input, or { input = \"<id>\", equals = false }."
+        }
+      },
+      "required": [
+        "kind",
+        "label"
+      ],
+      "type": "object"
+    },
+    "AwsConditionValue": {
       "anyOf": [
         {
-          "description": "The variable name; every daemon gets it.",
           "type": "string"
         },
         {
-          "allOf": [
-            {
-              "$ref": "#/definitions/EnvMapping"
-            }
-          ],
-          "description": "The variable name and the resources that get it."
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       ],
-      "description": "An environment variable that receives an input's value."
+      "description": "An IAM condition accepts one string or a list of alternative string values."
     },
-    "EnvValue": {
-      "anyOf": [
-        {
-          "description": "A literal. Numbers and booleans are written as their text.",
+    "AwsOpenSearch": {
+      "additionalProperties": false,
+      "description": "An Amazon OpenSearch Serverless collection (next generation).\n\n# Experimental namespace\n\nThis is the first resource under the `experimental/` resource-type\nnamespace. Experimental resources are provider-specific (they do not\nabstract over clouds), may change or be promoted to a portable resource\nin a breaking way, and are only registered for the platforms they\nsupport. `AwsOpenSearch` registers an AWS CloudFormation emitter only;\ndeploying it to any other platform fails with a typed\n`ImportRegistrationMissing` error at generation time.\n\n# What gets provisioned\n\nThe AWS emitter provisions next-generation OpenSearch Serverless:\na collection group (`Generation: NEXTGEN`, compute/storage decoupled)\nplus a collection inside it, an AWS-owned-key encryption configuration,\na public network policy, and a data-access policy for service-account\nroles granted `experimental/aws-opensearch/data-access`. Collection groups\nscale to zero by default; configure a non-zero minimum capacity when the\nworkload requires predictable interactive latency.\nThe collection endpoint is public but every request must be SigV4-signed\nand pass both IAM (`aoss:APIAccessAll`) and the data-access policy.\n\n# Naming\n\nThe physical collection (and collection group) name is\n`{id}-{stack-suffix}` and must satisfy the AOSS name grammar, so `id`\nmust match `[a-z][a-z0-9-]*` and be at most 23 characters. The emitter\nrejects ids that don't fit.\n\n# Runtime access\n\nWorkers reach the collection over HTTPS with SigV4. The SigV4 signing\nservice name for OpenSearch Serverless is `aoss` (not `es`); the runtime\nbinding payload carries `\"service\": \"aoss\"` so clients sign correctly.\nRequests with a body must also send an `x-amz-content-sha256` header\n(the AOSS gateway rejects body-carrying requests without it with an\nempty 403); official OpenSearch clients with an `aoss` signer handle\nthis automatically.",
+      "properties": {
+        "capacity": {
+          "$ref": "#/definitions/AwsOpenSearchCapacity",
+          "description": "Optional indexing and search OCU limits for the collection group.\n\nWhen omitted, AWS uses zero minimum capacity for both components, so\nan idle next-generation collection can scale to zero."
+        },
+        "collection-type": {
+          "$ref": "#/definitions/AwsOpenSearchCollectionType",
+          "description": "Workload type of the collection. Immutable once the resource exists\n(AWS only allows the type at collection creation). Default `Search`."
+        },
+        "description": {
           "type": "string"
         },
-        {
-          "allOf": [
-            {
-              "$ref": "#/definitions/InputReference"
-            }
-          ],
-          "description": "The value of a stack input, set when the deployment is created."
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
         }
-      ],
-      "description": "One environment variable of a workload."
+      },
+      "required": [],
+      "type": "object"
     },
-    "EnvVarType": {
-      "description": "How an input's value reaches the environment.",
+    "AwsOpenSearchCapacity": {
+      "additionalProperties": false,
+      "description": "Indexing and search capacity limits for an OpenSearch collection group.",
+      "properties": {
+        "indexing": {
+          "$ref": "#/definitions/AwsOpenSearchCapacityRange",
+          "description": "Indexing OCU bounds."
+        },
+        "search": {
+          "$ref": "#/definitions/AwsOpenSearchCapacityRange",
+          "description": "Search OCU bounds."
+        }
+      },
+      "type": "object"
+    },
+    "AwsOpenSearchCapacityRange": {
+      "additionalProperties": false,
+      "description": "Minimum and maximum OCU bounds for one OpenSearch compute component.",
+      "properties": {
+        "max-ocu": {
+          "description": "Maximum OCUs the component may scale to.",
+          "maximum": 1696,
+          "minimum": 2,
+          "type": "integer"
+        },
+        "min-ocu": {
+          "description": "Minimum OCUs kept available. Zero enables scale-to-zero.",
+          "maximum": 1696,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AwsOpenSearchCollectionType": {
+      "description": "Workload type for an OpenSearch Serverless collection.\n\n`TIMESERIES` is intentionally not exposed: next-generation serverless\nscale-to-zero targets search and vector workloads.",
       "enum": [
-        "plain",
-        "secret"
+        "search",
+        "vector-search"
       ],
       "type": "string"
     },
-    "Gpu": {
+    "AwsPermissionEffect": {
+      "enum": [
+        "Allow",
+        "Deny"
+      ],
+      "type": "string"
+    },
+    "AwsPlatformPermission": {
       "additionalProperties": false,
-      "description": "A GPU requirement.",
+      "description": "AWS-specific platform permission configuration",
       "properties": {
-        "count": {
-          "description": "Number of GPUs per machine.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
+        "binding": {
+          "$ref": "#/definitions/BindingConfiguration_AwsBindingSpec",
+          "description": "How to bind the permissions (stack vs resource scope)"
         },
-        "type": {
-          "description": "GPU model, for example \"nvidia-l4\".",
+        "description": {
+          "description": "Short admin-facing description of why this entry exists.",
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/definitions/AwsPermissionEffect",
+          "description": "IAM effect. Defaults to Allow."
+        },
+        "grant": {
+          "$ref": "#/definitions/PermissionGrant",
+          "description": "What permissions to grant"
+        },
+        "label": {
+          "description": "Stable admin-facing label for this permission entry.",
           "type": "string"
         }
       },
       "required": [
-        "count",
-        "type"
+        "grant",
+        "binding"
       ],
       "type": "object"
     },
-    "HealthCheck": {
+    "AzurePlatformPermission": {
       "additionalProperties": false,
-      "description": "An HTTP health check.",
+      "description": "Azure-specific platform permission configuration",
       "properties": {
-        "failure-threshold": {
-          "default": null,
-          "description": "Consecutive failures before the daemon counts as unhealthy. Defaults to 3.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
+        "binding": {
+          "$ref": "#/definitions/BindingConfiguration_AzureBindingSpec",
+          "description": "How to bind the permissions (stack vs resource scope)"
         },
-        "method": {
-          "default": null,
-          "description": "HTTP method. Defaults to \"GET\".",
-          "type": [
-            "string",
-            "null"
-          ]
+        "description": {
+          "description": "Short admin-facing description of why this entry exists.",
+          "type": "string"
         },
-        "path": {
-          "default": null,
-          "description": "Path to check. Defaults to \"/health\".",
-          "type": [
-            "string",
-            "null"
-          ]
+        "grant": {
+          "$ref": "#/definitions/PermissionGrant",
+          "description": "What permissions to grant"
         },
-        "port": {
-          "description": "Port to check.",
-          "format": "uint16",
-          "minimum": 0.0,
-          "type": "integer"
+        "label": {
+          "description": "Stable admin-facing label for this permission entry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "BindingConfiguration_AwsBindingSpec": {
+      "additionalProperties": false,
+      "description": "Generic binding configuration for permissions",
+      "properties": {
+        "resource": {
+          "additionalProperties": false,
+          "description": "AWS-specific binding specification",
+          "properties": {
+            "condition": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "$ref": "#/definitions/AwsConditionValue"
+                },
+                "type": "object"
+              },
+              "description": "Optional condition for additional filtering (rare)",
+              "type": "object"
+            },
+            "not-resources": {
+              "description": "ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a\ntag-on-create grant whose implied check AWS authorizes against no resource; the build\nrefuses it anywhere else.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "description": "Resource ARNs to bind to",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
         },
-        "timeout": {
+        "stack": {
+          "additionalProperties": false,
+          "description": "AWS-specific binding specification",
+          "properties": {
+            "condition": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "$ref": "#/definitions/AwsConditionValue"
+                },
+                "type": "object"
+              },
+              "description": "Optional condition for additional filtering (rare)",
+              "type": "object"
+            },
+            "not-resources": {
+              "description": "ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a\ntag-on-create grant whose implied check AWS authorizes against no resource; the build\nrefuses it anywhere else.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "description": "Resource ARNs to bind to",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "BindingConfiguration_AzureBindingSpec": {
+      "additionalProperties": false,
+      "description": "Generic binding configuration for permissions",
+      "properties": {
+        "resource": {
+          "additionalProperties": false,
+          "description": "Azure-specific binding specification",
+          "properties": {
+            "scope": {
+              "description": "Scope (subscription/resource group/resource level)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        },
+        "stack": {
+          "additionalProperties": false,
+          "description": "Azure-specific binding specification",
+          "properties": {
+            "scope": {
+              "description": "Scope (subscription/resource group/resource level)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "BindingConfiguration_GcpBindingSpec": {
+      "additionalProperties": false,
+      "description": "Generic binding configuration for permissions",
+      "properties": {
+        "resource": {
+          "additionalProperties": false,
+          "description": "GCP-specific binding specification",
+          "properties": {
+            "condition": {
+              "$ref": "#/definitions/GcpCondition",
+              "description": "Optional condition for filtering resources"
+            },
+            "scope": {
+              "description": "Scope (project/resource level)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        },
+        "stack": {
+          "additionalProperties": false,
+          "description": "GCP-specific binding specification",
+          "properties": {
+            "condition": {
+              "$ref": "#/definitions/GcpCondition",
+              "description": "Optional condition for filtering resources"
+            },
+            "scope": {
+              "description": "Scope (project/resource level)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "Build": {
+      "additionalProperties": false,
+      "description": "Represents a build resource that executes bash scripts to build code.\nBuilds are designed to be stateless and can be triggered on-demand to compile,\ntest, or package application code.",
+      "properties": {
+        "compute-type": {
+          "$ref": "#/definitions/ComputeType",
+          "description": "Amount of compute resources allocated to the build."
+        },
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "description": "The ID of a stack input.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "plain",
+                      "secret"
+                    ]
+                  }
+                },
+                "required": [
+                  "input"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "description": "Environment variables: a literal, or { input = \"<id>\" } to take the value of a stack input.",
+          "type": "object"
+        },
+        "env-file": {
           "anyOf": [
             {
-              "$ref": "#/definitions/Duration"
+              "type": "string"
             },
             {
-              "type": "null"
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           ],
-          "description": "How long one check may take: seconds, or a duration such as \"2s\". Defaults to 1 second."
+          "description": "A KEY=value file, or a list of them, relative to alien.toml."
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "links": {
+          "description": "List of resource references this build depends on.",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "type": "array"
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "description": "A permission profile name, or the grants in place, which make a profile named after the resource."
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "ComputeChoice": {
+      "anyOf": [
+        {
+          "description": "Every deployment uses this number.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "$ref": "#/definitions/ComputeChoiceRange",
+          "description": "Each deployment picks from `min..=max`, `default` when it does not pick."
+        }
+      ],
+      "description": "A machine count: one exact number, or a range a deployment chooses from."
+    },
+    "ComputeChoiceRange": {
+      "additionalProperties": false,
+      "description": "Allowed range and default for a count selected by the installer.",
+      "properties": {
+        "allowed": {
+          "items": {
+            "description": "Default value recommended when no installer override is supplied.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "default": {
+          "description": "Default value recommended when no installer override is supplied.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "default",
+        "allowed"
+      ],
+      "type": "object"
+    },
+    "ComputeType": {
+      "description": "Compute type for build resources.",
+      "enum": [
+        "small",
+        "medium",
+        "large",
+        "x-large"
+      ],
+      "type": "string"
+    },
+    "Container": {
+      "additionalProperties": false,
+      "description": "Container resource for running long-running container workloads.\n\nA Container defines a deployable unit that runs on a ComputeCluster.\nThe managed container backend handles scheduling replicas across machines,\nautoscaling based on various metrics, and service discovery.\n\n## Example\n\n```rust\nuse alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, PublicEndpoint, ExposeProtocol};\n\nlet container = Container::new(\"api\".to_string())\n    .cluster(\"compute\".to_string())\n    .code(ContainerCode::Image {\n        image: \"myapp:latest\".to_string(),\n    })\n    .cpu(ResourceSpec { min: \"0.5\".to_string(), desired: \"1\".to_string() })\n    .memory(ResourceSpec { min: \"512Mi\".to_string(), desired: \"1Gi\".to_string() })\n    .port(8080)\n    .public_endpoint(PublicEndpoint {\n        name: \"api\".to_string(),\n        port: 8080,\n        protocol: ExposeProtocol::Http,\n        host_label: None,\n        wildcard_subdomains: false,\n    })\n    .autoscaling(ContainerAutoscaling {\n        min: 2,\n        desired: 3,\n        max: 10,\n        target_cpu_percent: Some(70.0),\n        target_memory_percent: None,\n        target_http_in_flight_per_replica: Some(100),\n        max_http_p95_latency_ms: None,\n    })\n    .permissions(\"container-execution\".to_string())\n    .build();\n```",
+      "oneOf": [
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "build"
+          ]
+        }
+      ],
+      "properties": {
+        "autoscaling": {
+          "$ref": "#/definitions/ContainerAutoscaling",
+          "description": "Autoscaling configuration (only for stateless containers)"
+        },
+        "build": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "description": "Rust with Cargo build system",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the binary to build and run",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "rust"
+                  ]
+                }
+              },
+              "required": [
+                "binary-name",
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "TypeScript/JavaScript compiled to single executable with Bun",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the compiled binary (defaults to package.json name if not specified)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "typescript"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Python application installed from a locked uv project",
+              "properties": {
+                "command": {
+                  "description": "Process argv used to start the application",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "package": {
+                  "description": "Workspace package to install (omit for a single-package project)",
+                  "type": "string"
+                },
+                "python-version": {
+                  "description": "Python version used by the runtime image (defaults to 3.12)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "python"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Docker build from Dockerfile",
+              "properties": {
+                "build-args": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Build arguments for docker build",
+                  "type": "object"
+                },
+                "dockerfile": {
+                  "description": "Dockerfile path relative to src (default: \"Dockerfile\")",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Multi-stage build target",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "docker"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
+        },
+        "command": {
+          "description": "Command to override image default",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "commands-enabled": {
+          "default": false,
+          "description": "Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.",
+          "type": "boolean"
+        },
+        "cpu": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "allowed": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "default": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "default",
+                "allowed"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "CPU cores reserved per instance, or a range the deployer picks from: { default = 1, allowed = [0.5, 2] }."
+        },
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "egress": {
+          "$ref": "#/definitions/ContainerEgress",
+          "description": "Optional public-internet-only egress. Requires restricted security and backend support."
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "description": "The ID of a stack input.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "plain",
+                      "secret"
+                    ]
+                  }
+                },
+                "required": [
+                  "input"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "description": "Environment variables: a literal, or { input = \"<id>\" } to take the value of a stack input.",
+          "type": "object"
+        },
+        "env-file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "A KEY=value file, or a list of them, relative to alien.toml."
+        },
+        "ephemeral-storage": {
+          "description": "Ephemeral storage requirement (e.g., \"10Gi\")",
+          "type": "string"
+        },
+        "gpu": {
+          "$ref": "#/definitions/ContainerGpuSpec",
+          "description": "GPU requirements (optional)"
+        },
+        "health-check": {
+          "$ref": "#/definitions/HealthCheck",
+          "description": "Health check configuration"
+        },
+        "image": {
+          "description": "A prebuilt image to run, instead of `build`.",
+          "type": "string"
+        },
+        "kubernetes-liveness-probe": {
+          "$ref": "#/definitions/KubernetesHttpProbe",
+          "description": "Kubernetes liveness probe. Restarts an unhealthy container."
+        },
+        "kubernetes-readiness-probe": {
+          "$ref": "#/definitions/KubernetesHttpProbe",
+          "description": "Kubernetes readiness probe. Removes an unready pod from Service endpoints."
+        },
+        "kubernetes-secret-mounts": {
+          "description": "Existing Kubernetes Secrets mounted as read-only directories.",
+          "items": {
+            "$ref": "#/definitions/KubernetesSecretMount"
+          },
+          "type": "array"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "links": {
+          "description": "Resource links (dependencies)",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "allowed": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "default": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "default",
+                "allowed"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Memory reserved per instance, or a range the deployer picks from: { default = 1, allowed = [0.5, 2] }."
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "description": "A permission profile name, or the grants in place, which make a profile named after the resource."
+        },
+        "persistent-storage": {
+          "anyOf": [
+            {
+              "description": "The size of the volume, such as \"10Gi\".",
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/PersistentStorage",
+              "description": "Persistent storage configuration (only for stateful containers)"
+            }
+          ]
+        },
+        "pool": {
+          "type": "string"
+        },
+        "ports": {
+          "description": "Ports the container listens on: numbers, or tables.",
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "$ref": "#/definitions/ContainerPort"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "public-endpoints": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Public endpoint configuration for port-backed workload resources.",
+            "properties": {
+              "host-label": {
+                "description": "Optional DNS label override for generated endpoint hostnames.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Workload port served by the public endpoint.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "protocol": {
+                "$ref": "#/definitions/ExposeProtocol",
+                "description": "Public protocol."
+              },
+              "wildcard-subdomains": {
+                "description": "Whether to route wildcard subdomains to this endpoint.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "port"
+            ],
+            "type": "object"
+          },
+          "description": "Public HTTP endpoints by name, such as api = { port = 8080 }.",
+          "type": "object"
+        },
+        "remote-access": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "description": "Fixed replica count (for stateful containers or stateless without autoscaling)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "security": {
+          "$ref": "#/definitions/ContainerSecurity",
+          "description": "Security settings shared by supported container runtimes."
+        },
+        "stop-grace-period": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Grace period in seconds for stopping replicas during updates, drains, and deletes.\n\nWhen omitted, the runtime backend applies its default. Valid values are\n1 second through 24 hours."
+        },
+        "tunnel": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/definitions/ContainerTunnel",
+              "description": "Makes one HTTP port reachable from the control plane through the\nmanager's tunnel, over the operator's outbound connection. Nothing is\nexposed on the deployment's network."
+            }
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "ContainerAutoscaling": {
+      "additionalProperties": false,
+      "description": "Autoscaling configuration for stateless containers.",
+      "properties": {
+        "desired": {
+          "description": "Initial desired replicas at container creation",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max": {
+          "description": "Maximum replicas under load",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max-http-p95-latency": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Maximum acceptable p95 HTTP latency in milliseconds"
+        },
+        "min": {
+          "description": "Minimum replicas (always running)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target-cpu-percent": {
+          "description": "Target CPU utilization percentage for scaling (default: 70%)",
+          "type": "number"
+        },
+        "target-http-in-flight-per-replica": {
+          "description": "Target in-flight HTTP requests per replica",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target-memory-percent": {
+          "description": "Target memory utilization percentage for scaling (default: 80%)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "ContainerEgress": {
+      "description": "Outbound network restriction enforced outside the container.\nInternet access also permits this container's own replicas on declared TCP ports,\nown-service discovery, and the credential proxy for its own identity.\nAbsence preserves the runtime's existing full-network behavior.",
+      "enum": [
+        "internet"
+      ],
+      "type": "string"
+    },
+    "ContainerGpuSpec": {
+      "additionalProperties": false,
+      "description": "GPU specification for a container.",
+      "properties": {
+        "count": {
+          "description": "Number of GPUs required (1-8)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "description": "GPU type identifier (e.g., \"nvidia-a100\", \"nvidia-t4\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "count"
+      ],
+      "type": "object"
+    },
+    "ContainerPort": {
+      "additionalProperties": false,
+      "description": "Container port configuration.",
+      "properties": {
+        "port": {
+          "description": "Port number",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -566,177 +1275,1737 @@
       ],
       "type": "object"
     },
-    "Input": {
+    "ContainerSecurity": {
       "additionalProperties": false,
-      "description": "A stack input: a value provided per deployment. Its ID is the table name.",
+      "description": "Container process identity and filesystem security.",
       "properties": {
-        "default": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InputValue"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Value used when none is provided."
+        "profile": {
+          "$ref": "#/definitions/ContainerSecurityProfile",
+          "description": "Runtime security profile."
         },
-        "description": {
-          "default": null,
-          "description": "What the value is for. Required for required inputs.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "read-only-root-filesystem": {
+          "description": "Mount the root filesystem read-only.",
+          "type": "boolean"
         },
-        "env": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/OneOrMany_for_EnvTarget"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Environment variables that receive the value: a name, `{ name, target-resources }`, or a list. Without `target-resources` every daemon gets it."
+        "run-as-group": {
+          "description": "Numeric GID for the container process.",
+          "type": "integer"
         },
-        "kind": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/InputKind"
-            }
-          ],
-          "description": "What kind of value it is."
-        },
-        "label": {
-          "default": null,
-          "description": "Shown where the value is asked for. Defaults to the input ID.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "max": {
-          "description": "Largest accepted number (number and integer inputs).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "max-items": {
-          "default": null,
-          "description": "Most accepted items (string-list inputs).",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max-length": {
-          "default": null,
-          "description": "Longest accepted string (string and secret inputs).",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "min": {
-          "description": "Smallest accepted number (number and integer inputs).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "min-items": {
-          "default": null,
-          "description": "Fewest accepted items (string-list inputs).",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "min-length": {
-          "default": null,
-          "description": "Shortest accepted string (string and secret inputs).",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "pattern": {
-          "default": null,
-          "description": "Regular expression the value must match (string and secret inputs).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "placeholder": {
-          "default": null,
-          "description": "Example shown in an empty field.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "platforms": {
-          "default": null,
-          "description": "Ask for the input only on these platforms.",
-          "items": {
-            "$ref": "#/definitions/Platform"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "provided-by": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/OneOrMany_for_Provider"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Who provides the value: \"developer\", \"deployer\", or both. Defaults to \"developer\"."
-        },
-        "required": {
-          "default": null,
-          "description": "Whether a deployment needs a value. Defaults to true.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "values": {
-          "default": null,
-          "description": "The accepted values (enum inputs).",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "run-as-user": {
+          "description": "Numeric UID for the container process.",
+          "type": "integer"
         }
       },
       "required": [
-        "kind"
+        "profile",
+        "run-as-user",
+        "run-as-group",
+        "read-only-root-filesystem"
       ],
       "type": "object"
     },
-    "InputKind": {
-      "description": "The kind of value an input takes.",
+    "ContainerSecurityProfile": {
+      "description": "Security profile shared by container runtimes.",
+      "enum": [
+        "restricted"
+      ],
+      "type": "string"
+    },
+    "ContainerTunnel": {
+      "additionalProperties": false,
+      "description": "A container port reachable from the control plane through the manager.\n\nRequests to `/v1/deployments/{deployment}/tunnels/{container}/...` on the\nmanager are forwarded to this port over the operator's outbound\nconnection, so the control plane can call the service without any inbound\nnetwork path into the deployment.",
+      "properties": {
+        "port": {
+          "description": "Container port that serves HTTP. Must be one of the container's ports.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "CpuAmount": {
+      "anyOf": [
+        {
+          "description": "Whole cores.",
+          "type": "integer"
+        },
+        {
+          "description": "Fractional cores.",
+          "type": "number"
+        },
+        {
+          "description": "A Kubernetes-style quantity, passed through verbatim.",
+          "type": "string"
+        }
+      ],
+      "description": "A CPU amount written as a number of cores (`2`, `0.5`) or a quantity string (`\"500m\"`)."
+    },
+    "Daemon": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "build"
+          ]
+        }
+      ],
+      "properties": {
+        "build": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "description": "Rust with Cargo build system",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the binary to build and run",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "rust"
+                  ]
+                }
+              },
+              "required": [
+                "binary-name",
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "TypeScript/JavaScript compiled to single executable with Bun",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the compiled binary (defaults to package.json name if not specified)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "typescript"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Python application installed from a locked uv project",
+              "properties": {
+                "command": {
+                  "description": "Process argv used to start the application",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "package": {
+                  "description": "Workspace package to install (omit for a single-package project)",
+                  "type": "string"
+                },
+                "python-version": {
+                  "description": "Python version used by the runtime image (defaults to 3.12)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "python"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Docker build from Dockerfile",
+              "properties": {
+                "build-args": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Build arguments for docker build",
+                  "type": "object"
+                },
+                "dockerfile": {
+                  "description": "Dockerfile path relative to src (default: \"Dockerfile\")",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Multi-stage build target",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "docker"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
+        },
+        "command": {
+          "description": "Command to override the image default.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "commands-enabled": {
+          "default": false,
+          "description": "Whether an app-owned command receiver can lease pending commands for\nthis Daemon and execute registered handlers.",
+          "type": "boolean"
+        },
+        "cpu": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "cpu reserved per instance: a number, or a string with a unit such as \"512Mi\"."
+        },
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "description": "The ID of a stack input.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "plain",
+                      "secret"
+                    ]
+                  }
+                },
+                "required": [
+                  "input"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "description": "Environment variables: a literal, or { input = \"<id>\" } to take the value of a stack input.",
+          "type": "object"
+        },
+        "env-file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "A KEY=value file, or a list of them, relative to alien.toml."
+        },
+        "health-check": {
+          "$ref": "#/definitions/HealthCheck",
+          "description": "HTTP health check for public daemon endpoint load balancers."
+        },
+        "host-access": {
+          "description": "Run privileged, in the host's PID namespace and network, with the host's `/` at `/host`, as uid 0.",
+          "type": "boolean"
+        },
+        "image": {
+          "description": "A prebuilt image to run, instead of `build`.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "links": {
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "memory reserved per instance: a number, or a string with a unit such as \"512Mi\"."
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "description": "A permission profile name, or the grants in place, which make a profile named after the resource."
+        },
+        "pool": {
+          "type": "string"
+        },
+        "public-endpoints": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Public endpoint configuration for port-backed workload resources.",
+            "properties": {
+              "host-label": {
+                "description": "Optional DNS label override for generated endpoint hostnames.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Workload port served by the public endpoint.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "protocol": {
+                "description": "Daemon endpoints serve HTTP only.",
+                "enum": [
+                  "http"
+                ]
+              },
+              "wildcard-subdomains": {
+                "description": "Whether to route wildcard subdomains to this endpoint.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "port"
+            ],
+            "type": "object"
+          },
+          "description": "Public HTTP endpoints by name, such as api = { port = 8080 }.",
+          "type": "object"
+        },
+        "remote-access": {
+          "type": "boolean"
+        },
+        "runtime": {
+          "$ref": "#/definitions/DaemonRuntime",
+          "description": "Optional backend runtime settings for trusted daemons.\n\nThese settings are intended for daemon-style infrastructure that must\noperate on the host. Backends that do not support a setting may reject\nit during provisioning."
+        },
+        "stop-grace-period": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Grace period in seconds for stopping daemon instances during updates, drains, and deletes.\n\nWhen omitted, the runtime backend applies its default. Valid values are\n1 second through 24 hours."
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "DaemonRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "mounts": {
+          "description": "Host mounts exposed to the daemon container.",
+          "items": {
+            "$ref": "#/definitions/DaemonRuntimeMount"
+          },
+          "type": "array"
+        },
+        "network-mode": {
+          "description": "Network mode. Supported values are `host` and `appnet`.",
+          "type": "string"
+        },
+        "pid-namespace": {
+          "description": "Process namespace mode. Supported values are `host` and `private`.",
+          "type": "string"
+        },
+        "privileged": {
+          "description": "Run the daemon container with elevated host capabilities.",
+          "type": "boolean"
+        },
+        "user": {
+          "description": "Runtime user, as a numeric uid or uid:gid string.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DaemonRuntimeMount": {
+      "additionalProperties": false,
+      "properties": {
+        "options": {
+          "description": "Optional mount options understood by the backend runtime.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Absolute host path to mount into the daemon container.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Absolute container path where the source is mounted.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "DataDiskSize": {
+      "anyOf": [
+        {
+          "description": "One size for every deployment, for example `\"1Ti\"`.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sizes a deployment chooses from. A `min` of `\"0Gi\"` lets a deployment go without one.",
+          "properties": {
+            "allowed": {
+              "items": {
+                "description": "Size used when a deployment does not choose.",
+                "type": "string"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "default": {
+              "description": "Size used when a deployment does not choose.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "default",
+            "allowed"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The extra empty data disk each machine must provide."
+    },
+    "EgressPolicy": {
+      "anyOf": [
+        {
+          "enum": [
+            "internet"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 4096,
+              "minItems": 0,
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      ],
+      "description": "Per-sandbox outbound policy. Mail ports 25, 465 and 587 require an explicit allowlist port, such as smtp.example.com:587; internet and portless targets exclude them. This protects the deployment's shared outbound IP from mail abuse and blocklisting that could disrupt every tenant."
+    },
+    "Email": {
+      "additionalProperties": false,
+      "description": "Email infrastructure for sending and receiving mail on customer-owned\ndomains. On AWS this is backed by SES: a shared configuration set, optional\ninbound/event wiring, and one email identity (Easy DKIM) per seed domain.\n\n# Infrastructure vs runtime data\n\nThis resource owns the email *infrastructure* and the capability to use it,\nnot the domain lifecycle. Deployment manages the configuration set, the\nevent topology, the inbound receipt topology, and any seed identities\nlisted in `domains`. Email identities created at runtime through the\n`email/manage-identities` grant are application data: they are not tracked\nby the deployment, are not removed when the stack is deleted, and their\nlifecycle - including deletion - belongs to the application.\n\nThe operator (or the application, for runtime-created identities) owns DNS:\nthe per-domain DKIM CNAME records surfaced in [`EmailOutputs`] must be\ncreated before SES verifies a domain and allows sending from it.\n\n# Inbound mail (AWS)\n\nWhen `inbound` is set, a SES receipt rule set is provisioned that writes\nraw incoming mail into the linked Storage bucket. The receipt rule is a\ncatch-all (no recipient filter), so mail for identities verified at runtime\nlands in the bucket without any infrastructure change.\n\nAlien activates the provisioned receipt rule set as part of setup. Because\nSES permits only one active receipt rule set per AWS account and region, an\nAWS stack may contain only one email resource with inbound delivery. The\nresource requires exclusive ownership of SES receiving in its account and\nregion: setup refuses to replace an active rule set it does not own. Choose\nan unused region when the account already receives email through SES. SES email\nreceiving is available only in a subset of AWS regions; deploying `inbound`\nto an unsupported region fails during setup.\n\n# Update semantics\n\n`domains` is append-friendly: adding a domain provisions a new identity,\nremoving a domain deletes its identity (and its DKIM verification state).\nThe list may be empty. `inbound` and `events` may be added, removed, or\nrepointed; removing them tears down the corresponding receipt rule set /\nevent destination wiring.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "domains": {
+          "description": "Seed mail domains provisioned at deploy time (one SES identity each).\nUseful for day-0 bootstrap and products with a static domain set.\nMay be empty (the default): products that create and verify domains\ndynamically should manage identities at runtime through the\n`email/manage-identities` grant instead of listing them here.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "events": {
+          "anyOf": [
+            {
+              "description": "The ID of the resource.",
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/EmailEvents",
+              "description": "Optional event configuration: send / delivery / bounce / complaint /\ndelivery-delay / reject events are delivered to the linked Queue. On\nAWS, when `inbound` is also configured, that Queue additionally\nreceives SES `Received` notifications containing the envelope\nrecipients, receipt verdicts, and inbound Storage object key."
+            }
+          ]
+        },
+        "inbound": {
+          "anyOf": [
+            {
+              "description": "The ID of the resource.",
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/EmailInbound",
+              "description": "Optional inbound-mail configuration: raw incoming mail (for any\nidentity the account receives mail for - the receipt rule is a\ncatch-all) is written to the linked Storage bucket."
+            }
+          ]
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "EmailEvents": {
+      "additionalProperties": false,
+      "description": "Event configuration for an [`Email`] resource.",
+      "properties": {
+        "queue": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "The Queue resource that receives sending events and, when inbound mail\nis configured on AWS, SES `Received` notifications."
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "type": "object"
+    },
+    "EmailInbound": {
+      "additionalProperties": false,
+      "description": "Inbound-mail configuration for an [`Email`] resource.",
+      "properties": {
+        "storage": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "The Storage resource that receives raw incoming mail objects."
+        }
+      },
+      "required": [
+        "storage"
+      ],
+      "type": "object"
+    },
+    "ExposeProtocol": {
+      "description": "Protocol for public workload endpoints.",
+      "enum": [
+        "http",
+        "tcp"
+      ],
+      "type": "string"
+    },
+    "GcpCondition": {
+      "additionalProperties": false,
+      "description": "GCP IAM condition",
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "expression"
+      ],
+      "type": "object"
+    },
+    "GcpPlatformPermission": {
+      "additionalProperties": false,
+      "description": "GCP-specific platform permission configuration",
+      "properties": {
+        "binding": {
+          "$ref": "#/definitions/BindingConfiguration_GcpBindingSpec",
+          "description": "How to bind the permissions (stack vs resource scope)"
+        },
+        "description": {
+          "description": "Short admin-facing description of why this entry exists.",
+          "type": "string"
+        },
+        "grant": {
+          "$ref": "#/definitions/PermissionGrant",
+          "description": "What permissions to grant"
+        },
+        "label": {
+          "description": "Stable admin-facing label for this permission entry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "GpuSpec": {
+      "additionalProperties": false,
+      "description": "GPU specification for a capacity group.",
+      "properties": {
+        "count": {
+          "description": "Number of GPUs per machine",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "description": "GPU type identifier (e.g., \"nvidia-a100\", \"nvidia-t4\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "count"
+      ],
+      "type": "object"
+    },
+    "HealthCheck": {
+      "additionalProperties": false,
+      "description": "HTTP health check configuration.",
+      "properties": {
+        "failure-threshold": {
+          "description": "Number of consecutive failures before marking replica unhealthy",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "method": {
+          "description": "HTTP method to use for health check",
+          "type": "string"
+        },
+        "path": {
+          "description": "HTTP endpoint path to check (e.g., \"/health\", \"/ready\")",
+          "type": "string"
+        },
+        "port": {
+          "description": "Port to check (defaults to container port if not specified)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Request timeout in seconds (1-5)"
+        }
+      },
+      "type": "object"
+    },
+    "HttpMethod": {
+      "description": "HTTP method for readiness probe requests.",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "HEAD",
+        "OPTIONS",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "InputValue": {
+      "anyOf": [
+        {
+          "description": "Text.",
+          "type": "string"
+        },
+        {
+          "description": "A whole number.",
+          "type": "integer"
+        },
+        {
+          "description": "A number with a fractional part.",
+          "type": "number"
+        },
+        {
+          "description": "A flag.",
+          "type": "boolean"
+        },
+        {
+          "description": "A list of text values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "A stack input value as written: a default, or a numeric constraint."
+    },
+    "Key": {
+      "additionalProperties": false,
+      "description": "A customer-managed encryption key.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "KubernetesHttpProbe": {
+      "additionalProperties": false,
+      "description": "HTTP probe used by Kubernetes for workload liveness or readiness.",
+      "properties": {
+        "path": {
+          "description": "Absolute HTTP path served by the container.",
+          "type": "string"
+        },
+        "port": {
+          "description": "Container port to check.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "port"
+      ],
+      "type": "object"
+    },
+    "KubernetesSecretMount": {
+      "additionalProperties": false,
+      "description": "Mounts an existing, setup-owned Kubernetes Secret into a Container pod.\nThe Secret must exist in the deployment namespace before the workload starts.",
+      "properties": {
+        "mount-path": {
+          "description": "Directory where Kubernetes mounts the Secret's keys as read-only files.",
+          "type": "string"
+        },
+        "secret-name": {
+          "description": "Name of the existing Secret in the deployment namespace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "secret-name",
+        "mount-path"
+      ],
+      "type": "object"
+    },
+    "Kv": {
+      "additionalProperties": false,
+      "description": "Represents a key-value storage resource that provides a minimal, platform-agnostic API\ncompatible across DynamoDB, Firestore, Redis, and Azure Table Storage.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "LifecycleRule": {
+      "additionalProperties": false,
+      "description": "Defines a rule for managing the lifecycle of objects within a storage bucket.",
+      "properties": {
+        "days": {
+          "description": "Number of days after which objects matching the rule expire.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prefix": {
+          "description": "Optional prefix to filter objects the rule applies to. If None, applies to all objects.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "days"
+      ],
+      "type": "object"
+    },
+    "ManagementPermissions": {
+      "anyOf": [
+        {
+          "description": "Auto-derived permissions only (default)\nUses resource lifecycles to determine management permissions:\n- Frozen resources: `<type>/management`\n- Live resources: `<type>/provision`",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add permissions to auto-derived baseline",
+          "properties": {
+            "extend": {
+              "$ref": "#/definitions/PermissionProfile",
+              "description": "Add permissions to auto-derived baseline"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Replace auto-derived permissions entirely",
+          "properties": {
+            "override": {
+              "$ref": "#/definitions/PermissionProfile",
+              "description": "Replace auto-derived permissions entirely"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      ],
+      "description": "Management permissions configuration for stack management access"
+    },
+    "OperationApproval": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OperationApprovalDecision",
+          "description": "Run without approval, or require it."
+        },
+        {
+          "additionalProperties": false,
+          "description": "A decision plus the highest risk tier a wildcard access request may cover.",
+          "properties": {
+            "decision": {
+              "$ref": "#/definitions/OperationApprovalDecision",
+              "description": "Run without approval, or require it."
+            },
+            "max-risk": {
+              "description": "Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard\naccess request for these operations may cover.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Approval rule for the operations a pattern matches."
+    },
+    "OperationApprovalDecision": {
+      "description": "Whether matching operations run without approval.",
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
+    },
+    "OperationSettingValue": {
+      "anyOf": [
+        {
+          "description": "A literal value.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The value of a stack input.",
+          "properties": {
+            "input": {
+              "description": "Stack input id.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stack resources the plugin may act on, such as buckets or queues.",
+          "properties": {
+            "resources": {
+              "description": "Resource ids in the same stack.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An environment variable of the Operator process. Only for an Operator\ninstalled on its own, so secrets stay in its environment.",
+          "properties": {
+            "env": {
+              "description": "Environment variable name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Value of one plugin setting."
+    },
+    "PermissionGrant": {
+      "additionalProperties": false,
+      "description": "Grant permissions for a specific cloud platform",
+      "properties": {
+        "actions": {
+          "description": "AWS IAM actions (only for AWS)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "data-actions": {
+          "description": "Azure actions (only for Azure)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "permissions": {
+          "description": "GCP permissions that require an exact residual custom role.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "predefined-roles": {
+          "description": "Provider predefined roles to bind directly.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "residual-permissions": {
+          "description": "GCP residual custom permissions to pair with predefined roles.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PermissionProfile": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/definitions/PermissionSetReference"
+        },
+        "type": "array"
+      },
+      "description": "Permission profile that maps resources to permission sets\nKey can be \"*\" for all resources or resource name for specific resource",
+      "type": "object"
+    },
+    "PermissionSet": {
+      "additionalProperties": false,
+      "description": "A permission set that can be applied across different cloud platforms",
+      "properties": {
+        "description": {
+          "description": "Human-readable description of what this permission set allows",
+          "type": "string"
+        },
+        "id": {
+          "description": "Unique identifier for the permission set (e.g., \"storage/data-read\")",
+          "type": "string"
+        },
+        "platforms": {
+          "$ref": "#/definitions/PlatformPermissions",
+          "description": "Platform-specific permission configurations"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "platforms"
+      ],
+      "type": "object"
+    },
+    "PermissionSetReference": {
+      "anyOf": [
+        {
+          "description": "Reference to a built-in permission set by name (e.g., \"storage/data-read\")",
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/PermissionSet",
+          "description": "Inline permission set definition"
+        }
+      ],
+      "description": "Reference to a permission set - either by name or inline definition"
+    },
+    "PersistentStorage": {
+      "additionalProperties": false,
+      "description": "Persistent storage configuration for stateful containers.",
+      "properties": {
+        "backups": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/VolumeBackups",
+              "description": "Scheduled snapshots of each replica's volume. On by default."
+            }
+          ],
+          "description": "Volume backups: true for the defaults (every 24 hours, kept 7 days), or their settings."
+        },
+        "encryption-key": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "Key used to encrypt this volume and its snapshots. Cannot be changed after creation."
+        },
+        "mount-path": {
+          "description": "Mount path inside the container",
+          "type": "string"
+        },
+        "size": {
+          "description": "Storage size (e.g., \"100Gi\", \"500Gi\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "size"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "description": "Represents the target cloud platform.",
+      "enum": [
+        "aws",
+        "gcp",
+        "azure",
+        "kubernetes",
+        "machines",
+        "local",
+        "test"
+      ],
+      "type": "string"
+    },
+    "PlatformPermissions": {
+      "additionalProperties": false,
+      "description": "Platform-specific permission configurations",
+      "properties": {
+        "aws": {
+          "description": "AWS permission configurations",
+          "items": {
+            "$ref": "#/definitions/AwsPlatformPermission"
+          },
+          "type": "array"
+        },
+        "azure": {
+          "description": "Azure permission configurations",
+          "items": {
+            "$ref": "#/definitions/AzurePlatformPermission"
+          },
+          "type": "array"
+        },
+        "gcp": {
+          "description": "GCP permission configurations",
+          "items": {
+            "$ref": "#/definitions/GcpPlatformPermission"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Postgres": {
+      "additionalProperties": false,
+      "description": "A managed PostgreSQL database. The target platform decides the backend\n(AWS Aurora Serverless v2, GCP Cloud SQL, Azure Flexible Server, or an\nembedded native process on Local); the database is never publicly reachable.",
+      "properties": {
+        "backend": {
+          "$ref": "#/definitions/PostgresBackend",
+          "description": "Cloud backend selector; None resolves to the platform default. The field\nexists so a single per-cloud controller can dispatch on it without a later\nschema change - the registry allows only one controller per (resource, cloud)."
+        },
+        "cpu": {
+          "description": "Requested vCPUs (e.g. \"0.5\", \"2\"). None = smallest available tier.",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "encryption-key": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "Key used to encrypt database storage, snapshots, and performance data.\nCannot be changed after creation."
+        },
+        "high-availability": {
+          "description": "Multi-AZ / regional / zone-redundant high availability. Default false.",
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "memory": {
+          "description": "Requested memory (e.g. \"1Gi\", \"8Gi\"). None = smallest available tier.",
+          "type": "string"
+        },
+        "remote-access": {
+          "type": "boolean"
+        },
+        "storage": {
+          "default": "20Gi",
+          "description": "Allocated storage (e.g. \"20Gi\"). Default \"20Gi\". Grow-only.",
+          "type": "string"
+        },
+        "version": {
+          "default": "17",
+          "description": "Major engine version: \"15\" | \"16\" | \"17\". Default \"17\".",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "PostgresBackend": {
+      "additionalProperties": false,
+      "description": "Cloud backend for a Postgres resource. Only Aurora Serverless v2 ships in v1;\nthe enum reserves the slot so provisioned RDS is an additive variant later.",
+      "properties": {
+        "type": {
+          "enum": [
+            "aurora-serverless-v2"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "Queue": {
+      "additionalProperties": false,
+      "description": "Represents a message queue resource with minimal, portable semantics.\nQueue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "QueueBatchConfig": {
+      "additionalProperties": false,
+      "description": "Opt-in queue batching. Counts and windows are upper bounds, not guarantees.\nProviders may deliver smaller batches. Delivery remains at least once and unordered.",
+      "properties": {
+        "max-messages": {
+          "description": "Maximum deliveries per batch (1-100).",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max-window": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Maximum collection window in seconds (0-300).\nAWS may wait up to 20 seconds with sparse traffic even with a shorter window."
+        }
+      },
+      "required": [
+        "max-messages",
+        "max-window"
+      ],
+      "type": "object"
+    },
+    "ReadinessProbe": {
+      "additionalProperties": false,
+      "description": "Configuration for HTTP-based readiness probe.\nThis probe is executed after worker provisioning/update to verify the worker is ready to serve traffic.\nOnly works with workers that have Public ingress.",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/HttpMethod",
+          "description": "HTTP method to use for the probe request.\nDefault: GET"
+        },
+        "path": {
+          "description": "Path to request for the probe (e.g., \"/health\", \"/ready\").\nDefault: \"/\"",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ResourceRef": {
+      "description": "The ID of a resource declared in this file.",
+      "type": "string"
+    },
+    "Sandbox": {
+      "additionalProperties": false,
+      "description": "An isolated environment for running untrusted code, created at runtime.",
+      "oneOf": [
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "build"
+          ]
+        }
+      ],
+      "properties": {
+        "build": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "description": "Rust with Cargo build system",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the binary to build and run",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "rust"
+                  ]
+                }
+              },
+              "required": [
+                "binary-name",
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "TypeScript/JavaScript compiled to single executable with Bun",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the compiled binary (defaults to package.json name if not specified)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "typescript"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Python application installed from a locked uv project",
+              "properties": {
+                "command": {
+                  "description": "Process argv used to start the application",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "package": {
+                  "description": "Workspace package to install (omit for a single-package project)",
+                  "type": "string"
+                },
+                "python-version": {
+                  "description": "Python version used by the runtime image (defaults to 3.12)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "python"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Docker build from Dockerfile",
+              "properties": {
+                "build-args": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Build arguments for docker build",
+                  "type": "object"
+                },
+                "dockerfile": {
+                  "description": "Dockerfile path relative to src (default: \"Dockerfile\")",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Multi-stage build target",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "docker"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
+        },
+        "default-policy": {
+          "$ref": "#/definitions/EgressPolicy",
+          "description": "Default runtime policy for creates that omit one."
+        },
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "egress": {
+          "$ref": "#/definitions/SandboxEgress",
+          "description": "Outbound network policy"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "image": {
+          "description": "A prebuilt image to run, instead of `build`.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "limits": {
+          "$ref": "#/definitions/SandboxLimits",
+          "description": "Enforced resource ceilings.\n\nOptional because not every platform can enforce them, and a declaration that names none\ntakes the platform's own defaults. Naming them on a platform that cannot enforce them is\nrejected at plan time rather than silently ignored."
+        },
+        "preview-ports": {
+          "description": "Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none.",
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "private-base-image": {
+          "description": "Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is\nwhat the cross-account grant opens. Live only: the grant needs the customer account,\nwhich registration reports. Absent means the base image is pulled anonymously.",
+          "type": "string"
+        },
+        "privileged-supervisor": {
+          "$ref": "#/definitions/SandboxPrivilegedSupervisor",
+          "description": "Have Alien's agent install the declared egress policy before running any image code.\nUnsupported backends refuse this at plan time."
+        },
+        "remote-access": {
+          "type": "boolean"
+        },
+        "session": {
+          "$ref": "#/definitions/SandboxLifecyclePolicy",
+          "description": "Sandbox lifetime ceiling and idle behaviour.\n\nStored state written before the rename calls this `session`. A stack state or release\nthat old must stay readable, otherwise its deployment can no longer be updated or deleted."
+        }
+      },
+      "required": [
+        "egress"
+      ],
+      "type": "object"
+    },
+    "SandboxEgress": {
+      "anyOf": [
+        {
+          "enum": [
+            "none",
+            "internet"
+          ],
+          "type": "string"
+        },
+        {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "description": "Deprecated alias of \"none\".",
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "deny"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Deprecated direct backend access. Use \"internet\" to opt into the gateway,\nfixed outbound IP, connection logs and per-sandbox runtime policies.",
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "allow"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Deprecated backend hostname rules. Use \"internet\" and runtime policies\nto opt into gateway enforcement instead.",
+              "properties": {
+                "domains": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "mode": {
+                  "enum": [
+                    "allow-domains"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            }
+          ],
+          "description": "Deprecated object declarations preserve their released backend behavior."
+        }
+      ]
+    },
+    "SandboxLifecyclePolicy": {
+      "additionalProperties": false,
+      "description": "How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.",
+      "properties": {
+        "idle-pause": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Idle period after which the sandbox is paused, where the platform supports it.\n\nStored state written before the rename calls this `idleSuspendSeconds`."
+        },
+        "max-lifetime": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional because not every backend has the primitive: Kubernetes has\n`activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local\nexpose one, so declaring a ceiling there is refused at plan time rather than accepted and\nnever applied. AWS caps it at 8 hours."
+        }
+      },
+      "type": "object"
+    },
+    "SandboxLimits": {
+      "additionalProperties": false,
+      "description": "Hard ceilings enforced on a sandbox.\n\nThese are limits, not scheduling requests. Untrusted code does not respect a hint, so every\nfield is enforced by the platform and a platform that cannot enforce one is rejected at plan\ntime rather than silently ignoring it.",
+      "properties": {
+        "cpu": {
+          "description": "CPU ceiling in cores or millicores (e.g. `\"1\"`, `\"500m\"`)",
+          "type": "string"
+        },
+        "disk": {
+          "description": "Disk ceiling (e.g. `\"20Gi\"`)",
+          "type": "string"
+        },
+        "max-processes": {
+          "description": "Maximum number of processes, which bounds fork bombs.\n\nOptional because only a container runtime has the primitive: Kubernetes sets a pid ceiling\nper node, not per pod, and neither AWS MicroVMs nor Azure sandboxes expose one. Declaring\nit on a platform that cannot apply it is refused at plan time.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory": {
+          "description": "Memory ceiling (e.g. `\"2Gi\"`, `\"512Mi\"`)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cpu",
+        "memory",
+        "disk"
+      ],
+      "type": "object"
+    },
+    "SandboxPrivilegedSupervisor": {
+      "additionalProperties": false,
+      "description": "Opt-in supervisor-owned network enforcement. Caller requests cannot change this identity.",
+      "properties": {
+        "command-uid": {
+          "description": "Nonzero numeric uid and primary gid for every command, including the image entrypoint.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command-uid"
+      ],
+      "type": "object"
+    },
+    "ServiceAccount": {
+      "additionalProperties": false,
+      "description": "Represents a non-human identity that can be assumed by compute services\nsuch as Lambda, Cloud Run, ECS, Container Apps, etc.\n\nMaps to:\n- AWS: IAM Role\n- GCP: Service Account\n- Azure: User-assigned Managed Identity\n\nThe ServiceAccount is automatically created from permission profiles in the stack\nand contains the resolved permission sets for both stack-level and resource-scoped access.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        },
+        "resource-permission-sets": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/definitions/PermissionSet"
+            },
+            "type": "array"
+          },
+          "description": "Resolved grants for concrete resource IDs, captured for setup comparison.",
+          "type": "object"
+        },
+        "stack-permission-sets": {
+          "description": "Stack-level permission sets that apply to all resources in the stack.\nThese are derived from the \"*\" scope in the permission profile.\nResource-scoped permissions are handled by individual resource controllers.",
+          "items": {
+            "$ref": "#/definitions/PermissionSet"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "StackInputCondition": {
+      "additionalProperties": false,
+      "description": "A boolean input condition controlling whether another input applies.",
+      "properties": {
+        "equals": {
+          "description": "Boolean value for which this input applies.",
+          "type": "boolean"
+        },
+        "input": {
+          "description": "ID of an unconditional boolean input in the same stack.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "StackInputEnvironmentVariableType": {
+      "description": "Environment variable handling for a stack input mapping.",
+      "enum": [
+        "plain",
+        "secret"
+      ],
+      "type": "string"
+    },
+    "StackInputGenerate": {
+      "additionalProperties": false,
+      "description": "Asks Alien to generate a secret input's value.\n\nThe value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in\nconnection strings, command lines and environment variables. It is generated\nonce, when the deployment's input values are first resolved, and then kept\nwith the deployment's other input values.",
+      "properties": {
+        "length": {
+          "description": "Number of characters to generate.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "length"
+      ],
+      "type": "object"
+    },
+    "StackInputKind": {
+      "description": "Primitive stack input kind.",
       "enum": [
         "string",
         "secret",
@@ -748,481 +3017,902 @@
       ],
       "type": "string"
     },
-    "InputReference": {
-      "additionalProperties": false,
-      "description": "`{ input = \"<id>\" }`: the variable takes the value of a stack input.",
-      "properties": {
-        "input": {
-          "description": "ID of an `[input.<id>]` table.",
-          "type": "string"
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/EnvVarType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Whether the variable is \"plain\" or a \"secret\". Defaults from the input's kind."
-        }
-      },
-      "required": [
-        "input"
-      ],
-      "type": "object"
-    },
-    "InputValue": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "format": "int64",
-          "type": "integer"
-        },
-        {
-          "format": "double",
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "A value as written in TOML: string, number, boolean, or list of strings."
-    },
-    "Mount": {
-      "additionalProperties": false,
-      "description": "A host path mounted into a daemon.",
-      "properties": {
-        "options": {
-          "default": null,
-          "description": "Mount options such as \"ro\".",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "source": {
-          "description": "Absolute path on the machine.",
-          "type": "string"
-        },
-        "target": {
-          "description": "Absolute path inside the container.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "source",
-        "target"
-      ],
-      "type": "object"
-    },
-    "OneOrMany_for_EnvTarget": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/EnvTarget"
-        },
-        {
-          "items": {
-            "$ref": "#/definitions/EnvTarget"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "One value or a list of them."
-    },
-    "OneOrMany_for_Provider": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Provider"
-        },
-        {
-          "items": {
-            "$ref": "#/definitions/Provider"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "One value or a list of them."
-    },
-    "OneOrMany_for_String": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "One value or a list of them."
-    },
-    "Permissions": {
-      "anyOf": [
-        {
-          "description": "The name of a `[permissions.<name>]` profile.",
-          "type": "string"
-        },
-        {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "description": "Grants per resource ID; they make a profile named after the workload.",
-          "type": "object"
-        }
-      ],
-      "description": "A workload's permissions: a profile by name, or the grants themselves."
-    },
-    "Platform": {
-      "description": "Represents the target cloud platform.",
+    "StackInputProvider": {
+      "description": "Who can provide a stack input value.",
       "enum": [
-        "aws",
-        "gcp",
-        "azure",
-        "kubernetes",
-        "machines",
-        "local"
+        "developer",
+        "deployer"
       ],
       "type": "string"
     },
-    "Pool": {
+    "Storage": {
       "additionalProperties": false,
-      "description": "A machine pool. On machines deployments the pool name is what `join --capacity-group` takes.",
+      "description": "Represents an object storage bucket.",
       "properties": {
-        "architecture": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Architecture"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "CPU architecture of the machines."
-        },
-        "autoscaling": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Autoscaling"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Scale between a minimum and a maximum number of machines. Set this or `machines`."
-        },
-        "cpu": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/Cpu"
-            }
-          ],
-          "description": "CPU cores each machine needs, for example 4."
-        },
-        "data-disk": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/DataDisk"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "An extra empty block device each machine must provide: one size such as \"1Ti\", or a range each deployment picks from, `{ default = \"200Gi\", allowed = [\"0Gi\", \"4Ti\"] }`."
-        },
-        "ephemeral-storage": {
-          "default": null,
-          "description": "Size of the disk holding the operating system. Defaults to \"20Gi\".",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "failure-domain-spread": {
-          "default": null,
-          "description": "How many failure domains (zones) the pool's machines spread across, 1 to 255.",
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "gpu": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Gpu"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "A GPU each machine needs."
-        },
-        "machines": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Choice"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "A fixed number of machines: `2`, or a range each deployment picks from, `{ default = 2, allowed = [1, 5] }`. Set this or `autoscaling`."
-        },
-        "memory": {
-          "description": "Memory each machine needs, for example \"16Gi\".",
-          "type": "string"
-        },
-        "nested-virtualization": {
-          "default": null,
-          "description": "Whether machines must support nested virtualization (to run VMs inside them).",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "cpu",
-        "memory"
-      ],
-      "type": "object"
-    },
-    "Provider": {
-      "description": "Who provides an input's value.",
-      "oneOf": [
-        {
-          "description": "The developer, for each deployment.",
-          "enum": [
-            "developer"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Whoever installs the deployment.",
-          "enum": [
-            "deployer"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "ResourceLifecycle": {
-      "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
-      "oneOf": [
-        {
-          "description": "Frozen resources are owned by setup. Setup creates, updates, and deletes them. Alien may heartbeat them and may run explicit management operations when setup granted management permissions.",
-          "enum": [
-            "frozen"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Live resources are owned by Alien. Alien creates, updates, deletes, and replaces them after setup, so Live resources require provision permissions.",
-          "enum": [
-            "live"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "Runtime": {
-      "additionalProperties": false,
-      "description": "Container runtime settings of a daemon.",
-      "properties": {
-        "mounts": {
-          "description": "Host paths mounted into the container.",
+        "cors-allowed-origins": {
+          "description": "Browser origins allowed to read objects through signed URLs.\n\nWhen non-empty, providers configure CORS for `GET` and `HEAD` requests.\nAn origin of `*` is appropriate for private buckets whose signed URLs\nare bearer credentials and do not use browser cookies.\nDefault: `[]` (CORS disabled).",
           "items": {
-            "$ref": "#/definitions/Mount"
+            "type": "string"
           },
           "type": "array"
         },
-        "network-mode": {
-          "default": null,
-          "description": "\"host\" binds the daemon's ports on the machine itself, so `localhost:<port>` on the server reaches it. \"appnet\" is the default container network.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "description": {
+          "type": "string"
         },
-        "pid-namespace": {
-          "default": null,
-          "description": "\"host\" shares the machine's process namespace, \"private\" is the default.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "display-name": {
+          "type": "string"
         },
-        "privileged": {
-          "default": null,
-          "description": "Run with elevated host capabilities.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "user": {
-          "default": null,
-          "description": "Numeric uid, or uid:gid, to run as.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "Storage": {
-      "additionalProperties": false,
-      "description": "An object storage bucket.",
-      "properties": {
         "enabled-when": {
-          "default": null,
-          "description": "Create this bucket only when this deployer-provided boolean `[input.<id>]` is true.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "encryption-key": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "Customer-managed Key used by the provider's native storage encryption."
         },
         "lifecycle": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceLifecycle"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Who owns the bucket. Defaults to \"frozen\" (setup creates it)."
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "lifecycle-rules": {
+          "description": "List of rules for automatic object management (e.g., expiration).\nDefault: `[]` (empty list)",
+          "items": {
+            "$ref": "#/definitions/LifecycleRule"
+          },
+          "type": "array"
+        },
+        "notifications": {
+          "description": "Object notification rules delivered into queues (at most 10).\nOmitted when empty to preserve existing serialized configurations and setup digests.",
+          "items": {
+            "$ref": "#/definitions/StorageNotification"
+          },
+          "maxItems": 10,
+          "type": "array"
         },
         "public-read": {
-          "default": false,
-          "description": "Allow anyone to read objects without credentials.",
+          "description": "Allows public read access to objects without authentication.\nDefault: `false`",
+          "type": "boolean"
+        },
+        "remote-access": {
           "type": "boolean"
         },
         "versioning": {
-          "default": false,
-          "description": "Keep previous versions of overwritten objects.",
+          "description": "Enables object versioning.\nDefault: `false`",
           "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "StorageNotification": {
+      "additionalProperties": false,
+      "description": "Delivers matching object events to a queue in the same stack.\nRules on one Storage must not overlap: no object key may match two of them.\nDelivery is at least once, so consumers must tolerate duplicates.",
+      "properties": {
+        "events": {
+          "description": "Events to deliver. Defaults to object creation; v1 supports only `created`.",
+          "items": {
+            "$ref": "#/definitions/StorageNotificationEvent"
+          },
+          "type": "array"
+        },
+        "prefix": {
+          "description": "Literal object key prefix, non-empty and at most 512 UTF-8 bytes when set.",
+          "type": "string"
+        },
+        "queue": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "Target Queue. It must have the same lifecycle as the Storage."
+        },
+        "suffix": {
+          "description": "Literal object key suffix, non-empty and at most 128 UTF-8 bytes when set.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "type": "object"
+    },
+    "StorageNotificationEvent": {
+      "description": "Object events that can be delivered to a queue.",
+      "enum": [
+        "created"
+      ],
+      "type": "string"
+    },
+    "Vault": {
+      "additionalProperties": false,
+      "description": "Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for workers and services.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "VolumeBackups": {
+      "additionalProperties": false,
+      "description": "Scheduled snapshots of a persistent volume.\n\nThe cloud's own scheduler takes the snapshots (AWS Data Lifecycle Manager,\na Compute Engine snapshot schedule, or Azure Disk Backup), so they keep being\ntaken while the deployment is unreachable. Snapshots are crash-consistent:\nthe volume as it would be after a sudden power loss. When a container is\ndeleted, Alien keeps one final snapshot of each volume.\n\nKubernetes deployments leave volume backups to the cluster's own tooling,\nand local deployments don't snapshot volumes. Neither reports volumes in\n`ContainerOutputs.volumes` or a `volumeBackups` status.",
+      "properties": {
+        "enabled": {
+          "description": "Whether snapshots are taken. Defaults to true.",
+          "type": "boolean"
+        },
+        "interval": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24."
+        },
+        "retention": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Days each snapshot is kept, at most 365. Defaults to 7."
         }
       },
       "type": "object"
     },
-    "Toolchain": {
-      "description": "A build toolchain.",
+    "Worker": {
+      "additionalProperties": false,
+      "description": "Represents a serverless worker that executes code in response to triggers or direct invocations.\nWorkers are the primary compute resource in serverless applications, designed to be stateless and ephemeral.",
       "oneOf": [
         {
-          "description": "Cargo builds a binary, cross-compiled for the target machines.",
-          "enum": [
-            "rust"
-          ],
-          "type": "string"
+          "required": [
+            "image"
+          ]
         },
         {
-          "description": "Bun compiles the project to a single executable.",
-          "enum": [
-            "typescript"
+          "required": [
+            "build"
+          ]
+        }
+      ],
+      "properties": {
+        "build": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "description": "Rust with Cargo build system",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the binary to build and run",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "rust"
+                  ]
+                }
+              },
+              "required": [
+                "binary-name",
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "TypeScript/JavaScript compiled to single executable with Bun",
+              "properties": {
+                "binary-name": {
+                  "description": "Name of the compiled binary (defaults to package.json name if not specified)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "typescript"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Python application installed from a locked uv project",
+              "properties": {
+                "command": {
+                  "description": "Process argv used to start the application",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "package": {
+                  "description": "Workspace package to install (omit for a single-package project)",
+                  "type": "string"
+                },
+                "python-version": {
+                  "description": "Python version used by the runtime image (defaults to 3.12)",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "python"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Docker build from Dockerfile",
+              "properties": {
+                "build-args": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Build arguments for docker build",
+                  "type": "object"
+                },
+                "dockerfile": {
+                  "description": "Dockerfile path relative to src (default: \"Dockerfile\")",
+                  "type": "string"
+                },
+                "src": {
+                  "default": ".",
+                  "description": "The directory to build, relative to alien.toml.",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Multi-stage build target",
+                  "type": "string"
+                },
+                "toolchain": {
+                  "enum": [
+                    "docker"
+                  ]
+                }
+              },
+              "required": [
+                "toolchain"
+              ],
+              "type": "object"
+            }
           ],
+          "description": "Build from source: { toolchain = \"rust\", binary-name = \"<binary>\", src = \".\" }."
+        },
+        "commands-enabled": {
+          "default": false,
+          "description": "Whether the worker can receive remote commands via the Commands protocol.\nWhen enabled, the platform pushes commands into the Worker runtime,\nwhich executes registered handlers.",
+          "type": "boolean"
+        },
+        "concurrency-limit": {
+          "description": "Maximum number of concurrent executions allowed for the worker.\nNone means platform default applies.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "description": {
           "type": "string"
         },
-        {
-          "description": "A locked uv project.",
-          "enum": [
-            "python"
-          ],
+        "display-name": {
           "type": "string"
         },
-        {
-          "description": "A Dockerfile.",
-          "enum": [
-            "docker"
-          ],
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
           "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "description": "The ID of a stack input.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "plain",
+                      "secret"
+                    ]
+                  }
+                },
+                "required": [
+                  "input"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "description": "Environment variables: a literal, or { input = \"<id>\" } to take the value of a stack input.",
+          "type": "object"
+        },
+        "env-file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "A KEY=value file, or a list of them, relative to alien.toml."
+        },
+        "image": {
+          "description": "A prebuilt image to run, instead of `build`.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "links": {
+          "description": "List of resource references this worker depends on.",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$",
+              "type": "string"
+            }
+          ],
+          "description": "Memory allocated to the worker in megabytes (MB).\nDefault: 512\n\nPlatform-specific constraints:\n- **AWS Lambda**: 128-10240 MB in 1 MB increments\n- **GCP Cloud Run**: 128-32768 MB\n- **Azure Container Apps**: fixed CPU/memory pairs - 512, 1024, 1536, 2048, 2560,\n  3072, 3584, 4096 MB. Values below 512 are automatically rounded up at deploy time."
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "description": "A permission profile name, or the grants in place, which make a profile named after the resource."
+        },
+        "public-endpoints": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "description": "Public endpoint configuration for Worker resources.",
+                "properties": {
+                  "host-label": {
+                    "description": "Optional DNS label override for generated endpoint hostnames.",
+                    "type": "string"
+                  },
+                  "wildcard-subdomains": {
+                    "description": "Whether to route wildcard subdomains to this endpoint.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "type": "object"
+            }
+          ],
+          "description": "Public HTTP endpoints: a list of names, or a table by name."
+        },
+        "readiness-probe": {
+          "$ref": "#/definitions/ReadinessProbe",
+          "description": "Optional readiness probe configuration.\nOnly applicable for workers with Public ingress.\nWhen configured, the probe will be executed after provisioning/update to verify the worker is ready."
+        },
+        "remote-access": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 180"
+        },
+        "triggers": {
+          "description": "List of triggers that define what events automatically invoke this worker.\nIf empty, the worker is only invokable directly via HTTP calls or platform-specific invocation APIs.\nWhen configured, the worker will be automatically invoked when any of the specified trigger conditions are met.",
+          "items": {
+            "$ref": "#/definitions/WorkerTrigger"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "WorkerTrigger": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Worker triggered by queue messages. Single delivery unless batching is configured.",
+          "properties": {
+            "batch": {
+              "$ref": "#/definitions/QueueBatchConfig",
+              "description": "Optional batch delivery configuration; omitted preserves single-message handlers."
+            },
+            "queue": {
+              "$ref": "#/definitions/ResourceRef",
+              "description": "Reference to the queue resource"
+            }
+          },
+          "required": [
+            "queue"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Worker triggered by storage events (object created, deleted, etc.)",
+          "properties": {
+            "events": {
+              "description": "Events to trigger on (e.g., [\"created\", \"deleted\"])",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "storage": {
+              "$ref": "#/definitions/ResourceRef",
+              "description": "Reference to the storage resource"
+            }
+          },
+          "required": [
+            "storage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Worker triggered on a schedule (cron expression)",
+          "properties": {
+            "schedule": {
+              "description": "Cron expression for scheduling (standard 5-field unix cron)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schedule"
+          ],
+          "type": "object"
         }
       ]
     }
   },
-  "description": "A stack written as `alien.toml`.\n\nIt describes the same resources as an `alien.ts` file and resolves to the same stack.",
+  "description": "An Alien stack written in TOML.",
   "properties": {
+    "ai": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Ai"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "artifact-registry": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ArtifactRegistry"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "build-environment": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Build"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
     "cluster": {
-      "default": null,
-      "description": "ID of the compute cluster that holds the pools. Defaults to \"compute\". Set it when moving an existing stack to alien.toml so its cluster keeps its ID.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "additionalProperties": false,
+      "description": "The compute cluster that holds the pools. Its ID defaults to `compute`.",
+      "properties": {
+        "container-cidr": {
+          "description": "Container CIDR block for internal container networking.\nAuto-generated as \"10.244.0.0/16\" if not specified.\nEach machine gets a /24 subnet from this range.",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "id": {
+          "description": "Unique identifier for the container cluster.\nMust contain only alphanumeric characters, hyphens, and underscores.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "node-permissions": {
+          "$ref": "#/definitions/PermissionProfile",
+          "description": "Explicit grants for the node identity, keyed by concrete resource ID.\nIndependent of workload permission profiles; absent grants no data access."
+        },
+        "node-permissions-platforms": {
+          "description": "Cloud platforms on which the explicit node grants apply; absent applies everywhere.",
+          "items": {
+            "$ref": "#/definitions/Platform"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "container": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Container"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
     },
     "daemon": {
       "additionalProperties": {
         "$ref": "#/definitions/Daemon"
       },
-      "description": "Daemons: one process on every machine of their pool.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "dynamic-container-image-resources": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "dynamic-container-repositories": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "email": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Email"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "experimental": {
+      "additionalProperties": false,
+      "properties": {
+        "aws-opensearch": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AwsOpenSearch"
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "type": "object"
+        }
+      },
+      "required": [],
       "type": "object"
     },
     "input": {
       "additionalProperties": {
-        "$ref": "#/definitions/Input"
+        "$ref": "#/definitions/AuthoredInput"
       },
-      "description": "Stack inputs: values provided per deployment, by the developer or the deployer.",
+      "description": "Values the deployer or developer provides, keyed by ID.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
       "type": "object"
     },
+    "key": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Key"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "kv": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Kv"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "management-permissions": {
+      "$ref": "#/definitions/ManagementPermissions"
+    },
     "name": {
-      "description": "Stack name. Letters, digits, hyphens and underscores, up to 128 characters.",
+      "description": "The stack's name: letters, digits, hyphens and underscores.",
+      "pattern": "^[A-Za-z0-9_-]{1,128}$",
       "type": "string"
     },
-    "permissions": {
+    "operations": {
       "additionalProperties": {
         "additionalProperties": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "$ref": "#/definitions/OperationSettingValue"
+        },
+        "properties": {
+          "approval": {
+            "additionalProperties": {
+              "$ref": "#/definitions/OperationApproval"
+            },
+            "type": "object"
+          }
         },
         "type": "object"
       },
-      "default": {},
-      "description": "Permission profiles, by name. Each maps a resource ID (or \"*\" for every resource) to the permission sets granted on it, such as `[\"storage/data-read\"]`.",
+      "description": "Operations plugins, keyed by name; custom ones are \"name@version\" or tables.",
+      "properties": {
+        "custom": {
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^.+@[^@]+$",
+                "type": "string"
+              },
+              {
+                "additionalProperties": {
+                  "$ref": "#/definitions/OperationSettingValue"
+                },
+                "properties": {
+                  "approval": {
+                    "additionalProperties": {
+                      "$ref": "#/definitions/OperationApproval"
+                    },
+                    "type": "object"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "version"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "permissions": {
+      "additionalProperties": {
+        "$ref": "#/definitions/PermissionProfile"
+      },
+      "description": "Permission profiles, keyed by name.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
       "type": "object"
     },
     "platforms": {
-      "default": null,
-      "description": "Platforms this stack can be deployed to. Omit to allow every platform.",
+      "description": "Platforms the stack deploys to. Omit for all.",
       "items": {
         "$ref": "#/definitions/Platform"
       },
-      "type": [
-        "array",
-        "null"
-      ]
+      "type": "array"
     },
     "pool": {
       "additionalProperties": {
-        "$ref": "#/definitions/Pool"
+        "additionalProperties": false,
+        "description": "A pool of machines: what each needs, and how many run.\n\nSet `machines` for a fixed count or `autoscaling` for a range, not both.",
+        "properties": {
+          "architecture": {
+            "$ref": "#/definitions/Architecture",
+            "description": "CPU architecture the machines must have."
+          },
+          "autoscaling": {
+            "$ref": "#/definitions/AuthoredAutoscaling",
+            "description": "Machines scale between a minimum and a maximum."
+          },
+          "cpu": {
+            "$ref": "#/definitions/CpuAmount",
+            "description": "CPU cores per machine: a number, or a quantity such as `\"500m\"`."
+          },
+          "data-disk": {
+            "$ref": "#/definitions/DataDiskSize",
+            "description": "An extra empty data disk each machine must provide."
+          },
+          "dynamic-containers": {
+            "description": "Containers created after installation run on this pool. One pool may set it.",
+            "type": "boolean"
+          },
+          "ephemeral-storage": {
+            "description": "Size of the disk holding the operating system. `\"20Gi\"` when unset.",
+            "type": "string"
+          },
+          "failure-domain-spread": {
+            "description": "How many failure domains the pool spreads across, 1 to 255.",
+            "type": "integer"
+          },
+          "gpu": {
+            "$ref": "#/definitions/GpuSpec",
+            "description": "GPUs each machine must have."
+          },
+          "machines": {
+            "$ref": "#/definitions/ComputeChoice",
+            "description": "A fixed number of machines, or a range a deployment chooses from."
+          },
+          "memory": {
+            "description": "Memory per machine, for example `\"16Gi\"`.",
+            "type": "string"
+          },
+          "nested-virtualization": {
+            "description": "Whether the machines must support nested virtualization.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cpu",
+          "memory"
+        ],
+        "type": "object"
       },
-      "description": "Machine pools: what hardware each pool's machines need and how many run.",
+      "description": "Groups of machines containers and daemons run on, keyed by name.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "postgres": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Postgres"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "queue": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Queue"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "sandbox": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Sandbox"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "service-account": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ServiceAccount"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
       "type": "object"
     },
     "storage": {
       "additionalProperties": {
         "$ref": "#/definitions/Storage"
       },
-      "description": "Object storage buckets.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "vault": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Vault"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "worker": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Worker"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
       "type": "object"
     }
   },

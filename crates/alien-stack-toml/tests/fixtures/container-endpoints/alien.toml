@@ -1,0 +1,35 @@
+name = "acme-endpoints"
+platforms = ["aws", "gcp"]
+
+# An endpoint adds its port after the ports already listed, and the protocol is http
+# unless said otherwise.
+[container.web]
+image = "ghcr.io/acme/web:1.0.0"
+cpu = 1
+memory = "1Gi"
+ports = [9000]
+
+[container.web.public-endpoints]
+site = { port = 3000 }
+
+# Endpoints on a port that is already listed add nothing. Every endpoint of one
+# container routes to the same port.
+[container.gateway]
+image = "ghcr.io/acme/gateway:1.0.0"
+cpu = 1
+memory = "1Gi"
+ports = [8080, 5432]
+
+[container.gateway.public-endpoints]
+api = { port = 8080, host-label = "api" }
+admin = { port = 8080, host-label = "admin", protocol = "http" }
+apps = { port = 8080, host-label = "apps", wildcard-subdomains = true }
+
+# A raw TCP endpoint.
+[container.database]
+image = "ghcr.io/acme/database:1.0.0"
+cpu = 2
+memory = "4Gi"
+
+[container.database.public-endpoints]
+sql = { port = 5432, protocol = "tcp" }

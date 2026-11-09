@@ -1,0 +1,154 @@
+{
+  "id": "acme-endpoints",
+  "permissions": {
+    "profiles": {
+      "web": {},
+      "gateway": {},
+      "database": {}
+    }
+  },
+  "resources": {
+    "web": {
+      "config": {
+        "id": "web",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/web:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "web",
+        "ports": [
+          {
+            "port": 9000
+          },
+          {
+            "port": 3000
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "name": "site",
+            "port": 3000,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "gateway": {
+      "config": {
+        "id": "gateway",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/gateway:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "gateway",
+        "ports": [
+          {
+            "port": 8080
+          },
+          {
+            "port": 5432
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "hostLabel": "api",
+            "name": "api",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          },
+          {
+            "hostLabel": "admin",
+            "name": "admin",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          },
+          {
+            "hostLabel": "apps",
+            "name": "apps",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": true
+          }
+        ],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "database": {
+      "config": {
+        "id": "database",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/database:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "database",
+        "ports": [
+          {
+            "port": 5432
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "name": "sql",
+            "port": 5432,
+            "protocol": "tcp",
+            "wildcardSubdomains": false
+          }
+        ],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

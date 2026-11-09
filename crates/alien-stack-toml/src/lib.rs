@@ -16,22 +16,39 @@
 //!
 //! Errors point at the line and column of the offending value. Unknown keys are errors.
 
-mod document;
+mod canonical;
 mod env_file;
 mod error;
+mod node;
 mod resolve;
+mod schema;
 mod source;
+mod sugar;
 mod suggest;
+mod units;
 
 use std::path::Path;
 
 use alien_core::Stack;
 use alien_error::{Context, IntoAlienError};
+use toml::de::DeTable;
 
-pub use document::{Document, DAEMON_KEYS};
 pub use error::{ErrorData, Result};
 pub use resolve::DEFAULT_CLUSTER_ID;
 use source::SourceFile;
+
+/// What the tests that generate the editor schema (`schema/alien.toml.json`) read from the
+/// resolver, so the schema cannot drift from the keys the resolver accepts.
+#[doc(hidden)]
+pub mod authoring {
+    pub use crate::canonical::{allowed_keys, author_key, split_unit, Vocabulary};
+    pub use crate::sugar::vocabulary;
+    pub use crate::units::UnitSuffix;
+}
+
+/// The JSON schema editors check an `alien.toml` against, which the file's
+/// `#:schema` line points at.
+pub const EDITOR_SCHEMA: &str = include_str!("../schema/alien.toml.json");
 
 /// Loads the stack in the `alien.toml` file at `path`.
 pub fn load(path: &Path) -> Result<Stack> {
@@ -54,60 +71,14 @@ pub fn parse(text: &str, file_name: &str, base_dir: &Path) -> Result<Stack> {
         name: file_name.to_string(),
         text,
     };
-    let document: Document = toml::from_str(text)
-        .map_err(|error| file.error(error.span().unwrap_or(0..0), toml_message(&error)))?;
-    resolve::resolve(document, &file, base_dir)
+    let document = DeTable::parse(text)
+        .map_err(|error| file.error(error.span().unwrap_or(0..0), error.message().trim_end()))?;
+    resolve::resolve(node::from_document(document), &file, base_dir)
 }
 
-/// The JSON schema of `alien.toml`, for editor completion (Taplo, Even Better TOML).
-///
-/// Object keys are sorted, so the schema is the same whether or not serde_json's
-/// `preserve_order` feature is enabled in the build.
-pub fn json_schema() -> serde_json::Value {
-    let mut schema = schemars::schema_for!(Document);
-    schema.schema.metadata().id = Some("https://alien.dev/schemas/alien.toml.json".to_string());
-    sort_keys(serde_json::to_value(schema).expect("a JSON schema serializes"))
-}
-
-fn sort_keys(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(object) => {
-            let mut entries: Vec<_> = object.into_iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            serde_json::Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, sort_keys(value)))
-                    .collect(),
-            )
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.into_iter().map(sort_keys).collect())
-        }
-        other => other,
-    }
-}
-
-/// The parser's message without its own location prefix, with a "did you mean" hint after
-/// an unknown key or value that is close to a valid one.
-fn toml_message(error: &toml::de::Error) -> String {
-    let message = error.message().trim_end().to_string();
-    let Some((name_end, unknown, expected)) = unknown_and_expected(&message) else {
-        return message;
-    };
-    let hint = suggest::hint(unknown, expected);
-    format!("{}{hint}{}", &message[..name_end], &message[name_end..])
-}
-
-/// For serde's "unknown field `x`, expected one of `a`, `b`": where the rejected name ends,
-/// the name, and the valid ones.
-fn unknown_and_expected(message: &str) -> Option<(usize, &str, Vec<&str>)> {
-    let prefix = ["unknown field `", "unknown variant `"]
-        .into_iter()
-        .find(|prefix| message.starts_with(prefix))?;
-    let rest = &message[prefix.len()..];
-    let (unknown, expected) = rest.split_once('`')?;
-    let name_end = prefix.len() + unknown.len() + 1;
-    let expected = expected.split('`').skip(1).step_by(2).collect();
-    Some((name_end, unknown, expected))
+/// The resolved stack of the `alien.toml` file at `path`, as the JSON the deployment
+/// engine reads. It is every default and expansion made visible.
+pub fn expand(path: &Path) -> Result<serde_json::Value> {
+    let stack = load(path)?;
+    Ok(serde_json::to_value(stack).expect("a stack serializes"))
 }

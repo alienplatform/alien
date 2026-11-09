@@ -1,0 +1,35 @@
+name = "acme-resources"
+platforms = ["aws", "gcp", "azure"]
+
+# Plain values are fixed: the minimum and the desired amount are the same.
+[container.fixed]
+image = "ghcr.io/acme/fixed:1.0.0"
+cpu = 0.5
+memory = "512Mi"
+ephemeral-storage = "10Gi"
+
+# A range lets the deployer choose; `default` is what applies when they do not.
+[container.both-ranges]
+image = "ghcr.io/acme/ranges:1.0.0"
+cpu = { default = 1.5, allowed = [0.5, 8] }
+memory = { default = "3Gi", allowed = ["1Gi", "32Gi"] }
+ephemeral-storage = "50Gi"
+
+# One dimension a range, the other fixed.
+[container.cpu-range]
+image = "ghcr.io/acme/ranges:1.0.0"
+cpu = { default = 2, allowed = [1, 4] }
+memory = "2Gi"
+
+[container.memory-range]
+image = "ghcr.io/acme/ranges:1.0.0"
+cpu = 2
+memory = { default = "8Gi", allowed = ["4Gi", "64Gi"] }
+
+# A GPU with a fixed amount of everything else.
+[container.trainer]
+image = "ghcr.io/acme/trainer:1.0.0"
+cpu = 8
+memory = "64Gi"
+ephemeral-storage = "500Gi"
+gpu = { type = "nvidia-a100", count = 4 }

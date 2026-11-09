@@ -1,0 +1,29 @@
+{
+  "id": "acme-pinned-operations",
+  "operations": {
+    "custom": [
+      {
+        "name": "acme-metrics",
+        "version": "1.2.0"
+      },
+      {
+        "name": "@acme/diagnostics",
+        "version": "1.4.0"
+      },
+      {
+        "approval": {
+          "*": "auto"
+        },
+        "settings": {
+          "mode": "dry-run"
+        },
+        "name": "acme-cleanup",
+        "version": "2.0.0"
+      }
+    ]
+  },
+  "resources": {},
+  "supportedPlatforms": [
+    "gcp"
+  ]
+}

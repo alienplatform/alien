@@ -1,6 +1,8 @@
 name = "edge-fleet"
 platforms = ["machines", "aws", "gcp"]
-cluster = "edge-runtime"
+
+[cluster]
+id = "edge-runtime"
 
 [pool.servers]
 cpu = 8

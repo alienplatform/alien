@@ -1,0 +1,26 @@
+{
+  "id": "acme-every-platform",
+  "resources": {
+    "data": {
+      "config": {
+        "id": "data",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "test",
+    "local",
+    "kubernetes",
+    "machines",
+    "azure",
+    "gcp",
+    "aws"
+  ]
+}

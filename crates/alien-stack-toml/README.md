@@ -115,10 +115,18 @@ A permission profile maps resource IDs, or `"*"` for every resource, to the perm
 snapshots = ["storage/data-read", "storage/data-write"]
 ```
 
+## Inspecting the resolved stack
+
+`alien stack expand [path]` prints the stack an `alien.toml` resolves to as JSON, with every default and expansion made visible, and nothing else on stdout. `path` is an `alien.toml` or a directory that holds one, and defaults to the current directory. Errors name the file, line and column.
+
 ## Editor support
 
-The JSON schema in [`schema/alien.toml.json`](schema/alien.toml.json) is generated from this crate's types. With Taplo or Even Better TOML, the `#:schema` comment on the first line enables completion and validation. Regenerate it with `ALIEN_UPDATE_SCHEMA=1 cargo test -p alien-stack-toml --test schema`.
+[`schema/alien.toml.json`](schema/alien.toml.json) is a JSON schema in the spelling authors use (kebab-case keys, `"2m"` and `"512Mi"` for durations and sizes, the shorthand forms). With Taplo or Even Better TOML, the `#:schema` comment on the first line enables completion and validation. It is generated from the same type definitions the resolver reads, and a test fails when the checked-in file is stale. Regenerate it with `UPDATE_SCHEMA=1 cargo test -p alien-stack-toml --test schema`.
 
 ## Tests
 
-`tests/fixtures/<case>/` pairs an `alien.toml` with the equivalent `alien.ts`. `tests/fixtures/regenerate.sh` evaluates each `alien.ts` with the TypeScript SDK in this repository and writes `expected.json`. `tests/differential.rs` requires the TOML side to resolve to the same stack.
+- `tests/fixtures/<case>/` pairs an `alien.toml` with the equivalent `alien.ts`. `tests/fixtures/regenerate.sh [case...]` evaluates each `alien.ts` with the TypeScript SDK in this repository and writes `expected.json`. `tests/differential.rs` requires the TOML side to resolve to the same stack.
+- `tests/coverage.rs` requires every field of the editor schema to be written by at least one fixture.
+- `tests/editor_schema.rs` checks every fixture against the editor schema, and that the schema rejects what the resolver rejects.
+- `tests/errors.rs` checks the position and wording of errors.
+- `tests/expand.rs` checks that `expand` returns the loaded stack, as JSON, for every fixture.

@@ -1,0 +1,173 @@
+{
+  "id": "acme-workload-keys",
+  "inputs": [
+    {
+      "description": "Token the worker and the packager present to the control plane.",
+      "env": [
+        {
+          "name": "API_TOKEN",
+          "targetResources": [
+            "configured",
+            "packager"
+          ]
+        }
+      ],
+      "id": "api_token",
+      "kind": "secret",
+      "label": "API token",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "Region the worker reports from.",
+      "env": [
+        {
+          "name": "REGION",
+          "targetResources": [
+            "configured",
+            "packager"
+          ],
+          "type": "plain"
+        }
+      ],
+      "id": "region",
+      "kind": "string",
+      "label": "Region",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "ported": {},
+      "configured": {},
+      "packager": {}
+    }
+  },
+  "resources": {
+    "ported": {
+      "config": {
+        "id": "ported",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/ported:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "ported",
+        "ports": [
+          {
+            "port": 8080
+          },
+          {
+            "port": 9090
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "described": {
+      "config": {
+        "id": "described",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/described:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": [
+          {
+            "name": "relay",
+            "port": 7000,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ]
+      },
+      "dependencies": [],
+      "description": "Resident agent that relays HTTP.",
+      "lifecycle": "live",
+      "remoteAccess": true
+    },
+    "configured": {
+      "config": {
+        "id": "configured",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/configured:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {
+          "APP_MODE": "standard",
+          "APP_GREETING": "hello, \"world\"",
+          "APP_PATTERN": "^[a-z]+$ # kept",
+          "LOG_LEVEL": "warn",
+          "APP_REGION": "eu-west-1",
+          "MODE": "worker"
+        },
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "configured",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "displayName": "Configured worker",
+      "lifecycle": "frozen"
+    },
+    "packager": {
+      "config": {
+        "id": "packager",
+        "type": "build",
+        "environment": {
+          "APP_MODE": "standard",
+          "APP_GREETING": "hello, \"world\"",
+          "APP_PATTERN": "^[a-z]+$ # kept",
+          "LOG_LEVEL": "warn",
+          "APP_REGION": "eu-west-1",
+          "CHANNEL": "stable"
+        },
+        "links": [],
+        "permissions": "packager"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws"
+  ]
+}

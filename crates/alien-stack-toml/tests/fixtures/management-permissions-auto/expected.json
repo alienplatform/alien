@@ -1,0 +1,30 @@
+{
+  "id": "acme-management-auto",
+  "permissions": {
+    "management": "auto",
+    "profiles": {
+      "reader": {
+        "reports": [
+          "storage/data-read"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

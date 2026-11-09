@@ -1,0 +1,8 @@
+name = "acme-key"
+platforms = ["aws", "gcp", "azure"]
+
+[key.records]
+display-name = "Records key"
+description = "Customer-managed key for the records at rest."
+lifecycle = "frozen"
+remote-access = true

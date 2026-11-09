@@ -1,0 +1,17 @@
+{
+  "id": "acme-any-platform",
+  "resources": {
+    "data": {
+      "config": {
+        "id": "data",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  }
+}

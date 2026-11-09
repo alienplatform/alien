@@ -1,0 +1,133 @@
+{
+  "id": "acme-links",
+  "permissions": {
+    "profiles": {
+      "api": {},
+      "database": {}
+    }
+  },
+  "resources": {
+    "uploads": {
+      "config": {
+        "id": "uploads",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "sessions": {
+      "config": {
+        "id": "sessions",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "secrets": {
+      "config": {
+        "id": "secrets",
+        "type": "vault"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/api:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "secrets",
+            "type": "vault"
+          },
+          {
+            "id": "uploads",
+            "type": "storage"
+          },
+          {
+            "id": "database",
+            "type": "container"
+          },
+          {
+            "id": "jobs",
+            "type": "queue"
+          },
+          {
+            "id": "sessions",
+            "type": "kv"
+          }
+        ],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "api",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "database": {
+      "config": {
+        "id": "database",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/database:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "database",
+        "ports": [
+          {
+            "port": 5432
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}
