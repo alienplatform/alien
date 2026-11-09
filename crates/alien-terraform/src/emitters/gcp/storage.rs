@@ -19,7 +19,7 @@ use alien_core::{
     import::EmitContext,
     storage_notifications::{gcs_notification_configs, GCS_RULE_ATTRIBUTE},
     LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    ServiceAccount, Storage,
+    ServiceAccount, Storage, GCP_SIGNED_UPLOAD_HEADERS,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -257,6 +257,36 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
                         .to_vec(),
                     ),
                 ),
+                attr("max_age_seconds", Expression::from(3600)),
+            ],
+        )));
+    }
+
+    if !storage.cors_upload_origins.is_empty() {
+        let strings = |values: &[&str]| {
+            Expression::Array(
+                values
+                    .iter()
+                    .map(|v| Expression::String((*v).to_string()))
+                    .collect(),
+            )
+        };
+        body.push(nested(block(
+            "cors",
+            [
+                attr(
+                    "origin",
+                    Expression::Array(
+                        storage
+                            .cors_upload_origins
+                            .iter()
+                            .cloned()
+                            .map(Expression::String)
+                            .collect(),
+                    ),
+                ),
+                attr("method", strings(&["PUT"])),
+                attr("response_header", strings(GCP_SIGNED_UPLOAD_HEADERS)),
                 attr("max_age_seconds", Expression::from(3600)),
             ],
         )));

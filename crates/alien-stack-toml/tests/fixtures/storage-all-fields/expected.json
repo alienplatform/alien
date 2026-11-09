@@ -51,6 +51,9 @@
           "https://app.acme.example",
           "https://admin.acme.example"
         ],
+        "corsUploadOrigins": [
+          "https://app.acme.example"
+        ],
         "encryptionKey": {
           "id": "bucket-key",
           "type": "key"

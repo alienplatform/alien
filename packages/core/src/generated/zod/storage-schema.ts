@@ -13,6 +13,7 @@ import { StorageNotificationSchema } from "./storage-notification-schema.js";
  */
 export const StorageSchema = z.object({
     "corsAllowedOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to read objects through signed URLs.\n\nWhen non-empty, providers configure CORS for `GET` and `HEAD` requests.\nAn origin of `*` is appropriate for private buckets whose signed URLs\nare bearer credentials and do not use browser cookies.\nDefault: `[]` (CORS disabled).")),
+"corsUploadOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to upload objects through signed URLs.\n\nWhen non-empty, providers also configure CORS for single-request `PUT` uploads from\nthese origins (a presigned or SAS URL, or one presigned multipart part) and expose\n`ETag`. Allowed request headers: `Content-Type` and `Content-MD5` everywhere;\n`Content-Disposition`, `Content-Encoding`, `Cache-Control` and `x-amz-*` on S3;\nthe same content headers and `x-goog-content-length-range` on Cloud Storage, which\ncan't allow `x-goog-meta-*`; `x-ms-*` on Azure. Uploads that start with `POST`, such\nas multipart create and complete or resumable uploads, are not covered.\n\nEach origin is `*` or `scheme://host[:port]`; S3 also accepts one `*` wildcard, such\nas `https://*.example.com`.\nOmitted when empty to preserve existing serialized configurations and setup digests.")),
 get "encryptionKey"(){
                 return z.union([ResourceRefSchema, z.null()]).optional()
               },

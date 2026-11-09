@@ -82,7 +82,7 @@ fn automatic_setup_unsupported_resource(
         && entry
             .config
             .downcast_ref::<Storage>()
-            .is_some_and(|storage| !storage.cors_allowed_origins.is_empty())
+            .is_some_and(|storage| storage.has_cors())
     {
         return Some("storage with CORS origins".to_string());
     }
