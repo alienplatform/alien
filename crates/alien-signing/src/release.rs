@@ -86,6 +86,11 @@ pub const LOADER_ENV: &[&str] = &[
 /// exported shell functions.
 pub const LOADER_ENV_PREFIXES: &[&str] = &["LD_", "DYLD_", "BASH_FUNC_", "CORECLR_"];
 
+/// Names a request never fills, whatever the signed release says: the address
+/// the worker runtime listens on, and the list of public URLs. Releases signed
+/// before these left the provided list may still name them.
+const NEVER_FROM_REQUEST: &[&str] = &["ALIEN_WORKER_GRPC_ADDRESS", "ALIEN_PUBLIC_ENDPOINTS_JSON"];
+
 /// Whether the workload's runtime ships telemetry: a switch the deployment sets, which can't say
 /// where the telemetry goes.
 pub const RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -605,6 +610,11 @@ pub fn build_workload(
             }
             env.insert(key.clone(), value.clone());
             continue;
+        }
+        if NEVER_FROM_REQUEST.contains(&key.as_str()) {
+            return Err(refuse(format!(
+                "env {key} is set by the runtime, not by the control plane"
+            )));
         }
         if is_loader_env(key) || !workload.provided_env.contains(key) {
             return Err(refuse(format!("env {key} is not in the signed release")));

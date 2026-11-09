@@ -121,6 +121,7 @@ const AWS_SHARING_WRITES: &[&str] = &[
     "sns:CreateTopic",
     "sns:SetTopicAttributes",
     "sqs:AddPermission",
+    "ssm:PutResourcePolicy",
 ];
 
 /// Changing the value of an SSM parameter, which is where vault values live.
@@ -401,14 +402,24 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
             {
                 "Sid": "CreateThisInstallsMachineGroups",
                 "Effect": "Allow",
-                "Action": [
-                    "autoscaling:CreateAutoScalingGroup",
-                    "autoscaling:CreateOrUpdateTags"
-                ],
+                "Action": "autoscaling:CreateAutoScalingGroup",
                 "Resource": format!(
                     "arn:aws:autoscaling:{region}:{account}:autoScalingGroup:*:autoScalingGroupName/{prefix}-*"
                 ),
                 "Condition": { "StringEquals": own_tag }
+            },
+            {
+                // A group already tagged for another install is not retagged into this one.
+                "Sid": "TagThisInstallsMachineGroups",
+                "Effect": "Allow",
+                "Action": "autoscaling:CreateOrUpdateTags",
+                "Resource": format!(
+                    "arn:aws:autoscaling:{region}:{account}:autoScalingGroup:*:autoScalingGroupName/{prefix}-*"
+                ),
+                "Condition": {
+                    "StringEquals": own_tag,
+                    "StringEqualsIfExists": { "aws:ResourceTag/deployment": prefix }
+                }
             },
             {
                 // Only groups tagged for this install, so the name prefix alone cannot reach
@@ -602,6 +613,10 @@ mod tests {
             (
                 "sqs:AddPermission",
                 "arn:aws:sqs:us-east-1:111122223333:acme-jobs",
+            ),
+            (
+                "ssm:PutResourcePolicy",
+                "arn:aws:ssm:us-east-1:111122223333:parameter/acme-secrets-DB_URL",
             ),
         ] {
             assert!(denies(&limits, action, resource), "{action} on {resource}");

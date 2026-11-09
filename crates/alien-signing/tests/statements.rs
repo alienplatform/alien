@@ -621,6 +621,26 @@ fn an_expired_signer_list_refuses_everything() {
 }
 
 #[test]
+fn a_release_that_lists_runtime_addresses_as_provided_still_refuses_them() {
+    let mut release = release_body();
+    for name in ["ALIEN_WORKER_GRPC_ADDRESS", "ALIEN_PUBLIC_ENDPOINTS_JSON"] {
+        release.workloads[0].provided_env.push(name.to_string());
+    }
+    for (name, value) in [
+        ("ALIEN_WORKER_GRPC_ADDRESS", "0.0.0.0:51351"),
+        ("ALIEN_PUBLIC_ENDPOINTS_JSON", "{}"),
+    ] {
+        let request = WorkloadRequest {
+            env: BTreeMap::from([(name.to_string(), value.to_string())]),
+            ..WorkloadRequest::default()
+        };
+        let error = build_workload(&release, "web", &BTreeMap::new(), &local(), &request)
+            .expect_err(name);
+        assert_eq!(error.code, "SIGNING_WORKLOAD_REFUSED", "{name}");
+    }
+}
+
+#[test]
 fn control_plane_changes_to_a_workload_are_refused() {
     let release = release_body();
     release.validate().unwrap();

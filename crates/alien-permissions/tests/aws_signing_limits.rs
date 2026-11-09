@@ -85,3 +85,28 @@ fn the_verifier_creates_groups_only_with_its_installs_tag() {
         assert_eq!(evaluate(&policy, &other), Decision::NotAllowed, "{action}");
     }
 }
+
+#[test]
+fn the_verifier_cannot_retag_another_installs_group_to_reach_it() {
+    let policy = verifier();
+    // The name starts with `acme-` and the request tag is the install's own, but the
+    // group already carries another install's tag.
+    let retag = Request::new(
+        "autoscaling:CreateOrUpdateTags",
+        group("acme-prod-compute-general"),
+    )
+    .request_tags(&[("deployment", "acme")])
+    .resource_tags(&[("deployment", "acme-prod")]);
+    assert_eq!(evaluate(&policy, &retag), Decision::NotAllowed);
+
+    // Tagging a group that has no tag yet, or already has the install's, still works.
+    for resource_tags in [&[][..], &[("deployment", "acme")][..]] {
+        let own = Request::new(
+            "autoscaling:CreateOrUpdateTags",
+            group("acme-compute-general"),
+        )
+        .request_tags(&[("deployment", "acme")])
+        .resource_tags(resource_tags);
+        assert_eq!(evaluate(&policy, &own), Decision::Allowed);
+    }
+}
