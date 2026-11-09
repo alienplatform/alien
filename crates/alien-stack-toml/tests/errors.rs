@@ -565,7 +565,8 @@ fn env_file_paths_stay_inside_the_project() {
         "is outside the directory of alien.toml",
     ));
     for (path, reason) in cases {
-        let error = reject_in(&project, &format!("{DAEMON}env-file = \"{path}\"\n"));
+        // A literal (single-quoted) string, so Windows backslashes are not escapes.
+        let error = reject_in(&project, &format!("{DAEMON}env-file = '{path}'\n"));
         assert_eq!((error.line, error.column), (5, 12), "{path}");
         assert_eq!(error.file, "alien.toml", "{path}");
         assert!(error.message.contains(reason), "{path}: {}", error.message);
