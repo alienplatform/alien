@@ -62,7 +62,7 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceRedisSecretRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && (resource.name == \"projects/${projectNumber}/secrets/${resourceName}-auth\" || resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-auth/\")) && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
             }
           }
         }

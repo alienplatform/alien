@@ -381,20 +381,34 @@ fn gcp_context(resource: &str) -> PermissionContext {
         .with_project_number("123456789012")
 }
 
-/// Evaluates the `startsWith` clauses of a rendered Secret Manager condition against a secret.
+/// Evaluates the `==` and `startsWith` clauses of a rendered Secret Manager condition against a
+/// secret (or secret version) resource name.
 fn gcp_condition_allows(expression: &str, secret_resource_name: &str) -> bool {
+    let atom = |atom: &str| -> bool {
+        let atom = atom.trim().trim_start_matches('(');
+        let quoted = || {
+            let start = atom.find('"').expect("quoted value") + 1;
+            let end = atom.rfind('"').expect("quoted value");
+            &atom[start..end]
+        };
+        if atom.starts_with("resource.name ==") {
+            return secret_resource_name == quoted();
+        }
+        if atom.starts_with("resource.name.startsWith(") {
+            return secret_resource_name.starts_with(quoted());
+        }
+        panic!("unknown clause {atom}");
+    };
     expression.split("&&").all(|clause| {
         let clause = clause.trim();
         let (negated, clause) = match clause.strip_prefix('!') {
             Some(rest) => (true, rest),
             None => (false, clause),
         };
-        if let Some(rest) = clause.strip_prefix("resource.name.startsWith(\"") {
-            let prefix = rest.trim_end_matches("\")");
-            return secret_resource_name.starts_with(prefix) != negated;
+        if clause.contains("resource.type ==") {
+            return true;
         }
-        // The type clause: the secret is a Secret, or one of its versions.
-        clause.starts_with("(resource.type ==") || clause.starts_with("resource.type ==")
+        clause.split("||").any(atom) != negated
     })
 }
 
@@ -440,6 +454,37 @@ fn gcp_secret_writes_stay_on_the_resources_own_secrets() {
             assert!(!gcp_condition_allows(expression, other_stack), "{id}");
             assert!(!gcp_condition_allows(expression, deployer), "{id}");
         }
+    }
+}
+
+/// A workload granted `redis/data-access` on `cache` reads that resource's connection secret
+/// and its versions, and never the secret of a sibling whose id starts with `cache-`.
+#[test]
+fn gcp_data_access_does_not_reach_sibling_resources_with_a_longer_id() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let own = "projects/123456789012/secrets/my-stack-cache-auth";
+    let own_version = "projects/123456789012/secrets/my-stack-cache-auth/versions/3";
+    let sibling = "projects/123456789012/secrets/my-stack-cache-prod-auth";
+    let sibling_version = "projects/123456789012/secrets/my-stack-cache-prod-auth/versions/1";
+    for id in ["redis/data-access", "redis/provision", "redis/management"] {
+        let plan = generator
+            .generate_grant_plan(
+                get_permission_set(id).unwrap(),
+                BindingTarget::Resource,
+                &gcp_context("my-stack-cache"),
+            )
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        let expression = plan
+            .bindings
+            .iter()
+            .filter_map(|b| b.condition.as_ref())
+            .map(|c| c.expression.clone())
+            .next()
+            .unwrap_or_else(|| panic!("{id}: a conditioned secret binding"));
+        assert!(gcp_condition_allows(&expression, own), "{id}: {expression}");
+        assert!(gcp_condition_allows(&expression, own_version), "{id}");
+        assert!(!gcp_condition_allows(&expression, sibling), "{id}");
+        assert!(!gcp_condition_allows(&expression, sibling_version), "{id}");
     }
 }
 

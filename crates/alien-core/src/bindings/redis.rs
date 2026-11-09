@@ -86,11 +86,54 @@ pub struct ExternalRedisBinding {
     pub host: BindingValue<String>,
     pub port: BindingValue<u16>,
     pub username: BindingValue<String>,
-    /// Password literal or a Secret reference.
+    /// Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the
+    /// password from the Secret as an environment variable, which the SDK inserts after it
+    /// parses the binding, so any character is safe.
+    #[serde(deserialize_with = "deserialize_external_password")]
+    #[cfg_attr(feature = "openapi", schema(value_type = ExternalPasswordInput, inline))]
+    #[cfg_attr(feature = "jsonschema", schemars(with = "ExternalPasswordInput"))]
     pub password: BindingValue<String>,
     /// Connect over TLS. Defaults to true.
     #[serde(default = "default_true")]
     pub tls: bool,
+}
+
+// A password string or a `secretKeyRef`; other shapes (numbers, arrays, `secretRef`) are refused
+// instead of falling through BindingValue's expression handling.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+enum ExternalPasswordInput {
+    Literal(String),
+    Reference(ExternalPasswordSecretKeyRef),
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExternalPasswordSecretKeyRef {
+    secret_key_ref: super::SecretReference,
+}
+
+fn deserialize_external_password<'de, D>(deserializer: D) -> Result<BindingValue<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match serde_json::from_value::<ExternalPasswordInput>(value).map_err(|_| {
+        serde::de::Error::custom(
+            "expected a password string or {\"secretKeyRef\": {\"name\": ..., \"key\": ...}}",
+        )
+    })? {
+        ExternalPasswordInput::Literal(value) => Ok(BindingValue::Value(value)),
+        ExternalPasswordInput::Reference(reference) => {
+            Ok(BindingValue::Expression(serde_json::json!({
+                "secretKeyRef": {"name": reference.secret_key_ref.name, "key": reference.secret_key_ref.key}
+            })))
+        }
+    }
 }
 
 /// Local Valkey binding.
@@ -171,7 +214,7 @@ mod tests {
         let input = serde_json::json!({
             "service": "external", "host": "cache.internal", "port": 6379,
             "username": "default",
-            "password": {"secretRef": {"name": "redis-credentials", "key": "password"}}
+            "password": {"secretKeyRef": {"name": "redis-credentials", "key": "password"}}
         });
         let binding: RedisBinding = serde_json::from_value(input.clone()).unwrap();
         let RedisBinding::External(external) = &binding else {
@@ -183,6 +226,22 @@ mod tests {
             serde_json::to_value(&binding).unwrap()["password"],
             input["password"]
         );
+    }
+
+    #[test]
+    fn external_password_accepts_a_string_or_secret_key_ref_only() {
+        let binding = |password: serde_json::Value| {
+            serde_json::from_value::<RedisBinding>(serde_json::json!({
+                "service": "external", "host": "h", "port": 6379,
+                "username": "default", "password": password
+            }))
+        };
+        assert!(binding(serde_json::json!("p\"w\\d")).is_ok());
+        assert!(binding(serde_json::json!({"secretKeyRef": {"name": "n", "key": "k"}})).is_ok());
+        // `secretRef` would be spliced into the binding JSON as raw text.
+        assert!(binding(serde_json::json!({"secretRef": {"name": "n", "key": "k"}})).is_err());
+        assert!(binding(serde_json::json!(5)).is_err());
+        assert!(binding(serde_json::json!({"secretKeyRef": {"name": "n"}})).is_err());
     }
 
     #[test]

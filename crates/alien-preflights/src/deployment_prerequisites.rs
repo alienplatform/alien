@@ -1011,7 +1011,7 @@ mod tests {
             .build();
         let mut config = deployment_config();
         config.external_bindings = serde_json::from_value(serde_json::json!({
-            "cache":{"type":"redis","service":"external","host":"cache.example.com","port":6379,"username":"default","password":{"secretRef":{"name":"credentials","key":"password"}}}
+            "cache":{"type":"redis","service":"external","host":"cache.example.com","port":6379,"username":"default","password":{"secretKeyRef":{"name":"credentials","key":"password"}}}
         })).unwrap();
         for platform in [Platform::Aws, Platform::Local, Platform::Kubernetes] {
             let state = stack_state(platform);

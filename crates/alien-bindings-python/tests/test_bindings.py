@@ -510,15 +510,16 @@ async def test_redis_binding_drives_a_stock_redis_py_client() -> None:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    container = subprocess.run(
-        [
-            "docker", "run", "-d", "--rm",
-            "-p", f"127.0.0.1:{port}:6379",
-            VALKEY_IMAGE,
-            "valkey-server", "--requirepass", "p@ss/word", "--save", "",
-        ],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    run = await asyncio.create_subprocess_exec(
+        "docker", "run", "-d", "--rm",
+        "-p", f"127.0.0.1:{port}:6379",
+        VALKEY_IMAGE,
+        "valkey-server", "--requirepass", "p@ss/word", "--save", "",
+        stdout=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await run.communicate()
+    assert run.returncode == 0
+    container = stdout.decode().strip()
     try:
         bind(
             "live-cache",
@@ -552,4 +553,7 @@ async def test_redis_binding_drives_a_stock_redis_py_client() -> None:
         await from_url.aclose()
         await client.aclose()
     finally:
-        subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+        remove = await asyncio.create_subprocess_exec(
+            "docker", "rm", "-f", container, stdout=asyncio.subprocess.DEVNULL
+        )
+        await remove.wait()

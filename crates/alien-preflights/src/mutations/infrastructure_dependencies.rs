@@ -150,10 +150,15 @@ impl InfrastructureDependenciesMutation {
 
         // AWS Redis allows each compute cluster's security group on its own, so it is created
         // after the clusters and deleted before them. Azure and GCP reach Redis through the
-        // network and need no ordering against compute.
+        // network and need no ordering against compute. A cluster that already waits for this
+        // Redis (it grants its nodes access to it) is skipped: the reverse edge would be a cycle,
+        // and the Redis controller waits for such a cluster's security group instead.
         if platform == Platform::Aws && resource_type == &alien_core::Redis::RESOURCE_TYPE {
+            let redis = ResourceRef::new(alien_core::Redis::RESOURCE_TYPE, resource_id);
             for (id, entry) in &stack.resources {
-                if entry.config.resource_type() == alien_core::ComputeCluster::RESOURCE_TYPE {
+                if entry.config.resource_type() == alien_core::ComputeCluster::RESOURCE_TYPE
+                    && !depends_on(stack, id, &redis)
+                {
                     dependencies.push(ResourceRef::new(
                         alien_core::ComputeCluster::RESOURCE_TYPE,
                         id.clone(),
@@ -527,6 +532,27 @@ fn remote_bindings_id(stack: &Stack) -> Option<&str> {
         .map(|(resource_id, _)| resource_id.as_str())
 }
 
+/// Whether resource `from` waits for `target`, directly or through other resources.
+fn depends_on(stack: &Stack, from: &str, target: &ResourceRef) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![from.to_string()];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(entry) = stack.resources.get(&id) else {
+            continue;
+        };
+        for dependency in &entry.dependencies {
+            if dependency == target {
+                return true;
+            }
+            pending.push(dependency.id.clone());
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,6 +675,40 @@ mod tests {
             .contains(&ResourceRef::new(alien_core::Redis::RESOURCE_TYPE, "cache")));
         let gcp = build(Platform::Gcp).await;
         assert!(!gcp.resources["cache"].dependencies.contains(&compute));
+    }
+
+    #[tokio::test]
+    async fn aws_redis_skips_a_compute_cluster_that_already_waits_for_it() {
+        let mut stack = Stack::new("test".to_string())
+            .add(
+                alien_core::ComputeCluster::new("compute".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                alien_core::Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        // What ComputeClusterMutation does for `nodePermissions` that name the Redis.
+        stack.resources.get_mut("compute").unwrap().dependencies =
+            vec![ResourceRef::new(alien_core::Redis::RESOURCE_TYPE, "cache")];
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let stack = InfrastructureDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        assert!(!stack.resources["cache"]
+            .dependencies
+            .contains(&ResourceRef::new(
+                alien_core::ComputeCluster::RESOURCE_TYPE,
+                "compute"
+            )));
     }
 
     #[tokio::test]

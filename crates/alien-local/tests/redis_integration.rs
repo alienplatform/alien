@@ -263,3 +263,55 @@ async fn refuses_to_adopt_or_delete_a_container_with_the_same_name_that_is_not_o
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_server_that_fails_to_start_is_replaced_by_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = LocalRedisManager::new(dir.path().to_path_buf());
+
+    // The server refuses an unknown policy and exits during startup.
+    let error = manager
+        .start_redis("cache", spec(true, "not-a-policy", 64))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("exited during startup"),
+        "{error}"
+    );
+
+    // Correcting the setting recreates the container and the server comes up.
+    manager
+        .start_redis("cache", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    let binding = manager.get_binding("cache").unwrap();
+    assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
+    manager.delete_redis("cache").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_settings_change_keeps_every_acknowledged_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = LocalRedisManager::new(dir.path().to_path_buf());
+    manager
+        .start_redis("cache", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    let binding = manager.get_binding("cache").unwrap();
+    for i in 0..200 {
+        assert_eq!(
+            command(&binding, &["SET", &format!("k{i}"), "v"]).await,
+            "+OK\r\n"
+        );
+    }
+    // Recreated right after the last write: the stop is graceful, so the append-only file is
+    // flushed before the container goes.
+    manager
+        .start_redis("cache", spec(true, "noeviction", 64))
+        .await
+        .unwrap();
+    assert!(command(&binding, &["DBSIZE"]).await.contains(":200"));
+    manager.delete_redis("cache").await.unwrap();
+}

@@ -311,6 +311,9 @@ impl LocalRedisManager {
                 }
                 return wait_until_ready(docker, &name, metadata).await;
             }
+            // SIGTERM first so Valkey flushes its append-only file; a forced removal could drop
+            // the last second of acknowledged writes.
+            self.stop_container(docker, id).await?;
             remove_container(docker, &name).await?;
         }
         // Data is only kept while persistence is on; turning it off drops the volume so a
@@ -395,13 +398,34 @@ impl LocalRedisManager {
                 "Failed to create the container",
             ))?;
 
-        // The config holds the password: upload it into the container (readable by the
-        // server's user only) instead of passing it as an argument or environment value,
-        // where `docker inspect` and `ps` would show it.
+        // The container carries its final config-hash label from creation, so a create that stops
+        // before the config is uploaded and the server started must not be left behind: the next
+        // attempt would take it for a finished one.
+        let started = match self.configure_and_start(docker, &name, metadata).await {
+            Ok(()) => wait_until_ready(docker, &name, metadata).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = started {
+            if let Err(cleanup) = remove_container(docker, &name).await {
+                warn!(redis_id = %id, ?cleanup, "Failed to remove the unfinished Redis container");
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Uploads the config (it holds the password, so it is not an argument or environment
+    /// value where `docker inspect` and `ps` would show it) and starts the created container.
+    async fn configure_and_start(
+        &self,
+        docker: &Docker,
+        name: &str,
+        metadata: &RedisMetadata,
+    ) -> Result<()> {
         let archive = config_archive(&render_config(metadata))?;
         docker
             .upload_to_container(
-                &name,
+                name,
                 Some(
                     UploadToContainerOptionsBuilder::default()
                         .path("/etc")
@@ -412,21 +436,21 @@ impl LocalRedisManager {
             .await
             .into_alien_error()
             .context(container_error(
-                &name,
+                name,
                 "configure",
                 "Failed to write the Redis config",
             ))?;
 
         docker
-            .start_container(&name, None)
+            .start_container(name, None)
             .await
             .into_alien_error()
             .context(container_error(
-                &name,
+                name,
                 "start",
                 "Failed to start the container",
             ))?;
-        wait_until_ready(docker, &name, metadata).await
+        Ok(())
     }
 
     async fn stop_container(&self, docker: &Docker, id: &str) -> Result<()> {
@@ -747,11 +771,12 @@ fn config_archive(config: &str) -> Result<Vec<u8>> {
 async fn wait_until_ready(docker: &Docker, name: &str, metadata: &RedisMetadata) -> Result<()> {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     loop {
+        // The restart policy keeps a crashing server "running" between attempts, so a restart in
+        // progress counts as a failed start.
         let running = inspect_optional(docker, name)
             .await?
             .and_then(|response| response.state)
-            .and_then(|state| state.running)
-            == Some(true);
+            .is_some_and(|state| state.running == Some(true) && state.restarting != Some(true));
         if !running {
             return Err(AlienError::new(container_error(
                 name,
