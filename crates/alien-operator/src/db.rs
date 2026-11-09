@@ -2094,10 +2094,7 @@ impl OperatorDb {
         })?;
 
         let mut rows = conn
-            .query(
-                "SELECT value FROM state WHERE key = 'secrets_digest_key'",
-                (),
-            )
+            .query("SELECT value FROM state WHERE key = 'secrets_digest_key'", ())
             .await
             .into_alien_error()
             .context(ErrorData::DatabaseError {
