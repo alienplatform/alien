@@ -6,7 +6,7 @@ use crate::{
     wait_until_service::WaitUntilGrpcServer,
     MAX_GRPC_MESSAGE_SIZE,
 };
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     sync::Arc,
     task::{Context as TaskContext, Poll},
@@ -157,21 +157,17 @@ pub async fn run_grpc_server(addr_str: &str) -> Result<GrpcServerHandles> {
 
     info!("Configuring gRPC server for {}", addr);
 
-    // The worker-protocol gRPC server is unauthenticated by design — it's
+    // The worker-protocol gRPC server is unauthenticated by design: it is
     // intra-machine IPC between the Worker runtime and the application code it
-    // manages, and they share a trust boundary. Binding to a non-loopback
-    // address erases that assumption (think `0.0.0.0` from a misconfigured
-    // ALIEN_WORKER_GRPC_ADDRESS, `--network=host` Docker, or shared-pod sidecar).
-    // Make the misconfiguration loud at startup rather than silently exposing
-    // the control/drain channel.
+    // manages, which share a trust boundary. On any other address anyone who
+    // reaches the interface could use the control and drain channel, so the
+    // server only binds loopback.
     if !addr.ip().is_loopback() {
-        tracing::warn!(
-            address = %addr,
-            "worker-protocol gRPC server is binding to a NON-LOOPBACK address. \
-            This exposes the worker-protocol server (Control, WaitUntil) to anyone who can \
-            reach this network interface. The server has no authentication. Set \
-            ALIEN_WORKER_GRPC_ADDRESS=127.0.0.1:51351 unless you have a specific reason to expose it."
-        );
+        return Err(AlienError::new(ErrorData::ServerBindFailed {
+            address: addr.to_string(),
+            reason: "the worker-protocol server has no authentication and only binds a loopback address"
+                .to_string(),
+        }));
     }
 
     let wait_until_server = Arc::new(WaitUntilGrpcServer::new());
@@ -275,6 +271,17 @@ mod tests {
     impl Drop for AbortOnDrop {
         fn drop(&mut self) {
             self.0.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn the_server_refuses_an_address_other_than_loopback() {
+        for address in ["0.0.0.0:51351", "10.0.0.7:51351", "[::]:51351"] {
+            let error = run_grpc_server(address)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{address} must be refused"));
+            assert_eq!(error.code, "SERVER_BIND_FAILED", "{address}");
         }
     }
 
