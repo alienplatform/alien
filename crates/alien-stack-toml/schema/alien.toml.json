@@ -2567,6 +2567,68 @@
       },
       "type": "object"
     },
+    "Redis": {
+      "additionalProperties": false,
+      "description": "A managed, Redis-compatible in-memory store on a private network. The target\nplatform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for\nValkey, Azure Managed Redis, or the official Valkey image in Docker on Local). It is\nnever publicly reachable, and it is a single endpoint (not cluster mode), so\nplain clients and multi-key scripts work.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display-name": {
+          "type": "string"
+        },
+        "enabled-when": {
+          "description": "Create the resource only when this boolean `[input.<id>]` is true.",
+          "type": "string"
+        },
+        "encryption-key": {
+          "$ref": "#/definitions/ResourceRef",
+          "description": "Customer-managed key for encryption at rest. Cannot be changed after\ncreation."
+        },
+        "eviction-policy": {
+          "$ref": "#/definitions/RedisEvictionPolicy",
+          "description": "What happens at the memory limit. Default `volatile-lru`: keys without\na TTL are never evicted."
+        },
+        "high-availability": {
+          "description": "One replica in another zone with automatic failover. Default false.",
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "description": "`live` resources are updated by releases; `frozen` ones are set up once and left alone.",
+          "enum": [
+            "live",
+            "frozen"
+          ]
+        },
+        "memory": {
+          "description": "Memory available for data (e.g. \"512Mi\", \"4Gi\"). None = the smallest\nproduction tier. The smallest tier that fits is used; a request larger\nthan the biggest single-shard tier on the platform is rejected.",
+          "type": "string"
+        },
+        "persistence": {
+          "description": "Keep data across a server restart or maintenance. Default false (a\ncache). On AWS, GCP and Azure this needs `high_availability`, because the\nclouds only persist data from a replicated deployment. Local always\npersists with an append-only file when this is on.",
+          "type": "boolean"
+        },
+        "remote-access": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "RedisEvictionPolicy": {
+      "description": "What a Redis server does when it reaches its memory limit.",
+      "enum": [
+        "noeviction",
+        "allkeys-lru",
+        "allkeys-lfu",
+        "allkeys-random",
+        "volatile-lru",
+        "volatile-lfu",
+        "volatile-random",
+        "volatile-ttl"
+      ],
+      "type": "string"
+    },
     "ResourceRef": {
       "description": "The ID of a resource declared in this file.",
       "type": "string"
@@ -3863,6 +3925,15 @@
     "queue": {
       "additionalProperties": {
         "$ref": "#/definitions/Queue"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "type": "object"
+    },
+    "redis": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Redis"
       },
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_-]{1,64}$"
