@@ -316,7 +316,10 @@ async fn prepare_target(
             base_platform: deployment.base_platform,
             deployment_name: &deployment.name,
             management_config: deployment.management_config.as_ref(),
-            imported_quota_activation: false,
+            // A deployment installed with the quota API keeps it, as a setup
+            // re-import does; otherwise the rebuilt target would drop a
+            // resource the baseline holds and read as a cloud change.
+            imported_quota_activation: stack_state.resources.contains_key("enable-cloud-quotas"),
         },
         &settings,
     )
@@ -546,6 +549,49 @@ mod tests {
             release_name: None,
             namespace: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_gcp_deployment_installed_with_the_quota_api_keeps_it_in_the_target() {
+        let source = baseline();
+        let release = crate::traits::ReleaseRecord {
+            id: "rel_2".to_string(),
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            stacks: std::collections::HashMap::from([(Platform::Kubernetes, source.clone())]),
+            git_commit_sha: None,
+            git_commit_ref: None,
+            git_commit_message: None,
+            created_at: Utc::now(),
+        };
+        let mut record = deployment(source.clone());
+        record.base_platform = Some(Platform::Gcp);
+        let settings = alien_core::StackSettings::default();
+
+        let without = StackState::new(Platform::Kubernetes);
+        let target = prepare_target(&release, &record, &settings, &without)
+            .await
+            .unwrap();
+        assert!(!target.resources.contains_key("enable-cloud-quotas"));
+
+        let mut installed = StackState::new(Platform::Kubernetes);
+        installed.resources.insert(
+            "enable-cloud-quotas".to_string(),
+            alien_core::StackResourceState::new_pending(
+                "service-activation".to_string(),
+                alien_core::Resource::new(
+                    alien_core::ServiceActivation::new("enable-cloud-quotas".to_string())
+                        .service_name("cloudquotas.googleapis.com".to_string())
+                        .build(),
+                ),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        let target = prepare_target(&release, &record, &settings, &installed)
+            .await
+            .unwrap();
+        assert!(target.resources.contains_key("enable-cloud-quotas"));
     }
 
     #[test]
