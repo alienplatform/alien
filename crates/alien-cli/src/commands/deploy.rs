@@ -1598,8 +1598,18 @@ async fn create_standalone_deployment(
             .context(ErrorData::ConfigurationError {
                 message: "Failed to convert deployment platform for the manager".to_string(),
             })?;
-    let client =
-        alien_manager_api::Client::new_with_client(base_url, create_platform_http_client(token)?);
+    // The answers go to the manager URL the user gave, so it must be a TLS
+    // endpoint or this machine, and a redirect must not send them again.
+    let http = if resolved_args.input_values.is_empty() {
+        create_platform_http_client(token)?
+    } else {
+        value_access::checked_manager_url(base_url)?;
+        build_platform_http_client(
+            token,
+            crate::http_client::builder().redirect(reqwest::redirect::Policy::none()),
+        )?
+    };
+    let client = alien_manager_api::Client::new_with_client(base_url, http);
     let response = client
         .create_deployment()
         .body_map(|body| {
@@ -1634,6 +1644,13 @@ async fn create_standalone_deployment(
 }
 
 fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
+    build_platform_http_client(token, crate::http_client::builder())
+}
+
+fn build_platform_http_client(
+    token: &str,
+    builder: reqwest::ClientBuilder,
+) -> Result<reqwest::Client> {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
@@ -1648,7 +1665,7 @@ fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
         HeaderValue::from_static(crate::http_client::USER_AGENT),
     );
 
-    crate::http_client::builder()
+    builder
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -5439,6 +5456,82 @@ max = 1
         .expect_err("manager rejects the correctly formed request");
         assert!(error.to_string().contains("409"), "{error}");
         create.assert_hits_async(1).await;
+    }
+
+    fn standalone_resolved(input_values: HashMap<String, serde_json::Value>) -> ResolvedDeployArgs {
+        ResolvedDeployArgs {
+            secret_input_ids: Default::default(),
+            name: "test".to_string(),
+            platform: "aws".to_string(),
+            platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
+            network_settings: None,
+            compute_settings: None,
+            domain_settings: None,
+            input_values,
+            public_subdomain: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_creation_sends_no_answers_to_a_plain_http_manager() {
+        let resolved = standalone_resolved(HashMap::from([(
+            "secret".to_string(),
+            serde_json::json!("canary-standalone-http"),
+        )]));
+        let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+            .expect("valid standalone arguments");
+
+        let error = create_standalone_deployment(
+            "test-group-token",
+            "http://manager.example.com",
+            &resolved,
+            &args,
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("answers are not sent over plain http");
+
+        assert!(error.to_string().contains("not safe"), "{error}");
+        assert!(!error.to_string().contains("canary-standalone-http"));
+    }
+
+    #[tokio::test]
+    async fn standalone_creation_does_not_follow_a_redirect_with_the_answers() {
+        let elsewhere = httpmock::MockServer::start_async().await;
+        let target = elsewhere
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).json_body(serde_json::json!({}));
+            })
+            .await;
+        let server = httpmock::MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/deployments");
+                then.status(307)
+                    .header("location", elsewhere.url("/v1/deployments"));
+            })
+            .await;
+        let resolved = standalone_resolved(HashMap::from([(
+            "secret".to_string(),
+            serde_json::json!("canary-standalone-redirect"),
+        )]));
+        let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+            .expect("valid standalone arguments");
+
+        create_standalone_deployment(
+            "test-group-token",
+            &server.base_url(),
+            &resolved,
+            &args,
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a redirect is an error, not a second request");
+
+        first.assert_hits_async(1).await;
+        target.assert_hits_async(0).await;
     }
 
     /// A deploy config's data disk choice, including 0 for no disk, must reach

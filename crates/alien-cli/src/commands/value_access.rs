@@ -321,15 +321,13 @@ pub(crate) async fn store_deployment_values(
     Ok(StoredValues::Stored(refs))
 }
 
-/// The grant's token goes to whatever URL the platform names, so the URL must
-/// be a TLS endpoint, or a loopback address for a manager on this machine.
-fn checked_manager_url(manager_url: &str) -> Result<reqwest::Url> {
+/// Values and tokens go to the URL this names, so it must be a TLS endpoint,
+/// or a loopback address for a manager on this machine.
+pub(crate) fn checked_manager_url(manager_url: &str) -> Result<reqwest::Url> {
     let refuse = |reason: &str| {
         AlienError::new(ErrorData::ValidationError {
             field: "managerUrl".to_string(),
-            message: format!(
-                "the platform named a manager URL that is not safe to send values to ({reason})"
-            ),
+            message: format!("the manager URL is not safe to send values to ({reason})"),
         })
     };
     let url = reqwest::Url::parse(manager_url).map_err(|_| refuse("it is not a URL"))?;
