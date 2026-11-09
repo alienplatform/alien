@@ -385,8 +385,10 @@ fn is_known_aws_dataset_gap(action: &str) -> bool {
         // bedrock-mantle (the OpenAI/Anthropic-compatible inference endpoint) is newer
         // than the pinned dataset snapshot, which carries no entry for the service at
         // all. The action is real: AWS's own AmazonBedrockMantleInferenceAccess managed
-        // policy grants bedrock-mantle:CreateInference.
+        // policy grants bedrock-mantle:CreateInference, and the AWS Service Authorization
+        // Reference lists bedrock-mantle:ListModels (List access, project resource).
         | "bedrock-mantle:CreateInference"
+        | "bedrock-mantle:ListModels"
     )
 }
 
