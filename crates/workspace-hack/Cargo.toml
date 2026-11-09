@@ -54,6 +54,7 @@ futures-io = { version = "0.3", features = ["unstable"] }
 futures-sink = { version = "0.3" }
 futures-task = { version = "0.3", default-features = false, features = ["std", "unstable"] }
 futures-util = { version = "0.3", features = ["bilock", "channel", "io", "sink", "unstable"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
@@ -68,6 +69,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
 icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
+idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["block-padding"] }
 insta = { version = "1", features = ["json", "yaml"] }
@@ -82,6 +84,7 @@ md-5 = { version = "0.11" }
 memchr = { version = "2" }
 moka = { version = "0.12", features = ["future", "sync"] }
 nom = { version = "7" }
+num-bigint = { version = "0.4" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object_store = { version = "0.12", features = ["aws", "azure", "gcp", "http", "tls-webpki-roots"] }
@@ -104,7 +107,7 @@ rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
 rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf", "std", "unicode"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 ring = { version = "0.17", features = ["std"] }
@@ -151,7 +154,8 @@ url = { version = "2", features = ["serde"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono", "indexmap"] }
 uuid = { version = "1", features = ["js", "serde", "v4", "v5", "v7"] }
 whoami = { version = "2" }
-winnow = { version = "1" }
+winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
+winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
 writeable = { version = "0.6", default-features = false, features = ["alloc"] }
 yasna = { version = "0.5", features = ["std", "time"] }
 yoke = { version = "0.8", default-features = false, features = ["alloc", "derive"] }
@@ -203,6 +207,7 @@ futures-io = { version = "0.3", features = ["unstable"] }
 futures-sink = { version = "0.3" }
 futures-task = { version = "0.3", default-features = false, features = ["std", "unstable"] }
 futures-util = { version = "0.3", features = ["bilock", "channel", "io", "sink", "unstable"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
@@ -218,6 +223,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
 icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
+idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["block-padding"] }
 insta = { version = "1", features = ["json", "yaml"] }
@@ -232,6 +238,7 @@ md-5 = { version = "0.11" }
 memchr = { version = "2" }
 moka = { version = "0.12", features = ["future", "sync"] }
 nom = { version = "7" }
+num-bigint = { version = "0.4" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object_store = { version = "0.12", features = ["aws", "azure", "gcp", "http", "tls-webpki-roots"] }
@@ -254,7 +261,7 @@ rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
 rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf", "std", "unicode"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 ring = { version = "0.17", features = ["std"] }
@@ -305,7 +312,8 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "indexmap"] }
 utoipa-gen = { version = "5", default-features = false, features = ["axum_extras", "chrono", "indexmap"] }
 uuid = { version = "1", features = ["js", "serde", "v4", "v5", "v7"] }
 whoami = { version = "2" }
-winnow = { version = "1" }
+winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
+winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
 writeable = { version = "0.6", default-features = false, features = ["alloc"] }
 yasna = { version = "0.5", features = ["std", "time"] }
 yoke = { version = "0.8", default-features = false, features = ["alloc", "derive"] }
@@ -324,6 +332,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -342,6 +351,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -360,6 +370,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -378,6 +389,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -396,6 +408,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -414,6 +427,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -432,6 +446,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -450,6 +465,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "io_uring", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
@@ -469,6 +485,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
@@ -489,6 +506,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
@@ -509,6 +527,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
@@ -529,6 +548,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["ring",
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
 mio = { version = "1", features = ["net", "os-ext"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
@@ -546,6 +566,7 @@ digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-featur
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
@@ -564,6 +585,7 @@ digest-93f6ce9d446188ac = { package = "digest", version = "0.10", default-featur
 hybrid-array = { version = "0.4", default-features = false, features = ["ctutils", "extra-sizes"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "webpki-tokio"] }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
+num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
