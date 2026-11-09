@@ -8,6 +8,7 @@ use alien_core::{
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
 use url::Url;
 
 /// Sync configuration for connecting to remote management server
@@ -130,6 +131,10 @@ pub struct OperatorConfig {
     /// every sync; a setup update authorization is applied only while its
     /// fingerprint equals this one.
     pub installed_setup: Option<alien_core::sync::InstalledSetup>,
+
+    /// File the chart keeps the installed release in. A chart upgrade updates
+    /// it in place, so it is read again on every sync.
+    pub setup_release_file: Option<PathBuf>,
 
     /// Accept tunnel requests from the manager for the stack's declared
     /// tunnel endpoints. The operator dials only when the manager advertises

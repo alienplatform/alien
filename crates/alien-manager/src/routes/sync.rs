@@ -1076,7 +1076,8 @@ mod tests {
         acquired_deployment_response, agent_needs_initial_state_hydration,
         agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
         deployment_state_from_record, deployment_target_release_id, management_platform,
-        may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
+        may_deliver_agent_target, preserve_recorded_gate_answers,
+        preserve_setup_update_authorization, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
         validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
         InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
@@ -3287,6 +3288,49 @@ mod tests {
     }
 
     #[test]
+    fn a_report_without_the_minted_authorization_does_not_erase_it_until_the_update_ran() {
+        let authorization = alien_core::SetupUpdateAuthorization {
+            nonce: "n".into(),
+            baseline_frozen_digest: "a".into(),
+            target_frozen_digest: "b".into(),
+            release_id: "rel_2".into(),
+            setup_target: "helm".into(),
+            setup_fingerprint: "fp".into(),
+            setup_fingerprint_version: 1,
+        };
+        let mut stored = deployment_record_with_state("update-failed", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            setup_update_authorization: Some(authorization.clone()),
+            ..RuntimeMetadata::default()
+        });
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("s".to_string()).build(),
+        };
+
+        let mut waiting = uninitialized_state();
+        waiting.runtime_metadata = Some(RuntimeMetadata::default());
+        waiting.current_release = Some(release("rel_1"));
+        preserve_setup_update_authorization(&mut waiting, &stored);
+        assert_eq!(
+            waiting.runtime_metadata.unwrap().setup_update_authorization,
+            Some(authorization)
+        );
+
+        let mut done = uninitialized_state();
+        done.runtime_metadata = Some(RuntimeMetadata::default());
+        done.current_release = Some(release("rel_2"));
+        preserve_setup_update_authorization(&mut done, &stored);
+        assert!(done
+            .runtime_metadata
+            .unwrap()
+            .setup_update_authorization
+            .is_none());
+    }
+
+    #[test]
     fn preserving_gate_answers_folds_key_by_key_with_the_record_winning() {
         let mut recorded = RuntimeMetadata::default();
         recorded
@@ -3624,6 +3668,7 @@ async fn agent_sync(
                     // Stays below the ignore check: restoring metadata here
                     // would make an uninitialized report look initialized.
                     let _ = preserve_recorded_gate_answers(&mut agent_state, &deployment, None);
+                    preserve_setup_update_authorization(&mut agent_state, &deployment);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
                     // Pull sync is the agent's only channel to the manager, so a pending
@@ -4382,6 +4427,32 @@ fn gate_resources(stack: &alien_core::Stack) -> std::collections::HashMap<String
             .push(resource_id.clone());
     }
     gates
+}
+
+/// Keeps the setup update authorization the manager minted until the Operator
+/// has run it. An Operator that has not received the authorization yet reports
+/// state without it, and saving that report must not erase the grant. Once the
+/// reported current release is the authorized one, the update has run and the
+/// grant is dropped.
+fn preserve_setup_update_authorization(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+    let Some(authorization) = stored
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
+    else {
+        return;
+    };
+    let Some(metadata) = incoming.runtime_metadata.as_mut() else {
+        return;
+    };
+    let already_ran = incoming
+        .current_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref())
+        == Some(authorization.release_id.as_str());
+    if metadata.setup_update_authorization.is_none() && !already_ran {
+        metadata.setup_update_authorization = Some(authorization.clone());
+    }
 }
 
 fn preserve_recorded_gate_answers(

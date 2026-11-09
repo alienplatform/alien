@@ -1293,6 +1293,11 @@ data:
   stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
+  {{- with .Chart.Annotations }}
+  {{- if index . "setup.alien.dev/release-id" }}
+  setup-release-id: {{ index . "setup.alien.dev/release-id" | quote }}
+  {{- end }}
+  {{- end }}
 
 === templates/deployment.yaml ===
 {{- include "deployment.validateRuntimeIdentity" . -}}
@@ -1447,8 +1452,8 @@ spec:
               value: {{ .Release.Name | quote }}
             {{- with .Chart.Annotations }}
             {{- if index . "setup.alien.dev/fingerprint" }}
-            - name: OPERATOR_SETUP_RELEASE_ID
-              value: {{ index . "setup.alien.dev/release-id" | quote }}
+            - name: OPERATOR_SETUP_RELEASE_FILE
+              value: /etc/deployment/config/setup-release-id
             - name: OPERATOR_SETUP_TARGET
               value: {{ index . "setup.alien.dev/target" | quote }}
             - name: OPERATOR_SETUP_FINGERPRINT

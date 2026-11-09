@@ -357,7 +357,7 @@ async fn sync_with_manager(
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
-        installed_setup: state.config.installed_setup.clone(),
+        installed_setup: reported_installed_setup(&state.config),
     };
     let mut sync_input = SyncInput::builder(sync_request);
     if let Some(operator_image) = operator_image.cloned() {
@@ -840,6 +840,29 @@ fn logs_capability(
     })
 }
 
+/// The setup the installed chart carries, with the release read from the chart's
+/// file now: a chart upgrade updates it without restarting the Operator. When
+/// the file cannot be read the report is skipped rather than naming a release
+/// the chart may no longer be built from.
+fn reported_installed_setup(
+    config: &crate::OperatorConfig,
+) -> Option<alien_core::sync::InstalledSetup> {
+    let mut setup = config.installed_setup.clone()?;
+    if let Some(path) = config.setup_release_file.as_ref() {
+        match std::fs::read_to_string(path) {
+            Ok(release) if !release.trim().is_empty() => {
+                setup.release_id = release.trim().to_string()
+            }
+            Ok(_) => return None,
+            Err(error) => {
+                warn!(path = %path.display(), %error, "Cannot read the installed release; not reporting the installed setup");
+                return None;
+            }
+        }
+    }
+    Some(setup)
+}
+
 /// Granted only when the chart bound the dynamic container Role: the manager
 /// sends container targets to Operators that report this, so a namespace-only
 /// install without that access must not claim it.
@@ -924,6 +947,7 @@ fn apply_manager_control_state(
         local_state.protocol_version = manager_state.protocol_version;
     }
     let policy_changed = apply_manager_deletion_policy(local_state, manager_state);
+    let authorization_changed = apply_manager_setup_authorization(local_state, manager_state);
     if manager_state_is_delete_command(manager_state)
         && !local_state_is_delete_or_deleted(local_state)
     {
@@ -952,7 +976,7 @@ fn apply_manager_control_state(
         return true;
     }
 
-    protocol_changed || policy_changed
+    protocol_changed || policy_changed || authorization_changed
 }
 
 /// The manager authorizes the deletion policy. The operator keeps its own resource
@@ -971,6 +995,35 @@ fn apply_manager_deletion_policy(
         return false;
     }
     local.deletion_policy = manager.deletion_policy;
+    true
+}
+
+/// The manager decides, from the chart's report, whether a setup update may
+/// run; the Operator runs it. Takes the manager's authorization into the local
+/// state until the update it names has run.
+fn apply_manager_setup_authorization(
+    local_state: &mut alien_core::DeploymentState,
+    manager_state: &alien_core::DeploymentState,
+) -> bool {
+    let Some(authorization) = manager_state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
+    else {
+        return false;
+    };
+    let already_ran = local_state
+        .current_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref())
+        == Some(authorization.release_id.as_str());
+    let Some(local) = local_state.runtime_metadata.as_mut() else {
+        return false;
+    };
+    if already_ran || local.setup_update_authorization.as_ref() == Some(authorization) {
+        return false;
+    }
+    local.setup_update_authorization = Some(authorization.clone());
     true
 }
 
@@ -997,6 +1050,41 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    /// A chart upgrade to a new release with the same setup rewrites the release
+    /// file in place; the next report names the new release.
+    #[test]
+    fn the_report_names_the_release_the_chart_file_holds_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("setup-release-id");
+        std::fs::write(&file, "rel_1\n").unwrap();
+        let config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .sync(SyncConfig {
+                url: "http://localhost:1".parse().unwrap(),
+                token: "t".into(),
+            })
+            .data_dir(dir.path().to_str().unwrap())
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .installed_setup(alien_core::sync::InstalledSetup {
+                release_id: "rel_1".into(),
+                setup_target: "helm".into(),
+                setup_fingerprint: "fp".into(),
+                setup_fingerprint_version: 1,
+            })
+            .setup_release_file(file.clone())
+            .build();
+        assert_eq!(
+            super::reported_installed_setup(&config).unwrap().release_id,
+            "rel_1"
+        );
+        std::fs::write(&file, "rel_2\n").unwrap();
+        let report = super::reported_installed_setup(&config).unwrap();
+        assert_eq!(report.release_id, "rel_2");
+        assert_eq!(report.setup_fingerprint, "fp");
+        std::fs::remove_file(&file).unwrap();
+        assert!(super::reported_installed_setup(&config).is_none());
+    }
+
     use std::{
         collections::{BTreeMap, HashMap},
         sync::{
@@ -2683,6 +2771,63 @@ mod tests {
             &manager_state
         ));
         assert!(local_state.retry_requested);
+    }
+
+    #[test]
+    fn takes_the_managers_setup_authorization_until_the_update_ran() {
+        let authorization = alien_core::SetupUpdateAuthorization {
+            nonce: "n".into(),
+            baseline_frozen_digest: "a".into(),
+            target_frozen_digest: "b".into(),
+            release_id: "rel_2".into(),
+            setup_target: "helm".into(),
+            setup_fingerprint: "fp".into(),
+            setup_fingerprint_version: 1,
+        };
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("s".to_string()).build(),
+        };
+        let local = |current: &str| DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::UpdateFailed,
+            current_release: Some(release(current)),
+            target_release: Some(release("rel_2")),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                setup_update_authorization: Some(authorization.clone()),
+                ..Default::default()
+            }),
+            ..local("rel_1")
+        };
+
+        let mut waiting = local("rel_1");
+        assert!(apply_manager_control_state(&mut waiting, &manager_state));
+        assert_eq!(
+            waiting.runtime_metadata.unwrap().setup_update_authorization,
+            Some(authorization)
+        );
+        // Already taken: nothing to write again.
+        let mut again = manager_state.clone();
+        assert!(!apply_manager_control_state(&mut again, &manager_state));
+
+        // The authorized release already runs: the grant is spent.
+        let mut done = local("rel_2");
+        assert!(!apply_manager_control_state(&mut done, &manager_state));
+        assert!(done
+            .runtime_metadata
+            .unwrap()
+            .setup_update_authorization
+            .is_none());
     }
 
     #[test]

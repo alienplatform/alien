@@ -23,9 +23,17 @@ use super::AppState;
 use crate::auth::{Scope, Subject};
 use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
 
-/// Resource types a `helm upgrade` carries: Kubernetes objects the chart
-/// renders. Everything else needs the deployer's cloud credentials.
-const CHART_RENDERED_FROZEN_TYPES: [&str; 2] = ["service-account", "compute-cluster"];
+/// Whether a `helm upgrade` carries a frozen resource of this type: its
+/// controller only observes a Kubernetes object the chart renders. A compute
+/// cluster always does. A service account does only without a base cloud; with
+/// one, its controller creates a cloud identity, which needs cloud credentials.
+fn chart_renders(resource_type: &str, base_platform: Option<Platform>) -> bool {
+    match resource_type {
+        "compute-cluster" => true,
+        "service-account" => base_platform.is_none(),
+        _ => false,
+    }
+}
 
 /// What the manager does with one report.
 #[derive(Debug, PartialEq)]
@@ -138,7 +146,7 @@ fn changes_needing_cloud_setup(
         if unchanged {
             continue;
         }
-        if !CHART_RENDERED_FROZEN_TYPES.contains(&entry.config.resource_type().as_ref()) {
+        if !chart_renders(entry.config.resource_type().as_ref(), base_platform) {
             return Some(format!(
                 "This release adds or changes '{id}', which lives in your cloud account"
             ));
@@ -357,6 +365,21 @@ async fn write(
     runtime_metadata: alien_core::RuntimeMetadata,
     schedule_reconciliation: bool,
 ) -> Result<(), AlienError> {
+    // The store update writes the whole snapshot, and release lookup and
+    // preparation took time. If the record moved since it was read (a
+    // checkpoint, a settings change), writing now would put old state over it.
+    // Skip: the report repeats on the next sync.
+    let Some(fresh) = state
+        .deployment_store
+        .get_deployment(subject, &deployment.id)
+        .await?
+    else {
+        return Ok(());
+    };
+    if fresh.updated_at != deployment.updated_at || fresh.status != deployment.status {
+        info!(deployment_id = %deployment.id, "Deployment changed while handling the setup report; the next report retries");
+        return Ok(());
+    }
     let (Some(stack_settings), Some(stack_state)) = (
         deployment.stack_settings.clone(),
         deployment.stack_state.clone(),
@@ -558,6 +581,19 @@ mod tests {
             reason.contains("run your cloud setup, then upgrade"),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn a_service_account_on_a_base_cloud_is_refused_because_it_needs_a_cloud_identity() {
+        let installed = baseline();
+        let target = with_service_account(&installed);
+        let mut on_cloud = deployment(installed);
+        on_cloud.base_platform = Some(Platform::Aws);
+        let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), &target) else {
+            panic!("expected a refusal");
+        };
+        assert!(reason.contains("reader-sa"), "{reason}");
+        assert!(reason.contains("run your cloud setup"), "{reason}");
     }
 
     #[test]
