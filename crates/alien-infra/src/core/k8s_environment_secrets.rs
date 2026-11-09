@@ -58,7 +58,51 @@ fn environment_secret_values(
     values
 }
 
-fn secret_checksum(secret_values: &BTreeMap<String, String>) -> String {
+/// The key the checksum is computed with: the process key for digests of
+/// secrets, narrowed to this use.
+fn checksum_key() -> Result<[u8; 32]> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    #[cfg(test)]
+    let key = alien_core::secrets_digest_key::get().or(Some([7; 32]));
+    #[cfg(not(test))]
+    let key = alien_core::secrets_digest_key::get();
+    let key = key.ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::InfrastructureError {
+            message: "No secrets digest key is set; the embedding process must set one before \
+                      workload secrets are applied"
+                .to_string(),
+            operation: Some("compute the workload secret checksum".to_string()),
+            resource_id: None,
+        })
+    })?;
+    let mut derive = Hmac::<Sha256>::new_from_slice(&key).expect("HMAC accepts any key length");
+    derive.update(b"alien-k8s-env-secrets\0");
+    Ok(derive.finalize().into_bytes().into())
+}
+
+/// Keyed, because the checksum is kept in controller state that a separate
+/// control plane may store: a plain hash would let it test guesses at a weak
+/// secret.
+fn secret_checksum(secret_values: &BTreeMap<String, String>) -> Result<String> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(&checksum_key()?).expect("HMAC accepts any key length");
+    for (name, value) in secret_values {
+        mac.update(name.as_bytes());
+        mac.update(b"=");
+        mac.update(value.as_bytes());
+        mac.update(b"\n");
+    }
+    Ok(format!("{:x}", mac.finalize().into_bytes()))
+}
+
+/// The checksum before it was keyed. Used only to recognize a recorded one
+/// whose values have not changed, see [`EnvSecretRotationTracker`].
+fn unkeyed_secret_checksum(secret_values: &BTreeMap<String, String>) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
@@ -77,12 +121,13 @@ fn secret_checksum(secret_values: &BTreeMap<String, String>) -> String {
 /// that rolls pods (and drives update detection when only secret values
 /// change), and the keys the workload manifest renders as secretKeyRefs.
 ///
-/// Returns `None` when no Secret-typed env vars target the resource.
+/// Returns `None` when no Secret-typed env vars target the resource, and an
+/// error when the process has no digest key.
 pub fn environment_secret_plan(
     resource_id: &str,
     workload_name: &str,
     variables: &[EnvironmentVariable],
-) -> Option<KubernetesEnvSecretPlan> {
+) -> Result<Option<KubernetesEnvSecretPlan>> {
     environment_secret_plan_with_additional_secrets(
         resource_id,
         workload_name,
@@ -98,17 +143,17 @@ pub fn environment_secret_plan_with_additional_secrets(
     workload_name: &str,
     variables: &[EnvironmentVariable],
     additional_secrets: &BTreeMap<String, String>,
-) -> Option<KubernetesEnvSecretPlan> {
+) -> Result<Option<KubernetesEnvSecretPlan>> {
     let secret_values = environment_secret_values(resource_id, variables, additional_secrets);
     if secret_values.is_empty() {
-        return None;
+        return Ok(None);
     }
 
-    Some(KubernetesEnvSecretPlan {
+    Ok(Some(KubernetesEnvSecretPlan {
         secret_name: format!("{workload_name}-env"),
-        checksum: secret_checksum(&secret_values),
+        checksum: secret_checksum(&secret_values)?,
         keys: secret_values.keys().cloned().collect(),
-    })
+    }))
 }
 
 /// Builds the typed Kubernetes Secret manifest holding the plan's key/value
@@ -297,7 +342,8 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
         workload_name,
         variables,
         additional_secrets,
-    ) else {
+    )?
+    else {
         delete_environment_secret(
             resource_kind,
             resource_id,
@@ -576,13 +622,15 @@ impl EnvSecretRotationTracker {
 
     /// Returns true when the current env snapshot would derive a different
     /// env-secret checksum than the one recorded last (i.e. a secret rotated,
-    /// appeared, or was removed).
+    /// appeared, or was removed). A recorded checksum from before checksums
+    /// were keyed counts as unchanged when it is the old checksum of the
+    /// current values.
     pub fn drifted(
         &self,
         resource_id: &str,
         workload_name: &str,
         variables: &[EnvironmentVariable],
-    ) -> bool {
+    ) -> Result<bool> {
         self.drifted_with_additional_secrets(
             resource_id,
             workload_name,
@@ -597,15 +645,55 @@ impl EnvSecretRotationTracker {
         workload_name: &str,
         variables: &[EnvironmentVariable],
         additional_secrets: &BTreeMap<String, String>,
-    ) -> bool {
+    ) -> Result<bool> {
         let current = environment_secret_plan_with_additional_secrets(
             resource_id,
             workload_name,
             variables,
             additional_secrets,
-        )
+        )?
         .map(|plan| plan.checksum);
-        current != self.checksum
+        if current == self.checksum {
+            return Ok(false);
+        }
+        Ok(!self.is_unchanged_unkeyed(resource_id, variables, additional_secrets))
+    }
+
+    /// Replaces a recorded checksum from before checksums were keyed with the
+    /// keyed one when the values have not changed, so the unkeyed checksum no
+    /// longer sits in controller state. Returns whether it replaced one.
+    ///
+    /// The pod template keeps the old checksum until the workload is next
+    /// updated, so the pods roll once then.
+    pub fn adopt_unkeyed(
+        &mut self,
+        resource_id: &str,
+        workload_name: &str,
+        variables: &[EnvironmentVariable],
+        additional_secrets: &BTreeMap<String, String>,
+    ) -> Result<bool> {
+        if !self.is_unchanged_unkeyed(resource_id, variables, additional_secrets) {
+            return Ok(false);
+        }
+        let plan = environment_secret_plan_with_additional_secrets(
+            resource_id,
+            workload_name,
+            variables,
+            additional_secrets,
+        )?;
+        self.checksum = plan.map(|plan| plan.checksum);
+        Ok(true)
+    }
+
+    fn is_unchanged_unkeyed(
+        &self,
+        resource_id: &str,
+        variables: &[EnvironmentVariable],
+        additional_secrets: &BTreeMap<String, String>,
+    ) -> bool {
+        let values = environment_secret_values(resource_id, variables, additional_secrets);
+        !values.is_empty()
+            && self.checksum.as_deref() == Some(unkeyed_secret_checksum(&values).as_str())
     }
 }
 
@@ -645,7 +733,9 @@ mod tests {
             var_type: EnvironmentVariableType::Secret,
             target_resources: None,
         }];
-        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let plan = environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .expect("plan");
         let env_map = HashMap::from([
             (
                 ENV_ALIEN_DEPLOYER_SECRETS.to_string(),
@@ -704,7 +794,9 @@ mod tests {
             secret_var("OTHER_SECRET", "v", Some(vec!["other"])),
         ];
 
-        assert!(environment_secret_plan("web", "web", &variables).is_none());
+        assert!(environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .is_none());
     }
 
     #[test]
@@ -742,7 +834,9 @@ mod tests {
             secret_var("OTHER_SECRET", "v", Some(vec!["other"])),
         ];
 
-        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let plan = environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .expect("plan");
 
         assert_eq!(plan.secret_name, "web-env");
         assert_eq!(
@@ -761,9 +855,15 @@ mod tests {
         let unchanged = vec![secret_var("APP_SECRET", "v1", None)];
         let rotated = vec![secret_var("APP_SECRET", "v2", None)];
 
-        let plan_before = environment_secret_plan("web", "web", &before).expect("plan");
-        let plan_unchanged = environment_secret_plan("web", "web", &unchanged).expect("plan");
-        let plan_rotated = environment_secret_plan("web", "web", &rotated).expect("plan");
+        let plan_before = environment_secret_plan("web", "web", &before)
+            .expect("checksum key")
+            .expect("plan");
+        let plan_unchanged = environment_secret_plan("web", "web", &unchanged)
+            .expect("checksum key")
+            .expect("plan");
+        let plan_rotated = environment_secret_plan("web", "web", &rotated)
+            .expect("checksum key")
+            .expect("plan");
 
         assert_eq!(plan_before.checksum, plan_unchanged.checksum);
         assert_ne!(
@@ -773,12 +873,81 @@ mod tests {
     }
 
     #[test]
+    fn plan_checksum_is_keyed_so_a_guess_cannot_be_tested_against_it() {
+        let variables = vec![secret_var("APP_SECRET", "weak", None)];
+        let plan = environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .expect("plan");
+        let values = environment_secret_values("web", &variables, &BTreeMap::new());
+
+        assert_ne!(
+            plan.checksum,
+            unkeyed_secret_checksum(&values),
+            "a plain SHA-256 of the values would let a reader of controller state test guesses"
+        );
+        assert_eq!(plan.checksum.len(), 64);
+    }
+
+    #[test]
+    fn an_unkeyed_checksum_of_unchanged_values_is_adopted_without_a_rollout() {
+        let variables = vec![secret_var("APP_SECRET", "v1", None)];
+        let values = environment_secret_values("web", &variables, &BTreeMap::new());
+        let keyed = environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .expect("plan")
+            .checksum;
+        let mut tracker = EnvSecretRotationTracker {
+            checksum: Some(unkeyed_secret_checksum(&values)),
+            ..Default::default()
+        };
+
+        assert!(
+            !tracker
+                .drifted("web", "web", &variables)
+                .expect("checksum key"),
+            "values did not change, so the old checksum must not roll the pods"
+        );
+        assert!(tracker
+            .adopt_unkeyed("web", "web", &variables, &BTreeMap::new())
+            .expect("adopt"));
+        assert_eq!(tracker.checksum.as_deref(), Some(keyed.as_str()));
+        assert!(
+            !tracker
+                .adopt_unkeyed("web", "web", &variables, &BTreeMap::new())
+                .expect("adopt"),
+            "a keyed checksum is left alone"
+        );
+    }
+
+    #[test]
+    fn an_unkeyed_checksum_of_changed_values_still_rolls_the_pods() {
+        let before = vec![secret_var("APP_SECRET", "v1", None)];
+        let rotated = vec![secret_var("APP_SECRET", "v2", None)];
+        let old =
+            unkeyed_secret_checksum(&environment_secret_values("web", &before, &BTreeMap::new()));
+        let mut tracker = EnvSecretRotationTracker {
+            checksum: Some(old.clone()),
+            ..Default::default()
+        };
+
+        assert!(tracker
+            .drifted("web", "web", &rotated)
+            .expect("checksum key"));
+        assert!(!tracker
+            .adopt_unkeyed("web", "web", &rotated, &BTreeMap::new())
+            .expect("adopt"));
+        assert_eq!(tracker.checksum.as_deref(), Some(old.as_str()));
+    }
+
+    #[test]
     fn secret_manifest_is_a_typed_opaque_secret_with_values_and_checksum() {
         let variables = vec![
             secret_var("APP_SECRET", "s3cret", None),
             secret_var(ENV_ALIEN_COMMANDS_TOKEN, "tok", Some(vec!["web"])),
         ];
-        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let plan = environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .expect("plan");
         let secret_values = environment_secret_values("web", &variables, &BTreeMap::new());
         let deployment_labels = BTreeMap::from([(
             "alien.dev/deployment".to_string(),
@@ -843,6 +1012,7 @@ mod tests {
         ]);
         let plan =
             environment_secret_plan_with_additional_secrets("web", "web", &variables, &additional)
+                .expect("checksum key")
                 .expect("plan");
         let values = environment_secret_values("web", &variables, &additional);
         let secret =
@@ -900,13 +1070,20 @@ mod tests {
             "authorization=Bearer v2".to_string(),
         )]);
         let plan = environment_secret_plan_with_additional_secrets("agent", "agent", &[], &before)
+            .expect("checksum key")
             .expect("monitoring plan");
         let mut tracker = EnvSecretRotationTracker::default();
         tracker.record(Some(&plan));
 
-        assert!(!tracker.drifted_with_additional_secrets("agent", "agent", &[], &before));
-        assert!(tracker.drifted_with_additional_secrets("agent", "agent", &[], &rotated));
-        assert!(tracker.drifted_with_additional_secrets("agent", "agent", &[], &BTreeMap::new()));
+        assert!(!tracker
+            .drifted_with_additional_secrets("agent", "agent", &[], &before)
+            .expect("checksum key"));
+        assert!(tracker
+            .drifted_with_additional_secrets("agent", "agent", &[], &rotated)
+            .expect("checksum key"));
+        assert!(tracker
+            .drifted_with_additional_secrets("agent", "agent", &[], &BTreeMap::new())
+            .expect("checksum key"));
     }
 
     #[test]

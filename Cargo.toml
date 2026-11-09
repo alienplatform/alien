@@ -160,6 +160,7 @@ pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 futures-util = "0.3.31"
 heck = "0.5"
 hmac = "0.12"
+aes-gcm = "0.10"
 http = "1"
 http-body = "1"
 http-body-util = "0.1.3"

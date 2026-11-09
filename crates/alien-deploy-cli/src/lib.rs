@@ -170,8 +170,8 @@ pub fn setup_tracing(verbose: bool) {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<()> {
-    // This process alone steps its deployments, so a key of its own is enough.
-    alien_deployment::set_ephemeral_secrets_digest_key();
+    // The checksums saved in a deployment must match the next run too.
+    alien_deployment::persisted_digest_key::use_user_secrets_digest_key();
 
     // Load embedded config if present (for pre-configured / rebranded binaries)
     let embedded_config = embedded_config()?;

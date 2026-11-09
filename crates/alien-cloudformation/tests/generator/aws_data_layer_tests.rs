@@ -125,6 +125,67 @@ fn instance_secrets_stack() -> Stack {
     stack
 }
 
+fn granted_runtime_stack(accounts: &[&str]) -> Stack {
+    let mut permissions = alien_core::PermissionsConfig::new();
+    let mut stack = Stack::new("instance-secrets".to_string()).add(
+        Key::new("secrets".to_string()).build(),
+        ResourceLifecycle::Frozen,
+    );
+    for account in accounts {
+        permissions = permissions.with_profile(
+            account.trim_end_matches("-sa"),
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        );
+        stack = stack.add(
+            ServiceAccount::new(account.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+    }
+    stack.permissions(permissions).build()
+}
+
+/// A grant is named after its service account, so adding another granted account before it
+/// must not rename or replace its policy.
+#[test]
+fn aws_runtime_key_grant_names_do_not_move_when_an_earlier_account_is_added() {
+    let policies = |accounts: &[&str]| {
+        let (template, _yaml) = render_built_ins_template(
+            &granted_runtime_stack(accounts),
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            alien_cloudformation::CloudFormationTarget::Aws,
+            "aws",
+            "aws runtime key grant names",
+        );
+        template
+            .resources
+            .iter()
+            .filter(|(_, resource)| resource.resource_type == "AWS::IAM::Policy")
+            .filter(|(_, resource)| {
+                serde_json::to_string(&resource.properties["PolicyDocument"])
+                    .unwrap()
+                    .contains("kms:Decrypt")
+            })
+            .map(|(logical_id, resource)| {
+                (
+                    serde_json::to_string(&resource.properties["Roles"]).unwrap(),
+                    (
+                        logical_id.clone(),
+                        serde_json::to_string(&resource.properties["PolicyName"]).unwrap(),
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let before = policies(&["manager-sa", "worker-sa"]);
+    let after = policies(&["alpha-sa", "manager-sa", "worker-sa"]);
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert_eq!(after.len(), 3, "{after:?}");
+    for (role, policy) in &before {
+        assert_eq!(after.get(role), Some(policy), "{role} was renamed");
+    }
+}
+
 #[test]
 fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
     let (template, yaml) = render_built_ins_template(
@@ -175,6 +236,51 @@ fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
         .as_array()
         .unwrap()
         .contains(&serde_json::json!("kms:PutKeyPolicy")));
+}
+
+/// The key policy delegates to IAM, so the runtime role needs its own Allow. Without it the
+/// allowlist deny leaves nobody able to use the key.
+#[test]
+fn aws_runtime_only_key_is_usable_by_the_granted_runtime_role_and_no_other() {
+    let (template, _yaml) = render_built_ins_template(
+        &instance_secrets_stack(),
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "aws runtime key grant",
+    );
+    let grants = template
+        .resources
+        .values()
+        .filter(|resource| resource.resource_type == "AWS::IAM::Policy")
+        .filter_map(|resource| {
+            let document =
+                serde_json::to_value(&resource.properties["PolicyDocument"]).expect("document");
+            let roles = serde_json::to_value(&resource.properties["Roles"]).expect("roles");
+            let statements = document["Statement"].as_array().expect("statements");
+            statements
+                .iter()
+                .any(|statement| {
+                    statement["Effect"] == "Allow"
+                        && statement["Action"]
+                            .as_array()
+                            .is_some_and(|actions| actions.contains(&"kms:Decrypt".into()))
+                })
+                .then(|| (roles, statements.clone()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(grants.len(), 1, "exactly one role may decrypt: {grants:?}");
+    let (roles, statements) = &grants[0];
+    assert_eq!(roles, &serde_json::json!([{ "Ref": "ManagerSaRole" }]));
+    assert_eq!(
+        statements,
+        &vec![serde_json::json!({
+            "Effect": "Allow",
+            "Action": ["kms:Encrypt", "kms:Decrypt"],
+            "Resource": { "Fn::GetAtt": ["Secrets", "Arn"] },
+        })]
+    );
 }
 
 #[test]

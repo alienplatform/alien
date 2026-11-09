@@ -486,11 +486,10 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
                 && !prompt_confirm(
                     &format!(
                         "Update instance {id} to {}?",
-                        release
-                            .as_deref()
-                            .map_or("the latest instance release".to_string(), |release| format!(
-                                "release {release}"
-                            ))
+                        release.as_deref().map_or(
+                            "the latest instance release".to_string(),
+                            |release| format!("release {release}")
+                        )
                     ),
                     false,
                 )?

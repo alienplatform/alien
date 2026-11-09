@@ -1,7 +1,9 @@
 // Acquisition models are generated only by the full SDK.
 #![cfg(feature = "full-api")]
 
-use alien_platform_api::types::{DeploymentConfig, SyncAcquireResponseDeployment};
+use alien_platform_api::types::{
+    DeploymentConfig, SyncAcquireResponseDeployment, SyncAcquireResponseDeploymentConfig,
+};
 use serde_json::{Value, json};
 
 fn config() -> Value {
@@ -31,7 +33,7 @@ fn acquired_config_retains_stored_secret_ids_without_secret_values() {
     original["storedSecretInputIds"] = json!(["credential"]);
     let acquired: SyncAcquireResponseDeployment =
         serde_json::from_value(acquired_deployment(original.clone())).unwrap();
-    let typed_config: &DeploymentConfig = &acquired.config;
+    let typed_config: &SyncAcquireResponseDeploymentConfig = &acquired.config;
     let encoded_config = serde_json::to_value(typed_config).unwrap();
     let encoded_response = serde_json::to_value(&acquired).unwrap();
 
@@ -62,8 +64,10 @@ fn absent_and_empty_stored_secret_ids_remain_distinct() {
     }] {
         let acquired: SyncAcquireResponseDeployment =
             serde_json::from_value(acquired_deployment(original.clone())).unwrap();
-        let rebuilt: DeploymentConfig =
-            alien_platform_api::types::builder::DeploymentConfig::from(acquired.config.clone())
+        let rebuilt: SyncAcquireResponseDeploymentConfig =
+            alien_platform_api::types::builder::SyncAcquireResponseDeploymentConfig::from(
+                acquired.config.clone(),
+            )
                 .stored_secret_input_ids(
                     original
                         .get("storedSecretInputIds")

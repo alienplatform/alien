@@ -8,14 +8,17 @@ use std::time::Duration;
 
 use alien_core::{ComputePoolSelection, ComputeSettings, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::types::ValueKind;
 use alien_platform_api::types::{
     DeploymentDetailResponse, DrainMachinesMachineRequest, EnvironmentVariableConfig,
     UpdateDeploymentComputeRequest, UpdateDeploymentEnvironmentVariablesRequest,
-    UpdateDeploymentInputsRequest,
 };
 use alien_platform_api::SdkResultExt as _;
 use serde_json::{Map, Value};
 
+use crate::commands::value_access::{
+    self, platform_json, store_deployment_values, StoredValues, ValueWrite,
+};
 use crate::error::{ErrorData, Result};
 use crate::interaction::ConfirmationMode;
 use crate::output::{print_json, prompt_confirm};
@@ -531,30 +534,23 @@ pub(crate) async fn set_environment_variables_task(
         return Ok(());
     }
 
-    let body: UpdateDeploymentEnvironmentVariablesRequest =
-        request_body(serde_json::json!({ "variables": variables }), "env")?;
-    let response = client
-        .update_deployment_environment_variables()
-        .id(deployment_id)
-        .workspace(workspace)
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("updating environment variables for deployment '{deployment_id}'"),
-            url: None,
-        })?
-        .into_inner();
+    let previous = current_environment_names(client, workspace, deployment_id).await;
+    let message = save_environment_variables(client, workspace, deployment_id, &variables).await?;
+    let dropped: Vec<String> = previous
+        .into_iter()
+        .filter(|name| !names.contains(name))
+        .map(|name| format!("env:{name}"))
+        .collect();
+    value_access::delete_values_best_effort(client, workspace, deployment_id, &dropped).await;
 
     if json {
         return print_json(&serde_json::json!({
             "deploymentId": deployment_id,
             "variables": names,
-            "message": response.message,
+            "message": message,
         }));
     }
-    println!("{}", success_line(&response.message));
+    println!("{}", success_line(&message));
     if names.is_empty() {
         println!("{} none", dim_label("Variables"));
     } else {
@@ -568,6 +564,123 @@ pub(crate) async fn set_environment_variables_task(
         ))
     );
     Ok(())
+}
+
+/// Replaces the deployment's environment variables and returns the platform's message.
+///
+/// When the deployment's manager stores values, the values go there and the
+/// platform receives only a reference to each. Otherwise the platform receives
+/// the values, as it did before managers stored them.
+/// The variable names the deployment has now. Empty when they cannot be read:
+/// removing their manager copies is best effort.
+async fn current_environment_names(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+) -> Vec<String> {
+    let current = platform_json(
+        client,
+        reqwest::Method::GET,
+        &format!("/v1/deployments/{deployment_id}/environment-variables"),
+        workspace,
+        None,
+        &format!("reading environment variables of deployment '{deployment_id}'"),
+    )
+    .await;
+    current
+        .ok()
+        .and_then(|body| {
+            body.get("variables")?.as_array().map(|rows| {
+                rows.iter()
+                    .filter_map(|row| row.get("name")?.as_str().map(str::to_string))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) async fn save_environment_variables(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    variables: &[EnvironmentVariableConfig],
+) -> Result<String> {
+    let rows = variables
+        .iter()
+        .map(|variable| {
+            serde_json::to_value(variable)
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "serialize".to_string(),
+                    reason: "an environment variable".to_string(),
+                })
+        })
+        .collect::<Result<Vec<Value>>>()?;
+    let writes = rows
+        .iter()
+        .map(|row| {
+            let text = |field: &str| row.get(field).and_then(Value::as_str).unwrap_or_default();
+            ValueWrite {
+                slot: format!("env:{}", text("name")),
+                kind: if text("type") == "secret" {
+                    ValueKind::Secret
+                } else {
+                    ValueKind::Plain
+                },
+                value: text("value").to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let path = format!("/v1/deployments/{deployment_id}/environment-variables");
+    let action = format!("updating environment variables for deployment '{deployment_id}'");
+    match store_deployment_values(client, workspace, deployment_id, &writes).await? {
+        StoredValues::Stored(refs) => {
+            let rows: Vec<Value> = rows
+                .into_iter()
+                .zip(refs)
+                .map(|(mut row, reference)| {
+                    if let Some(row) = row.as_object_mut() {
+                        row.remove("value");
+                        row.insert("valueRef".to_string(), serde_json::json!(reference));
+                    }
+                    row
+                })
+                .collect();
+            let response = platform_json(
+                client,
+                reqwest::Method::PATCH,
+                &path,
+                workspace,
+                Some(&serde_json::json!({ "variables": rows })),
+                &action,
+            )
+            .await?;
+            Ok(response
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Environment variables updated.")
+                .to_string())
+        }
+        StoredValues::OldPath => {
+            let body: UpdateDeploymentEnvironmentVariablesRequest =
+                request_body(serde_json::json!({ "variables": variables }), "env")?;
+            let response = client
+                .update_deployment_environment_variables()
+                .id(deployment_id)
+                .workspace(workspace)
+                .body(body)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: action,
+                    url: None,
+                })?
+                .into_inner();
+            Ok(response.message)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -731,24 +844,67 @@ async fn fetch_inputs(
     workspace: &str,
     deployment_id: &str,
 ) -> Result<Value> {
-    let response = client
-        .get_deployment_inputs()
-        .id(deployment_id)
-        .workspace(workspace)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("reading stack inputs for deployment '{deployment_id}'"),
-            url: None,
-        })?
-        .into_inner();
-    serde_json::to_value(&response)
-        .into_alien_error()
-        .context(ErrorData::JsonError {
-            operation: "serialize".to_string(),
-            reason: "deployment inputs".to_string(),
-        })
+    platform_json(
+        client,
+        reqwest::Method::GET,
+        &format!("/v1/deployments/{deployment_id}/inputs"),
+        workspace,
+        None,
+        &format!("reading stack inputs for deployment '{deployment_id}'"),
+    )
+    .await
+}
+
+/// The inputs the deployment's manager holds, as `heldInputIds` lists them.
+fn held_input_ids(current: &Value) -> Vec<&str> {
+    current
+        .get("heldInputIds")
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// Splits `values` into the writes for inputs the manager holds and the rest.
+/// A held input is stored as JSON text, and as a secret when its kind is.
+fn split_held_inputs(
+    current: &Value,
+    values: &Map<String, Value>,
+) -> Result<(Vec<ValueWrite>, Map<String, Value>)> {
+    let held = held_input_ids(current);
+    let is_secret = |id: &str| {
+        current
+            .get("inputs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|input| {
+                input.get("id").and_then(Value::as_str) == Some(id)
+                    && input.get("kind").and_then(Value::as_str) == Some("secret")
+            })
+    };
+    let mut writes = Vec::new();
+    let mut platform_values = Map::new();
+    for (id, value) in values {
+        if held.contains(&id.as_str()) {
+            writes.push(ValueWrite {
+                slot: format!("input:{id}"),
+                kind: if is_secret(id) {
+                    ValueKind::Secret
+                } else {
+                    ValueKind::Plain
+                },
+                value: serde_json::to_string(value).into_alien_error().context(
+                    ErrorData::JsonError {
+                        operation: "serialize".to_string(),
+                        reason: format!("input '{id}'"),
+                    },
+                )?,
+            });
+        } else {
+            platform_values.insert(id.clone(), value.clone());
+        }
+    }
+    Ok((writes, platform_values))
 }
 
 fn print_inputs(inputs: &Value) {
@@ -813,6 +969,70 @@ pub(crate) async fn inputs_task(
     Ok(())
 }
 
+/// Saves input values and resets `clear` on a deployment, and returns the platform's answer.
+///
+/// `current` is the deployment's `GET .../inputs` answer. Inputs its manager holds go to the
+/// manager and the platform receives a reference; the rest go to the platform.
+pub(crate) async fn save_inputs(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    current: &Value,
+    values: &Map<String, Value>,
+    clear: &[String],
+) -> Result<Value> {
+    let (writes, mut platform_values) = split_held_inputs(current, values)?;
+    let mut value_refs = Map::new();
+    match store_deployment_values(client, workspace, deployment_id, &writes).await? {
+        StoredValues::Stored(refs) => {
+            for (write, reference) in writes.iter().zip(refs) {
+                let id = write.slot.trim_start_matches("input:").to_string();
+                value_refs.insert(id, serde_json::json!(reference));
+            }
+        }
+        StoredValues::OldPath => {
+            for write in &writes {
+                let id = write.slot.trim_start_matches("input:");
+                platform_values.insert(id.to_string(), values[id].clone());
+            }
+        }
+    }
+
+    let mut request = serde_json::json!({ "inputValues": platform_values, "clearInputIds": clear });
+    if !value_refs.is_empty() {
+        request["inputValueRefs"] = Value::Object(value_refs);
+    }
+    let response = platform_json(
+        client,
+        reqwest::Method::PATCH,
+        &format!("/v1/deployments/{deployment_id}/inputs"),
+        workspace,
+        Some(&request),
+        &format!("updating stack inputs for deployment '{deployment_id}'"),
+    )
+    .await?;
+    let held = held_input_ids(current);
+    let dropped: Vec<String> = clear
+        .iter()
+        .filter(|id| held.contains(&id.as_str()))
+        .map(|id| format!("input:{id}"))
+        .collect();
+    value_access::delete_values_best_effort(client, workspace, deployment_id, &dropped).await;
+    Ok(response)
+}
+
+/// Stores the answers a platform refused at creation on the deployment that was created without them.
+pub(crate) async fn store_created_inputs(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    values: &Map<String, Value>,
+) -> Result<()> {
+    let current = fetch_inputs(client, workspace, deployment_id).await?;
+    save_inputs(client, workspace, deployment_id, &current, values, &[]).await?;
+    Ok(())
+}
+
 pub(crate) async fn set_inputs_task(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -832,32 +1052,15 @@ pub(crate) async fn set_inputs_task(
         })
         .unwrap_or_default();
     let values = input_values_to_save(&declared, &changes)?;
-    let clear = changes.clear;
-
-    let body: UpdateDeploymentInputsRequest = request_body(
-        serde_json::json!({ "inputValues": values, "clearInputIds": clear }),
-        "input",
-    )?;
-    let response = client
-        .update_deployment_inputs()
-        .id(deployment_id)
-        .workspace(workspace)
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("updating stack inputs for deployment '{deployment_id}'"),
-            url: None,
-        })?
-        .into_inner();
-    let response =
-        serde_json::to_value(&response)
-            .into_alien_error()
-            .context(ErrorData::JsonError {
-                operation: "serialize".to_string(),
-                reason: "updated deployment inputs".to_string(),
-            })?;
+    let response = save_inputs(
+        client,
+        workspace,
+        deployment_id,
+        &current,
+        &values,
+        &changes.clear,
+    )
+    .await?;
 
     if json {
         return print_json(&response);

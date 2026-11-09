@@ -17,22 +17,22 @@ use std::{future::ready, sync::Arc, time::Duration};
 
 use alien_bindings::traits::Kv;
 use alien_core::{
-    AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat, sync::TargetDeployment,
+    sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat,
 };
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
 use base64::Engine as _;
-use futures::{StreamExt, stream};
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 use crate::{
     auth::{Scope, Subject},
     error::ErrorData,
@@ -512,9 +512,22 @@ async fn status_report(
     }
     let last_batch = report.telemetry.iter().filter_map(|batch| batch.id).max();
     let report_state = report.state.clone();
+    let held_values = match crate::values::HeldValues::current(
+        state.values.as_deref(),
+        &state.config,
+        state.release_store.as_ref(),
+        &deployment,
+        report_state.stack_state.as_ref(),
+    )
+    .await
+    {
+        Ok(held_values) => held_values,
+        Err(error) => return error.into_response(),
+    };
     if !deleting {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),
+            &held_values,
             &subject,
             &deployment.id,
             report.state,
@@ -563,6 +576,7 @@ async fn status_report(
     {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),
+            &held_values,
             &subject,
             &deployment.id,
             report_state,
@@ -589,12 +603,16 @@ async fn status_report(
 
 async fn reconcile_report(
     store: &dyn crate::traits::DeploymentStore,
+    held_values: &crate::values::HeldValues,
     subject: &Subject,
     deployment_id: &str,
-    report: DeploymentState,
+    mut report: DeploymentState,
     heartbeats: Vec<ResourceHeartbeat>,
     applied_configuration_revision: Option<String>,
 ) -> Result<(), alien_error::AlienError> {
+    held_values
+        .redact(report.stack_state.as_mut())
+        .map_err(|error| error.into_generic())?;
     let data = ReconcileData {
         deployment_id: deployment_id.to_string(),
         session: "airgap-status-report".to_string(),
@@ -1629,6 +1647,7 @@ mod tests {
                 .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
             let error = reconcile_report(
                 &store,
+                &crate::values::HeldValues::default(),
                 &Subject::system(),
                 "dep_1",
                 report.state,
@@ -1929,18 +1948,16 @@ mod tests {
         });
         let mut input = batches(1..=256);
         input[199].1 = TelemetrySignal::Traces;
-        assert!(
-            forward_telemetry(
-                backend.clone(),
-                kv.clone(),
-                caller(),
-                "mark".into(),
-                input.clone(),
-                Duration::from_secs(5)
-            )
-            .await
-            .is_err()
-        );
+        assert!(forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            Duration::from_secs(5)
+        )
+        .await
+        .is_err());
         assert!(
             backend.received.lock().unwrap().contains(&256),
             "logs in the failed window reached the backend"

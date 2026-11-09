@@ -161,6 +161,16 @@ async fn build_standalone_server(
     let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(&state_dir)
         .unwrap_or_else(|e| panic!("Failed to set up the bundle signing key: {e}"));
 
+    let ephemeral_state_dir = alien_manager::values::state_dir_is_ephemeral(&state_dir)
+        .unwrap_or_else(|e| panic!("Failed to check the state directory: {e}"));
+    if ephemeral_state_dir && toml_config.commands.values_key.is_none() {
+        tracing::warn!(
+            state_dir = %state_dir.display(),
+            "The state directory is not on a persistent volume and no values key is set; \
+             deployment values will be refused"
+        );
+    }
+
     // Build the server with standalone defaults
     let server = AlienManager::builder(config)
         .token_store(token_store)
@@ -170,6 +180,7 @@ async fn build_standalone_server(
             toml_config.operator.insecure_registry,
         ))
         .bundle_signing_key(bundle_signing_key)
+        .ephemeral_state_dir(ephemeral_state_dir)
         .with_standalone_defaults(toml_config)
         .await
         .expect("Failed to set up standalone defaults")

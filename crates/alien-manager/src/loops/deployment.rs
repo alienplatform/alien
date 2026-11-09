@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{stream, FutureExt, StreamExt};
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -228,6 +227,8 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+    /// Holds the values of deployments whose config carries `valueSlots`.
+    values: Option<Arc<crate::values::ValueStore>>,
 }
 
 /// A phase that can't start, to be saved as the deployment's failure.
@@ -316,7 +317,14 @@ impl DeploymentLoop {
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            values: None,
         }
+    }
+
+    /// Load deployments' held values from `values` before they step.
+    pub fn with_value_store(mut self, values: Option<Arc<crate::values::ValueStore>>) -> Self {
+        self.values = values;
+        self
     }
 
     /// Add acquisition exclusions without enumerating a possibly capped candidate list.
@@ -1097,14 +1105,61 @@ impl DeploymentLoop {
                     .await;
             }
         };
+        // Values the deployment keeps on this manager are loaded only for the
+        // config and the in-memory state; neither is saved with them.
+        let loaded = async {
+            let held =
+                crate::values::hydrate_held_values(self.values.as_deref(), &deployment).await?;
+            let (held, generated) = crate::values::with_generated_inputs(
+                self.values.as_deref(),
+                deployment_stack.as_ref(),
+                held,
+            )
+            .await?;
+            let step_values = crate::values::HeldValues::of_step(
+                self.values.as_deref(),
+                &self.config,
+                &deployment,
+                &held,
+                deployment_stack.as_ref(),
+            )
+            .await?;
+            step_values.restore(state.stack_state.as_mut())?;
+            Ok::<_, AlienError<crate::error::ErrorData>>((held, generated.slots, step_values))
+        }
+        .await;
+        let (held, generated_slots, step_values) = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    error = %error,
+                    "Held values could not be loaded for the deployment"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
+                        status,
+                        deployment_stack: deployment_stack.as_ref(),
+                        target_release_id,
+                        current_release,
+                        had_credential_retry,
+                        error: error.into_generic(),
+                        session,
+                        execution_claim,
+                    })
+                    .await;
+            }
+        };
         let mut config = RunnerConfigSources {
             config: &self.config,
             credential_resolver: self.credential_resolver.as_ref(),
             bindings_provider: &self.server_bindings.bindings_provider,
             target_bindings_providers: &self.server_bindings.target_bindings_providers,
         }
-        .deployment_config(&deployment, deployment_stack.as_ref(), management_config)
+        .deployment_config(&held, deployment_stack.as_ref(), management_config)
         .await?;
+        drop(held);
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
         // when an external control plane did not supply one. It stays out of
@@ -1192,7 +1247,9 @@ impl DeploymentLoop {
             session.to_string(),
             execution_claim.clone(),
             self.config.supported_aws_regions.clone(),
-        );
+        )
+        .with_held_values(step_values)
+        .with_generated_slots(generated_slots);
 
         let mut config = config;
         let runner_result = if options.require_heartbeats_enabled {
@@ -1695,6 +1752,7 @@ impl RunnerConfigSources<'_> {
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
                 volume_restores: Vec::new(),
+                value_slots: Vec::new(),
                 deletion_policy: Default::default(),
             }
         };
@@ -1818,7 +1876,7 @@ fn input_environment_parts(
 /// The environment variables snapshot injected into the deployment's
 /// workloads: `ALIEN_DEPLOYMENT_ID`, `ALIEN_DEPLOYMENT_NAME`, command delivery
 /// configuration, and the deployment's own variables.
-fn deployment_environment_variables(
+pub(crate) fn deployment_environment_variables(
     config: &ManagerConfig,
     deployment: &DeploymentRecord,
     deployment_stack: Option<&Stack>,
@@ -1882,16 +1940,10 @@ fn deployment_environment_variables(
         ),
     }
 
-    // Build deterministic hash from variable contents so the infra executor
-    // only sees a change when the actual values change.
-    let mut hasher = Sha256::new();
-    for v in &vars {
-        hasher.update(v.name.as_bytes());
-        hasher.update(b"=");
-        hasher.update(v.value.as_bytes());
-        hasher.update(b"\n");
-    }
-    let hash = format!("env-{:x}", hasher.finalize());
+    // Keyed fingerprint of the variables, so the infra executor only sees a
+    // change when the actual values change and the hash on a workload tells
+    // nothing about them.
+    let hash = alien_deployment::environment_snapshot_hash(&vars).map_err(|e| e.into_generic())?;
 
     Ok(EnvironmentVariablesSnapshot {
         variables: vars,
@@ -2122,7 +2174,9 @@ fn state_from_record(
 /// The stacks a control plane supplied for this step: the target (the
 /// desired release, or the current one when nothing is desired) and the
 /// installed current stack. `None` means read the release instead.
-fn supplied_release_stacks(deployment: &DeploymentRecord) -> (Option<Stack>, Option<Stack>) {
+pub(crate) fn supplied_release_stacks(
+    deployment: &DeploymentRecord,
+) -> (Option<Stack>, Option<Stack>) {
     let Some(stacks) = deployment.supplied_stacks.as_ref() else {
         return (None, None);
     };
@@ -2988,6 +3042,21 @@ mod tests {
                 error: AlienError,
                 platform: Platform,
             ) -> Self {
+                Self::new_with_inputs(status, error, platform, Vec::new()).await
+            }
+
+            /// A fixture whose release stack declares `inputs`.
+            async fn new_with_inputs(
+                status: DeploymentStatus,
+                error: AlienError,
+                platform: Platform,
+                inputs: Vec<alien_core::StackInputDefinition>,
+            ) -> Self {
+                let release_stack = {
+                    let mut stack = Stack::new("test".to_string()).build();
+                    stack.inputs = inputs;
+                    stack
+                };
                 let directory = TempDir::new().unwrap();
                 let db_path = directory.path().join("manager.db");
                 let credentials = Arc::new(Credentials {
@@ -3022,10 +3091,7 @@ mod tests {
                         &caller,
                         crate::traits::release_store::CreateReleaseParams {
                             project_id: "default".to_string(),
-                            stacks: HashMap::from([(
-                                platform,
-                                Stack::new("test".to_string()).build(),
-                            )]),
+                            stacks: HashMap::from([(platform, release_stack.clone())]),
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
@@ -3062,7 +3128,7 @@ mod tests {
                     deployment_status_str(status), release.id, release.id, deployment.id,
                 )).await.unwrap();
                 let metadata = serde_json::to_string(&alien_core::RuntimeMetadata {
-                    prepared_stack: Some(Stack::new("test".to_string()).build()),
+                    prepared_stack: Some(release_stack),
                     ..Default::default()
                 })
                 .unwrap();
@@ -3094,6 +3160,7 @@ mod tests {
                     self.manager.server_bindings.clone(),
                     None,
                 )
+                .with_value_store(self.manager.values.clone())
             }
 
             async fn record(&self) -> DeploymentRecord {
@@ -3106,6 +3173,15 @@ mod tests {
             }
 
             async fn process(&self, runner: &DeploymentLoop) {
+                self.process_with(runner, |_| {}).await
+            }
+
+            /// Like `process`, with `change` applied to the record the loop receives.
+            async fn process_with(
+                &self,
+                runner: &DeploymentLoop,
+                change: impl FnOnce(&mut DeploymentRecord),
+            ) {
                 let acquired = self
                     .manager
                     .deployment_store
@@ -3127,6 +3203,7 @@ mod tests {
                 // Only the deployment state itself is a durable clock for retries.
                 item.deployment.created_at = Utc::now();
                 item.deployment.updated_at = None;
+                change(&mut item.deployment);
                 runner
                     .process_deployment(
                         item.deployment,
@@ -3238,6 +3315,199 @@ mod tests {
             let saved: AlienError =
                 serde_json::from_value(record.error.expect("saved error")).unwrap();
             assert_eq!(saved.source.expect("resolver error").message, cause.message);
+        }
+
+        fn config_naming_slots(
+            slots: Vec<alien_core::ValueSlotRef>,
+        ) -> alien_core::DeploymentConfig {
+            let mut config = alien_core::DeploymentConfig::builder()
+                .deployment_name("credential-retry".to_string())
+                .stack_settings(Default::default())
+                .input_values(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build();
+            config.value_slots = slots;
+            config
+        }
+
+        /// A value changed on the manager after the sender planned the step is never
+        /// run: the update ends failed, saying which slot, without showing either value.
+        #[tokio::test]
+        async fn a_held_value_changed_after_planning_fails_the_update() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "env:API_TOKEN".parse().unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "first-s3cret-A".into(),
+                )
+                .await
+                .unwrap();
+            store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "second-s3cret-B".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            let saved: AlienError =
+                serde_json::from_value(record.error.expect("saved error")).unwrap();
+            assert_eq!(saved.code, "DEPLOYMENT_VALUES_CHANGED");
+            assert!(saved.message.contains("env:API_TOKEN"), "{}", saved.message);
+            let saved_text = serde_json::to_string(&saved).unwrap();
+            assert!(!saved_text.contains("s3cret"), "{saved_text}");
+        }
+
+        /// A held value that still matches its digest does not stop the step.
+        #[tokio::test]
+        async fn a_held_value_that_matches_its_digest_does_not_stop_the_update() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &"env:API_TOKEN".parse().unwrap(),
+                    crate::values::ValueKind::Secret,
+                    "s3cret".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let record = fixture.record().await;
+            assert_ne!(record.status, "update-failed", "{:?}", record.error);
+            assert!(record.error.is_none(), "{:?}", record.error);
+        }
+
+        fn generated_signing_key(length: u32) -> alien_core::StackInputDefinition {
+            alien_core::StackInputDefinition {
+                id: "signingKey".to_string(),
+                kind: alien_core::StackInputKind::Secret,
+                when: None,
+                provided_by: vec![alien_core::StackInputProvider::Developer],
+                required: true,
+                label: "Signing key".to_string(),
+                description: "Key the service signs internal tokens with.".to_string(),
+                placeholder: None,
+                default: None,
+                platforms: None,
+                validation: None,
+                generate: Some(alien_core::StackInputGenerate { length }),
+                env: vec![],
+            }
+        }
+
+        /// The first step generates a secret input on the manager and keeps it there:
+        /// nothing the control plane stores holds the value, and a later step reuses it.
+        #[tokio::test]
+        async fn a_generated_secret_input_is_made_once_and_stays_on_the_manager() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new_with_inputs(
+                DeploymentStatus::UpdatePending,
+                transient_error(),
+                Platform::Local,
+                vec![generated_signing_key(48)],
+            )
+            .await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "input:signingKey".parse().unwrap();
+            assert!(store.get(&scope, &slot).await.unwrap().is_none());
+
+            fixture.process(&fixture.runner()).await;
+
+            let first = store
+                .get(&scope, &slot)
+                .await
+                .unwrap()
+                .expect("the first step generates the input");
+            assert_eq!(first.kind, crate::values::ValueKind::Secret);
+            let value: String =
+                serde_json::from_str(&first.value).expect("stored as a JSON string");
+            assert_eq!(value.len(), 48);
+            assert!(value.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+            let record = fixture.record().await;
+            assert_ne!(record.status, "update-failed", "{:?}", record.error);
+            let control_plane_view = serde_json::to_string(&record).unwrap();
+            assert!(
+                !control_plane_view.contains(&value),
+                "the deployment record the control plane keeps holds the value"
+            );
+
+            fixture.process(&fixture.runner()).await;
+
+            let second = store.get(&scope, &slot).await.unwrap().unwrap();
+            assert_eq!(second.value, first.value, "a later step keeps the value");
+            assert_eq!(second.updated_at, first.updated_at);
+            let control_plane_view = serde_json::to_string(&fixture.record().await).unwrap();
+            assert!(!control_plane_view.contains(&value));
         }
 
         /// Deletion removes what is installed and never renders setup, so it needs no
@@ -5569,6 +5839,7 @@ mod tests {
     /// supplied identity: it uses the record's, else resolves.
     #[tokio::test]
     async fn a_supplied_management_identity_renders_without_the_resolver() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let identity = |tenant: &str| {
             alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
                 managing_tenant_id: tenant.to_string(),
@@ -5676,6 +5947,7 @@ mod tests {
     /// snapshot for the resources its mapping targets.
     #[test]
     fn push_snapshot_includes_input_environment_mappings() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let input = serde_json::from_value(serde_json::json!({
             "id": "databasePassword", "kind": "secret", "providedBy": ["developer"],
             "required": true, "label": "Database password", "description": "Generated",
@@ -5732,6 +6004,7 @@ mod tests {
     /// included, so a manager upgrade changes no workload.
     #[test]
     fn push_snapshot_is_unchanged_when_the_deployment_carries_every_mapped_variable() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let stack = Stack::new("inputs-stack".to_string())
             .inputs(vec![
                 plain_input("region", "APP_REGION"),
@@ -5759,13 +6032,11 @@ mod tests {
             user_variable(ENV_ALIEN_DEPLOYMENT_NAME, &deployment.name),
         ];
         expected.extend(deployment.user_environment_variables.clone().unwrap());
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        for variable in &expected {
-            hasher.update(format!("{}={}\n", variable.name, variable.value));
-        }
         assert_eq!(with_inputs.variables, expected);
-        assert_eq!(with_inputs.hash, format!("env-{:x}", hasher.finalize()));
+        assert_eq!(
+            with_inputs.hash,
+            alien_deployment::environment_snapshot_hash(&expected).unwrap()
+        );
     }
 
     /// Skipping one input leaves the others as the strict resolver has them:
@@ -5773,6 +6044,7 @@ mod tests {
     /// gated by another input's answer still sees that answer.
     #[test]
     fn push_snapshot_skips_only_the_input_that_does_not_resolve() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let mut twice = plain_input("twice", "TWICE");
         twice.env.push(twice.env[0].clone());
         let enabled = alien_core::StackInputDefinition::deployer_boolean(
@@ -5819,6 +6091,7 @@ mod tests {
     /// skipped (neither value wins) and every other input still resolves.
     #[test]
     fn push_snapshot_skips_inputs_that_map_one_variable_twice() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let stack = Stack::new("inputs-stack".to_string())
             .inputs(vec![
                 plain_input("primary", "SHARED"),
@@ -5858,6 +6131,7 @@ mod tests {
     /// the identity and command variables plus the deployment's own.
     #[tokio::test]
     async fn runner_config_replaces_control_plane_snapshot_with_manager_variables() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let daemon = Daemon::new("debug-daemon".to_string())
             .code(DaemonCode::Image {
                 image: "daemon:latest".to_string(),

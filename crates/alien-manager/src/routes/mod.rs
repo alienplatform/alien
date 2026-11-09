@@ -20,6 +20,7 @@ pub mod sync;
 pub mod telemetry;
 pub mod tokens;
 pub mod tunnel;
+pub mod values;
 pub mod vault;
 pub mod whoami;
 
@@ -101,6 +102,13 @@ pub struct AppState {
     pub bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
     /// Recent deployment logs kept by the manager (see `providers::recent_logs`).
     pub log_buffer: Arc<crate::dev::LogBuffer>,
+    /// Deployment values this manager holds. `None` when it has no place to
+    /// keep them; the `/v1/values` routes then answer 501.
+    pub values: Option<Arc<crate::values::ValueStore>>,
+    /// Decides who may use `/v1/values`.
+    pub value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
+    /// Limits `/v1/values/{scope}/verify`.
+    pub verify_limiter: Arc<crate::values::VerifyLimiter>,
 }
 
 impl HasCommandServer for AppState {
@@ -187,6 +195,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(whoami::router())
         .merge(manager_info::router())
         .merge(logs::router())
+        .merge(values::router())
         .merge(airgap::router())
         .merge(channels::router())
         // Deployments

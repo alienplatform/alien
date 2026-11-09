@@ -64,6 +64,12 @@ pub struct AlienManagerBuilder {
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from.
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    /// Where deployment values are kept; `None` serves no values.
+    value_store: Option<Arc<crate::values::ValueStore>>,
+    /// Who may use the value endpoints; the standalone rules when unset.
+    value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
+    /// The state directory is lost when the process restarts.
+    ephemeral_state_dir: bool,
 }
 
 impl AlienManagerBuilder {
@@ -93,7 +99,38 @@ impl AlienManagerBuilder {
             release_channels: None,
             bundle_signing_key: None,
             bundle_sources: None,
+            value_store: None,
+            value_access: None,
+            ephemeral_state_dir: false,
         }
+    }
+
+    /// Say that the state directory does not survive a restart (see
+    /// [`crate::values::state_dir_is_ephemeral`]). Values that would be kept in
+    /// it are then refused; a values key keeps them in the key-value store
+    /// instead.
+    pub fn ephemeral_state_dir(mut self, ephemeral: bool) -> Self {
+        self.ephemeral_state_dir = ephemeral;
+        self
+    }
+
+    /// Keep deployment values (see [`crate::values`]) in `store`. Without
+    /// it the manager serves no values and does not advertise the
+    /// capability. Standalone defaults use the manager's own database, or
+    /// its key-value binding when one is configured.
+    pub fn value_store(mut self, store: crate::values::ValueStore) -> Self {
+        self.value_store = Some(Arc::new(store));
+        self
+    }
+
+    /// Decide who may use the value endpoints. Default: the same tokens and
+    /// deployment rights as the rest of the API.
+    pub fn value_access(
+        mut self,
+        authorizer: Arc<dyn crate::values::ValueAccessAuthorizer>,
+    ) -> Self {
+        self.value_access = Some(authorizer);
+        self
     }
 
     /// Sign air-gapped bundles with `key`. Environments pin its public key,
@@ -302,19 +339,6 @@ impl AlienManagerBuilder {
             })?,
         );
 
-        // The vault-sync digest in runtime metadata is keyed with a secret that
-        // stays with this manager's state. An embedder that keeps the key
-        // elsewhere sets it before building; managers built later in the same
-        // process use the key that is already set.
-        if !alien_deployment::secrets_digest_key_is_set() {
-            let digest_key =
-                load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
-                    .context(ErrorData::ServerInitFailed {
-                        reason: "Failed to load the secrets digest key".to_string(),
-                    })?;
-            alien_deployment::set_secrets_digest_key_if_unset(digest_key);
-        }
-
         // --- Stores (only set if not already provided) ---
         // Channel routing joins the deployments table, so it comes with the
         // SQLite deployment store.
@@ -494,13 +518,49 @@ impl AlienManagerBuilder {
                         reason: "Failed to create KV bindings provider".to_string(),
                     },
                 )?;
-                provider
+                let kv = provider
                     .load_kv("kv")
                     .await
                     .context(ErrorData::ServerInitFailed {
                         reason: "Failed to load KV binding".to_string(),
-                    })?
+                    })?;
+                let values_key = match &toml_config.commands.values_key {
+                    Some(binding) => Some(load_values_key(binding).await?),
+                    None => None,
+                };
+                if self.value_store.is_none() {
+                    if let Some(key) = &values_key {
+                        let cipher =
+                            Arc::new(crate::values::EnvelopeCipher::new(key.clone(), kv.clone()));
+                        self.value_store = Some(Arc::new(crate::values::ValueStore::new(
+                            Arc::new(crate::values::KvValueBackend::new(kv.clone(), cipher)),
+                        )));
+                    }
+                }
+                // The vault-sync digest and the environment hash are keyed with a
+                // secret that every process of this manager must share and that
+                // survives a restart, so it lives in the same store. An embedder
+                // that keeps the key elsewhere sets it before building.
+                if !alien_deployment::secrets_digest_key_is_set() {
+                    let digest_key = crate::values::load_or_create_digest_key(
+                        kv.as_ref(),
+                        values_key.as_deref(),
+                    )
+                    .await
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load the secrets digest key".to_string(),
+                    })?;
+                    alien_deployment::set_secrets_digest_key_if_unset(digest_key);
+                }
+                kv
             } else {
+                if toml_config.commands.values_key.is_some() {
+                    return Err(AlienError::new(ErrorData::ServerInitFailed {
+                        reason: "commands.values-key protects values kept in commands.kv; \
+                                 set commands.kv as well"
+                            .to_string(),
+                    }));
+                }
                 // Only the manager opens this store, so it doesn't need
                 // cross-process coordination, and it works when the state
                 // directory is a network volume (EFS, NFS).
@@ -741,6 +801,30 @@ impl AlienManagerBuilder {
             });
         }
 
+        // A manager with no cloud key-value store keeps the digest key next to its
+        // state, in a file that appears complete or not at all.
+        if !alien_deployment::secrets_digest_key_is_set() {
+            let digest_key =
+                load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load the secrets digest key".to_string(),
+                    })?;
+            alien_deployment::set_secrets_digest_key_if_unset(digest_key);
+        }
+
+        // Without a cloud key-value binding, values stay in the encrypted
+        // database; the local key-value file is not encrypted.
+        if self.value_store.is_none() {
+            let store = crate::values::ValueStore::new(Arc::new(
+                crate::stores::sqlite::SqliteValueBackend::new(db.clone()),
+            ));
+            self.value_store = Some(Arc::new(if self.ephemeral_state_dir {
+                store.refusing_writes()
+            } else {
+                store
+            }));
+        }
+
         Ok(self)
     }
 
@@ -782,6 +866,15 @@ impl AlienManagerBuilder {
             .unwrap_or_else(|| Arc::new(crate::dev::LogBuffer::new()));
 
         let config = Arc::new(self.config);
+        let value_access = self.value_store.as_ref().map(|_| {
+            self.value_access.clone().unwrap_or_else(|| {
+                Arc::new(crate::values::StandaloneValueAccess::new(
+                    auth_validator.clone(),
+                    authz.clone(),
+                    deployment_store.clone(),
+                )) as Arc<dyn crate::values::ValueAccessAuthorizer>
+            })
+        });
 
         finalize(
             config,
@@ -808,6 +901,8 @@ impl AlienManagerBuilder {
             self.release_channels,
             self.bundle_signing_key,
             self.bundle_sources,
+            self.value_store,
+            value_access,
         )
         .await
     }
@@ -872,6 +967,44 @@ fn azure_management_gap(
 ) -> Option<AlienError> {
     impersonation.azure.as_ref()?;
     crate::providers::impersonation_credentials::azure_management_config_from_env(environment).err()
+}
+
+/// Loads the key that protects values kept in a cloud key-value store, with
+/// the credentials of the process's own environment.
+pub async fn load_values_key(
+    binding: &alien_core::bindings::KeyBinding,
+) -> crate::error::Result<Arc<dyn alien_bindings::traits::Key>> {
+    use alien_bindings::{BindingsProvider, BindingsProviderApi};
+    use alien_client_config::ClientConfigExt;
+    use alien_core::bindings::KeyBinding;
+    use alien_error::{Context, IntoAlienError};
+    let platform = match binding {
+        KeyBinding::AwsKms(_) => alien_core::Platform::Aws,
+        KeyBinding::GcpCloudKms(_) => alien_core::Platform::Gcp,
+        KeyBinding::AzureKeyVault(_) => alien_core::Platform::Azure,
+    };
+    let config = alien_core::ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ServerInitFailed {
+            reason: format!("Failed to load {platform} credentials for the values key"),
+        })?;
+    let bindings = HashMap::from([(
+        "values-key".to_string(),
+        serde_json::to_value(binding)
+            .into_alien_error()
+            .context(ErrorData::ServerInitFailed {
+                reason: "Failed to serialize the values key binding".to_string(),
+            })?,
+    )]);
+    BindingsProvider::new(config, bindings)
+        .context(ErrorData::ServerInitFailed {
+            reason: "Failed to create the values key provider".to_string(),
+        })?
+        .load_key("values-key")
+        .await
+        .context(ErrorData::ServerInitFailed {
+            reason: "Failed to load the values key".to_string(),
+        })
 }
 
 /// Determine which cloud platform a KV binding targets.
@@ -984,6 +1117,8 @@ async fn finalize(
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    values: Option<Arc<crate::values::ValueStore>>,
+    value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -1030,6 +1165,9 @@ async fn finalize(
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
+        values: values.clone(),
+        value_access,
+        verify_limiter: Arc::new(crate::values::VerifyLimiter::default()),
     };
 
     // --- Router ---
@@ -1067,6 +1205,7 @@ async fn finalize(
         dev_status_tx,
         log_buffer,
         command_server,
+        values,
     })
 }
 
@@ -1463,8 +1602,11 @@ fn load_or_create_secrets_digest_key(
     let written = options
         .open(&temp)
         .and_then(|mut file| file.write_all(&key).and_then(|()| file.sync_all()));
-    let published = written
-        .and_then(|()| publish_key_file(&temp, path, |from, to| std::fs::hard_link(from, to)));
+    let published = written.and_then(|()| {
+        alien_deployment::persisted_digest_key::publish_key_file(&temp, path, |from, to| {
+            std::fs::hard_link(from, to)
+        })
+    });
     let _ = std::fs::remove_file(&temp);
     match published {
         Ok(()) => Ok(key),
@@ -1486,40 +1628,9 @@ fn load_or_create_secrets_digest_key(
     }
 }
 
-/// Moves the finished temp file to `path` without replacing a key another
-/// process wrote first. A hard link fails when the target exists. Filesystems
-/// without hard links (SMB, Azure Files) get a rename after an existence
-/// check, which leaves a small window where two simultaneous first starts
-/// could each keep their own key; those mounts hold one manager's state.
-///
-/// Linux reports a filesystem without hard links as `EPERM`, which Rust maps
-/// to `PermissionDenied`, so both kinds fall back. The caller has just
-/// created `temp` in the same directory, so the directory is writable and a
-/// real permission problem fails again in the rename with its own error.
-fn publish_key_file(
-    temp: &std::path::Path,
-    path: &std::path::Path,
-    link: impl Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
-) -> std::io::Result<()> {
-    match link(temp, path) {
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::Unsupported | std::io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            if path.exists() {
-                return Err(std::io::ErrorKind::AlreadyExists.into());
-            }
-            std::fs::rename(temp, path)
-        }
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod secrets_digest_key_tests {
-    use super::{load_or_create_secrets_digest_key, publish_key_file};
+    use super::load_or_create_secrets_digest_key;
 
     #[test]
     fn processes_starting_together_agree_on_one_key() {
@@ -1545,71 +1656,5 @@ mod secrets_digest_key_tests {
         let path = dir.path().join("secrets-digest.key");
         std::fs::write(&path, b"short").unwrap();
         assert!(load_or_create_secrets_digest_key(&path).is_err());
-    }
-
-    fn unsupported(_: &std::path::Path, _: &std::path::Path) -> std::io::Result<()> {
-        Err(std::io::ErrorKind::Unsupported.into())
-    }
-
-    #[test]
-    fn a_filesystem_without_hard_links_still_publishes_the_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let temp = dir.path().join("key.tmp");
-        let path = dir.path().join("key");
-        std::fs::write(&temp, [7u8; 32]).unwrap();
-        publish_key_file(&temp, &path, unsupported).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), [7u8; 32]);
-        assert!(!temp.exists());
-    }
-
-    #[test]
-    fn a_filesystem_without_hard_links_keeps_a_key_that_is_already_there() {
-        let dir = tempfile::tempdir().unwrap();
-        let temp = dir.path().join("key.tmp");
-        let path = dir.path().join("key");
-        std::fs::write(&temp, [7u8; 32]).unwrap();
-        std::fs::write(&path, [9u8; 32]).unwrap();
-        let error = publish_key_file(&temp, &path, unsupported).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(std::fs::read(&path).unwrap(), [9u8; 32]);
-    }
-
-    #[test]
-    fn a_filesystem_that_answers_eperm_to_link_still_publishes_the_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let temp = dir.path().join("key.tmp");
-        let path = dir.path().join("key");
-        std::fs::write(&temp, [7u8; 32]).unwrap();
-        // EPERM is 1 on Linux and macOS; Rust reports it as PermissionDenied.
-        let eperm =
-            |_: &std::path::Path, _: &std::path::Path| Err(std::io::Error::from_raw_os_error(1));
-        publish_key_file(&temp, &path, eperm).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), [7u8; 32]);
-    }
-
-    #[test]
-    fn a_real_permission_problem_still_fails_in_the_rename() {
-        let dir = tempfile::tempdir().unwrap();
-        let temp = dir.path().join("missing.tmp");
-        let path = dir.path().join("key");
-        let denied = |_: &std::path::Path, _: &std::path::Path| {
-            Err(std::io::ErrorKind::PermissionDenied.into())
-        };
-        let error = publish_key_file(&temp, &path, denied).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn other_link_errors_are_not_retried_with_a_rename() {
-        let dir = tempfile::tempdir().unwrap();
-        let temp = dir.path().join("key.tmp");
-        let path = dir.path().join("key");
-        std::fs::write(&temp, [7u8; 32]).unwrap();
-        let broken =
-            |_: &std::path::Path, _: &std::path::Path| Err(std::io::Error::other("disk on fire"));
-        let error = publish_key_file(&temp, &path, broken).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert!(!path.exists());
     }
 }
