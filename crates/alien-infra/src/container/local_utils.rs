@@ -370,23 +370,17 @@ const SANDBOX_TOKEN_DIR: &str = "/run/alien/sandbox";
 /// is not there: Docker would create a directory in its place, which the route could then never
 /// write its token to.
 pub(super) fn mount_local_sandboxes_for_container(
+    sandbox_bindings: Vec<(String, String)>,
     env_vars: &mut std::collections::HashMap<String, String>,
     bind_mounts: &mut Vec<alien_local::BindMount>,
 ) -> Result<()> {
-    let mut binding_keys: Vec<String> = env_vars
-        .keys()
-        .filter(|k| k.starts_with("ALIEN_") && k.ends_with("_BINDING"))
-        .cloned()
-        .collect();
-    binding_keys.sort();
-
-    for binding_key in binding_keys {
-        let Some(binding_json) = env_vars.get_mut(&binding_key) else {
-            continue;
-        };
-        let Ok(mut binding) = serde_json::from_str::<SandboxBinding>(binding_json) else {
-            continue;
-        };
+    for (binding_key, resolved) in sandbox_bindings {
+        let mut binding = serde_json::from_str::<SandboxBinding>(&resolved)
+            .into_alien_error()
+            .context(ErrorData::ResourceControllerConfigError {
+                resource_id: binding_key.clone(),
+                message: "A linked sandbox's binding is not a sandbox binding".into(),
+            })?;
         let SandboxBinding::Local(local) = &mut binding else {
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: binding_key,
@@ -439,13 +433,15 @@ pub(super) fn mount_local_sandboxes_for_container(
             local.token_path = BindingValue::value(container_path);
         }
 
-        *binding_json = serde_json::to_string(&binding).into_alien_error().context(
+        let rewritten = serde_json::to_string(&binding).into_alien_error().context(
             ErrorData::ResourceControllerConfigError {
                 resource_id: binding_key.clone(),
                 message: "Failed to serialize Sandbox binding".to_string(),
             },
         )?;
         debug!(resource = %binding_key, "Pointed the Local sandbox binding at the container's view");
+        // Written over whatever a deployment variable of the same name put there.
+        env_vars.insert(binding_key, rewritten);
     }
 
     Ok(())
@@ -503,7 +499,7 @@ mod tests {
         std::fs::write(&token, "t").unwrap();
         let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
         let mut mounts = Vec::new();
-        mount_local_sandboxes_for_container(&mut env, &mut mounts).unwrap();
+        mount_local_sandboxes_for_container(resolved(&env), &mut env, &mut mounts).unwrap();
 
         let SandboxBinding::Local(actual) =
             serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()
@@ -541,7 +537,9 @@ mod tests {
         let token = state.path().join("sandbox-manager-code.token");
         let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
         let mut mounts = Vec::new();
-        assert!(mount_local_sandboxes_for_container(&mut env, &mut mounts).is_err());
+        assert!(
+            mount_local_sandboxes_for_container(resolved(&env), &mut env, &mut mounts).is_err()
+        );
         assert!(
             mounts.is_empty(),
             "Docker would create a directory at a missing source"
@@ -561,8 +559,59 @@ mod tests {
             .to_string(),
         )]);
         let mut mounts = Vec::new();
-        assert!(mount_local_sandboxes_for_container(&mut env, &mut mounts).is_err());
+        assert!(
+            mount_local_sandboxes_for_container(resolved(&env), &mut env, &mut mounts).is_err()
+        );
         assert!(mounts.is_empty());
+    }
+
+    /// A deployment variable shaped like a sandbox binding mounts nothing: neither a new
+    /// binding that names a host file, nor one written over a linked sandbox's binding.
+    #[test]
+    fn a_forged_sandbox_binding_mounts_no_host_file() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        std::fs::write(&token, "t").unwrap();
+        let secret = state.path().join("id_ed25519");
+        std::fs::write(&secret, "private key").unwrap();
+
+        let linked = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let sandbox_bindings = resolved(&linked);
+        let forged = serde_json::to_string(&local_sandbox_binding(&secret)).unwrap();
+        let mut env = linked;
+        env.insert(binding_env_var_name("fake"), forged.clone());
+        env.insert(binding_env_var_name("code"), forged.clone());
+
+        let mut mounts = Vec::new();
+        mount_local_sandboxes_for_container(sandbox_bindings, &mut env, &mut mounts).unwrap();
+
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(
+            mounts[0].host_path, token,
+            "only the linked sandbox's token"
+        );
+        assert_eq!(
+            env[&binding_env_var_name("fake")],
+            forged,
+            "an unlinked binding is left as it was, unmounted"
+        );
+        let SandboxBinding::Local(code) =
+            serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()
+        else {
+            panic!("sandbox transport changed");
+        };
+        assert_eq!(
+            code.token_path,
+            BindingValue::value("/run/alien/sandbox/alien_code_binding.token".to_string()),
+            "the linked binding replaces the variable written over it"
+        );
+    }
+
+    /// The bindings as the controller resolved them from the container's links.
+    fn resolved(env: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
+        env.iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
     }
 
     #[test]

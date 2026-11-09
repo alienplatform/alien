@@ -289,6 +289,18 @@ impl LocalContainerController {
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();
+        // The bindings of linked Local sandboxes as the controller resolved them, before any
+        // deployment variable is added. Only these get a host token file mounted: a variable
+        // shaped like a sandbox binding would otherwise mount any host file it names.
+        let sandbox_bindings: Vec<(String, String)> = config
+            .links
+            .iter()
+            .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
+            .filter_map(|link| {
+                let key = alien_core::binding_env_var_name(link.id());
+                env_vars.get(&key).map(|value| (key, value.clone()))
+            })
+            .collect();
 
         for var in applicable_secret_environment_variables(
             &config.id,
@@ -339,7 +351,11 @@ impl LocalContainerController {
         }
 
         // A linked Local sandbox is reached over the host gateway with a mounted token file
-        local_utils::mount_local_sandboxes_for_container(&mut env_vars, &mut bind_mounts)?;
+        local_utils::mount_local_sandboxes_for_container(
+            sandbox_bindings,
+            &mut env_vars,
+            &mut bind_mounts,
+        )?;
         for (sandbox, route) in linked_sandbox_routes(ctx, config) {
             alien_local::SandboxRoute::forward_to_containers(&sandbox, &route)
                 .await
