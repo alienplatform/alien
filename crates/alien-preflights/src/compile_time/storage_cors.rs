@@ -18,7 +18,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, Storage};
+use alien_core::{gate_is_off_platform, Platform, ResourceEntry, Stack, Storage};
 
 const AZURE_MAX_ORIGIN_CHARS: usize = 256;
 
@@ -36,20 +36,13 @@ impl CompileTimeCheck for StorageCorsCheck {
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
         matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-            && stack.resources.values().any(|entry| {
-                entry
-                    .config
-                    .downcast_ref::<Storage>()
-                    .is_some_and(|storage| !storage.cors_upload_origins.is_empty())
-            })
+            && storages_on(stack, platform)
+                .any(|(_, storage)| !storage.cors_upload_origins.is_empty())
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut result = CheckResult::success();
-        for (id, entry) in &stack.resources {
-            let Some(storage) = entry.config.downcast_ref::<Storage>() else {
-                continue;
-            };
+        for (id, storage) in storages_on(stack, platform) {
             for (index, origin) in storage.cors_upload_origins.iter().enumerate() {
                 if let Some(error) = origin_error(origin, platform) {
                     result.add_error(format!(
@@ -60,6 +53,25 @@ impl CompileTimeCheck for StorageCorsCheck {
         }
         Ok(result)
     }
+}
+
+/// The stack's storage resources that can exist on `platform`. A resource gated on an input
+/// that does not apply to `platform` is never created there, so its origins only have to
+/// suit the platforms it can run on, as template rendering already assumes.
+fn storages_on(stack: &Stack, platform: Platform) -> impl Iterator<Item = (&String, &Storage)> {
+    stack
+        .resources
+        .iter()
+        .filter_map(move |(id, entry): (&String, &ResourceEntry)| {
+            let off_platform = entry
+                .enabled_when
+                .as_deref()
+                .is_some_and(|input_id| gate_is_off_platform(&stack.inputs, input_id, platform));
+            if off_platform {
+                return None;
+            }
+            Some((id, entry.config.downcast_ref::<Storage>()?))
+        })
 }
 
 fn origin_error(origin: &str, platform: Platform) -> Option<String> {
@@ -144,7 +156,7 @@ fn origin_error(origin: &str, platform: Platform) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{error::ErrorData, runner::PreflightRunner};
-    use alien_core::ResourceLifecycle;
+    use alien_core::{ResourceLifecycle, StackInputDefinition, StackInputKind, StackInputProvider};
 
     fn stack(origins: &[&str]) -> Stack {
         Stack::new("uploads".to_string())
@@ -305,5 +317,73 @@ mod tests {
         for platform in [Platform::Kubernetes, Platform::Local, Platform::Machines] {
             assert!(!StorageCorsCheck.should_run(&with_origins, platform));
         }
+    }
+
+    /// A storage resource gated on an input that only applies to one cloud is never created on
+    /// the others, so its origins are checked only where it can exist.
+    #[tokio::test]
+    async fn storage_gated_off_the_platform_is_not_checked() {
+        let gated_to = |platforms: Vec<Platform>| -> Stack {
+            let mut stack = Stack::new("uploads".to_string())
+                .add_enabled_when(
+                    Storage::new("st".to_string())
+                        .cors_upload_origins(vec!["https://*.example.com".to_string()])
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                    "uploads",
+                )
+                .build();
+            stack.inputs = vec![StackInputDefinition {
+                id: "uploads".to_string(),
+                kind: StackInputKind::Boolean,
+                when: None,
+                provided_by: vec![StackInputProvider::Deployer],
+                required: false,
+                label: "Uploads".to_string(),
+                description: "Create the upload bucket.".to_string(),
+                placeholder: None,
+                default: None,
+                platforms: Some(platforms),
+                validation: None,
+                generate: None,
+                env: Vec::new(),
+            }];
+            stack
+        };
+
+        let aws_only = gated_to(vec![Platform::Aws]);
+        assert!(StorageCorsCheck.should_run(&aws_only, Platform::Aws));
+        let aws = StorageCorsCheck
+            .check(&aws_only, Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(aws.errors.is_empty(), "{:?}", aws.errors);
+        for platform in [Platform::Gcp, Platform::Azure] {
+            assert!(!StorageCorsCheck.should_run(&aws_only, platform));
+            let result = StorageCorsCheck
+                .check(&aws_only, platform)
+                .await
+                .expect("the check runs");
+            assert!(
+                result.errors.is_empty(),
+                "{platform:?}: {:?}",
+                result.errors
+            );
+        }
+
+        // The same gate on a platform it applies to keeps the check.
+        let gcp_too = gated_to(vec![Platform::Aws, Platform::Gcp]);
+        assert!(StorageCorsCheck.should_run(&gcp_too, Platform::Gcp));
+        let gcp = StorageCorsCheck
+            .check(&gcp_too, Platform::Gcp)
+            .await
+            .expect("the check runs");
+        assert_eq!(gcp.errors.len(), 1, "{:?}", gcp.errors);
+        assert!(
+            gcp.errors[0]
+                .starts_with("Storage 'st': corsUploadOrigins[0] 'https://*.example.com' "),
+            "{:?}",
+            gcp.errors
+        );
     }
 }
