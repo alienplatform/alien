@@ -72,9 +72,7 @@ const releaseRead: alien.PermissionSet = {
         description: "Allows reading release blobs.",
         grant: {
           actions: ["Microsoft.Storage/storageAccounts/read"],
-          dataActions: [
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
-          ],
+          dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
           residualPermissions: ["Microsoft.Storage/storageAccounts/listKeys/action"],
         },
         binding: {
@@ -85,9 +83,7 @@ const releaseRead: alien.PermissionSet = {
       },
       {
         grant: {
-          dataActions: [
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
-          ],
+          dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"],
         },
         binding: {
           resource: {
@@ -115,7 +111,9 @@ const deployer = new alien.ServiceAccount("deployer")
 
 // The builder has no method for resource-scoped permission sets, so the generated config
 // field is set directly.
-;(deployer.config as { resourcePermissionSets?: Record<string, alien.PermissionSet[]> }).resourcePermissionSets = {
+;(
+  deployer.config as { resourcePermissionSets?: Record<string, alien.PermissionSet[]> }
+).resourcePermissionSets = {
   archive: [
     {
       id: "acme/archive-read",

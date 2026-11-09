@@ -81,9 +81,7 @@ const ingest = new alien.Worker("ingest")
   .enabled(inputs.jobs_enabled)
   .build()
 
-const customerKeys = new alien.Vault("customer-keys")
-  .enabled(inputs.customer_keys_enabled)
-  .build()
+const customerKeys = new alien.Vault("customer-keys").enabled(inputs.customer_keys_enabled).build()
 
 const renderer = new alien.Container("renderer")
   .code({ type: "image", image: "ghcr.io/acme/renderer:2.1.0" })

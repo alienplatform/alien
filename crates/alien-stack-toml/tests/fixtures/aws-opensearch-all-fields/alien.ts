@@ -21,7 +21,9 @@ const catalog = new alien.experimental.AwsOpenSearch("catalog")
   })
   .build()
 
-const logs = new alien.experimental.AwsOpenSearch("logs").capacity({ search: { maxOcu: 16 } }).build()
+const logs = new alien.experimental.AwsOpenSearch("logs")
+  .capacity({ search: { maxOcu: 16 } })
+  .build()
 
 export default new alien.Stack("acme-search")
   .inputs(inputs)

@@ -17,6 +17,7 @@
       "!**/entrypoint.js",
       "!**/generated",
       "!crates/alien-stack-toml/schema/alien.toml.json",
+      "!crates/alien-stack-toml/schema/canonical.json",
       "!crates/alien-stack-toml/tests/fixtures/*/expected.json",
       "!examples/custom-operations/metadata.json",
       "!**/shim.mjs",
