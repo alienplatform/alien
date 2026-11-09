@@ -148,6 +148,20 @@ impl InfrastructureDependenciesMutation {
             dependencies.push(ResourceRef::new(Network::RESOURCE_TYPE, "default-network"));
         }
 
+        // AWS Redis allows each compute cluster's security group on its own, so it is created
+        // after the clusters and deleted before them. Azure and GCP reach Redis through the
+        // network and need no ordering against compute.
+        if platform == Platform::Aws && resource_type == &alien_core::Redis::RESOURCE_TYPE {
+            for (id, entry) in &stack.resources {
+                if entry.config.resource_type() == alien_core::ComputeCluster::RESOURCE_TYPE {
+                    dependencies.push(ResourceRef::new(
+                        alien_core::ComputeCluster::RESOURCE_TYPE,
+                        id.clone(),
+                    ));
+                }
+            }
+        }
+
         if resource_type == &Network::RESOURCE_TYPE {
             let activation = match platform {
                 Platform::Azure => Some("enable-network"),
@@ -598,6 +612,44 @@ mod tests {
                 "Redis must wait for the network on {platform:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn aws_redis_waits_for_every_compute_cluster_and_nothing_else_does() {
+        let build = |platform: Platform| {
+            let stack = Stack::new("test".to_string())
+                .add(
+                    alien_core::ComputeCluster::new("compute".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    alien_core::Redis::new("cache".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let stack_state = StackState::new(platform);
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            async move {
+                InfrastructureDependenciesMutation
+                    .mutate(stack, &stack_state, &config)
+                    .await
+                    .unwrap()
+            }
+        };
+        let compute = ResourceRef::new(alien_core::ComputeCluster::RESOURCE_TYPE, "compute");
+        let aws = build(Platform::Aws).await;
+        assert!(aws.resources["cache"].dependencies.contains(&compute));
+        assert!(!aws.resources["compute"].dependencies.contains(&ResourceRef::new(
+            alien_core::Redis::RESOURCE_TYPE,
+            "cache"
+        )));
+        let gcp = build(Platform::Gcp).await;
+        assert!(!gcp.resources["cache"].dependencies.contains(&compute));
     }
 
     #[tokio::test]

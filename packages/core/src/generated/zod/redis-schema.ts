@@ -8,7 +8,7 @@ import { RedisEvictionPolicySchema } from "./redis-eviction-policy-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 
 /**
- * @description A managed, Redis-compatible in-memory store on a private network. The target\nplatform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for\nValkey, Azure Managed Redis, or a native Valkey process on Local). It is\nnever publicly reachable, and it is a single endpoint (not cluster mode), so\nplain clients and multi-key scripts work.
+ * @description A managed, Redis-compatible in-memory store on a private network. The target\nplatform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for\nValkey, Azure Managed Redis, or the official Valkey image in Docker on Local). It is\nnever publicly reachable, and it is a single endpoint (not cluster mode), so\nplain clients and multi-key scripts work.
  */
 export const RedisSchema = z.object({
     get "encryptionKey"(){
@@ -21,6 +21,6 @@ get "evictionPolicy"(){
 "id": z.string(),
 "memory": z.string().describe("Memory available for data (e.g. \"512Mi\", \"4Gi\"). None = the smallest\nproduction tier. The smallest tier that fits is used; a request larger\nthan the biggest single-shard tier on the platform is rejected.").nullish(),
 "persistence": z.optional(z.boolean().describe("Keep data across a server restart or maintenance. Default false (a\ncache). On AWS, GCP and Azure this needs `high_availability`, because the\nclouds only persist data from a replicated deployment. Local always\npersists with an append-only file when this is on."))
-    }).describe("A managed, Redis-compatible in-memory store on a private network. The target\nplatform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for\nValkey, Azure Managed Redis, or a native Valkey process on Local). It is\nnever publicly reachable, and it is a single endpoint (not cluster mode), so\nplain clients and multi-key scripts work.")
+    }).describe("A managed, Redis-compatible in-memory store on a private network. The target\nplatform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for\nValkey, Azure Managed Redis, or the official Valkey image in Docker on Local). It is\nnever publicly reachable, and it is a single endpoint (not cluster mode), so\nplain clients and multi-key scripts work.")
 
 export type Redis = z.infer<typeof RedisSchema>

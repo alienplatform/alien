@@ -1625,7 +1625,7 @@ pub enum RedisHeartbeatData {
     Memorystore(MemorystoreRedisHeartbeatData),
     /// Azure Managed Redis.
     AzureManagedRedis(AzureManagedRedisHeartbeatData),
-    /// Local Valkey process.
+    /// Local Valkey container.
     Local(LocalRedisHeartbeatData),
 }
 

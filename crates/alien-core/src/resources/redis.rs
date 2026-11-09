@@ -56,7 +56,7 @@ impl RedisEvictionPolicy {
 
 /// A managed, Redis-compatible in-memory store on a private network. The target
 /// platform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for
-/// Valkey, Azure Managed Redis, or a native Valkey process on Local). It is
+/// Valkey, Azure Managed Redis, or the official Valkey image in Docker on Local). It is
 /// never publicly reachable, and it is a single endpoint (not cluster mode), so
 /// plain clients and multi-key scripts work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]

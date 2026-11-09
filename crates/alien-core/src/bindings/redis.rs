@@ -29,7 +29,7 @@ pub enum RedisBinding {
     /// Operator-provided server (Kubernetes, on-prem, or cloud override).
     #[serde(rename = "external")]
     External(ExternalRedisBinding),
-    /// Local Valkey process.
+    /// Local Valkey container.
     #[serde(rename = "local-redis")]
     Local(LocalRedisBinding),
 }

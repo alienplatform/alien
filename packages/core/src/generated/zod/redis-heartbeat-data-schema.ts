@@ -20,6 +20,6 @@ export const RedisHeartbeatDataSchema = z.union([z.lazy(() => ElasticacheRedisHe
     "backend": z.enum(["azureManagedRedis"])
     })).describe("Azure Managed Redis."), z.lazy(() => LocalRedisHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["local"])
-    })).describe("Local Valkey process.")]).describe("Heartbeat data for a Redis resource. Everything comes from the cloud's\nmanagement and metrics APIs; the manager never opens a Redis connection.")
+    })).describe("Local Valkey container.")]).describe("Heartbeat data for a Redis resource. Everything comes from the cloud's\nmanagement and metrics APIs; the manager never opens a Redis connection.")
 
 export type RedisHeartbeatData = z.infer<typeof RedisHeartbeatDataSchema>

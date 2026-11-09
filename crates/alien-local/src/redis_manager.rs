@@ -1,47 +1,54 @@
 //! Local Redis manager.
 //!
-//! Runs Valkey as a native `valkey-server` process, like the other local managers run
-//! native processes. State for each server lives under `{state_dir}/redis/{id}/`; the
-//! server binary is downloaded once into `{state_dir}/redis/_dist` and shared.
-//!
-//! The binary comes from Alien's release host (`releases.alien.dev/valkey`), pinned by
-//! SHA-256. `ALIEN_VALKEY_RELEASES_URL` points at another host or a `file://` directory
-//! (for testing a locally built binary); the checksum then comes from a `.sha256` file
-//! next to the archive.
+//! Runs the official Valkey image in Docker, through the same Docker connection the
+//! container manager uses. Each server is one container named from the state directory
+//! and the resource id. State for each server lives under `{state_dir}/redis/{id}/`
+//! (connection metadata, 0600); data lives in a Docker volume only while persistence is
+//! on. Docker's restart policy recovers crashes, and a `stop` on shutdown keeps the
+//! container stopped until the next `alien dev` start recovers it.
 
 use crate::{
+    docker_connection::connect_docker,
     docker_network::bindable_docker_bridge_gateway,
     error::{ErrorData, Result},
 };
 use alien_core::bindings::RedisBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
+use bollard::models::{
+    ContainerCreateBody, HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum,
+    VolumeCreateRequest,
+};
+use bollard::query_parameters::{
+    CreateContainerOptions, CreateImageOptionsBuilder, RemoveContainerOptions, RemoveVolumeOptions,
+    StopContainerOptionsBuilder, UploadToContainerOptionsBuilder,
+};
+use bollard::Docker;
+use futures_util::TryStreamExt;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-/// Valkey major.minor.patch that Local runs. The clouds run Valkey 9.0 too.
-pub const VALKEY_VERSION: &str = "9.0.0";
+/// The Valkey release line Local runs. The clouds run Valkey 9.0 too.
+pub const VALKEY_VERSION: &str = "9.0";
 
-const RELEASES_URL_ENV: &str = "ALIEN_VALKEY_RELEASES_URL";
-const RELEASES_URL_DEFAULT: &str = "https://releases.alien.dev/valkey";
-const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
-const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// The official image, pinned by digest so every machine runs the same bytes.
+const VALKEY_IMAGE: &str = "valkey/valkey:9.0@sha256:7e1deda01b64ece3167d370ab5be3452d29734feec22cbcbc69b3a64f6859d6d";
+const CONTAINER_PORT: &str = "6379/tcp";
+/// The image's `valkey` user. The config file must be readable by it.
+const VALKEY_UID: u64 = 999;
+const CONFIG_PATH_IN_CONTAINER: &str = "/etc/alien-valkey.conf";
+const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// SHA-256 of `valkey-server.tar.gz` for each release target, filled in when a release is
-/// published. An unpinned target fails with a clear error instead of running an
-/// unverified binary.
-const PINNED_SHA256: &[(&str, &str)] = &[];
-
-/// Settings a server is started with. A change restarts the process; data is kept by
-/// the append-only file when persistence is on.
+/// Settings a server is started with. A change recreates the container; data is kept by
+/// the append-only file in the volume when persistence is on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedisSpec {
@@ -72,11 +79,12 @@ impl std::fmt::Debug for RedisMetadata {
     }
 }
 
-/// Manages local Valkey servers as child processes, keyed by resource id.
+/// Manages local Valkey containers, keyed by resource id.
 #[derive(Clone)]
 pub struct LocalRedisManager {
     state_dir: PathBuf,
-    running: Arc<Mutex<HashMap<String, Child>>>,
+    /// Serializes start/stop/delete so two callers never race on one container name.
+    lock: Arc<Mutex<()>>,
 }
 
 impl std::fmt::Debug for LocalRedisManager {
@@ -91,30 +99,22 @@ impl LocalRedisManager {
     pub fn new(state_dir: PathBuf) -> Self {
         Self {
             state_dir,
-            running: Arc::new(Mutex::new(HashMap::new())),
+            lock: Arc::new(Mutex::new(())),
         }
     }
 
-    /// Creates a manager and spawns the monitor loop: it restarts servers recorded on
-    /// disk at startup and any that exit while running.
+    /// Creates a manager and spawns a task that starts the servers recorded on disk and
+    /// stops them on shutdown. Docker's restart policy handles crashes in between.
     pub fn new_with_shutdown(
         state_dir: PathBuf,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) -> (Self, JoinHandle<()>) {
         let manager = Self::new(state_dir);
-        let monitor = manager.clone();
+        let task = manager.clone();
         let handle = tokio::spawn(async move {
-            monitor.recover_all().await;
-            let mut interval = tokio::time::interval(MONITOR_INTERVAL);
-            loop {
-                tokio::select! {
-                    _ = shutdown_rx.recv() => {
-                        monitor.stop_all().await;
-                        break;
-                    }
-                    _ = interval.tick() => monitor.restart_exited().await,
-                }
-            }
+            task.recover_all().await;
+            let _ = shutdown_rx.recv().await;
+            task.stop_all().await;
         });
         (manager, handle)
     }
@@ -127,20 +127,24 @@ impl LocalRedisManager {
         self.resource_dir(id).join("metadata.json")
     }
 
+    /// Container and volume name. The state directory is part of it so two Alien state
+    /// directories sharing one Docker engine never touch each other's servers.
+    fn docker_name(&self, id: &str) -> String {
+        let scope = hex::encode(Sha256::digest(self.state_dir.to_string_lossy().as_bytes()));
+        format!("alien-redis-{}-{id}", &scope[..8])
+    }
+
     /// Starts the server for `id`, or applies a changed spec. Idempotent: the port and
     /// password are generated once and reused, so a restart keeps the same connection
     /// details.
     pub async fn start_redis(&self, id: &str, spec: RedisSpec) -> Result<()> {
-        let mut running = self.running.lock().await;
+        let _guard = self.lock.lock().await;
+        let docker = connect_redis_docker().await?;
         let metadata = match self.try_read_metadata(id)? {
             Some(mut metadata) => {
                 if metadata.spec != spec {
                     metadata.spec = spec;
                     self.write_metadata(&metadata).await?;
-                    // Settings are read at process start: restart to apply them.
-                    if let Some(mut child) = running.remove(id) {
-                        stop_child(id, &mut child).await?;
-                    }
                 }
                 metadata
             }
@@ -155,40 +159,29 @@ impl LocalRedisManager {
                 metadata
             }
         };
-        if let Some(child) = running.get_mut(id) {
-            if child
-                .try_wait()
-                .into_alien_error()
-                .context(process_error(
-                    id,
-                    "query",
-                    "Failed to check the server process",
-                ))?
-                .is_none()
-            {
-                return Ok(());
-            }
-            // Leave the exited child in place: if the boot below fails, the monitor still
-            // sees it as exited and retries on its next pass.
-        }
-        let child = self.boot(&metadata).await?;
-        running.insert(id.to_string(), child);
+        self.ensure_running(&docker, &metadata).await?;
         info!(redis_id = %id, "Local Redis started");
         Ok(())
     }
 
     /// Stops the server but keeps its data and metadata.
     pub async fn stop_redis(&self, id: &str) -> Result<()> {
-        let mut running = self.running.lock().await;
-        if let Some(mut child) = running.remove(id) {
-            stop_child(id, &mut child).await?;
-        }
-        Ok(())
+        let _guard = self.lock.lock().await;
+        let docker = connect_redis_docker().await?;
+        self.stop_container(&docker, id).await
     }
 
-    /// Stops the server and removes its data directory.
+    /// Removes the container, its data volume and its state directory.
     pub async fn delete_redis(&self, id: &str) -> Result<()> {
-        self.stop_redis(id).await?;
+        let _guard = self.lock.lock().await;
+        let docker = connect_redis_docker().await?;
+        let name = self.docker_name(id);
+        // Never remove a same-name container that is not ours.
+        if let Some(existing) = inspect_optional(&docker, &name).await? {
+            self.require_ours(&name, id, &existing)?;
+            remove_container(&docker, &name).await?;
+        }
+        remove_volume(&docker, &name).await?;
         let dir = self.resource_dir(id);
         if dir.exists() {
             tokio::fs::remove_dir_all(&dir)
@@ -197,33 +190,39 @@ impl LocalRedisManager {
                 .context(ErrorData::LocalDirectoryError {
                     path: dir.display().to_string(),
                     operation: "delete".to_string(),
-                    reason: "Failed to delete Redis data directory".to_string(),
+                    reason: "Failed to delete Redis state directory".to_string(),
                 })?;
         }
         debug!(redis_id = %id, "Local Redis deleted");
         Ok(())
     }
 
-    /// Verifies the process is still running. Never connects to the server.
+    /// Verifies the container is running. Never connects to the server.
     pub async fn check_health(&self, id: &str) -> Result<()> {
-        let mut running = self.running.lock().await;
-        let child = running.get_mut(id).ok_or_else(|| {
+        let docker = connect_redis_docker().await?;
+        let name = self.docker_name(id);
+        let existing = inspect_optional(&docker, &name).await?.ok_or_else(|| {
             AlienError::new(ErrorData::ServiceResourceNotFound {
                 resource_id: id.to_string(),
                 resource_type: "redis".to_string(),
             })
         })?;
-        match child.try_wait().into_alien_error().context(process_error(
-            id,
-            "health_check",
-            "Failed to check the server process",
-        ))? {
-            None => Ok(()),
-            Some(status) => Err(AlienError::new(process_error(
-                id,
+        self.require_ours(&name, id, &existing)?;
+        let state = existing.state.unwrap_or_default();
+        if state.running == Some(true) {
+            Ok(())
+        } else {
+            Err(AlienError::new(container_error(
+                &name,
                 "health_check",
-                &format!("Redis is not running (exited with {status})"),
-            ))),
+                &format!(
+                    "Redis is not running (status {})",
+                    state
+                        .status
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+            )))
         }
     }
 
@@ -253,57 +252,177 @@ impl LocalRedisManager {
 
     // ───────────────────────── internals ─────────────────────────
 
-    async fn boot(&self, metadata: &RedisMetadata) -> Result<Child> {
+    fn require_ours(
+        &self,
+        name: &str,
+        id: &str,
+        existing: &bollard::models::ContainerInspectResponse,
+    ) -> Result<()> {
+        let labels = existing
+            .config
+            .as_ref()
+            .and_then(|config| config.labels.as_ref());
+        if labels.and_then(|labels| labels.get(LABEL_OWNER)).map(String::as_str)
+            == Some(self.owner_label(id).as_str())
+        {
+            return Ok(());
+        }
+        Err(AlienError::new(container_error(
+            name,
+            "adopt",
+            "A Docker container with this name already exists and was not created by Alien for this Redis; remove or rename it",
+        )))
+    }
+
+    fn owner_label(&self, id: &str) -> String {
+        self.docker_name(id)
+    }
+
+    /// Brings the container to the state `metadata` describes: reuses a matching one,
+    /// starts a stopped one, recreates one whose settings differ.
+    async fn ensure_running(&self, docker: &Docker, metadata: &RedisMetadata) -> Result<()> {
         let id = &metadata.resource_id;
-        let binary = ensure_binary(&self.state_dir).await?;
-        let dir = self.resource_dir(id);
-        let data_dir = dir.join("data");
-        tokio::fs::create_dir_all(&data_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::LocalDirectoryError {
-                path: data_dir.display().to_string(),
-                operation: "create".to_string(),
-                reason: "Failed to create Redis data directory".to_string(),
-            })?;
+        let name = self.docker_name(id);
+        let gateway = bindable_docker_bridge_gateway().await?;
+        let desired = config_hash(metadata, gateway.map(|g| g.to_string()));
+
+        if let Some(existing) = inspect_optional(docker, &name).await? {
+            self.require_ours(&name, id, &existing)?;
+            let current = existing
+                .config
+                .as_ref()
+                .and_then(|config| config.labels.as_ref())
+                .and_then(|labels| labels.get(LABEL_CONFIG))
+                .cloned();
+            if current.as_deref() == Some(desired.as_str()) {
+                if existing.state.as_ref().and_then(|s| s.running) != Some(true) {
+                    docker
+                        .start_container(&name, None)
+                        .await
+                        .into_alien_error()
+                        .context(container_error(&name, "start", "Failed to start the container"))?;
+                }
+                return wait_until_ready(docker, &name, metadata).await;
+            }
+            remove_container(docker, &name).await?;
+        }
+        // Data is only kept while persistence is on; turning it off drops the volume so a
+        // later "on" never loads a stale append-only file.
+        if !metadata.spec.persistence {
+            remove_volume(docker, &name).await?;
+        }
+
+        ensure_image(docker, &name).await?;
+        if metadata.spec.persistence {
+            docker
+                .create_volume(VolumeCreateRequest {
+                    name: Some(name.clone()),
+                    labels: Some(HashMap::from([(
+                        LABEL_OWNER.to_string(),
+                        self.owner_label(id),
+                    )])),
+                    ..Default::default()
+                })
+                .await
+                .into_alien_error()
+                .context(ErrorData::DockerVolumeError {
+                    volume: name.clone(),
+                    operation: "create".to_string(),
+                    reason: "Failed to create the Redis data volume".to_string(),
+                })?;
+        }
 
         // Loopback plus the docker bridge gateway when present, so a same-stack local
-        // container can reach it; never 0.0.0.0.
-        let bind = match bindable_docker_bridge_gateway().await? {
-            Some(gateway) => format!("127.0.0.1 {gateway}"),
-            None => "127.0.0.1".to_string(),
+        // container can reach it through `host.docker.internal`; never 0.0.0.0.
+        let mut host_ips = vec!["127.0.0.1".to_string()];
+        if let Some(gateway) = gateway {
+            host_ips.push(gateway.to_string());
+        }
+        let bindings = host_ips
+            .into_iter()
+            .map(|ip| PortBinding {
+                host_ip: Some(ip),
+                host_port: Some(metadata.port.to_string()),
+            })
+            .collect();
+        let body = ContainerCreateBody {
+            image: Some(VALKEY_IMAGE.to_string()),
+            cmd: Some(vec![CONFIG_PATH_IN_CONTAINER.to_string()]),
+            labels: Some(HashMap::from([
+                (LABEL_OWNER.to_string(), self.owner_label(id)),
+                (LABEL_CONFIG.to_string(), desired),
+            ])),
+            exposed_ports: Some(vec![CONTAINER_PORT.to_string()]),
+            host_config: Some(HostConfig {
+                port_bindings: Some(HashMap::from([(CONTAINER_PORT.to_string(), Some(bindings))])),
+                binds: metadata
+                    .spec
+                    .persistence
+                    .then(|| vec![format!("{name}:/data")]),
+                // Docker recovers crashes and keeps an explicitly stopped container
+                // stopped across daemon restarts.
+                restart_policy: Some(RestartPolicy {
+                    name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
+                    maximum_retry_count: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
         };
-        // The password goes in a 0600 config file, not on the command line where `ps`
-        // would show it.
-        let config = render_config(metadata, &bind, &data_dir);
-        let config_path = dir.join("valkey.conf");
-        let write_path = config_path.clone();
-        tokio::task::spawn_blocking(move || {
-            alien_core::file_utils::write_secret_file(&write_path, config.as_bytes())
-        })
-        .await
-        .into_alien_error()
-        .context(process_error(id, "configure", "Config write task panicked"))?
-        .into_alien_error()
-        .context(ErrorData::LocalDirectoryError {
-            path: config_path.display().to_string(),
-            operation: "write".to_string(),
-            reason: "Failed to write the Redis config".to_string(),
-        })?;
-
-        let mut child = Command::new(&binary)
-            .arg(&config_path)
-            .current_dir(&data_dir)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
+        docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }),
+                body,
+            )
+            .await
             .into_alien_error()
-            .context(process_error(id, "start", "Failed to spawn valkey-server"))?;
+            .context(container_error(&name, "create", "Failed to create the container"))?;
 
-        wait_until_listening(id, metadata.port, &mut child).await?;
-        Ok(child)
+        // The config holds the password: upload it into the container (readable by the
+        // server's user only) instead of passing it as an argument or environment value,
+        // where `docker inspect` and `ps` would show it.
+        let archive = config_archive(&render_config(metadata))?;
+        docker
+            .upload_to_container(
+                &name,
+                Some(UploadToContainerOptionsBuilder::default().path("/etc").build()),
+                bollard::body_full(archive.into()),
+            )
+            .await
+            .into_alien_error()
+            .context(container_error(&name, "configure", "Failed to write the Redis config"))?;
+
+        docker
+            .start_container(&name, None)
+            .await
+            .into_alien_error()
+            .context(container_error(&name, "start", "Failed to start the container"))?;
+        wait_until_ready(docker, &name, metadata).await
+    }
+
+    async fn stop_container(&self, docker: &Docker, id: &str) -> Result<()> {
+        let name = self.docker_name(id);
+        let Some(existing) = inspect_optional(docker, &name).await? else {
+            return Ok(());
+        };
+        self.require_ours(&name, id, &existing)?;
+        match docker
+            .stop_container(&name, Some(StopContainerOptionsBuilder::default().t(10).build()))
+            .await
+        {
+            Ok(()) => Ok(()),
+            // 304: already stopped. 404: removed since the inspect.
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304 | 404,
+                ..
+            }) => Ok(()),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(container_error(&name, "stop", "Failed to stop the container")),
+        }
     }
 
     fn try_read_metadata(&self, id: &str) -> Result<Option<RedisMetadata>> {
@@ -372,6 +491,8 @@ impl LocalRedisManager {
         })
     }
 
+    /// Starts every server recorded on disk. Failures are logged: one broken server must
+    /// not keep the others down, and Docker being off is reported when a controller asks.
     async fn recover_all(&self) {
         let root = self.state_dir.join("redis");
         let Ok(mut entries) = tokio::fs::read_dir(&root).await else {
@@ -382,9 +503,6 @@ impl LocalRedisManager {
                 continue;
             }
             let id = entry.file_name().to_string_lossy().to_string();
-            if id == "_dist" {
-                continue;
-            }
             match self.try_read_metadata(&id) {
                 Ok(Some(metadata)) => {
                     if let Err(error) = self.start_redis(&id, metadata.spec).await {
@@ -399,56 +517,160 @@ impl LocalRedisManager {
         }
     }
 
-    async fn restart_exited(&self) {
-        let exited: Vec<String> = {
-            let mut running = self.running.lock().await;
-            running
-                .iter_mut()
-                .filter_map(|(id, child)| {
-                    (!matches!(child.try_wait(), Ok(None))).then(|| id.clone())
-                })
-                .collect()
-        };
-        for id in exited {
-            let spec = match self.try_read_metadata(&id) {
-                Ok(Some(metadata)) => metadata.spec,
-                _ => continue,
-            };
-            warn!(redis_id = %id, "Local Redis exited; restarting");
-            if let Err(error) = self.start_redis(&id, spec).await {
-                warn!(redis_id = %id, ?error, "Failed to restart local Redis");
-            }
-        }
-    }
-
     async fn stop_all(&self) {
-        let mut running = self.running.lock().await;
-        for (id, child) in running.iter_mut() {
-            if let Err(error) = stop_child(id, child).await {
+        let root = self.state_dir.join("redis");
+        let Ok(mut entries) = tokio::fs::read_dir(&root).await else {
+            return;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let id = entry.file_name().to_string_lossy().to_string();
+            if let Err(error) = self.stop_redis(&id).await {
                 warn!(redis_id = %id, ?error, "Failed to stop local Redis on shutdown");
             }
         }
-        running.clear();
     }
 }
 
-fn process_error(id: &str, operation: &str, reason: &str) -> ErrorData {
-    ErrorData::LocalProcessError {
-        process_id: id.to_string(),
+const LABEL_OWNER: &str = "alien.redis.owner";
+const LABEL_CONFIG: &str = "alien.redis.config-hash";
+
+fn container_error(container: &str, operation: &str, reason: &str) -> ErrorData {
+    ErrorData::DockerContainerError {
+        container: container.to_string(),
         operation: operation.to_string(),
         reason: reason.to_string(),
     }
 }
 
+/// Connects and pings, so a missing Docker engine fails here with a message that says what
+/// to do, not later as an opaque socket error.
+async fn connect_redis_docker() -> Result<Docker> {
+    let docker = connect_docker().context(needs_docker())?;
+    docker
+        .ping()
+        .await
+        .into_alien_error()
+        .context(needs_docker())?;
+    Ok(docker)
+}
+
+fn needs_docker() -> ErrorData {
+    ErrorData::DockerConnectionFailed {
+        reason: "Redis on Local runs in Docker, and no Docker engine is reachable. Start Docker and retry".to_string(),
+    }
+}
+
+async fn inspect_optional(
+    docker: &Docker,
+    name: &str,
+) -> Result<Option<bollard::models::ContainerInspectResponse>> {
+    match docker.inspect_container(name, None).await {
+        Ok(response) => Ok(Some(response)),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(None),
+        Err(error) => Err(error).into_alien_error().context(container_error(
+            name,
+            "inspect",
+            "Failed to inspect the container",
+        )),
+    }
+}
+
+async fn remove_container(docker: &Docker, name: &str) -> Result<()> {
+    match docker
+        .remove_container(
+            name,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(()),
+        Err(error) => Err(error).into_alien_error().context(container_error(
+            name,
+            "remove",
+            "Failed to remove the container",
+        )),
+    }
+}
+
+async fn remove_volume(docker: &Docker, name: &str) -> Result<()> {
+    match docker
+        .remove_volume(name, Some(RemoveVolumeOptions { force: true }))
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(()),
+        Err(error) => Err(error)
+            .into_alien_error()
+            .context(ErrorData::DockerVolumeError {
+                volume: name.to_string(),
+                operation: "remove".to_string(),
+                reason: "Failed to remove the Redis data volume".to_string(),
+            }),
+    }
+}
+
+/// Pulls the pinned image when the engine does not have it.
+async fn ensure_image(docker: &Docker, name: &str) -> Result<()> {
+    match docker.inspect_image(VALKEY_IMAGE).await {
+        Ok(_) => return Ok(()),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => {}
+        Err(error) => {
+            return Err(error).into_alien_error().context(container_error(
+                name,
+                "inspect_image",
+                "Failed to inspect the Valkey image",
+            ))
+        }
+    }
+    info!(image = VALKEY_IMAGE, "Pulling the Valkey image");
+    docker
+        .create_image(
+            Some(
+                CreateImageOptionsBuilder::default()
+                    .from_image(VALKEY_IMAGE)
+                    .build(),
+            ),
+            None,
+            None,
+        )
+        .try_collect::<Vec<_>>()
+        .await
+        .into_alien_error()
+        .context(container_error(name, "pull_image", "Failed to pull the Valkey image"))?;
+    Ok(())
+}
+
+/// Hash of everything that decides how the container is built. A different hash means the
+/// container is recreated.
+fn config_hash(metadata: &RedisMetadata, gateway: Option<String>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(VALKEY_IMAGE.as_bytes());
+    hasher.update(render_config(metadata).as_bytes());
+    hasher.update(metadata.port.to_be_bytes());
+    hasher.update(gateway.unwrap_or_default().as_bytes());
+    hasher.update([metadata.spec.persistence as u8]);
+    hex::encode(hasher.finalize())
+}
+
 /// The server config. `appendfsync everysec` bounds loss to about a second of writes.
-fn render_config(metadata: &RedisMetadata, bind: &str, data_dir: &Path) -> String {
+fn render_config(metadata: &RedisMetadata) -> String {
     let spec = &metadata.spec;
     let mut config = format!(
-        "bind {bind}\nport {}\nprotected-mode yes\nrequirepass {}\ndir {}\nmaxmemory-policy {}\n\
-         save \"\"\nappendonly {}\nappendfsync everysec\ndaemonize no\n",
-        metadata.port,
+        "bind 0.0.0.0\nport 6379\nprotected-mode yes\nrequirepass {}\ndir /data\n\
+         maxmemory-policy {}\nsave \"\"\nappendonly {}\nappendfsync everysec\ndaemonize no\n",
         metadata.password,
-        quote_config_value(&data_dir.display().to_string()),
         spec.eviction_policy,
         if spec.persistence { "yes" } else { "no" },
     );
@@ -458,160 +680,83 @@ fn render_config(metadata: &RedisMetadata, bind: &str, data_dir: &Path) -> Strin
     config
 }
 
-/// Quotes a config value the way the Valkey config parser reads it, so a path with spaces,
-/// quotes or backslashes stays one argument.
-fn quote_config_value(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for c in value.chars() {
-        match c {
-            '\\' | '"' => {
-                quoted.push('\\');
-                quoted.push(c);
-            }
-            '\n' => quoted.push_str("\\n"),
-            _ => quoted.push(c),
-        }
-    }
-    quoted.push('"');
-    quoted
+/// A one-file tar for `/etc/alien-valkey.conf`, mode 0400, owned by the image's server user.
+fn config_archive(config: &str) -> Result<Vec<u8>> {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(config.len() as u64);
+    header.set_mode(0o400);
+    header.set_uid(VALKEY_UID);
+    header.set_gid(VALKEY_UID);
+    header.set_cksum();
+    let mut builder = tar::Builder::new(Vec::new());
+    builder
+        .append_data(&mut header, "alien-valkey.conf", config.as_bytes())
+        .into_alien_error()
+        .context(container_error("redis", "configure", "Failed to build the config archive"))?;
+    builder
+        .into_inner()
+        .into_alien_error()
+        .context(container_error("redis", "configure", "Failed to build the config archive"))
 }
 
-/// SIGTERM-equivalent stop: `kill` then reap. Valkey rewrites nothing on SIGKILL, but the
-/// AOF with `everysec` keeps all but the last second of writes.
-async fn stop_child(id: &str, child: &mut Child) -> Result<()> {
-    child.kill().await.into_alien_error().context(process_error(
-        id,
-        "stop",
-        "Failed to stop valkey-server",
-    ))
-}
-
-async fn wait_until_listening(id: &str, port: u16, child: &mut Child) -> Result<()> {
+/// Waits until the server answers an authenticated PING on the published port, failing early
+/// when the container exits.
+async fn wait_until_ready(docker: &Docker, name: &str, metadata: &RedisMetadata) -> Result<()> {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     loop {
-        if let Some(status) = child.try_wait().into_alien_error().context(process_error(
-            id,
-            "start",
-            "Failed to check the server process",
-        ))? {
-            return Err(AlienError::new(process_error(
-                id,
+        let running = inspect_optional(docker, name)
+            .await?
+            .and_then(|response| response.state)
+            .and_then(|state| state.running)
+            == Some(true);
+        if !running {
+            return Err(AlienError::new(container_error(
+                name,
                 "start",
-                &format!("valkey-server exited during startup with {status}"),
+                "The Valkey container exited during startup; check `docker logs`",
             )));
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
+        if ping(metadata.port, &metadata.password).await {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(AlienError::new(process_error(
-                id,
+            return Err(AlienError::new(container_error(
+                name,
                 "start",
-                &format!("valkey-server did not listen on port {port} within {READY_TIMEOUT:?}"),
+                &format!(
+                    "Valkey did not answer on port {} within {READY_TIMEOUT:?}",
+                    metadata.port
+                ),
             )));
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
-/// The release target name for this host, e.g. `linux-x86_64`.
-fn release_target() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-}
-
-/// Returns the path of the cached `valkey-server`, downloading and verifying it first
-/// when it is not there.
-async fn ensure_binary(state_dir: &Path) -> Result<PathBuf> {
-    let target = release_target();
-    let dist = state_dir
-        .join("redis")
-        .join("_dist")
-        .join(format!("v{VALKEY_VERSION}"))
-        .join(&target);
-    let binary = dist.join("valkey-server");
-    if binary.exists() {
-        return Ok(binary);
-    }
-
-    let base_override = std::env::var(RELEASES_URL_ENV).ok();
-    let base = base_override
-        .clone()
-        .unwrap_or_else(|| RELEASES_URL_DEFAULT.to_string());
-    let archive_url = format!("{base}/v{VALKEY_VERSION}/{target}/valkey-server.tar.gz");
-    let fetch_error =
-        |reason: String| AlienError::new(process_error("valkey", "download", &reason));
-
-    let archive = fetch_bytes(&archive_url)
-        .await
-        .map_err(|reason| fetch_error(format!("Could not fetch {archive_url}: {reason}")))?;
-    let expected = match &base_override {
-        // A host the user pointed us at: trust its checksum file (e.g. a local build).
-        Some(_) => {
-            let text = fetch_bytes(&format!("{archive_url}.sha256"))
-                .await
-                .map_err(|reason| fetch_error(format!("Could not fetch the .sha256 file: {reason}")))?;
-            String::from_utf8_lossy(&text)
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_string()
+/// One authenticated PING over a fresh connection.
+async fn ping(port: u16, password: &str) -> bool {
+    let attempt = async {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+        let request = format!(
+            "*3\r\n$4\r\nAUTH\r\n$7\r\ndefault\r\n${}\r\n{password}\r\n*1\r\n$4\r\nPING\r\n",
+            password.len()
+        );
+        stream.write_all(request.as_bytes()).await.ok()?;
+        let mut reply = Vec::new();
+        let mut buf = [0u8; 64];
+        while !String::from_utf8_lossy(&reply).contains("+PONG") {
+            let n = stream.read(&mut buf).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            reply.extend_from_slice(&buf[..n]);
         }
-        None => PINNED_SHA256
-            .iter()
-            .find(|(name, _)| *name == target)
-            .map(|(_, sha)| sha.to_string())
-            .ok_or_else(|| {
-                fetch_error(format!(
-                    "No pinned checksum for target '{target}' in this build; set {RELEASES_URL_ENV} to a host that serves valkey-server for it"
-                ))
-            })?,
+        Some(())
     };
-    let actual = hex::encode(Sha256::digest(&archive));
-    if !actual.eq_ignore_ascii_case(expected.trim()) {
-        return Err(fetch_error(format!(
-            "Checksum mismatch for {archive_url}: expected {expected}, got {actual}"
-        )));
-    }
-
-    let unpack_dir = dist.clone();
-    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        std::fs::create_dir_all(&unpack_dir)?;
-        let decoder = flate2::read::GzDecoder::new(archive.as_slice());
-        tar::Archive::new(decoder).unpack(&unpack_dir)
-    })
-    .await
-    .into_alien_error()
-    .context(process_error("valkey", "install", "Unpack task panicked"))?
-    .into_alien_error()
-    .context(process_error(
-        "valkey",
-        "install",
-        "Failed to unpack the valkey-server archive",
-    ))?;
-
-    if !binary.exists() {
-        return Err(fetch_error(
-            "The archive did not contain a top-level 'valkey-server' file".to_string(),
-        ));
-    }
-    Ok(binary)
-}
-
-async fn fetch_bytes(url: &str) -> std::result::Result<Vec<u8>, String> {
-    if let Some(path) = url.strip_prefix("file://") {
-        return tokio::fs::read(path).await.map_err(|e| e.to_string());
-    }
-    let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
-    let response = response.error_for_status().map_err(|e| e.to_string())?;
-    response
-        .bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| e.to_string())
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), attempt).await,
+        Ok(Some(()))
+    )
 }
 
 /// Generates a 32-character alphanumeric password (URL-safe).
@@ -642,11 +787,34 @@ fn allocate_port(id: &str) -> Result<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::quote_config_value;
+    use super::*;
+
+    fn metadata(persistence: bool) -> RedisMetadata {
+        RedisMetadata {
+            resource_id: "cache".to_string(),
+            port: 6400,
+            password: "pw".to_string(),
+            spec: RedisSpec {
+                persistence,
+                eviction_policy: "volatile-lru".to_string(),
+                max_memory_bytes: Some(1024),
+            },
+        }
+    }
 
     #[test]
-    fn config_values_with_spaces_quotes_and_backslashes_stay_one_argument() {
-        assert_eq!(quote_config_value("/a b/data"), "\"/a b/data\"");
-        assert_eq!(quote_config_value("/a\"b\\c"), "\"/a\\\"b\\\\c\"");
+    fn a_changed_setting_changes_the_container_hash() {
+        let base = config_hash(&metadata(true), None);
+        assert_eq!(base, config_hash(&metadata(true), None));
+        assert_ne!(base, config_hash(&metadata(false), None));
+        let mut other = metadata(true);
+        other.spec.eviction_policy = "noeviction".to_string();
+        assert_ne!(base, config_hash(&other, None));
+        assert_ne!(base, config_hash(&metadata(true), Some("172.17.0.1".to_string())));
+    }
+
+    #[test]
+    fn debug_output_hides_the_password() {
+        assert!(!format!("{:?}", metadata(true)).contains("pw\""));
     }
 }

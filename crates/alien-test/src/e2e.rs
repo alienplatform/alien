@@ -204,7 +204,7 @@ pub enum Binding {
     Vault,
     /// Managed Postgres database (Aurora, Cloud SQL, Flexible Server, embedded pgvector on Local)
     Postgres,
-    /// Managed Redis-compatible store (embedded Valkey on Local), exercised with stock clients
+    /// Managed Redis-compatible store (the Valkey image in Docker on Local), exercised with stock clients
     Redis,
     /// Sandbox session: run a command, move a file in and out, terminate
     Sandbox,

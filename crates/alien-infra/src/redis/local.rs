@@ -261,7 +261,7 @@ fn emit_local_redis_heartbeat(ctx: &ResourceControllerContext<'_>, id: &str, por
             status: RedisHeartbeatStatus {
                 health: ObservedHealth::Healthy,
                 lifecycle: ProviderLifecycleState::Running,
-                message: Some("Local Redis process is running".to_string()),
+                message: Some("Local Redis container is running".to_string()),
                 stale: false,
                 partial: false,
                 collection_issues: vec![],

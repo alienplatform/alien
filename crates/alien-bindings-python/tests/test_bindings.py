@@ -485,14 +485,23 @@ def test_redis_provider_ca_certificates_reach_the_client() -> None:
     assert connection.redis_kwargs()["ssl_ca_data"].count("BEGIN CERTIFICATE") == 2
 
 
-VALKEY_SERVER = os.environ.get("ALIEN_TEST_VALKEY_SERVER")
+VALKEY_IMAGE = (
+    "valkey/valkey:9.0@sha256:"
+    "7e1deda01b64ece3167d370ab5be3452d29734feec22cbcbc69b3a64f6859d6d"
+)
+
+
+def _docker_available() -> bool:
+    import shutil
+
+    if shutil.which("docker") is None:
+        return False
+    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not VALKEY_SERVER, reason="set ALIEN_TEST_VALKEY_SERVER to a valkey-server binary"
-)
-async def test_redis_binding_drives_a_stock_redis_py_client(tmp_path: Path) -> None:
+@pytest.mark.skipif(not _docker_available(), reason="needs a running Docker engine")
+async def test_redis_binding_drives_a_stock_redis_py_client() -> None:
     """The binding's kwargs must work unchanged with redis.asyncio against a real server."""
     import socket
 
@@ -501,23 +510,15 @@ async def test_redis_binding_drives_a_stock_redis_py_client(tmp_path: Path) -> N
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    server = await asyncio.create_subprocess_exec(
-        *[
-            VALKEY_SERVER,
-            "--port",
-            str(port),
-            "--bind",
-            "127.0.0.1",
-            "--requirepass",
-            "p@ss/word",
-            "--dir",
-            str(tmp_path),
-            "--save",
-            "",
+    container = subprocess.run(
+        [
+            "docker", "run", "-d", "--rm",
+            "-p", f"127.0.0.1:{port}:6379",
+            VALKEY_IMAGE,
+            "valkey-server", "--requirepass", "p@ss/word", "--save", "",
         ],
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
     try:
         bind(
             "live-cache",
@@ -551,5 +552,4 @@ async def test_redis_binding_drives_a_stock_redis_py_client(tmp_path: Path) -> N
         await from_url.aclose()
         await client.aclose()
     finally:
-        server.terminate()
-        await server.wait()
+        subprocess.run(["docker", "rm", "-f", container], capture_output=True)
