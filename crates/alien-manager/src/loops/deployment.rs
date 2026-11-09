@@ -2173,7 +2173,9 @@ fn state_from_record(
 /// The stacks a control plane supplied for this step: the target (the
 /// desired release, or the current one when nothing is desired) and the
 /// installed current stack. `None` means read the release instead.
-fn supplied_release_stacks(deployment: &DeploymentRecord) -> (Option<Stack>, Option<Stack>) {
+pub(crate) fn supplied_release_stacks(
+    deployment: &DeploymentRecord,
+) -> (Option<Stack>, Option<Stack>) {
     let Some(stacks) = deployment.supplied_stacks.as_ref() else {
         return (None, None);
     };

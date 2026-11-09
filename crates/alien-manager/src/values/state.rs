@@ -8,6 +8,7 @@
 use alien_core::{EnvironmentVariable, EnvironmentVariableType, Stack, StackState};
 
 use super::{StoredValue, ValueKind, ValueScope, ValueStore};
+use crate::auth::Subject;
 use crate::config::ManagerConfig;
 use crate::error::{ErrorData, Result};
 use crate::traits::deployment_store::DeploymentRecord;
@@ -41,22 +42,37 @@ impl HeldValues {
         }
         Ok(Self {
             scope: Some(scope_of(deployment)?),
-            variables: held_variables(config, deployment, held, stack)?,
+            variables: held_variables(
+                config,
+                deployment,
+                held,
+                stack,
+                &planned_env_digests(deployment)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )?,
             planned: planned_env_digests(deployment),
         })
     }
 
-    /// What this manager holds for `deployment` now, for state that a runner
-    /// or an operator reports after running a step this manager did not watch.
-    /// A variable whose value changed since the step loaded it is still found
-    /// by the digest the sender planned it with.
+    /// What this manager holds for `deployment` now, for the `reported` state
+    /// that a runner or an operator sends after running a step this manager
+    /// did not watch. A variable whose value changed since the step loaded it
+    /// is still found by the digest the sender planned it with. Without a
+    /// reported stack state there is nothing to redact.
+    ///
+    /// When the deployment's release is gone, the stack that maps held inputs
+    /// to variables is gone with it: only held variables are covered then, so
+    /// that a report can still be saved and a deletion can still finish.
     pub async fn current(
         values: Option<&ValueStore>,
         config: &ManagerConfig,
         release_store: &dyn ReleaseStore,
         deployment: &DeploymentRecord,
+        reported: Option<&StackState>,
     ) -> Result<Self> {
-        let Some(values) = values else {
+        let (Some(values), Some(_)) = (values, reported) else {
             return Ok(Self::default());
         };
         let scope = ValueScope::deployment(&deployment.id)?;
@@ -67,31 +83,18 @@ impl HeldValues {
         }
         let held = with_stored_values(deployment, &stored);
         let stack = if stored.iter().any(|value| value.slot.input_id().is_some()) {
-            let release_id = deployment
-                .desired_release_id
-                .as_deref()
-                .or(deployment.current_release_id.as_deref());
-            match release_id {
-                Some(release_id) => crate::loops::deployment::target_release_stack(
-                    release_store,
-                    deployment,
-                    release_id,
-                )
-                .await
-                .map_err(|e| {
-                    ErrorData::internal(format!(
-                        "Could not load the stack of the release: {}",
-                        e.message
-                    ))
-                })?,
-                None => None,
-            }
+            release_stack(release_store, deployment).await?
         } else {
             None
         };
+        let slots = stored
+            .iter()
+            .filter_map(|value| value.slot.env_name().map(str::to_string))
+            .chain(planned.iter().map(|(name, _)| name.clone()))
+            .collect::<Vec<_>>();
         Ok(Self {
             scope: Some(scope.as_str().to_string()),
-            variables: held_variables(config, deployment, &held, stack.as_ref())?,
+            variables: held_variables(config, deployment, &held, stack.as_ref(), &slots)?,
             planned,
         })
     }
@@ -118,6 +121,34 @@ impl HeldValues {
             ErrorData::internal(format!("Could not restore held values: {}", e.message))
         })
     }
+}
+
+/// The stack of the release a deployment runs or is moving to; `None` when
+/// the release is gone.
+async fn release_stack(
+    release_store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+) -> Result<Option<Stack>> {
+    if let (Some(stack), _) = crate::loops::deployment::supplied_release_stacks(deployment) {
+        return Ok(Some(stack));
+    }
+    let Some(release_id) = deployment
+        .desired_release_id
+        .as_deref()
+        .or(deployment.current_release_id.as_deref())
+    else {
+        return Ok(None);
+    };
+    let release = release_store
+        .get_release(&Subject::system(), release_id)
+        .await
+        .map_err(|e| {
+            ErrorData::internal(format!(
+                "Could not load the stack of the release: {}",
+                e.message
+            ))
+        })?;
+    Ok(release.and_then(|release| release.stacks.get(&deployment.platform).cloned()))
 }
 
 fn scope_of(deployment: &DeploymentRecord) -> Result<String> {
@@ -164,12 +195,16 @@ fn with_stored_values(deployment: &DeploymentRecord, stored: &[StoredValue]) -> 
 
 /// The variables in the environment built with `held`'s values and not in the
 /// one built without them: whatever those values contribute, whether as
-/// variables or through stack inputs mapped to variables.
+/// variables or through stack inputs mapped to variables. A variable named by
+/// an `env:` slot in `env_slots` is always included, even when something else
+/// in the environment gives it the same value: it is saved as a marker and
+/// has to be put back.
 fn held_variables(
     config: &ManagerConfig,
     deployment: &DeploymentRecord,
     held: &DeploymentRecord,
     stack: Option<&Stack>,
+    env_slots: &[String],
 ) -> Result<Vec<(String, String)>> {
     let environment = |record: &DeploymentRecord| {
         crate::loops::deployment::deployment_environment_variables(config, record, stack)
@@ -185,9 +220,10 @@ fn held_variables(
     Ok(environment(held)?
         .into_iter()
         .filter(|variable| {
-            !without
-                .iter()
-                .any(|other| other.name == variable.name && other.value == variable.value)
+            env_slots.contains(&variable.name)
+                || !without
+                    .iter()
+                    .any(|other| other.name == variable.name && other.value == variable.value)
         })
         .map(|variable| (variable.name, variable.value))
         .collect())
@@ -460,6 +496,7 @@ mod tests {
             &ManagerConfig::default(),
             &NoReleases,
             &deployment,
+            Some(&state),
         )
         .await
         .unwrap();
@@ -512,11 +549,17 @@ mod tests {
         // A report this manager did not watch finds the changed variable by
         // the digest it was planned with.
         let mut reported = state_running_with(CANARY, INPUT_CANARY);
-        HeldValues::current(Some(&store), &config, &NoReleases, &deployment)
-            .await
-            .unwrap()
-            .redact(Some(&mut reported))
-            .unwrap();
+        HeldValues::current(
+            Some(&store),
+            &config,
+            &NoReleases,
+            &deployment,
+            Some(&reported),
+        )
+        .await
+        .unwrap()
+        .redact(Some(&mut reported))
+        .unwrap();
         let saved = saved_json(&reported);
         assert!(!saved.contains(CANARY), "{saved}");
     }
@@ -533,6 +576,7 @@ mod tests {
             &ManagerConfig::default(),
             &NoReleases,
             &deployment,
+            Some(&state),
         )
         .await
         .unwrap()
@@ -546,11 +590,95 @@ mod tests {
     async fn without_a_store_state_is_left_alone() {
         let deployment = record(Vec::new());
         let mut state = state_running_with(CANARY, INPUT_CANARY);
-        HeldValues::current(None, &ManagerConfig::default(), &NoReleases, &deployment)
-            .await
-            .unwrap()
-            .redact(Some(&mut state))
-            .unwrap();
+        HeldValues::current(
+            None,
+            &ManagerConfig::default(),
+            &NoReleases,
+            &deployment,
+            Some(&state),
+        )
+        .await
+        .unwrap()
+        .redact(Some(&mut state))
+        .unwrap();
         assert!(saved_json(&state).contains(CANARY));
+    }
+
+    #[tokio::test]
+    async fn a_variable_another_source_also_gives_is_still_put_back() {
+        let (_dir, store) = store().await;
+        // The stack input's default maps to ENDPOINT too, with the same value
+        // the held variable has.
+        let url = put(&store, "dep_1", "env:ENDPOINT", "same").await;
+        let mut deployment = record(vec![slot_ref("env:ENDPOINT", &url)]);
+        for stack in deployment
+            .supplied_stacks
+            .iter_mut()
+            .flat_map(|stacks| [&mut stacks.current, &mut stacks.desired])
+            .flatten()
+        {
+            stack.inputs[0].default = Some(
+                serde_json::from_value(serde_json::json!({"type": "string", "value": "same"}))
+                    .unwrap(),
+            );
+        }
+        let held = held_record(&store, &deployment).await;
+        let config = ManagerConfig::default();
+        let stack = deployment.supplied_stacks.as_ref().unwrap().current.clone();
+        let step =
+            HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref()).unwrap();
+        let mut state = state_running_with(CANARY, "same");
+        let original = serde_json::to_value(&state).unwrap();
+
+        step.redact(Some(&mut state)).unwrap();
+        assert!(
+            !saved_json(&state).contains("\"same\""),
+            "{}",
+            saved_json(&state)
+        );
+        step.restore(Some(&mut state)).unwrap();
+
+        assert_eq!(serde_json::to_value(&state).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn a_report_without_state_or_with_a_gone_release_is_still_accepted() {
+        let (_dir, store) = store().await;
+        put(&store, "dep_1", "env:API_URL", CANARY).await;
+        put(
+            &store,
+            "dep_1",
+            "input:endpoint",
+            &format!("\"{INPUT_CANARY}\""),
+        )
+        .await;
+        let mut deployment = record(Vec::new());
+        deployment.supplied_stacks = None;
+        deployment.current_release_id = Some("rel_gone".to_string());
+        let config = ManagerConfig::default();
+
+        // No state to redact: nothing to look up.
+        HeldValues::current(Some(&store), &config, &NoReleases, &deployment, None)
+            .await
+            .expect("no state, no lookup");
+
+        // The release is gone: held variables are still redacted.
+        let mut state = state_running_with(CANARY, INPUT_CANARY);
+        HeldValues::current(
+            Some(&store),
+            &config,
+            &NoReleases,
+            &deployment,
+            Some(&state),
+        )
+        .await
+        .expect("a gone release does not refuse the report")
+        .redact(Some(&mut state))
+        .unwrap();
+        assert!(
+            !saved_json(&state).contains(CANARY),
+            "{}",
+            saved_json(&state)
+        );
     }
 }

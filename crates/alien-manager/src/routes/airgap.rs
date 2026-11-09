@@ -517,6 +517,7 @@ async fn status_report(
         &state.config,
         state.release_store.as_ref(),
         &deployment,
+        report_state.stack_state.as_ref(),
     )
     .await
     {

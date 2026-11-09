@@ -569,6 +569,7 @@ async fn redact_reported_values(
         &state.config,
         state.release_store.as_ref(),
         deployment,
+        stack_state.as_deref(),
     )
     .await
     .and_then(|held| held.redact(stack_state))
