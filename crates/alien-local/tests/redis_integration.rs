@@ -292,6 +292,31 @@ async fn a_server_that_fails_to_start_is_replaced_by_the_next_start() {
 
 #[tokio::test]
 #[ignore = "requires Docker"]
+async fn a_server_that_is_slow_to_answer_is_kept_and_found_ready_by_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let impatient = LocalRedisManager::new(dir.path().to_path_buf())
+        .with_ready_timeout(std::time::Duration::ZERO);
+    let error = impatient
+        .start_redis("slowstart", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("did not answer"), "{error}");
+
+    // The server is still running, so the container must survive the timeout.
+    let docker = Docker::connect_with_local_defaults().unwrap();
+    assert_eq!(containers_named(&docker, "slowstart").await, 1);
+
+    let manager = LocalRedisManager::new(dir.path().to_path_buf());
+    manager
+        .start_redis("slowstart", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    assert_eq!(containers_named(&docker, "slowstart").await, 1);
+    manager.delete_redis("slowstart").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
 async fn a_settings_change_keeps_every_acknowledged_write() {
     let dir = tempfile::tempdir().unwrap();
     let manager = LocalRedisManager::new(dir.path().to_path_buf());

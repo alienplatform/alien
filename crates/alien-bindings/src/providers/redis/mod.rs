@@ -152,7 +152,7 @@ mod tests {
     fn unresolved_secret_reference_is_a_configuration_error() {
         let binding: RedisBinding = serde_json::from_value(serde_json::json!({
             "service": "external", "host": "cache", "port": 6379, "username": "default",
-            "password": {"secretRef": {"name": "redis", "key": "password"}}
+            "password": {"secretKeyRef": {"name": "redis", "key": "password"}}
         }))
         .unwrap();
         let err = ResolvedRedis::from_inline_binding("cache", &binding).unwrap_err();

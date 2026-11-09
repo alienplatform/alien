@@ -86,6 +86,7 @@ pub struct LocalRedisManager {
     state_dir: PathBuf,
     /// Serializes start/stop/delete so two callers never race on one container name.
     lock: Arc<Mutex<()>>,
+    ready_timeout: Duration,
 }
 
 impl std::fmt::Debug for LocalRedisManager {
@@ -101,7 +102,15 @@ impl LocalRedisManager {
         Self {
             state_dir,
             lock: Arc::new(Mutex::new(())),
+            ready_timeout: READY_TIMEOUT,
         }
+    }
+
+    /// Shortens the wait for a started server to answer (tests exercise the slow-start path).
+    #[doc(hidden)]
+    pub fn with_ready_timeout(mut self, timeout: Duration) -> Self {
+        self.ready_timeout = timeout;
+        self
     }
 
     /// Creates a manager and spawns a task that starts the servers recorded on disk and
@@ -309,7 +318,7 @@ impl LocalRedisManager {
                             "Failed to start the container",
                         ))?;
                 }
-                return wait_until_ready(docker, &name, metadata).await;
+                return wait_until_ready(docker, &name, metadata, self.ready_timeout).await;
             }
             // SIGTERM first so Valkey flushes its append-only file; a forced removal could drop
             // the last second of acknowledged writes.
@@ -402,12 +411,24 @@ impl LocalRedisManager {
         // before the config is uploaded and the server started must not be left behind: the next
         // attempt would take it for a finished one.
         let started = match self.configure_and_start(docker, &name, metadata).await {
-            Ok(()) => wait_until_ready(docker, &name, metadata).await,
+            Ok(()) => wait_until_ready(docker, &name, metadata, self.ready_timeout).await,
             Err(error) => Err(error),
         };
         if let Err(error) = started {
-            if let Err(cleanup) = remove_container(docker, &name).await {
-                warn!(redis_id = %id, ?cleanup, "Failed to remove the unfinished Redis container");
+            // A server that is still running only needs more time (a large append-only file can
+            // take longer than the readiness wait to load); the next start finds the container
+            // with its final config and waits again. Anything that stopped or never started is
+            // removed so it is not mistaken for a finished one.
+            let still_running = inspect_optional(docker, &name)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|response| response.state)
+                .is_some_and(|state| state.running == Some(true) && state.restarting != Some(true));
+            if !still_running {
+                if let Err(cleanup) = remove_container(docker, &name).await {
+                    warn!(redis_id = %id, ?cleanup, "Failed to remove the unfinished Redis container");
+                }
             }
             return Err(error);
         }
@@ -768,8 +789,13 @@ fn config_archive(config: &str) -> Result<Vec<u8>> {
 
 /// Waits until the server answers an authenticated PING on the published port, failing early
 /// when the container exits.
-async fn wait_until_ready(docker: &Docker, name: &str, metadata: &RedisMetadata) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
+async fn wait_until_ready(
+    docker: &Docker,
+    name: &str,
+    metadata: &RedisMetadata,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         // The restart policy keeps a crashing server "running" between attempts, so a restart in
         // progress counts as a failed start.
@@ -792,7 +818,7 @@ async fn wait_until_ready(docker: &Docker, name: &str, metadata: &RedisMetadata)
                 name,
                 "start",
                 &format!(
-                    "Valkey did not answer on port {} within {READY_TIMEOUT:?}",
+                    "Valkey did not answer on port {} within {timeout:?}",
                     metadata.port
                 ),
             )));
