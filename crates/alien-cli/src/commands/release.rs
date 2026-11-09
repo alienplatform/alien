@@ -1692,9 +1692,7 @@ async fn provision_sandbox_push_repository(
         )
     };
     let sandbox = create_manager_repository(manager, &url, &body, key, "sandbox").await?;
-    Ok(Some(
-        manager_proxy_push_settings(manager_url, &sandbox, *platform, manager)?.repository,
-    ))
+    Ok(Some(manager_proxy_repository(manager_url, &sandbox)?.0))
 }
 
 /// Asks a hosted manager for the project's repository for AWS container and daemon images.
@@ -1714,7 +1712,7 @@ async fn provision_proxy_only_push_repository(
         "container",
     )
     .await?;
-    Ok(manager_proxy_push_settings(manager_url, &repository, Platform::Aws, manager)?.repository)
+    Ok(manager_proxy_repository(manager_url, &repository)?.0)
 }
 
 /// Creates (or finds) a repository through the manager and returns the name it answers with
@@ -1760,14 +1758,12 @@ async fn create_manager_repository(
         })
 }
 
-/// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
-/// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
-pub(crate) fn manager_proxy_push_settings(
+/// The full repository reference for `repository` on the manager's registry proxy, and the
+/// protocol to push to it with. Images go through the same proxy whatever the platform.
+fn manager_proxy_repository(
     registry_host: &str,
     repository: &str,
-    platform: Platform,
-    manager: &ManagerContext,
-) -> Result<PushSettings> {
+) -> Result<(String, ClientProtocol)> {
     // A manager served over plain HTTP (a trial install without a
     // certificate) must be pushed to over HTTP, whatever its host name.
     let plain_http = registry_host.starts_with("http://");
@@ -1780,7 +1776,18 @@ pub(crate) fn manager_proxy_push_settings(
     } else {
         protocol
     };
-    let repository = format!("{registry_host}/{repository}");
+    Ok((format!("{registry_host}/{repository}"), protocol))
+}
+
+/// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
+/// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
+pub(crate) fn manager_proxy_push_settings(
+    registry_host: &str,
+    repository: &str,
+    platform: Platform,
+    manager: &ManagerContext,
+) -> Result<PushSettings> {
+    let (repository, protocol) = manager_proxy_repository(registry_host, repository)?;
 
     // OCI speaks Basic — the token rides in the password slot, the
     // workspace rides in the username slot. OCI clients can't add custom
