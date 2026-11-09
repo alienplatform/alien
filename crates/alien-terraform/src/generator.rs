@@ -739,6 +739,7 @@ pub(crate) fn render_terraform_module(
         "providers.tf".to_string(),
         render_body(providers_body(
             target,
+            options.registration.as_ref(),
             include_kubernetes_provider,
             include_helm_provider,
             include_azapi_provider,
@@ -2590,14 +2591,18 @@ fn variables_body(
     // A protected module registers through the deploy CLI after apply, which takes the token
     // and the endpoint itself; the module never holds them.
     if stack_settings.signing.is_none() {
+        // Only a module that registers itself reads the token. Without
+        // registration the input stays declared so callers that pass it keep working.
         blocks.push(nested(variable_block(
             "token",
-            if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+            if registration.is_none() {
+                "Not used: this module does not register the deployment."
+            } else if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
                 AUTOMATIC_TOKEN_DESCRIPTION
             } else {
                 "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
             },
-            None,
+            registration.is_none().then(|| expr::raw("null")),
             true,
         )));
         blocks.push(nested(management_url_variable_block(
@@ -3928,6 +3933,7 @@ fn custom_domain_certificate_arn_variable_block(default: String) -> Block {
 
 fn providers_body(
     target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
     include_kubernetes_provider: bool,
     include_helm_provider: bool,
     include_azapi_provider: bool,
@@ -4055,6 +4061,15 @@ fn providers_body(
                 "kubernetes",
                 provider_config_object(kubernetes_provider_body(target, true)),
             )]),
+        }));
+    }
+    if let Some(registration) = registration {
+        // Terraform keeps resource arguments in state but never provider
+        // configuration, so the install token is given to the provider.
+        structures.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("provider"),
+            labels: vec![BlockLabel::String(registration.provider_name.clone())],
+            body: Body::from(vec![attr("token", expr::raw("var.token"))]),
         }));
     }
     Body::from(structures)
@@ -4574,7 +4589,6 @@ fn registration_body(
     if let Some(registration) = registration {
         let mut body = vec![
             setup_management_precondition(setup_management),
-            attr("token", expr::raw("var.token")),
             attr("name", expr::raw("local.deployment_name")),
             attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
@@ -4635,7 +4649,6 @@ fn registration_body(
         expr::object(
             [
                 ("platform", expr::raw("local.deployment_platform")),
-                ("token", expr::raw("var.token")),
                 ("name", expr::raw("var.name")),
                 ("resource_prefix", expr::raw("local.resource_prefix")),
                 (
@@ -5259,14 +5272,6 @@ fn outputs_body(
             )),
             "Deployment id assigned by the Terraform registration provider.",
         ));
-        outputs.push((
-            "deployment_token",
-            expr::raw(format!(
-                "{}.this.deployment_token",
-                registration.provider_resource_type()
-            )),
-            "Deployment token assigned by the Terraform registration provider.",
-        ));
     }
     if target.is_kubernetes() {
         outputs.push((
@@ -5310,10 +5315,7 @@ fn outputs_body(
                 attr("value", value),
                 attr("description", Expression::String(description)),
             ];
-            if name == "deployment_stack_settings"
-                || name == "deployment_token"
-                || name == "kubernetes_kubeconfig"
-            {
+            if name == "deployment_stack_settings" || name == "kubernetes_kubeconfig" {
                 body.push(attr("sensitive", Expression::Bool(true)));
             }
 
@@ -5443,10 +5445,7 @@ fn readme_md(
     } else if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
     } else {
-        format!(
-            "export TF_VAR_name=\"{}\"\nexport TF_VAR_token=\"...\"",
-            stack.id()
-        )
+        format!("export TF_VAR_name=\"{}\"", stack.id())
     };
     let registration_note = if protected {
         "This module carries no registration provider. After `terraform apply`, register it from the directory you applied in with the deploy CLI:\n\n```bash\n<deploy-cli> register --import terraform --dir . --token \"...\"\n```\n\nIt reads `terraform output -json` and sends the outputs below.\n".to_string()
@@ -5616,7 +5615,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
-- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
+- `deployment_id`: emitted only when Terraform performs registration.\
 {kubernetes_operations}",
         display_name = display_name,
         target = target.name(),
@@ -5642,13 +5641,14 @@ fn readme_required_inputs(deployment_name_default: Option<&str>, automatic: bool
     } else {
         "install token from the setup page."
     };
+    let token = format!(
+        "{token} Terraform reads the token on every plan, apply and destroy and does not write it to state; a saved plan file (`-out`) does contain it. Install tokens expire, so use a current one from the setup page. Applying this version over an existing installation updates its registration in place."
+    );
     match deployment_name_default {
         Some(default) => format!(
             "Required:\n\n- `token`: {token}\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
         ),
-        None => format!(
-            "Required:\n\n- `token`: {token}\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens."
-        ),
+        None => "Required:\n\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string(),
     }
 }
 
@@ -5999,6 +5999,7 @@ mod tests {
                 "providers.tf".to_string(),
                 render_body(providers_body(
                     TerraformTarget::Eks,
+                    None,
                     true,
                     true,
                     false,
@@ -6223,6 +6224,37 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         ));
         assert!(registration_body
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
+        // Resource arguments are kept in Terraform state; the install token is
+        // given to the provider instead, whose configuration never is.
+        assert!(!registration_body.contains("var.token"));
+        let providers = hcl::parse(
+            &render_body(providers_body(
+                TerraformTarget::Aws,
+                Some(&registration),
+                false,
+                false,
+                false,
+                false,
+                false,
+            ))
+            .expect("providers render"),
+        )
+        .expect("providers parse");
+        let provider = providers
+            .blocks()
+            .find(|block| {
+                block.identifier() == "provider"
+                    && block.labels().first().map(|label| label.as_str()) == Some("example_app")
+            })
+            .expect("the registration provider should be configured");
+        assert_eq!(
+            provider
+                .body()
+                .attributes()
+                .find(|attribute| attribute.key() == "token")
+                .map(|attribute| attribute.expr().to_string()),
+            Some("var.token".to_string())
+        );
 
         let outputs = render_body(outputs_body(
             TerraformTarget::Aws,
@@ -6236,6 +6268,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         .expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
         assert!(!outputs.contains("deployment_input_values"));
+        assert!(!outputs.contains("deployment_token"));
     }
 
     #[test]
