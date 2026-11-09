@@ -92,6 +92,7 @@ jobs:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
               - '.cargo/**'
+              - '.config/hakari.toml'
               - 'crates/**'
               - 'packages/**'
               - 'client-sdks/**'
