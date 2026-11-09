@@ -49,6 +49,7 @@ members = [
   "crates/alien-deploy-cli",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
+  "crates/workspace-hack",
   "examples/basic-worker-rs",
   "examples/custom-operations",
   "examples/endpoint-agent",

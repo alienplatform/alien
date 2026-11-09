@@ -75,6 +75,7 @@ base64 = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
 ed25519-compact = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

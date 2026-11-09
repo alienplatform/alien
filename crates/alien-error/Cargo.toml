@@ -22,6 +22,7 @@ utoipa = { workspace = true, features = ["chrono"], optional = true }
 alien-error-derive = { workspace = true }
 anyhow = { workspace = true, optional = true }
 axum = { workspace = true, default-features = false, features = ["json"], optional = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "macros", "rt"] }

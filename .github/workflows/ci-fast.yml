@@ -660,6 +660,41 @@ jobs:
       - name: Check every package and target
         run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
 
+  workspace-hack:
+    name: Workspace-hack up to date
+    needs: [pr-conventions, changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 15
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - uses: taiki-e/install-action@cargo-hakari
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      # The workspace-hack crate unifies dependency features so single-crate
+      # cargo commands reuse the workspace build cache. If either command fails,
+      # run `cargo hakari generate && cargo hakari manage-deps` and commit the result.
+      - name: Check workspace-hack contents
+        run: cargo hakari generate --diff
+
+      - name: Check workspace-hack dependencies
+        run: cargo hakari manage-deps --dry-run
+
   worker-integration:
     name: Worker integration
     needs: [pr-conventions, changes]
@@ -755,7 +790,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, typescript, worker-integration]
+    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

@@ -39,5 +39,6 @@ blake3 = "1.5.5"
 
 # Regex for PII detection
 regex = "1.11.1"
+workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
 
 [dev-dependencies]

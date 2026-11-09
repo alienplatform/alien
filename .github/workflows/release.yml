@@ -517,12 +517,20 @@ jobs:
           name: qualified-crates
           path: qualified/crates
 
+      - uses: taiki-e/install-action@cargo-hakari
+
       - name: Publish crates
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p qualified/crates
+
+          # The workspace-hack crate is unpublished and only speeds up local
+          # builds. Remove the dependency on it from every crate before
+          # packaging so published manifests never reference it. This leaves
+          # the working tree dirty, hence --allow-dirty below.
+          cargo hakari remove-deps --yes
           crates_io_user_agent="Alien release workflow (https://github.com/alienplatform/alien)"
           wait_for_crates_io_index() {
             local crate=$1 expected_checksum=$2 index_path published_checksum
@@ -605,12 +613,12 @@ jobs:
             alien-commands-client; do
             if [ "${{ inputs.stable_action }}" = "qualification" ]; then
               echo "Recording package inputs for $crate..."
-              depot cargo package -p "$crate" --list |
+              depot cargo package -p "$crate" --list --allow-dirty |
                 LC_ALL=C sort > "qualified/crates/${crate}-${VERSION}.files"
               continue
             fi
 
-            depot cargo package -p "$crate" --list |
+            depot cargo package -p "$crate" --list --allow-dirty |
               LC_ALL=C sort > "${crate}-${VERSION}.files"
             if ! cmp -s \
               "${crate}-${VERSION}.files" \
@@ -627,7 +635,7 @@ jobs:
             # qualified prerequisite version exists in crates.io, so final
             # assembly happens here in dependency order.
             echo "Packaging $crate..."
-            depot cargo package -p "$crate" --no-verify
+            depot cargo package -p "$crate" --no-verify --allow-dirty
             package="target/package/${crate}-${VERSION}.crate"
             checksum=$(sha256sum "$package" | awk '{print $1}')
             metadata_response="crates-io-metadata-${crate}.json"
@@ -663,7 +671,7 @@ jobs:
             fi
 
             echo "Publishing $crate..."
-            depot cargo publish -p "$crate" --no-verify
+            depot cargo publish -p "$crate" --no-verify --allow-dirty
             wait_for_crates_io_index "$crate" "$checksum"
           done
 

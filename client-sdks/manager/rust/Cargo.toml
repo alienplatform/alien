@@ -20,6 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 regress = "0.11"
 chrono = { workspace = true, features = ["serde"] }
+workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 
 [build-dependencies]
 prettyplease = "0.2.22"

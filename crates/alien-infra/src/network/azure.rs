@@ -1106,10 +1106,15 @@ impl AzureNetworkController {
                 name: Some(PublicIpAddressSkuName::Standard),
                 tier: None,
             }),
-            properties: Some(PublicIpAddressPropertiesFormat {
-                public_ip_allocation_method: Some(IpAllocationMethod::Static),
-                ..Default::default()
-            }),
+            // `.into()`: the generated model boxes this field only in some feature
+            // combinations (full vs. reachable-only models, serde_json key order).
+            properties: Some(
+                PublicIpAddressPropertiesFormat {
+                    public_ip_allocation_method: Some(IpAllocationMethod::Static),
+                    ..Default::default()
+                }
+                .into(),
+            ),
             tags: [("managed-by".to_string(), "runtime".to_string())]
                 .into_iter()
                 .collect(),
