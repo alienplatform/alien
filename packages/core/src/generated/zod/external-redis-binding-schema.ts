@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { BindingValueStringSchema } from "./binding-value-string-schema.js";
 import { BindingValueU16Schema } from "./binding-value-u16-schema.js";
+import { ExternalPasswordSecretKeyRefSchema } from "./external-password-secret-key-ref-schema.js";
 
 /**
  * @description Operator-provided server binding.
@@ -15,7 +16,7 @@ export const ExternalRedisBindingSchema = z.object({
                 return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },
 get "password"(){
-                return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
+                return z.union([ExternalPasswordSecretKeyRefSchema, z.string()]).describe("Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the\npassword from the Secret as an environment variable, which the SDK inserts after it\nparses the binding, so any character is safe.")
               },
 get "port"(){
                 return BindingValueU16Schema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
