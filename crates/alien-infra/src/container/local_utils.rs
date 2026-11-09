@@ -384,10 +384,12 @@ pub(super) fn linked_sandbox_bindings(
 /// at the mount. The mount is shared with the host operator's identity because the file is
 /// readable by it alone, as Storage, KV and Vault mounts already are.
 ///
-/// **Fails fast** on a cloud sandbox binding, as the other rewrites do, and on a token file that
-/// is not there: Docker would create a directory in its place, which the route could then never
-/// write its token to.
+/// **Fails fast** on a cloud sandbox binding, as the other rewrites do. A token file that is not
+/// there yet is not mounted (Docker would create a directory in its place, which the route could
+/// then never write its token to): the sandbox is reported as a dependency that is not ready,
+/// because after a manager restart its next tick writes the token again.
 pub(super) fn mount_local_sandboxes_for_container(
+    container_id: &str,
     sandbox_bindings: Vec<(String, String)>,
     env_vars: &mut std::collections::HashMap<String, String>,
     bind_mounts: &mut Vec<alien_local::BindMount>,
@@ -432,9 +434,10 @@ pub(super) fn mount_local_sandboxes_for_container(
         }
         if let BindingValue::Value(host_path) = &local.token_path {
             if !std::path::Path::new(host_path).is_file() {
-                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: binding_key,
-                    message: "the linked sandbox's route has not written its token yet".into(),
+                debug!(resource = %binding_key, %host_path, "the linked sandbox's route has not written its token yet");
+                return Err(AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: container_id.to_string(),
+                    dependency_id: binding_key,
                 }));
             }
             let container_path = format!(
@@ -517,7 +520,7 @@ mod tests {
         std::fs::write(&token, "t").unwrap();
         let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
         let mut mounts = Vec::new();
-        mount_local_sandboxes_for_container(resolved(&env), &mut env, &mut mounts).unwrap();
+        mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts).unwrap();
 
         let SandboxBinding::Local(actual) =
             serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()
@@ -549,19 +552,33 @@ mod tests {
         );
     }
 
+    /// A token the route has not written yet (a manager restart the sandbox has not caught up
+    /// with) waits for the sandbox instead of failing the container, and mounts nothing until
+    /// then. Once the token is there, the next attempt mounts it.
     #[test]
-    fn local_sandbox_binding_without_its_token_file_is_refused_unmounted() {
+    fn a_token_not_written_yet_waits_for_the_sandbox_then_mounts() {
         let state = tempfile::TempDir::new().unwrap();
         let token = state.path().join("sandbox-manager-code.token");
-        let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let linked = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+
+        let mut env = linked.clone();
         let mut mounts = Vec::new();
-        assert!(
-            mount_local_sandboxes_for_container(resolved(&env), &mut env, &mut mounts).is_err()
-        );
+        let error =
+            mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts)
+                .expect_err("no token file yet");
+        assert_eq!(error.code, "DEPENDENCY_NOT_READY");
+        assert!(error.retryable);
         assert!(
             mounts.is_empty(),
             "Docker would create a directory at a missing source"
         );
+
+        std::fs::write(&token, "t").unwrap();
+        let mut env = linked;
+        mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts)
+            .expect("the token is there now");
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(mounts[0].host_path, token);
     }
 
     #[test]
@@ -578,7 +595,8 @@ mod tests {
         )]);
         let mut mounts = Vec::new();
         assert!(
-            mount_local_sandboxes_for_container(resolved(&env), &mut env, &mut mounts).is_err()
+            mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts)
+                .is_err()
         );
         assert!(mounts.is_empty());
     }
@@ -601,7 +619,8 @@ mod tests {
         env.insert(binding_env_var_name("code"), forged.clone());
 
         let mut mounts = Vec::new();
-        mount_local_sandboxes_for_container(sandbox_bindings, &mut env, &mut mounts).unwrap();
+        mount_local_sandboxes_for_container("web", sandbox_bindings, &mut env, &mut mounts)
+            .unwrap();
 
         assert_eq!(mounts.len(), 1, "{mounts:?}");
         assert_eq!(
@@ -641,7 +660,7 @@ mod tests {
         assert_eq!(bindings[0].0, binding_env_var_name("code"));
 
         let mut mounts = Vec::new();
-        mount_local_sandboxes_for_container(bindings, &mut env, &mut mounts).unwrap();
+        mount_local_sandboxes_for_container("web", bindings, &mut env, &mut mounts).unwrap();
         assert_eq!(mounts.len(), 1, "{mounts:?}");
         assert_eq!(mounts[0].host_path, token);
     }

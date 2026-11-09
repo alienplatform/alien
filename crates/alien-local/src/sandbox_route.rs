@@ -240,11 +240,9 @@ impl SandboxRoute {
                 .is_some_and(|route| route.base_url == base_url)
         });
         if !serving {
-            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: base_url.to_string(),
-                operation: format!(
-                    "forward the route to containers: this process serves no route of sandbox '{sandbox}' there"
-                ),
+            return Err(AlienError::new(ErrorData::SandboxRouteNotServed {
+                sandbox: sandbox.to_string(),
+                base_url: base_url.to_string(),
             }));
         }
         let address: SocketAddr = base_url
@@ -271,9 +269,9 @@ impl SandboxRoute {
         })
         .await
         .map_err(|error| {
-            AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: base_url.to_string(),
-                operation: format!("forward the route to Docker's host gateway: {error}"),
+            AlienError::new(ErrorData::SandboxRouteForwardFailed {
+                base_url: base_url.to_string(),
+                reason: error.to_string(),
             })
         })?;
         forwards.insert(base_url.to_string(), forward);

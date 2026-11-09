@@ -211,3 +211,176 @@ async fn a_container_reaches_the_sandbox_it_links_with_its_binding_across_a_mana
         std::panic::resume_unwind(panic);
     }
 }
+
+/// A manager restart mid-deploy: the container's create runs before the sandbox's next tick
+/// serves the route again. The create waits for the sandbox (a dependency that is not ready, not
+/// a failure), and once the sandbox serves the route the same container starts and reaches it.
+#[tokio::test]
+#[ignore = "requires Docker and registry access"]
+async fn a_container_created_before_its_sandbox_route_returns_waits_and_then_starts() {
+    let directory = tempfile::tempdir().unwrap();
+    let id = format!("sandbox-wait-{}", std::process::id());
+    let sandbox_id = format!("wait-{}", std::process::id());
+    let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+    let manager = bindings.container_manager().unwrap();
+    let services = Arc::new(crate::DefaultPlatformServiceProvider::with_local_bindings(
+        bindings,
+    ));
+    let client = alien_core::ClientConfig::Local {
+        state_directory: directory.path().to_string_lossy().into_owned(),
+    };
+    let sandbox_with = |egress| {
+        alien_core::Sandbox::new(sandbox_id.clone())
+            .egress(egress)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(300),
+                idle_pause_seconds: None,
+            })
+            .code(alien_core::SandboxCode::Image {
+                image: "busybox:1.37.0".to_string(),
+                bundled_from: None,
+            })
+            .build()
+    };
+    let sandbox = sandbox_with(alien_core::SandboxEgress::None);
+    let mut sandbox_executor = SingleControllerExecutor::builder()
+        .resource(sandbox.clone())
+        .controller(LocalSandboxController::default())
+        .platform(Platform::Local)
+        .client_config(client.clone())
+        .service_provider(services.clone())
+        .build()
+        .await
+        .unwrap();
+    sandbox_executor
+        .run_until_status(ResourceStatus::Running)
+        .await
+        .unwrap();
+    let served = serde_json::to_vec(
+        sandbox_executor
+            .internal_state::<LocalSandboxController>()
+            .unwrap(),
+    )
+    .unwrap();
+
+    // The manager restarts before the container is created: the route and its forward go, the
+    // token file stays on disk. (Removing the route here also deletes the file, so it is put back.)
+    let token_path = sandbox_executor
+        .internal_state::<LocalSandboxController>()
+        .unwrap()
+        .token_path
+        .clone()
+        .unwrap();
+    let token = std::fs::read(&token_path).unwrap();
+    alien_local::SandboxRoute::remove(&sandbox_id).await;
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&token_path)
+            .unwrap()
+            .write_all(&token)
+            .unwrap();
+    }
+
+    let config = Container::new(id.clone())
+        .permissions("default-profile".to_string())
+        .cpu(alien_core::ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.25".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "64Mi".to_string(),
+            desired: "64Mi".to_string(),
+        })
+        .code(ContainerCode::Image {
+            image: "busybox:1.37.0".to_string(),
+        })
+        .command(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            LIST_SESSIONS_THEN_SERVE.replace(
+                "__SANDBOX_BINDING__",
+                &alien_core::bindings::binding_env_var_name(&sandbox_id),
+            ),
+        ])
+        .health_check(alien_core::HealthCheck {
+            path: "/health".to_string(),
+            port: Some(8080),
+            method: "GET".to_string(),
+            timeout_seconds: 1,
+            failure_threshold: 20,
+        })
+        .link(&sandbox)
+        .build();
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(config)
+        .controller(LocalContainerController::default())
+        .with_dependency(
+            sandbox,
+            serde_json::from_slice::<LocalSandboxController>(&served).unwrap(),
+        )
+        .platform(Platform::Local)
+        .client_config(client)
+        .service_provider(services)
+        .real_delays()
+        .build()
+        .await
+        .unwrap();
+
+    let verification = AssertUnwindSafe(async {
+        // Steps until the create reaches the sandbox's route, which is not served yet
+        let mut waited = None;
+        for _ in 0..10 {
+            match executor.step().await {
+                Ok(_) => {}
+                Err(error) => {
+                    waited = Some(error);
+                    break;
+                }
+            }
+        }
+        let waited = waited.expect("the create reached the missing sandbox route");
+        assert_eq!(waited.code, "DEPENDENCY_NOT_READY", "{waited:?}");
+        assert!(waited.retryable, "{waited:?}");
+        assert_ne!(executor.status(), ResourceStatus::ProvisionFailed);
+        assert!(
+            !manager.container_exists(&id).await.unwrap(),
+            "nothing is started while the sandbox is not there"
+        );
+
+        // The sandbox's next tick serves the route again, at the address the container was given
+        sandbox_executor
+            .update(sandbox_with(alien_core::SandboxEgress::Internet))
+            .unwrap();
+        sandbox_executor.step().await.unwrap();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(180),
+            executor.run_until_terminal(),
+        )
+        .await;
+        assert!(
+            matches!(outcome, Ok(Ok(()))) && executor.status() == ResourceStatus::Running,
+            "the container did not start once its sandbox returned ({:?}): {outcome:?}",
+            executor.status(),
+        );
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    })
+    .catch_unwind()
+    .await;
+    if manager.container_exists(&id).await.unwrap_or(true) {
+        if let Err(error) = manager.delete_container_and_storage(&id).await {
+            eprintln!("could not remove container {id}: {error}");
+        }
+    }
+    alien_local::SandboxRoute::remove(&sandbox_id).await;
+    if let Err(panic) = verification {
+        std::panic::resume_unwind(panic);
+    }
+}
