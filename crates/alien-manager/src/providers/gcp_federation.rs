@@ -34,7 +34,9 @@ pub fn federation_trust(
 
 /// The Kubernetes identity named by `GCP_MANAGEMENT_OIDC_ISSUER` and
 /// `GCP_MANAGEMENT_OIDC_SUBJECT`, or `None` when neither is set.
-fn kubernetes_trust(env: &HashMap<String, String>) -> alien_core::Result<Option<GcpFederationTrust>> {
+fn kubernetes_trust(
+    env: &HashMap<String, String>,
+) -> alien_core::Result<Option<GcpFederationTrust>> {
     match (env.get("GCP_MANAGEMENT_OIDC_ISSUER"), env.get("GCP_MANAGEMENT_OIDC_SUBJECT")) {
         (None, None) => Ok(None),
         (Some(issuer), Some(subject)) => {
@@ -238,8 +240,14 @@ mod binding_tests {
     async fn configured_kubernetes_issuer_selects_the_manager_service_account() {
         let bindings = provider(HashMap::from([("management".to_string(), account())]));
         let env = in_cluster(&[
-            ("GCP_MANAGEMENT_OIDC_ISSUER", "https://oidc.example.com/cluster"),
-            ("GCP_MANAGEMENT_OIDC_SUBJECT", "system:serviceaccount:platform:manager"),
+            (
+                "GCP_MANAGEMENT_OIDC_ISSUER",
+                "https://oidc.example.com/cluster",
+            ),
+            (
+                "GCP_MANAGEMENT_OIDC_SUBJECT",
+                "system:serviceaccount:platform:manager",
+            ),
         ]);
         let GcpFederationSource::KubernetesServiceAccount {
             issuer,
@@ -251,7 +259,10 @@ mod binding_tests {
             panic!("Kubernetes source required")
         };
         assert_eq!(issuer, "https://oidc.example.com/cluster");
-        assert_eq!((namespace.as_str(), service_account.as_str()), ("platform", "manager"));
+        assert_eq!(
+            (namespace.as_str(), service_account.as_str()),
+            ("platform", "manager")
+        );
         let trust = federation_trust(Some("123456789012345678901"), &env)
             .unwrap()
             .unwrap();
@@ -261,7 +272,10 @@ mod binding_tests {
     #[tokio::test]
     async fn half_configured_kubernetes_issuer_is_refused() {
         let bindings = provider(HashMap::from([("management".to_string(), account())]));
-        let env = in_cluster(&[("GCP_MANAGEMENT_OIDC_ISSUER", "https://oidc.example.com/cluster")]);
+        let env = in_cluster(&[(
+            "GCP_MANAGEMENT_OIDC_ISSUER",
+            "https://oidc.example.com/cluster",
+        )]);
         assert!(assertion_source(&bindings, &env).await.is_err());
         assert!(federation_trust(Some("123456789012345678901"), &env).is_err());
     }

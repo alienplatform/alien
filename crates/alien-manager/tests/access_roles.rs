@@ -223,6 +223,9 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
+        values: None,
+        value_access: None,
+        verify_limiter: std::sync::Arc::new(alien_manager::values::VerifyLimiter::default()),
     };
     (state, deployment.id, tmp)
 }

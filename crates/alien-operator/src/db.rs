@@ -2073,6 +2073,65 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// The key that digests of secret values are computed with.
+    ///
+    /// Created on the first start and never rotated, so the checksums kept in
+    /// the deployment's saved state still match after a restart. It lives in
+    /// the encrypted database and is never logged.
+    pub async fn load_or_create_digest_key(&self) -> Result<[u8; 32]> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('secrets_digest_key', ?, datetime('now'))
+             ON CONFLICT(key) DO NOTHING",
+            (alien_deployment::persisted_digest_key::encode_digest_key(
+                &alien_deployment::persisted_digest_key::generate_digest_key(),
+            ),),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to create the secrets digest key".to_string(),
+        })?;
+
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'secrets_digest_key'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query the secrets digest key".to_string(),
+            })?;
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch the secrets digest key row".to_string(),
+            })?
+            .ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::DatabaseError {
+                    message: "The secrets digest key was not stored".to_string(),
+                })
+            })?;
+        let stored: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read the secrets digest key".to_string(),
+            })?;
+        alien_deployment::persisted_digest_key::decode_digest_key(&stored).map_err(|_| {
+            alien_error::AlienError::new(ErrorData::DatabaseError {
+                message: "The stored secrets digest key is damaged".to_string(),
+            })
+        })
+    }
+
+    /// Uses the stored digest key for this process, unless the embedder
+    /// already set one.
+    pub async fn install_digest_key(&self) -> Result<()> {
+        alien_deployment::set_secrets_digest_key_if_unset(self.load_or_create_digest_key().await?);
+        Ok(())
+    }
+
     /// Get the commands URL used by the operator relay and app-owned receivers.
     pub async fn get_commands_url(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;

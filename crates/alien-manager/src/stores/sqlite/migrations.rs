@@ -428,12 +428,25 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             expires_at INTEGER NOT NULL,
             revision INTEGER NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS deployment_values (
+            scope TEXT NOT NULL,
+            slot TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (scope, slot)
+        )",
     ];
     for sql in channel_statements {
         conn.execute(sql, ())
             .await
             .into_alien_error()
-            .map_err(|e| db_error(&format!("Release channel tables failed: {}", e.message)))?;
+            .map_err(|e| {
+                db_error(&format!(
+                    "Release channel and value tables failed: {}",
+                    e.message
+                ))
+            })?;
     }
 
     // Codes made from a deployment token are marked, so they stop working once

@@ -310,6 +310,15 @@ impl KubernetesDaemonController {
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if let Some(daemon_set_name) = self.daemon_set_name.as_ref() {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            self.env_secret.adopt_unkeyed(
+                &config.id,
+                daemon_set_name,
+                &ctx.deployment_config.environment_variables.variables,
+                &direct_monitoring_auth_headers(ctx),
+            )?;
+        }
         let live = self.read_daemonset(ctx).await?;
         if let (Some(name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
             let config = ctx.desired_resource_config::<Daemon>()?;
@@ -949,7 +958,7 @@ impl KubernetesDaemonController {
             daemon_set_name,
             &ctx.deployment_config.environment_variables.variables,
             &monitoring_headers,
-        ))
+        )?)
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -1421,6 +1430,7 @@ mod tests {
             &variables,
             &monitoring_headers,
         )
+        .expect("checksum key")
         .expect("plan");
         let controller = manifest_test_controller();
 
@@ -1591,7 +1601,9 @@ mod tests {
         let mut daemonsets = Vec::new();
         for value in ["v1", "v1", "v2"] {
             let variables = vec![secret_env_var("APP_SECRET", value, None)];
-            let plan = environment_secret_plan("agent", "agent", &variables).expect("plan");
+            let plan = environment_secret_plan("agent", "agent", &variables)
+                .expect("checksum key")
+                .expect("plan");
             let harness =
                 KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
             let daemonset = controller
@@ -1625,7 +1637,9 @@ mod tests {
     fn needs_update_detects_env_secret_rotation() {
         let config = manifest_test_daemon(&[]);
         let original = vec![secret_env_var("APP_SECRET", "v1", None)];
-        let original_plan = environment_secret_plan("agent", "agent", &original).expect("plan");
+        let original_plan = environment_secret_plan("agent", "agent", &original)
+            .expect("checksum key")
+            .expect("plan");
 
         let mut controller = manifest_test_controller();
         controller.env_secret.record(Some(&original_plan));

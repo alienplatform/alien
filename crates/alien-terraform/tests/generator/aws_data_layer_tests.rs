@@ -105,6 +105,51 @@ fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
 }
 
 #[test]
+fn aws_runtime_only_key_is_usable_by_the_granted_runtime_role_and_no_other() {
+    let stack = Stack::new("instance-secrets".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "manager",
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        ))
+        .add(
+            Key::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("manager-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("bystander-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+
+    let manager = role_policy_documents(&module, "manager_sa")
+        .iter()
+        .map(|(_, document)| document.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(manager.contains("kms:Encrypt"), "{manager}");
+    assert!(manager.contains("kms:Decrypt"), "{manager}");
+    assert!(
+        manager.contains("aws_kms_key.secrets.arn")
+            || manager.contains("local.secrets_selected_key.arn"),
+        "the grant names the key itself, not a wildcard:\n{manager}"
+    );
+    assert!(
+        role_policy_documents(&module, "bystander_sa").is_empty(),
+        "a role the profile does not grant gets no key access"
+    );
+    assert_terraform_valid(&module, "aws_runtime_only_key_grant");
+}
+
+#[test]
 fn aws_storage_minimal_renders_idiomatic_module() {
     let stack = Stack::new("acme-prod".to_string())
         .add(

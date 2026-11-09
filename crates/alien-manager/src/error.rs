@@ -309,6 +309,120 @@ pub enum ErrorData {
     )]
     EnrollmentKeyExists { deployment_id: String },
 
+    /// A value is larger than the store accepts.
+    #[error(
+        code = "VALUE_TOO_LARGE",
+        message = "Value for '{slot}' is {bytes} bytes; the limit is 24,000 bytes",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 413
+    )]
+    ValueTooLarge {
+        slot: String,
+        bytes: usize,
+        max_bytes: usize,
+    },
+
+    /// A request to the value endpoints carries too many values or bytes.
+    #[error(
+        code = "VALUES_REQUEST_TOO_LARGE",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 413
+    )]
+    ValuesRequestTooLarge { reason: String },
+
+    /// A value slot has no stored value.
+    #[error(
+        code = "VALUE_NOT_FOUND",
+        message = "No value is stored for '{slot}' in '{scope}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ValueNotFound { scope: String, slot: String },
+
+    /// A conditional PUT carries more or fewer than one value.
+    #[error(
+        code = "VALUES_CONDITION_SINGLE_SLOT",
+        message = "A PUT with 'If-None-Match: *' must carry exactly one value, got {count}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ValuesConditionSingleSlot { count: usize },
+
+    /// A conditional PUT found the slot already holding a value.
+    #[error(
+        code = "VALUE_ALREADY_EXISTS",
+        message = "A value is already stored for '{slot}' in '{scope}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 412
+    )]
+    ValueAlreadyExists { scope: String, slot: String },
+
+    /// There is no place to keep values.
+    #[error(
+        code = "VALUES_UNAVAILABLE",
+        message = "Values cannot be stored here: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 501
+    )]
+    ValuesUnavailable { reason: String },
+
+    /// The key that protects stored values cannot be used right now.
+    #[error(
+        code = "VALUE_STORE_KEY_UNAVAILABLE",
+        message = "The key that protects stored values is unavailable: {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    ValueStoreKeyUnavailable { reason: String },
+
+    /// A stored value could not be decrypted: it was damaged or moved to another slot.
+    #[error(
+        code = "STORED_VALUE_UNREADABLE",
+        message = "The stored value for '{slot}' cannot be read: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 500
+    )]
+    StoredValueUnreadable { slot: String, reason: String },
+
+    /// A deployment's held value differs from the digest its update was planned with.
+    #[error(
+        code = "DEPLOYMENT_VALUES_CHANGED",
+        message = "The value for '{slot}' changed since the update was planned; plan the update again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentValuesChanged { deployment_id: String, slot: String },
+
+    /// A deployment names a held value that the store does not have.
+    #[error(
+        code = "DEPLOYMENT_VALUE_MISSING",
+        message = "No value is stored for '{slot}'; set it again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentValueMissing { deployment_id: String, slot: String },
+
+    /// Too many verification attempts for a scope.
+    #[error(
+        code = "VALUE_VERIFY_RATE_LIMITED",
+        message = "Too many value verifications for '{scope}'; try again in a minute",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 429
+    )]
+    ValueVerifyRateLimited { scope: String },
+
     /// Invalid request payload
     #[error(
         code = "BAD_REQUEST",

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{
-    is_false, ComputeBackend, DeletionPolicy, DomainMetadata, EnvironmentVariablesSnapshot,
+    is_false, ComputeBackend, DeletionPolicy, DomainMetadata, EnvironmentVariableType,
+    EnvironmentVariablesSnapshot,
 };
 
 /// Deployment configuration
@@ -58,6 +59,14 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[builder(default)]
     pub input_values: HashMap<String, serde_json::Value>,
+    /// Values the manager holds for this deployment instead of the sender.
+    /// For each slot the sender gives the kind and a keyed digest, never the
+    /// value. The manager loads the value from its own store, refuses to run
+    /// when a digest differs, and merges the value into `environment_variables`
+    /// or `input_values` before the deployment steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub value_slots: Vec<ValueSlotRef>,
     /// IDs of applicable secret inputs stored for this exact deployment target.
     /// Trusted presence metadata only: never values, gate answers, or authority.
     /// Absent on legacy targets; an explicit empty list means no stored secrets.
@@ -181,6 +190,28 @@ pub struct DeploymentConfig {
     #[cfg_attr(feature = "openapi", schema(ignore))]
     #[builder(default)]
     pub deletion_policy: DeletionPolicy,
+}
+
+/// A value the manager holds, named by slot, with the digest the sender expects.
+///
+/// The slot is `env:NAME` for an environment variable or `input:ID` for a stack
+/// input. An input's stored value is the JSON text of the input value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ValueSlotRef {
+    /// `env:NAME` or `input:ID`.
+    pub slot: String,
+    /// Whether the value is a secret. The manager checks it against the stored kind.
+    pub kind: EnvironmentVariableType,
+    /// Keyed digest of the value, as lowercase hex.
+    pub digest: String,
+    /// Variable name, repeated for display. The slot decides the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_name: Option<String>,
+    /// Target resource patterns for an environment variable. `None` means all resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<String>>,
 }
 
 /// Replace one replica's persistent volume with a new volume made from a snapshot.

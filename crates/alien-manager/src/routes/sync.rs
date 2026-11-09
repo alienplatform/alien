@@ -529,18 +529,22 @@ async fn acquire(
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
-        let response =
-            acquired_deployment_response(state.release_store.as_ref(), &sources, acquired)
-                .await
-                .and_then(|mut deployment| {
-                    if subject.role == crate::auth::Role::OperatorSync {
-                        deployment.deployment["deploymentToken"] = serde_json::Value::Null;
-                        if let Some(config) = deployment.deployment.get_mut("deploymentConfig") {
-                            remove_legacy_runtime_credentials(config, &state.config.base_url())?;
-                        }
-                    }
-                    Ok(deployment)
-                });
+        let response = acquired_deployment_response(
+            state.release_store.as_ref(),
+            state.values.as_deref(),
+            &sources,
+            acquired,
+        )
+        .await
+        .and_then(|mut deployment| {
+            if subject.role == crate::auth::Role::OperatorSync {
+                deployment.deployment["deploymentToken"] = serde_json::Value::Null;
+                if let Some(config) = deployment.deployment.get_mut("deploymentConfig") {
+                    remove_legacy_runtime_credentials(config, &state.config.base_url())?;
+                }
+            }
+            Ok(deployment)
+        });
         match response {
             Ok(deployment) => deployments.push(deployment),
             Err(error) => {
@@ -618,6 +622,25 @@ fn remove_legacy_runtime_credentials(
     Ok(())
 }
 
+/// Keeps the values this manager holds for `deployment` out of a state that a
+/// runner or an operator reported, before it is saved.
+async fn redact_reported_values(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    stack_state: Option<&mut alien_core::StackState>,
+) -> Result<(), AlienError> {
+    crate::values::HeldValues::current(
+        state.values.as_deref(),
+        &state.config,
+        state.release_store.as_ref(),
+        deployment,
+        stack_state.as_deref(),
+    )
+    .await
+    .and_then(|held| held.redact(stack_state))
+    .map_err(|e| e.into_generic())
+}
+
 /// An acquired deployment as the runner that acquired it receives it.
 ///
 /// `deploymentConfig` is the config the manager's own loop would run with, so
@@ -627,6 +650,7 @@ fn remove_legacy_runtime_credentials(
 /// workloads anyway.
 async fn acquired_deployment_response(
     release_store: &dyn crate::traits::ReleaseStore,
+    values: Option<&crate::values::ValueStore>,
     sources: &RunnerConfigSources<'_>,
     acquired: &crate::traits::deployment_store::AcquiredDeployment,
 ) -> Result<AcquiredDeploymentResponse, AlienError> {
@@ -646,18 +670,38 @@ async fn acquired_deployment_response(
         ManagementRenderer::Runner,
     )
     .await?;
+    let held = crate::values::hydrate_held_values(values, record)
+        .await
+        .map_err(|e| e.into_generic())?;
+    let (held, _) = crate::values::with_generated_inputs(values, deployment_stack.as_ref(), held)
+        .await
+        .map_err(|e| e.into_generic())?;
     let config = sources
-        .deployment_config(record, deployment_stack.as_ref(), management_config)
+        .deployment_config(&held, deployment_stack.as_ref(), management_config)
         .await
         .context(GenericError {
             message: format!("Failed to build the config for deployment {}", record.id),
         })?;
 
-    let mut deployment = serde_json::to_value(record)
-        .into_alien_error()
-        .context(GenericError {
-            message: format!("Failed to serialize deployment {}", record.id),
-        })?;
+    // The record's saved state carries markers for held values; the runner's
+    // executor compares it with the config above, which carries the values.
+    let mut served = record.clone();
+    crate::values::HeldValues::of_step(
+        values,
+        sources.config,
+        record,
+        &held,
+        deployment_stack.as_ref(),
+    )
+    .await
+    .and_then(|step_values| step_values.restore(served.stack_state.as_mut()))
+    .map_err(|e| e.into_generic())?;
+    let mut deployment =
+        serde_json::to_value(&served)
+            .into_alien_error()
+            .context(GenericError {
+                message: format!("Failed to serialize deployment {}", record.id),
+            })?;
     let config = serde_json::to_value(&config)
         .into_alien_error()
         .context(GenericError {
@@ -845,27 +889,45 @@ async fn reconcile(
     };
 
     // 2. Persist the step result (including any registry access changes).
-    let result = match state
-        .deployment_store
-        .reconcile(
-            &subject,
-            ReconcileData {
-                deployment_id: req.deployment_id.clone(),
-                session: req.session,
-                state: final_state.clone(),
-                update_heartbeat: req.update_heartbeat,
-                suggested_delay_ms: req.suggested_delay_ms,
-                heartbeats: req.heartbeats,
-                observed_inventory_batches: req.observed_inventory_batches,
-                capabilities: req.capabilities,
-                operator_version: req.operator_version,
-                execution_claim: req.execution_claim,
-                // Push-mode reconcile never carries an operations report;
-                // that's a pull-mode-only concept reported via `/v1/sync`.
-                operations_report: None,
-            },
-        )
-        .await
+    //    Values this manager holds for the deployment stay out of what is saved.
+    let mut saved_state = final_state.clone();
+    if let Err(error) =
+        redact_reported_values(&state, &deployment, saved_state.stack_state.as_mut()).await
+    {
+        return error.into_response();
+    }
+    let generated_slots = match generated_slot_report(&state, &deployment).await {
+        Ok(slots) => slots,
+        Err(response) => return response,
+    };
+    let result = match reconcile_agent_report(
+        state.deployment_store.as_ref(),
+        &subject,
+        ReconcileData {
+            deployment_id: req.deployment_id.clone(),
+            session: req.session,
+            state: saved_state,
+            update_heartbeat: req.update_heartbeat,
+            suggested_delay_ms: req.suggested_delay_ms,
+            heartbeats: req.heartbeats,
+            observed_inventory_batches: req.observed_inventory_batches,
+            capabilities: req.capabilities,
+            operator_version: req.operator_version,
+            execution_claim: req.execution_claim,
+            // Push-mode reconcile never carries an operations report;
+            // that's a pull-mode-only concept reported via `/v1/sync`.
+            operations_report: None,
+        },
+        AgentReportExtras {
+            operator_image: None,
+            application: None,
+            dynamic_containers: None,
+            operations_config: None,
+            pull_secret_refreshed: false,
+            generated_slots,
+        },
+    )
+    .await
     {
         Ok(r) => r,
         Err(e) => return e.into_response(),
@@ -1178,6 +1240,120 @@ mod tests {
         installed_config_missing: bool,
         reconciled_image: Option<&str>,
     ) -> (Value, Vec<ReconcileData>) {
+        let (response, reconciled, _) = sync_operator_full(
+            record,
+            None,
+            None,
+            Stack::new("app".to_string()).build(),
+            None,
+            false,
+            SyncReport {
+                installed_config_missing,
+                reconciled_image: reconciled_image.map(str::to_owned),
+            },
+        )
+        .await;
+        (response, reconciled)
+    }
+
+    /// Like [`sync_operator_without_claim`], with the control plane answering
+    /// every reconcile with `targets` and the manager holding `values`.
+    async fn sync_operator_with_targets(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+    ) -> (Value, Vec<ReconcileData>) {
+        let (response, reconciled, _) = sync_operator_report(
+            record,
+            targets,
+            values,
+            Stack::new("app".to_string()).build(),
+        )
+        .await;
+        (response, reconciled)
+    }
+
+    /// Like [`sync_operator_with_targets`], with the current release holding
+    /// `stack`; also returns the generated slots each reconcile carried.
+    async fn sync_operator_report(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
+        sync_operator_reporting(record, targets, values, stack, None).await
+    }
+
+    /// Like [`sync_operator_report`], with the Operator's report carrying
+    /// `stack_state`.
+    async fn sync_operator_reporting(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+        stack_state: Option<Value>,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
+        sync_operator_reporting_for(record, targets, values, stack, stack_state, false).await
+    }
+
+    /// With `release_gone`, the deployment's release is one the manager no
+    /// longer has.
+    async fn sync_operator_reporting_for(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+        stack_state: Option<Value>,
+        release_gone: bool,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
+        sync_operator_full(
+            record,
+            targets,
+            values,
+            stack,
+            stack_state,
+            release_gone,
+            SyncReport::default(),
+        )
+        .await
+    }
+
+    /// What the Operator reports, and the image the control plane answers with.
+    #[derive(Default)]
+    struct SyncReport {
+        installed_config_missing: bool,
+        reconciled_image: Option<String>,
+    }
+
+    async fn sync_operator_full(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+        stack_state: Option<Value>,
+        release_gone: bool,
+        report: SyncReport,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
+        let SyncReport {
+            installed_config_missing,
+            reconciled_image,
+        } = report;
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1190,10 +1366,7 @@ mod tests {
                 &crate::auth::Subject::system(),
                 CreateReleaseParams {
                     project_id: record.project_id.clone(),
-                    stacks: HashMap::from([(
-                        Platform::Kubernetes,
-                        Stack::new("app".to_string()).build(),
-                    )]),
+                    stacks: HashMap::from([(Platform::Kubernetes, stack)]),
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
@@ -1202,7 +1375,11 @@ mod tests {
             .await
             .expect("current release");
         let mut record = record;
-        record.current_release_id = Some(current_release.id.clone());
+        record.current_release_id = Some(if release_gone {
+            "rel_gone".to_string()
+        } else {
+            current_release.id.clone()
+        });
 
         let reconciled = Arc::new(Mutex::new(Vec::new()));
         let mut store = MockDeploymentStore::new();
@@ -1218,19 +1395,40 @@ mod tests {
             .times(1)
             .returning(|_, _, _, _| Ok(Vec::new()));
         let received = reconciled.clone();
-        let reconciled_image = reconciled_image.map(str::to_owned);
         let reconciled_record = record.clone();
+        let outcome_targets = targets.clone();
+        let request_image = reconciled_image.clone();
         store.expect_reconcile().returning(move |_, data| {
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {
                 record: reconciled_record.clone(),
                 target_operations_bundle_set: None,
-                target_dynamic_containers: None,
+                target_dynamic_containers: outcome_targets.clone(),
                 target_operator_image: reconciled_image.clone(),
             })
         });
+        let generated = Arc::new(Mutex::new(Vec::new()));
+        let received = reconciled.clone();
+        let received_slots = generated.clone();
+        let reconciled_record = record.clone();
+        store
+            .expect_reconcile_request()
+            .returning(move |_, request| {
+                received_slots
+                    .lock()
+                    .expect("generated slot log")
+                    .push(request.generated_slots().to_vec());
+                let (data, _) = request.into_parts();
+                received.lock().expect("reconcile log").push(data);
+                Ok(ReconcileOutcome {
+                    record: reconciled_record.clone(),
+                    target_operations_bundle_set: None,
+                    target_dynamic_containers: targets.clone(),
+                    target_operator_image: request_image.clone(),
+                })
+            });
 
-        let state = test_app_state(
+        let mut state = test_app_state(
             temp.path(),
             Arc::new(store),
             release_store,
@@ -1238,6 +1436,7 @@ mod tests {
             db,
         )
         .await;
+        state.values = values;
 
         // The Operator's report claims the pending target is already running.
         // Accepting it would acknowledge work the Operator never received.
@@ -1255,6 +1454,9 @@ mod tests {
         });
         if installed_config_missing {
             body["installedConfigMissing"] = json!(true);
+        }
+        if let Some(stack_state) = stack_state {
+            body["currentState"]["stackState"] = stack_state;
         }
         let response = super::router()
             .with_state(state)
@@ -1277,7 +1479,8 @@ mod tests {
         )
         .expect("response json");
         let reconciled = reconciled.lock().expect("reconcile log").clone();
-        (response, reconciled)
+        let generated = generated.lock().expect("generated slot log").clone();
+        (response, reconciled, generated)
     }
 
     /// The sync routes' state over `deployment_store`, with local command storage.
@@ -1331,6 +1534,9 @@ mod tests {
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
+            values: None,
+            value_access: None,
+            verify_limiter: Arc::new(crate::values::VerifyLimiter::default()),
         }
     }
 
@@ -1400,8 +1606,16 @@ mod tests {
     }
 
     async fn sync_with_management_resolver(
+        record: DeploymentRecord,
+        credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+    ) -> UnresolvableManagementSync {
+        sync_with_values(record, credential_resolver, None).await
+    }
+
+    async fn sync_with_values(
         mut record: DeploymentRecord,
         credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+        values: Option<Arc<crate::values::ValueStore>>,
     ) -> UnresolvableManagementSync {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
@@ -1473,7 +1687,7 @@ mod tests {
             gave_back.lock().expect("release log").push(claim);
             Ok(())
         });
-        let state = test_app_state(
+        let mut state = test_app_state(
             temp.path(),
             Arc::new(store),
             release_store,
@@ -1481,6 +1695,7 @@ mod tests {
             db,
         )
         .await;
+        state.values = values;
 
         let body = json!({
             "deploymentId": record.id,
@@ -2319,6 +2534,372 @@ mod tests {
         assert!(response.get("targetOperatorImage").is_none(), "{response}");
     }
 
+    fn dynamic_container(name: &str) -> alien_core::sync::TargetDynamicContainer {
+        alien_core::sync::TargetDynamicContainer {
+            name: name.to_string(),
+            generation: 1,
+            image: "registry.example.com/app@sha256:abc".to_string(),
+            cpu: "0.5".to_string(),
+            memory: "512Mi".to_string(),
+            replicas: 1,
+            ports: vec![8080],
+            deleted: false,
+            env: Default::default(),
+            secret_env: Default::default(),
+            health_check: None,
+            suspended_reason: None,
+        }
+    }
+
+    /// The Operator gets a dynamic container's stored variables in its sync
+    /// response, and the control plane's reconcile never sees them.
+    #[tokio::test]
+    async fn dynamic_container_values_reach_the_operator_and_not_the_control_plane() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const CANARY: &str = "canary-3b9e7d51-not-a-real-secret";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        for (container, name, kind, value) in [
+            ("api", "TOKEN", ValueKind::Secret, CANARY),
+            ("api", "LEVEL", ValueKind::Plain, "debug"),
+            ("api.worker", "TOKEN", ValueKind::Secret, "the-worker-token"),
+        ] {
+            values
+                .put(
+                    &scope,
+                    &ValueSlot::container_env(container, name).expect("slot"),
+                    kind,
+                    value.to_string(),
+                )
+                .await
+                .expect("stored");
+        }
+        let mut record = deployment_record_with_state("running", None);
+        record.desired_release_id = Some("rel_target".to_string());
+        let mut api = dynamic_container("api");
+        api.env.insert("KEPT".to_string(), "kept".to_string());
+        let mut deleted = dynamic_container("api.worker");
+        deleted.deleted = true;
+        let targets = vec![api, dynamic_container("web"), deleted];
+
+        let (response, reconciled) =
+            sync_operator_with_targets(record, Some(targets), Some(values)).await;
+
+        let targets = response["targetDynamicContainers"]
+            .as_array()
+            .expect("targets in the response");
+        let by_name = |name: &str| {
+            targets
+                .iter()
+                .find(|t| t["name"] == name)
+                .expect("target present")
+        };
+        assert_eq!(by_name("api")["secretEnv"], json!({ "TOKEN": CANARY }));
+        assert_eq!(
+            by_name("api")["env"],
+            json!({ "KEPT": "kept", "LEVEL": "debug" })
+        );
+        assert_eq!(by_name("web")["env"], json!({}));
+        assert_eq!(by_name("web")["secretEnv"], json!({}));
+        assert_eq!(by_name("api.worker")["secretEnv"], json!({}));
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        for data in &reconciled {
+            let seen = format!("{data:?}{}", serde_json::to_string(&data.state).unwrap());
+            assert!(!seen.contains(CANARY), "{seen}");
+            assert!(!seen.contains("the-worker-token"), "{seen}");
+        }
+    }
+
+    /// A sync creates a deployment's generated secret input on the manager,
+    /// reports its metadata, and keeps the value out of everything the control
+    /// plane receives.
+    #[tokio::test]
+    async fn a_sync_reports_generated_slots_and_never_their_values() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let mut stack = Stack::new("app".to_string()).build();
+        stack.inputs = vec![alien_core::StackInputDefinition {
+            id: "signingKey".to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            when: None,
+            provided_by: vec![alien_core::StackInputProvider::Developer],
+            required: true,
+            label: "Signing key".to_string(),
+            description: "Key the service signs internal tokens with.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: Some(alien_core::StackInputGenerate { length: 40 }),
+            env: vec![],
+        }];
+        let record = deployment_record_with_state("running", None);
+
+        let (response, reconciled, generated) =
+            sync_operator_report(record, None, Some(values.clone()), stack).await;
+
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        let slot: ValueSlot = "input:signingKey".parse().expect("slot");
+        let stored = values
+            .get(&scope, &slot)
+            .await
+            .expect("store read")
+            .expect("the sync generated the input");
+        assert_eq!(stored.kind, ValueKind::Secret);
+        let value: String = serde_json::from_str(&stored.value).expect("JSON string");
+        assert_eq!(value.len(), 40);
+
+        assert!(!generated.is_empty(), "the reconcile carried a report");
+        for slots in &generated {
+            assert_eq!(slots, &vec![stored.meta(&scope).expect("meta")]);
+        }
+        let report = serde_json::to_value(&generated[0]).expect("report json");
+        assert_eq!(report[0]["slot"], "input:signingKey");
+        assert_eq!(report[0]["kind"], "secret");
+        assert_eq!(report[0]["digest"].as_str().map(str::len), Some(64));
+        assert!(report[0]["updatedAt"].is_string());
+        let mut seen = response.to_string();
+        for data in &reconciled {
+            seen.push_str(&format!("{data:?}"));
+            seen.push_str(&serde_json::to_string(&data.state).unwrap());
+        }
+        seen.push_str(&serde_json::to_string(&generated).unwrap());
+        assert!(!seen.contains(&value), "{seen}");
+    }
+
+    /// A deployment config that plans `slots` and nothing else.
+    fn planning_config(slots: Vec<alien_core::ValueSlotRef>) -> alien_core::DeploymentConfig {
+        let mut config = alien_core::DeploymentConfig::builder()
+            .deployment_name("test".to_string())
+            .stack_settings(StackSettings::default())
+            .input_values(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        config.value_slots = slots;
+        config
+    }
+
+    fn plain_slot_ref(slot: &str, digest: String) -> alien_core::ValueSlotRef {
+        alien_core::ValueSlotRef {
+            slot: slot.to_string(),
+            kind: alien_core::EnvironmentVariableType::Plain,
+            digest,
+            env_name: None,
+            targets: None,
+        }
+    }
+
+    /// The state an Operator reports for one running worker with `env`.
+    fn reported_state_with_env(env: &[(&str, &str)]) -> StackState {
+        let mut worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        worker.environment = env
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let resource = alien_core::Resource::new(worker);
+        let mut reported = StackState::new(Platform::Kubernetes);
+        reported.resources.insert(
+            "api".to_string(),
+            alien_core::StackResourceState {
+                progress: None,
+                display_name: None,
+                description: None,
+                resource_type: resource.resource_type().as_ref().to_string(),
+                internal_state: None,
+                status: alien_core::ResourceStatus::Running,
+                outputs: None,
+                previous_config: None,
+                config: resource,
+                retry_attempt: 0,
+                error: None,
+                lifecycle: Some(alien_core::ResourceLifecycle::Live),
+                controller_platform: None,
+                dependencies: Vec::new(),
+                last_failed_state: None,
+                remote_binding_params: None,
+                external_binding: false,
+            },
+        );
+        reported
+    }
+
+    /// An Operator reports a stack state that still carries a value the
+    /// manager holds, which the user replaced after the deployment loaded it.
+    /// Neither the old nor the new value reaches the control plane.
+    #[tokio::test]
+    async fn an_operator_report_is_redacted_of_a_replaced_held_value() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const OLD: &str = "canary-old-6c13f0";
+        const NEW: &str = "canary-new-a94e27";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        let slot: ValueSlot = "env:API_URL".parse().expect("slot");
+        let planned = values
+            .put(&scope, &slot, ValueKind::Plain, OLD.to_string())
+            .await
+            .expect("stored")
+            .digest;
+        let mut record = deployment_record_with_state("running", None);
+        record.deployment_config = Some(planning_config(vec![plain_slot_ref(
+            "env:API_URL",
+            planned,
+        )]));
+        values
+            .put(&scope, &slot, ValueKind::Plain, NEW.to_string())
+            .await
+            .expect("replaced");
+        let reported = reported_state_with_env(&[("API_URL", OLD)]);
+
+        let (_, reconciled, _) = sync_operator_reporting(
+            record,
+            None,
+            Some(values),
+            Stack::new("app".to_string()).build(),
+            Some(serde_json::to_value(&reported).expect("state json")),
+        )
+        .await;
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        let seen = reconciled
+            .iter()
+            .map(|data| serde_json::to_string(&data.state).unwrap())
+            .collect::<String>();
+        assert!(
+            seen.contains("alien-held:"),
+            "the report was redacted: {seen}"
+        );
+        assert!(!seen.contains(OLD), "{seen}");
+        assert!(!seen.contains(NEW), "{seen}");
+    }
+
+    /// An Operator was served a held value, which the user then replaced and
+    /// deleted. Its next report still carries the value it was served: it must
+    /// not reach the control plane, though the manager no longer holds it.
+    #[tokio::test]
+    async fn an_operator_report_is_redacted_of_a_value_served_then_changed_then_deleted() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const SERVED: &str = "canary-served-3f7a1c";
+        const CHANGED: &str = "canary-changed-82d0e5";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        let slot: ValueSlot = "env:API_URL".parse().expect("slot");
+        let digest = values
+            .put(&scope, &slot, ValueKind::Plain, SERVED.to_string())
+            .await
+            .expect("stored")
+            .digest;
+        let mut pull = pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        pull.deployment_config = Some(planning_config(vec![plain_slot_ref("env:API_URL", digest)]));
+
+        let served = sync_with_values(
+            pull,
+            Arc::new(UnresolvableManagementIdentity),
+            Some(values.clone()),
+        )
+        .await;
+        assert_eq!(served.status, StatusCode::OK, "{}", served.response);
+        let target = serde_json::to_string(&served.response["target"]).expect("target json");
+        assert!(target.contains(SERVED), "the Operator was served the value");
+
+        values
+            .put(&scope, &slot, ValueKind::Plain, CHANGED.to_string())
+            .await
+            .expect("changed");
+        values.delete(&scope, &slot).await.expect("deleted");
+
+        let (_, reconciled, _) = sync_operator_reporting(
+            deployment_record_with_state("running", None),
+            None,
+            Some(values),
+            Stack::new("app".to_string()).build(),
+            Some(
+                serde_json::to_value(reported_state_with_env(&[("API_URL", SERVED)]))
+                    .expect("state json"),
+            ),
+        )
+        .await;
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        let seen = reconciled
+            .iter()
+            .map(|data| serde_json::to_string(&data.state).unwrap())
+            .collect::<String>();
+        assert!(
+            seen.contains("alien-held:"),
+            "the report was redacted: {seen}"
+        );
+        assert!(!seen.contains(SERVED), "{seen}");
+        assert!(!seen.contains(CHANGED), "{seen}");
+    }
+
+    /// A report for a deployment whose release is gone can't map held stack
+    /// inputs to variables. It is still accepted, with the input's value
+    /// redacted by its content.
+    #[tokio::test]
+    async fn an_operator_report_with_a_gone_release_is_accepted_and_redacted_by_content() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const INPUT: &str = "canary-input-5e0a17";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        values
+            .put(
+                &ValueScope::deployment("dep_test").expect("scope"),
+                &"input:endpoint".parse::<ValueSlot>().expect("slot"),
+                ValueKind::Plain,
+                format!("\"{INPUT}\""),
+            )
+            .await
+            .expect("stored");
+
+        let (_, reconciled, _) = sync_operator_reporting_for(
+            deployment_record_with_state("running", None),
+            None,
+            Some(values),
+            Stack::new("app".to_string()).build(),
+            Some(
+                serde_json::to_value(reported_state_with_env(&[("ENDPOINT", INPUT)]))
+                    .expect("state json"),
+            ),
+            true,
+        )
+        .await;
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        let seen = reconciled
+            .iter()
+            .map(|data| serde_json::to_string(&data.state).unwrap())
+            .collect::<String>();
+        assert!(
+            seen.contains("alien-held:"),
+            "the report was redacted: {seen}"
+        );
+        assert!(!seen.contains(INPUT), "{seen}");
+    }
+
     #[tokio::test]
     async fn operator_heartbeat_keeps_a_failed_update_failed() {
         // A failed operation keeps its desired release for diagnosis. The
@@ -3149,6 +3730,7 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
             volume_restores: Vec::new(),
+            value_slots: Vec::new(),
             deletion_policy: Default::default(),
         }
     }
@@ -3226,6 +3808,7 @@ mod tests {
     /// runner rolls every workload again without the manager's variables.
     #[tokio::test]
     async fn acquired_config_is_the_config_the_manager_loop_runs_with() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let api = alien_core::Container::new("api".to_string())
             .code(alien_core::ContainerCode::Image {
                 image: "api:latest".to_string(),
@@ -3289,6 +3872,7 @@ mod tests {
 
         let response = acquired_deployment_response(
             &release_store,
+            None,
             &sources,
             &crate::traits::deployment_store::AcquiredDeployment {
                 deployment: record.clone(),
@@ -3332,6 +3916,82 @@ mod tests {
         );
     }
 
+    /// A runner that acquires a deployment runs with its generated secret
+    /// input: created on the manager when none exists, the same one every time.
+    #[tokio::test]
+    async fn an_acquired_config_carries_the_generated_secret_input() {
+        let mut stack = Stack::new("app".to_string()).build();
+        stack.inputs = vec![alien_core::StackInputDefinition {
+            id: "signingKey".to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            when: None,
+            provided_by: vec![alien_core::StackInputProvider::Developer],
+            required: true,
+            label: "Signing key".to_string(),
+            description: "Key the service signs internal tokens with.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: Some(alien_core::StackInputGenerate { length: 32 }),
+            env: vec![],
+        }];
+        let mut record = deployment_record_with_state("update-pending", None);
+        record.desired_release_id = Some("rel_next".to_string());
+        record.deployment_config = Some(test_deployment_config());
+        record.supplied_stacks = Some(crate::traits::deployment_store::SuppliedStacks {
+            current: None,
+            desired: Some(stack),
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = std::sync::Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &dir.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let release_store = crate::stores::sqlite::SqliteReleaseStore::new(db);
+        let values = crate::values::fixtures::kv_store(&dir.path().join("values")).await;
+        let manager_config = crate::config::ManagerConfig::default();
+        let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
+            dir.path().to_path_buf(),
+        );
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &credential_resolver,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+        };
+        let acquired = crate::traits::deployment_store::AcquiredDeployment {
+            deployment: record,
+            execution_claim: None,
+        };
+
+        let first =
+            acquired_deployment_response(&release_store, Some(&values), &sources, &acquired)
+                .await
+                .expect("first acquire");
+        let second =
+            acquired_deployment_response(&release_store, Some(&values), &sources, &acquired)
+                .await
+                .expect("second acquire");
+
+        let key = &first.deployment["deploymentConfig"]["inputValues"]["signingKey"];
+        assert_eq!(key.as_str().map(str::len), Some(32), "{key}");
+        assert_eq!(
+            key, &second.deployment["deploymentConfig"]["inputValues"]["signingKey"],
+            "the same value on every acquire"
+        );
+        let scope = crate::values::ValueScope::deployment("dep_test").expect("scope");
+        let stored = values
+            .get(&scope, &"input:signingKey".parse().expect("slot"))
+            .await
+            .expect("store read")
+            .expect("generated on the manager");
+        assert_eq!(serde_json::from_str::<Value>(&stored.value).unwrap(), *key);
+    }
+
     #[test]
     fn preserving_gate_answers_folds_key_by_key_with_the_record_winning() {
         let mut recorded = RuntimeMetadata::default();
@@ -3371,26 +4031,80 @@ mod tests {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn reconcile_agent_report(
-    store: &dyn crate::traits::DeploymentStore,
-    subject: &crate::auth::Subject,
-    data: ReconcileData,
+/// The generated secret inputs of the deployment's target release, created if
+/// a first step has not made them yet, as the metadata a report carries.
+/// Empty when this manager keeps no values, the deployment has no release (or
+/// its release is gone), or it is being deleted.
+async fn generated_slot_report(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+) -> Result<Vec<crate::values::ValueMeta>, Response> {
+    let Some(values) = state.values.as_deref() else {
+        return Ok(Vec::new());
+    };
+    if deployment_is_deleting(deployment) {
+        return Ok(Vec::new());
+    }
+    let Some(release_id) = deployment
+        .desired_release_id
+        .as_deref()
+        .or(deployment.current_release_id.as_deref())
+    else {
+        return Ok(Vec::new());
+    };
+    // A report does not depend on its release: one that is gone has nothing to generate.
+    let Some(release) = state
+        .release_store
+        .get_release(&crate::auth::Subject::system(), release_id)
+        .await
+        .map_err(|e| e.into_response())?
+    else {
+        return Ok(Vec::new());
+    };
+    let (_, generated) = crate::values::with_generated_inputs(
+        Some(values),
+        release.stacks.get(&deployment.platform),
+        std::borrow::Cow::Borrowed(deployment),
+    )
+    .await
+    .map_err(|e| e.into_response())?;
+    Ok(generated.slots)
+}
+
+/// Optional metadata an agent's report carries to the store.
+struct AgentReportExtras {
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     pull_secret_refreshed: bool,
+    generated_slots: Vec<crate::values::ValueMeta>,
+}
+
+async fn reconcile_agent_report(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &crate::auth::Subject,
+    data: ReconcileData,
+    extras: AgentReportExtras,
 ) -> Result<crate::traits::ReconcileOutcome, AlienError> {
+    let AgentReportExtras {
+        operator_image,
+        application,
+        dynamic_containers,
+        operations_config,
+        pull_secret_refreshed,
+        generated_slots,
+    } = extras;
     if operator_image.is_none()
         && application.is_none()
         && dynamic_containers.is_none()
         && operations_config.is_none()
         && !pull_secret_refreshed
+        && generated_slots.is_empty()
     {
         return store.reconcile(subject, data).await;
     }
-    let mut request = ReconcileInput::builder(data);
+    let mut request = ReconcileInput::builder(data).generated_slots(generated_slots);
     if let Some(operator_image) = operator_image {
         request = request.operator_image(operator_image);
     }
@@ -3630,10 +4344,24 @@ async fn agent_sync(
                         );
                     }
 
+                    let mut saved_state = agent_state.clone();
+                    if let Err(error) = redact_reported_values(
+                        &state,
+                        &deployment,
+                        saved_state.stack_state.as_mut(),
+                    )
+                    .await
+                    {
+                        return error.into_response();
+                    }
+                    let generated_slots = match generated_slot_report(&state, &deployment).await {
+                        Ok(slots) => slots,
+                        Err(response) => return response,
+                    };
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: req.session.clone(),
-                        state: agent_state.clone(),
+                        state: saved_state,
                         update_heartbeat: true,
                         heartbeats: req.heartbeats.clone(),
                         observed_inventory_batches: req.observed_inventory_batches.clone(),
@@ -3647,11 +4375,14 @@ async fn agent_sync(
                         state.deployment_store.as_ref(),
                         &subject,
                         reconcile_data,
-                        operator_image.clone(),
-                        application.clone(),
-                        dynamic_containers.clone(),
-                        operations_config.clone(),
-                        pull_secret_refreshed,
+                        AgentReportExtras {
+                            operator_image: operator_image.clone(),
+                            application: application.clone(),
+                            dynamic_containers: dynamic_containers.clone(),
+                            operations_config: operations_config.clone(),
+                            pull_secret_refreshed,
+                            generated_slots,
+                        },
                     )
                     .await;
 
@@ -3941,6 +4672,10 @@ async fn agent_sync(
         match deployment_state_from_record(&deployment, current_release, target_release) {
             Some(deployment_state) => {
                 if record_unclaimed_observations {
+                    let generated_slots = match generated_slot_report(&state, &deployment).await {
+                        Ok(slots) => slots,
+                        Err(response) => return response,
+                    };
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: "agent-sync".to_string(),
@@ -3958,11 +4693,14 @@ async fn agent_sync(
                         state.deployment_store.as_ref(),
                         &subject,
                         reconcile_data,
-                        operator_image.clone(),
-                        application.clone(),
-                        dynamic_containers.clone(),
-                        operations_config.clone(),
-                        pull_secret_refreshed,
+                        AgentReportExtras {
+                            operator_image: operator_image.clone(),
+                            application: application.clone(),
+                            dynamic_containers: dynamic_containers.clone(),
+                            operations_config: operations_config.clone(),
+                            pull_secret_refreshed,
+                            generated_slots,
+                        },
                     )
                     .await;
 
@@ -4000,6 +4738,15 @@ async fn agent_sync(
     } else {
         None
     };
+
+    if let (Some(values), Some(targets)) = (state.values.as_deref(), &mut target_dynamic_containers)
+    {
+        if let Err(error) =
+            crate::values::load_container_env(values, &req.deployment_id, targets).await
+        {
+            return error.into_response();
+        }
+    }
 
     Json(AgentSyncResponse {
         execution_claim,
@@ -4157,6 +4904,12 @@ pub(crate) async fn build_pull_target(
 
     let manager_url = state.config.base_url();
 
+    let stored_record = deployment;
+    let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
+        .await
+        .map_err(|e| e.into_response())?;
+    let deployment: &DeploymentRecord = &held;
+
     // Derive native image host for Lambda/Cloud Run so controllers
     // can resolve proxy URIs to native ECR/GAR URIs.
     let native_image_host = crate::registry_access::derive_native_image_host(
@@ -4184,6 +4937,22 @@ pub(crate) async fn build_pull_target(
             "Operator predates container tunnels; delivering the release without them. Upgrade the Operator to enable tunnels."
         );
     }
+
+    let (held, _) =
+        crate::values::with_generated_inputs(state.values.as_deref(), Some(&stack), held)
+            .await
+            .map_err(|e| e.into_response())?;
+    let deployment: &DeploymentRecord = &held;
+
+    crate::values::HeldValues::of_step(
+        state.values.as_deref(),
+        &state.config,
+        stored_record,
+        deployment,
+        Some(&stack),
+    )
+    .await
+    .map_err(|e| e.into_response())?;
 
     let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
         Ok(variables) => variables,

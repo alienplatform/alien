@@ -8,6 +8,7 @@ use alien_core::{
     import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_error::AlienError;
+use alien_permissions::key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,6 +87,24 @@ impl TfEmitter for GcpKeyEmitter {
             ));
         }
 
+        for account_id in cryptography_service_accounts(ctx.stack, ctx.resource_id) {
+            let Some(account_label) = ctx.name_for(&account_id) else {
+                continue;
+            };
+            fragment.resource_blocks.push(resource_block(
+                "google_kms_crypto_key_iam_member",
+                &format!("{label}_{account_label}_cryptography"),
+                [
+                    attr(
+                        "crypto_key_id",
+                        expr::traversal(["google_kms_crypto_key", label, "id"]),
+                    ),
+                    attr("role", Expression::String(gcp_remote_role()?)),
+                    attr("member", service_account_member_for_label(account_label)),
+                ],
+            ));
+        }
+
         if let Some(management_label) = management_label(ctx) {
             fragment.resource_blocks.push(resource_block(
                 "google_kms_crypto_key_iam_member",
@@ -138,8 +157,8 @@ impl TfEmitter for GcpKeyEmitter {
 }
 
 fn gcp_remote_role() -> Result<String> {
-    let permission_set = alien_permissions::get_permission_set("key/remote-cryptography")
-        .ok_or_else(|| {
+    let permission_set =
+        alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY).ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
                 message: "key/remote-cryptography permission set is not registered".to_string(),
             })

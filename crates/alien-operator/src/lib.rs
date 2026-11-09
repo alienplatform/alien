@@ -256,9 +256,6 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     cancel: CancellationToken,
     runtime_options: OperatorRuntimeOptions,
 ) -> error::Result<()> {
-    // This process alone steps its deployments, so a key of its own is enough.
-    // A key the embedder already set wins.
-    alien_deployment::set_ephemeral_secrets_digest_key();
     info!(
         sync_configured = config.sync.is_some(),
         deployment_approval = config.requires_deployment_approval(),
@@ -294,6 +291,11 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
 
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    // The digest key is kept in the database, so the checksums saved in the
+    // deployment's state still match after a restart. A key the embedder
+    // already set wins.
+    db.install_digest_key().await?;
+
     let service_provider = if db.read_daily_identity().await?.is_some()
         && (service_provider.is_none() || local_bindings.is_some())
     {
@@ -310,7 +312,6 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     } else {
         service_provider
     };
-
     validate_runtime_deployment_scope(
         &db,
         config.label_domain.as_deref(),

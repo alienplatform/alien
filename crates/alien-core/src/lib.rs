@@ -14,6 +14,8 @@ pub use stack_input_resolution::*;
 mod operations_config;
 pub use operations_config::*;
 
+pub mod secrets_digest_key;
+
 mod deployer_secrets;
 pub use deployer_secrets::*;
 pub mod vault_naming;

@@ -7,20 +7,19 @@ use super::{
 use crate::error::{ErrorData, Result};
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
+use std::collections::HashSet;
 
-pub(super) async fn validate_before_creation(
-    base_url: &str,
-    token: &str,
+pub(super) fn is_prepared_before_creation(platform: Platform) -> bool {
+    matches!(
+        platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
+    )
+}
+
+fn prepare_stack_body(
     resolved: &ResolvedDeployArgs,
     args: &DeployArgs,
-) -> Result<()> {
-    if !matches!(
-        resolved.platform_enum,
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
-    ) {
-        return Ok(());
-    }
-    let client = create_platform_http_client(token)?;
+) -> Result<serde_json::Value> {
     let mut body = serde_json::json!({
         "platform": resolved.platform,
         "setupMethod": "cli",
@@ -31,6 +30,76 @@ pub(super) async fn validate_before_creation(
     if let Some(setup_item) = args.setup_item {
         body["setupItem"] = serde_json::Value::String(setup_item.api_name().to_string());
     }
+    Ok(body)
+}
+
+/// The ids of the release's boolean inputs. These are the inputs a `when` or
+/// a frozen-resource gate can read, and a boolean is never a secret. The
+/// manager can start the first apply of some deployments as soon as they are
+/// created, so these answers must be in the create request. When the release
+/// cannot be read, no id is returned and every answer is held back, as for any
+/// other input.
+pub(super) async fn boolean_input_ids(
+    base_url: &str,
+    token: &str,
+    resolved: &ResolvedDeployArgs,
+    args: &DeployArgs,
+) -> HashSet<String> {
+    if !is_prepared_before_creation(resolved.platform_enum) {
+        return HashSet::new();
+    }
+    let ids = async {
+        let body = prepare_stack_body(resolved, args)?;
+        let response = create_platform_http_client(token)?
+            .post(api_url(
+                base_url,
+                "/v1/deployment-info/prepare-stack",
+                None,
+            )?)
+            .json(&body)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to read the release inputs".to_string(),
+            })?;
+        let prepared: alien_platform_api::types::PreparedDeploymentStack =
+            parse_api_response(response, "Invalid prepared installation").await?;
+        Ok::<_, AlienError<ErrorData>>(boolean_ids(&prepared))
+    }
+    .await;
+    ids.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Could not read the release inputs; every answer is sent after the deployment is created");
+        HashSet::new()
+    })
+}
+
+fn boolean_ids(prepared: &alien_platform_api::types::PreparedDeploymentStack) -> HashSet<String> {
+    let Ok(prepared) = serde_json::to_value(prepared) else {
+        return HashSet::new();
+    };
+    prepared["stack"]["inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|input| input["kind"] == "boolean")
+        .filter_map(|input| input["id"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Validates the release a new deployment will install and returns its
+/// boolean input ids (see [`boolean_input_ids`]).
+pub(super) async fn validate_before_creation(
+    base_url: &str,
+    token: &str,
+    resolved: &ResolvedDeployArgs,
+    args: &DeployArgs,
+) -> Result<HashSet<String>> {
+    if !is_prepared_before_creation(resolved.platform_enum) {
+        return Ok(HashSet::new());
+    }
+    let body = prepare_stack_body(resolved, args)?;
+    let client = create_platform_http_client(token)?;
     let response = client
         .post(api_url(
             base_url,
@@ -46,12 +115,12 @@ pub(super) async fn validate_before_creation(
         })?;
     if response.status().is_success() {
         // Parse the normal preparation response; malformed responses fail closed.
-        parse_api_response::<alien_platform_api::types::PreparedDeploymentStack>(
+        let prepared = parse_api_response::<alien_platform_api::types::PreparedDeploymentStack>(
             response,
             "Invalid prepared installation",
         )
         .await?;
-        return Ok(());
+        return Ok(boolean_ids(&prepared));
     }
 
     // Preparation is authoritative: inline compute and adopted resources can
@@ -108,5 +177,5 @@ pub(super) async fn validate_before_creation(
         "Installation validation failed before deployment creation",
     )
     .await?;
-    Ok(())
+    Ok(HashSet::new())
 }
