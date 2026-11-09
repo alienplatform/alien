@@ -1,0 +1,9 @@
+name = "acme-management-override"
+platforms = ["aws"]
+
+[storage.reports]
+[kv.cache]
+
+[management-permissions.override]
+"*" = ["storage/management"]
+cache = ["kv/management"]

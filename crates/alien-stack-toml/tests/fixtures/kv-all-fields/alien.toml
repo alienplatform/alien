@@ -1,0 +1,17 @@
+name = "acme-kv"
+platforms = ["aws", "gcp", "azure"]
+
+[kv.main]
+display-name = "Primary kv"
+description = "The kv the acme services share."
+lifecycle = "live"
+remote-access = true
+enabled-when = "kv_enabled"
+
+[input.kv_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create kv"
+description = "Whether this deployment gets the kv."
+default = false
+platforms = ["aws"]

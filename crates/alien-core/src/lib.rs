@@ -149,6 +149,7 @@ pub mod file_utils;
 pub mod image_rewrite;
 pub mod import;
 pub mod instance_catalog;
+pub mod stack_authoring;
 pub mod network_ids;
 pub use import::*;
 

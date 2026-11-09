@@ -1,0 +1,135 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-host-agent"
+platforms = ["machines", "aws"]
+
+[daemon.agent]
+build = { toolchain = "rust", binary-name = "acme-host-agent" }
+host-access = true            # privileged, host pid and network, / at /host, uid 0
+command = ["/usr/local/bin/acme-host-agent", "--foreground"]
+cpu = 0.5
+memory = "256Mi"
+stop-grace-period = "5m"
+health-check = { port = 9477, path = "/healthz", timeout = "2s", failure-threshold = 4 }
+env-file = ["config/base.env", "config/site.env"]
+links = ["audit-archive"]
+
+[daemon.agent.env]
+LOG_FORMAT = "json"
+SCAN_THREADS = 4
+EBPF_ENABLED = true
+SITE_NAME = { input = "site_name" }
+UPDATE_CHANNEL = { input = "update_channel" }
+ENROLLMENT_TOKEN = { input = "enrollment_token" }
+
+[daemon.agent.public-endpoints]
+status = { port = 9477, host-label = "status" }
+
+# The bucket audit logs are shipped to, created only when the deployer opts in.
+[storage.audit-archive]
+enabled-when = "ship_audit_logs"
+versioning = true
+
+[input.enrollment_token]
+kind = "secret"
+label = "Enrollment token"
+description = "Token the agent uses to enroll with the fleet service."
+min-length = 24
+
+[input.signing_key]
+kind = "secret"
+label = "Signing key"
+description = "Key that signs reports leaving the host."
+generate = 64
+env = "REPORT_SIGNING_KEY"
+
+[input.site_name]
+kind = "string"
+label = "Site name"
+description = "Short name of the site this agent reports from."
+pattern = "^[a-z][a-z0-9-]*$"
+min-length = 2
+max-length = 32
+
+[input.api_endpoint]
+kind = "string"
+label = "Fleet service URL"
+description = "Where the agent enrolls and reports."
+format = "url"
+default = "https://fleet.acme.example"
+env = "FLEET_URL"
+
+[input.update_channel]
+kind = "enum"
+values = ["stable", "beta", "nightly"]
+default = "stable"
+label = "Update channel"
+description = "Release channel the agent follows."
+
+[input.scan_interval_seconds]
+kind = "integer"
+provided-by = ["developer", "deployer"]
+default = 300
+min = 30
+max = 86400
+label = "Scan interval"
+description = "Seconds between full host scans."
+env = "SCAN_INTERVAL_SECONDS"
+
+[input.cpu_budget]
+kind = "number"
+default = 0.1
+min = 0.01
+max = 1
+label = "CPU budget"
+description = "Share of one core the agent may use."
+env = { name = "CPU_BUDGET", target-resources = ["agent"] }
+
+[input.collect_process_events]
+kind = "boolean"
+default = true
+label = "Collect process events"
+description = "Record process starts and exits."
+env = "COLLECT_PROCESS_EVENTS"
+
+[input.excluded_paths]
+kind = "string-list"
+required = false
+default = ["/proc", "/sys", "/dev"]
+max-items = 50
+label = "Excluded paths"
+env = "EXCLUDED_PATHS"
+
+[input.use_proxy]
+kind = "boolean"
+provided-by = ["developer", "deployer"]
+default = false
+label = "Use an outbound proxy"
+description = "Send agent traffic through a proxy."
+
+[input.proxy_url]
+kind = "string"
+provided-by = ["developer", "deployer"]
+required = false
+when = "use_proxy"
+format = "url"
+label = "Proxy URL"
+env = "HTTPS_PROXY"
+
+[input.proxy_password]
+kind = "secret"
+provided-by = "deployer"
+required = false
+when = "use_proxy"
+platforms = ["machines"]
+label = "Proxy password"
+env = "PROXY_PASSWORD"
+
+[input.ship_audit_logs]
+kind = "boolean"
+provided-by = "deployer"
+default = false
+platforms = ["aws"]
+label = "Ship audit logs"
+description = "Create a bucket for audit logs and link it to the agent."
+
+[permissions.agent]

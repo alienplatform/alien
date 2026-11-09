@@ -25,6 +25,7 @@ test-device-env = []
 [dependencies]
 bon = { workspace = true }
 alien-core = { workspace = true }
+alien-stack-toml = { workspace = true }
 alien-client-config = { workspace = true, features = ["aws"] }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
@@ -99,7 +100,7 @@ hex = { workspace = true }
 git-url-parse = { version = "0.4.4" }
 flate2 = "1"
 tar = "0.4"
-toml = "0.9"
+toml = { workspace = true }
 crossterm = { workspace = true }
 alien-signing = { workspace = true }
 alien-aws-clients = { workspace = true }

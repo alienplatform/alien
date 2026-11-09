@@ -463,13 +463,31 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_join_command() {
+    fn test_join_accepts_capacity_group_as_an_alias_of_pool() {
         let cli = Cli::try_parse_from([
             "alien-deploy",
             "join",
             "--token",
             "jt_secret",
             "--capacity-group",
+            "gpu",
+        ])
+        .unwrap();
+
+        let Commands::Join(args) = cli.command else {
+            panic!("expected join variant");
+        };
+        assert_eq!(args.pool.as_deref(), Some("gpu"));
+    }
+
+    #[test]
+    fn test_parse_join_command() {
+        let cli = Cli::try_parse_from([
+            "alien-deploy",
+            "join",
+            "--token",
+            "jt_secret",
+            "--pool",
             "gpu",
             "--zone",
             "rack-1",
@@ -489,7 +507,7 @@ mod tests {
             panic!("expected join variant");
         };
         assert_eq!(args.token.as_deref(), Some("jt_secret"));
-        assert_eq!(args.capacity_group.as_deref(), Some("gpu"));
+        assert_eq!(args.pool.as_deref(), Some("gpu"));
         assert_eq!(args.zone.as_deref(), Some("rack-1"));
         assert_eq!(args.public_ip.as_deref(), Some("10.0.1.12"));
         assert_eq!(

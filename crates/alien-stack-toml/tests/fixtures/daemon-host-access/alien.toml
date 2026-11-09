@@ -1,0 +1,13 @@
+name = "acme-host"
+platforms = ["machines"]
+
+# host-access stands for the whole privileged runtime: privileged, host PID and network
+# namespaces, the host root at /host, and uid 0.
+[daemon.installer]
+build = { toolchain = "rust", binary-name = "installer" }
+host-access = true
+
+# Off is the same as not writing it.
+[daemon.plain]
+build = { toolchain = "rust", binary-name = "plain" }
+host-access = false

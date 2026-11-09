@@ -1,0 +1,123 @@
+{
+  "id": "acme-daemon-health",
+  "resources": {
+    "defaults": {
+      "config": {
+        "id": "defaults",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/defaults:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 3,
+          "method": "GET",
+          "path": "/health",
+          "timeoutSeconds": 1
+        },
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "path-only": {
+      "config": {
+        "id": "path-only",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/path-only:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 3,
+          "method": "GET",
+          "path": "/ready",
+          "timeoutSeconds": 1
+        },
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "everything": {
+      "config": {
+        "id": "everything",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/everything:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 2,
+          "method": "POST",
+          "path": "/status",
+          "port": 8081,
+          "timeoutSeconds": 5
+        },
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "unchecked": {
+      "config": {
+        "id": "unchecked",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/unchecked:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines"
+  ]
+}

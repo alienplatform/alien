@@ -1,0 +1,20 @@
+name = "acme-cluster-options"
+platforms = ["aws", "gcp", "azure"]
+
+[storage.models]
+
+[storage.scratch]
+
+[cluster]
+id = "acme-nodes"
+display-name = "Acme nodes"
+description = "Machines that run acme workloads."
+container-cidr = "10.96.0.0/16"
+lifecycle = "live"
+node-permissions = { models = ["storage/data-read"], scratch = ["storage/data-read", "storage/data-write"] }
+node-permissions-platforms = ["aws", "gcp"]
+
+[pool.general]
+cpu = 2
+memory = "8Gi"
+machines = 2

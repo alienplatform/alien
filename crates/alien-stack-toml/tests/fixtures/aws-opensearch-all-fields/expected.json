@@ -1,0 +1,62 @@
+{
+  "id": "acme-search",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the catalog search collection.",
+      "env": [],
+      "id": "search_enabled",
+      "kind": "boolean",
+      "label": "Create catalog search",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "catalog": {
+      "config": {
+        "id": "catalog",
+        "type": "experimental/aws-opensearch",
+        "capacity": {
+          "indexing": {
+            "maxOcu": 8,
+            "minOcu": 2
+          },
+          "search": {
+            "maxOcu": 32,
+            "minOcu": 2
+          }
+        },
+        "collectionType": "vectorSearch"
+      },
+      "dependencies": [],
+      "description": "Vector index over the product catalog.",
+      "displayName": "Catalog search",
+      "enabledWhen": "search_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    },
+    "logs": {
+      "config": {
+        "id": "logs",
+        "type": "experimental/aws-opensearch",
+        "capacity": {
+          "search": {
+            "maxOcu": 16
+          }
+        },
+        "collectionType": "search"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

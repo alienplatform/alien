@@ -1,0 +1,19 @@
+name = "acme-gating-key-email"
+platforms = ["aws", "gcp"]
+
+[input.mail_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Send mail"
+description = "Whether this deployment gets the mail sender and the key that protects it."
+default = false
+
+[storage.inbox]
+
+[email.notifications]
+domains = ["mail.acme.example"]
+inbound = "inbox"
+enabled-when = "mail_enabled"
+
+[key.signing]
+enabled-when = "mail_enabled"

@@ -1,0 +1,46 @@
+import * as alien from "@alienplatform/core"
+
+const single = new alien.Container("single")
+  .code({ type: "image", image: "ghcr.io/acme/single:1.0.0" })
+  .cpu(1)
+  .memory("1Gi")
+  .port(8080)
+  .permissions("single")
+  .build()
+
+const multiple = new alien.Container("multiple")
+  .code({ type: "image", image: "ghcr.io/acme/multiple:1.0.0" })
+  .cpu(1)
+  .memory("1Gi")
+  .ports([9000, 9001, 9002])
+  .permissions("multiple")
+  .build()
+
+const tunnelListed = new alien.Container("tunnel-listed")
+  .code({ type: "image", image: "ghcr.io/acme/tunnel:1.0.0" })
+  .cpu(1)
+  .memory("1Gi")
+  .ports([7000, 8080])
+  .tunnel(7000)
+  .permissions("tunnel-listed")
+  .build()
+
+const tunnelAdded = new alien.Container("tunnel-added")
+  .code({ type: "image", image: "ghcr.io/acme/tunnel:1.0.0" })
+  .cpu(1)
+  .memory("1Gi")
+  .port(8080)
+  .tunnel(7001)
+  .permissions("tunnel-added")
+  .build()
+
+export default new alien.Stack("acme-ports")
+  .platforms(["aws"])
+  .add(single, "live")
+  .add(multiple, "live")
+  .add(tunnelListed, "live")
+  .add(tunnelAdded, "live")
+  .permissions({
+    profiles: { single: {}, multiple: {}, "tunnel-listed": {}, "tunnel-added": {} },
+  })
+  .build()

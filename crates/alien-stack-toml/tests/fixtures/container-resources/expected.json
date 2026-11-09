@@ -1,0 +1,221 @@
+{
+  "id": "acme-resources",
+  "permissions": {
+    "profiles": {
+      "fixed": {},
+      "both-ranges": {},
+      "cpu-range": {},
+      "memory-range": {},
+      "millicores": {},
+      "trainer": {}
+    }
+  },
+  "resources": {
+    "fixed": {
+      "config": {
+        "id": "fixed",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/fixed:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.5",
+          "min": "0.5"
+        },
+        "environment": {},
+        "ephemeralStorage": "10Gi",
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "512Mi",
+          "min": "512Mi"
+        },
+        "permissions": "fixed",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "both-ranges": {
+      "config": {
+        "id": "both-ranges",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/ranges:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1.5",
+          "min": "1.5"
+        },
+        "environment": {},
+        "ephemeralStorage": "50Gi",
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "3Gi",
+          "min": "3Gi"
+        },
+        "permissions": "both-ranges",
+        "ports": [],
+        "publicEndpoints": [],
+        "resourceChoices": {
+          "cpu": {
+            "default": "1.5",
+            "max": "8",
+            "min": "0.5"
+          },
+          "memory": {
+            "default": "3Gi",
+            "max": "32Gi",
+            "min": "1Gi"
+          }
+        },
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "cpu-range": {
+      "config": {
+        "id": "cpu-range",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/ranges:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "2Gi",
+          "min": "2Gi"
+        },
+        "permissions": "cpu-range",
+        "ports": [],
+        "publicEndpoints": [],
+        "resourceChoices": {
+          "cpu": {
+            "default": "2",
+            "max": "4",
+            "min": "1"
+          }
+        },
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "memory-range": {
+      "config": {
+        "id": "memory-range",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/ranges:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "8Gi",
+          "min": "8Gi"
+        },
+        "permissions": "memory-range",
+        "ports": [],
+        "publicEndpoints": [],
+        "resourceChoices": {
+          "memory": {
+            "default": "8Gi",
+            "max": "64Gi",
+            "min": "4Gi"
+          }
+        },
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "millicores": {
+      "config": {
+        "id": "millicores",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/small:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "500m",
+          "min": "500m"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "256Mi",
+          "min": "256Mi"
+        },
+        "permissions": "millicores",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "trainer": {
+      "config": {
+        "id": "trainer",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/trainer:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "8",
+          "min": "8"
+        },
+        "environment": {},
+        "ephemeralStorage": "500Gi",
+        "gpu": {
+          "count": 4,
+          "type": "nvidia-a100"
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "64Gi",
+          "min": "64Gi"
+        },
+        "permissions": "trainer",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

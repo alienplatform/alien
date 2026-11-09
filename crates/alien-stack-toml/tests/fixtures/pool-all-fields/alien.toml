@@ -1,0 +1,36 @@
+name = "acme-pool-fields"
+platforms = ["aws", "gcp"]
+
+[cluster]
+id = "acme-pools"
+
+# Every pool field, with fixed machines.
+[pool.trainers]
+cpu = 16
+memory = "64Gi"
+gpu = { type = "nvidia-a100", count = 4 }
+data-disk = "2Ti"
+ephemeral-storage = "200Gi"
+architecture = "x86_64"
+nested-virtualization = true
+failure-domain-spread = 3
+dynamic-containers = true
+machines = 4
+
+# The same fields as ranges, with autoscaling.
+[pool.batch]
+cpu = "4"
+memory = "16Gi"
+gpu = { type = "nvidia-l4", count = 1 }
+data-disk = { default = "100Gi", allowed = ["0Gi", "1Ti"] }
+ephemeral-storage = "50Gi"
+architecture = "arm64"
+nested-virtualization = false
+failure-domain-spread = 2
+autoscaling = { min = { default = 1, allowed = [0, 4] }, max = { default = 8, allowed = [4, 32] } }
+
+# A fixed pool with a machine-count range.
+[pool.edge]
+cpu = 1
+memory = "2Gi"
+machines = { default = 2, allowed = [1, 5] }

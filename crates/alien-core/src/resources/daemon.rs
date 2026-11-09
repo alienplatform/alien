@@ -238,14 +238,16 @@ fn default_commands_enabled() -> bool {
     false
 }
 
-fn default_daemon_cpu() -> ResourceSpec {
+/// CPU a daemon reserves when it does not say.
+pub fn default_daemon_cpu() -> ResourceSpec {
     ResourceSpec {
         min: "0.1".to_string(),
         desired: "0.1".to_string(),
     }
 }
 
-fn default_daemon_memory() -> ResourceSpec {
+/// Memory a daemon reserves when it does not say.
+pub fn default_daemon_memory() -> ResourceSpec {
     ResourceSpec {
         min: "128Mi".to_string(),
         desired: "128Mi".to_string(),

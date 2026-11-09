@@ -1,0 +1,125 @@
+{
+  "id": "acme-health",
+  "permissions": {
+    "profiles": {
+      "defaults": {},
+      "path-only": {},
+      "everything": {}
+    }
+  },
+  "resources": {
+    "defaults": {
+      "config": {
+        "id": "defaults",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/defaults:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 3,
+          "method": "GET",
+          "path": "/health",
+          "timeoutSeconds": 1
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "defaults",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "path-only": {
+      "config": {
+        "id": "path-only",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/path-only:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 3,
+          "method": "GET",
+          "path": "/ready",
+          "timeoutSeconds": 1
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "path-only",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "everything": {
+      "config": {
+        "id": "everything",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/everything:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 10,
+          "method": "POST",
+          "path": "/livez",
+          "port": 9090,
+          "timeoutSeconds": 4
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "everything",
+        "ports": [
+          {
+            "port": 8080
+          },
+          {
+            "port": 9090
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

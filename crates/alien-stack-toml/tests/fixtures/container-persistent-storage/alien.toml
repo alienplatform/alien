@@ -1,0 +1,52 @@
+name = "acme-volumes"
+platforms = ["aws", "gcp", "azure"]
+
+# A size alone: mounted at /data, backed up daily and kept for a week.
+[container.default-volume]
+image = "ghcr.io/acme/db:1.0.0"
+cpu = 2
+memory = "4Gi"
+persistent-storage = "50Gi"
+
+# A table: another mount path, and every backup setting left as the default.
+[container.custom-mount]
+image = "ghcr.io/acme/db:1.0.0"
+cpu = 2
+memory = "4Gi"
+persistent-storage = { size = "200Gi", mount-path = "/var/lib/db" }
+
+# Backups off, for a volume that holds a cache.
+[container.cache-volume]
+image = "ghcr.io/acme/cache:1.0.0"
+cpu = 1
+memory = "2Gi"
+persistent-storage = { size = "20Gi", backups = false }
+
+# Backups on without a schedule keep the defaults.
+[container.explicit-backups]
+image = "ghcr.io/acme/db:1.0.0"
+cpu = 2
+memory = "4Gi"
+persistent-storage = { size = "20Gi", backups = true }
+
+# One backup setting given: the other keeps its default.
+[container.hourly-backups]
+image = "ghcr.io/acme/db:1.0.0"
+cpu = 2
+memory = "4Gi"
+persistent-storage = { size = "20Gi", backups = { enabled = true, interval = "1h" } }
+
+[container.long-retention]
+image = "ghcr.io/acme/db:1.0.0"
+cpu = 2
+memory = "4Gi"
+persistent-storage = { size = "20Gi", backups = { retention = "90d" } }
+
+# The volume and its snapshots are encrypted with a key of the stack.
+[container.encrypted]
+image = "ghcr.io/acme/db:1.0.0"
+cpu = 2
+memory = "4Gi"
+persistent-storage = { size = "20Gi", encryption-key = "volume-key", backups = { interval = "12h", retention = 30 } }
+
+[key.volume-key]

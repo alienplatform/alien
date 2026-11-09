@@ -44,11 +44,11 @@ use crate::commands::{
     destroy_local_deployment, destroy_task, devices_task, ensure_server_running_for_dev_session,
     fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
     onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task, vault_task,
-    whoami_task, write_dev_status, ApproveArgs, BuildArgs, BuildSubcommand, CliEnvVar,
+    render_task, stack_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task,
+    vault_task, whoami_task, write_dev_status, ApproveArgs, BuildArgs, BuildSubcommand, CliEnvVar,
     CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, DevicesArgs, InitArgs,
-    LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs,
-    UpgradeArgs, WhoamiArgs,
+    LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StackArgs,
+    StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -183,6 +183,7 @@ impl Cli {
             | Some(Commands::Vault(_))
             | Some(Commands::Commands(_))
             | Some(Commands::Serve(_))
+            | Some(Commands::Stack(_))
             | Some(Commands::Upgrade(_))
             | Some(Commands::Approve(_)) => false,
             Some(Commands::Devices(args)) => args.wants_json_output(),
@@ -204,6 +205,8 @@ pub enum Commands {
     Devices(DevicesArgs),
     /// Render setup artifacts for review
     Render(RenderArgs),
+    /// Inspect an alien.toml stack
+    Stack(StackArgs),
     /// Create a deployment group and generate a deployment link
     Onboard(OnboardArgs),
     /// Deployment commands
@@ -2112,6 +2115,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         return render_task(args).await;
     }
 
+    // Expanding an alien.toml only reads local files.
+    if let Some(Commands::Stack(args)) = cli.command {
+        return stack_task(args);
+    }
+
     // Upgrades do not need a project or authentication context.
     if let Some(Commands::Upgrade(args)) = cli.command {
         return upgrade_task(args).await;
@@ -2228,6 +2236,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Init(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Serve(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Render(_)) => unreachable!("handled before ctx resolution"),
+            Some(Commands::Stack(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Upgrade(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Devices(args)) => devices_task(args, ctx).await?,
             Some(Commands::Approve(args)) => approve_task(args, ctx).await?,

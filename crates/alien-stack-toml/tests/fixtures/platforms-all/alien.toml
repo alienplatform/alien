@@ -1,0 +1,4 @@
+name = "acme-every-platform"
+platforms = ["local", "kubernetes", "machines", "azure", "gcp", "aws"]
+
+[storage.data]

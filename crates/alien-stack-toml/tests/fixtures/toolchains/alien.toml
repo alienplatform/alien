@@ -1,0 +1,59 @@
+name = "acme-toolchains"
+platforms = ["aws"]
+
+# A prebuilt image.
+[container.prebuilt]
+image = "ghcr.io/acme/prebuilt:2.0.0"
+cpu = 1
+memory = "1Gi"
+
+# Rust: `binary-name` is required; `src` defaults to the directory of alien.toml.
+[container.rust-default]
+build = { toolchain = "rust", binary-name = "rust-default" }
+cpu = 1
+memory = "1Gi"
+
+[container.rust-nested]
+build = { toolchain = "rust", binary-name = "rust-nested", src = "services/nested" }
+cpu = 1
+memory = "1Gi"
+
+# TypeScript: `binary-name` is optional.
+[container.typescript-default]
+build = { toolchain = "typescript" }
+cpu = 1
+memory = "1Gi"
+
+[container.typescript-named]
+build = { toolchain = "typescript", binary-name = "server", src = "services/web" }
+cpu = 1
+memory = "1Gi"
+
+# Python: `command` is required; the package and the Python version are optional.
+[container.python-default]
+build = { toolchain = "python", command = ["python", "-m", "app"] }
+cpu = 1
+memory = "1Gi"
+
+[container.python-full]
+build = { toolchain = "python", command = ["gunicorn", "app:server"], package = "acme-api", python-version = "3.12", src = "services/api" }
+cpu = 1
+memory = "1Gi"
+
+# Docker: the Dockerfile defaults to ./Dockerfile.
+[container.docker-default]
+build = { toolchain = "docker" }
+cpu = 1
+memory = "1Gi"
+
+[container.docker-full]
+build = { toolchain = "docker", dockerfile = "docker/Dockerfile.prod", target = "runtime", build-args = { GO_VERSION = "1.23", FEATURES = "tls,metrics" }, src = "services/go" }
+cpu = 1
+memory = "1Gi"
+
+# The same build tables work on a daemon and on a worker.
+[daemon.agent]
+build = { toolchain = "docker", dockerfile = "agent/Dockerfile" }
+
+[worker.processor]
+build = { toolchain = "python", command = ["python", "processor.py"] }
