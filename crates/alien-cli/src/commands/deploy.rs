@@ -1043,13 +1043,15 @@ fn first_party_inputs_request_body(
     })
 }
 
-/// Creates a deployment from a first-party session. No answer goes to the
-/// hosted inputs endpoint, whether the user gave it as a secret or as an
-/// ordinary input: whether an input is a secret is the stack's to say, and a
-/// deployment manager that holds values must be the only one to see them, so
-/// they are written after
-/// the create, to the manager for the inputs it holds and to the platform for
-/// the rest. An older platform that validates and stores inputs itself and
+/// Creates a deployment from a first-party session. Only the answers to
+/// boolean inputs go to the hosted inputs endpoint: the platform plans
+/// resources from them, a boolean is never a secret, and the manager can start
+/// the first apply as soon as the deployment exists. No other answer does,
+/// whether the user gave it as a secret or as an ordinary input: whether an
+/// input is a secret is the stack's to say, and a deployment manager that holds
+/// values must be the only one to see them, so they are written after the
+/// create, to the manager for the inputs it holds and to the platform for the
+/// rest. An older platform that validates and stores inputs itself and
 /// refuses the create for a missing required input gets that one answer back
 /// in the inputs, once.
 async fn create_first_party_deployment(
@@ -1061,10 +1063,30 @@ async fn create_first_party_deployment(
     args: &DeployArgs,
     project_id: &str,
 ) -> Result<CreateDeploymentApiResponse> {
-    let mut inputs = resolved_args.input_values.clone();
+    let mut inputs = HashMap::new();
     let mut withheld = serde_json::Map::new();
-    for (id, value) in inputs.drain() {
+    for (id, value) in resolved_args.input_values.clone() {
         withheld.insert(id, value);
+    }
+    if !withheld.is_empty()
+        && setup_validation::is_prepared_before_creation(resolved_args.platform_enum)
+    {
+        // Reading the release needs the session bound to this channel first.
+        set_first_party_deployment_inputs(
+            base_url,
+            session_token,
+            &resolved_args.platform,
+            &inputs,
+            &args.channel,
+        )
+        .await?;
+        let gates =
+            setup_validation::boolean_input_ids(base_url, session_token, resolved_args, args).await;
+        for id in gates {
+            if let Some(value) = withheld.remove(&id) {
+                inputs.insert(id, value);
+            }
+        }
     }
     loop {
         // Bind the preparation request to this exact channel even without inputs.
@@ -1097,16 +1119,14 @@ async fn create_first_party_deployment(
 }
 
 #[cfg(test)]
-pub(crate) async fn create_first_party_deployment_for_test(
-    client: &alien_platform_api::Client,
-    workspace: &str,
-    base_url: &str,
+fn deploy_inputs_for_test(
+    platform: &str,
     input_values: HashMap<String, serde_json::Value>,
-) -> Result<serde_json::Value> {
+) -> (ResolvedDeployArgs, DeployArgs) {
     let resolved = ResolvedDeployArgs {
         name: "customer".to_string(),
-        platform: "local".to_string(),
-        platform_enum: Platform::Local,
+        platform: platform.to_string(),
+        platform_enum: Platform::from_str(platform).expect("a platform"),
         setup_management: alien_core::SetupManagement::Manual,
         network_settings: None,
         compute_settings: None,
@@ -1114,13 +1134,36 @@ pub(crate) async fn create_first_party_deployment_for_test(
         input_values,
         public_subdomain: None,
     };
-    let args = DeployArgs::try_parse_from(["deploy", "--name", "customer", "--platform", "local"])
+    let args = DeployArgs::try_parse_from(["deploy", "--name", "customer", "--platform", platform])
         .expect("deployment arguments should parse");
+    (resolved, args)
+}
+
+#[cfg(test)]
+pub(crate) async fn create_first_party_deployment_for_test(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    base_url: &str,
+    platform: &str,
+    input_values: HashMap<String, serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let (resolved, args) = deploy_inputs_for_test(platform, input_values);
     let created = create_first_party_deployment(
         client, workspace, base_url, "session", &resolved, &args, "prj",
     )
     .await?;
     Ok(serde_json::json!({ "deploymentId": created.deployment.id }))
+}
+
+#[cfg(test)]
+pub(crate) async fn gate_inputs_for_test(
+    base_url: &str,
+    platform: &str,
+) -> std::collections::HashSet<String> {
+    let (resolved, args) = deploy_inputs_for_test(platform, HashMap::new());
+    setup_validation::validate_before_creation(base_url, "token", &resolved, &args)
+        .await
+        .expect("the release is prepared")
 }
 
 fn group_session_create_failed(error: &AlienError<GenericError>) -> AlienError<ErrorData> {
@@ -1480,10 +1523,13 @@ where
 
 /// Creates a deployment with the stack input answers given to `alien deploy`.
 ///
-/// No answer is in the first create request. Whether an input is a secret is
-/// the stack's to say, and a deployment manager that holds values must be the
-/// only one to see a secret: the hosted API would read it from the request
-/// body even if it refused the request. The answers are written after the
+/// Only the answers to boolean inputs (`gate_inputs`) are in the first create
+/// request. The platform plans resources from them, a boolean is never a
+/// secret, and the manager can start the first apply as soon as the
+/// deployment exists. Whether any other input is a secret is the stack's to
+/// say, and a deployment manager that holds values must be the only one to
+/// see a secret: the hosted API would read it from the request body even if
+/// it refused the request. The other answers are written after the
 /// deployment exists, to the manager for the inputs it holds and to the
 /// platform for the rest. When the platform rejects the create for a missing
 /// required input (an older platform that validates and stores inputs
@@ -1496,6 +1542,7 @@ pub(crate) async fn create_deployment_with_answers(
     workspace: &str,
     request: &mut alien_platform_api::types::NewDeploymentRequest,
     answers: &HashMap<String, serde_json::Value>,
+    gate_inputs: &std::collections::HashSet<String>,
 ) -> Result<alien_platform_api::types::CreateDeploymentResponse> {
     let failed = |message: &str| ErrorData::ConfigurationError {
         message: message.to_string(),
@@ -1503,6 +1550,9 @@ pub(crate) async fn create_deployment_with_answers(
     let mut withheld = serde_json::Map::new();
     let ids: Vec<String> = request.input_values.keys().cloned().collect();
     for id in ids {
+        if gate_inputs.contains(&id) {
+            continue;
+        }
         if request.input_values.remove(&id).is_some() {
             if let Some(value) = answers.get(&id) {
                 withheld.insert(id, value.clone());
@@ -1905,15 +1955,17 @@ async fn deploy_task_with_environment(
                             None => None,
                         };
 
-                        if ctx.is_platform() {
+                        let gate_inputs = if ctx.is_platform() {
                             setup_validation::validate_before_creation(
                                 &base_url,
                                 token,
                                 &resolved_args,
                                 &args,
                             )
-                            .await?;
-                        }
+                            .await?
+                        } else {
+                            Default::default()
+                        };
 
                         let response_json = if ctx.is_platform() {
                             let mut request = alien_platform_api::types::NewDeploymentRequest {
@@ -1990,6 +2042,7 @@ async fn deploy_task_with_environment(
                                 &workspace_name,
                                 &mut request,
                                 &resolved_args.input_values,
+                                &gate_inputs,
                             )
                             .await?;
 
