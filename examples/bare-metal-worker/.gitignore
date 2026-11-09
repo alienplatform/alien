@@ -1,0 +1,8 @@
+# Rust
+target/
+
+# Alien
+.alien/
+
+# OS
+.DS_Store

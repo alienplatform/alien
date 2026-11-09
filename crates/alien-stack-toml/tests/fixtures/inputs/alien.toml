@@ -1,0 +1,82 @@
+name = "inputs-demo"
+platforms = ["machines", "aws"]
+
+[input.runner_region]
+kind = "string"
+label = "Runner region"
+description = "Region key this deployment's workers consume."
+min-length = 1
+pattern = "^[a-z0-9-]+$"
+env = { name = "RUNNER_REGION", target-resources = ["worker"] }
+
+[input.store_backend]
+kind = "enum"
+label = "Store backend"
+description = "Backend that stores registry state."
+values = ["sqlite", "cas"]
+default = "sqlite"
+env = "STORE_BACKEND"
+
+[input.cache_size_gb]
+kind = "integer"
+label = "Cache size"
+description = "Largest local cache, in GiB."
+default = 100
+min = 1
+max = 4096
+env = ["CACHE_SIZE_GB", { name = "LEGACY_CACHE_GB", target-resources = ["work*"] }]
+
+[input.sample_rate]
+kind = "number"
+required = false
+label = "Trace sample rate"
+min = 0
+max = 1.0
+default = 0.25
+
+[input.dry_run]
+kind = "boolean"
+provided-by = ["developer", "deployer"]
+label = "Dry run"
+description = "Observe decisions without applying them."
+default = false
+env = { name = "DRY_RUN", target-resources = ["worker"] }
+
+[input.prewarm_images]
+kind = "string-list"
+required = false
+label = "Prewarm images"
+default = ["ghcr.io/acme/runner:latest"]
+max-items = 8
+platforms = ["machines"]
+env = "PREWARM_IMAGES"
+
+[input.activation_token]
+kind = "secret"
+provided-by = "deployer"
+label = "Activation token"
+description = "Short-lived token used to enroll this runtime."
+min-length = 32
+env = "ACTIVATION_TOKEN"
+
+[input.managed_bucket]
+kind = "boolean"
+provided-by = "deployer"
+platforms = ["aws"]
+default = true
+label = "Create a data bucket"
+description = "Create an Alien-managed bucket for this deployment's data."
+
+[storage.data]
+enabled-when = "managed_bucket"
+
+[daemon.worker]
+image = "ghcr.io/acme/worker:2.0.0"
+
+[daemon.worker.env]
+API_TOKEN = { input = "api_token" }
+
+[input.api_token]
+kind = "secret"
+label = "API token"
+description = "Token the worker uses to call the API."

@@ -1,0 +1,53 @@
+{
+  "id": "acme-builds",
+  "permissions": {
+    "profiles": {
+      "release": {
+        "artifacts": [
+          "storage/data-read",
+          "storage/data-write"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "artifacts": {
+      "config": {
+        "id": "artifacts",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "release": {
+      "config": {
+        "id": "release",
+        "type": "build",
+        "computeType": "large",
+        "environment": {
+          "CI": "true",
+          "PARALLELISM": "8",
+          "CHANNEL": "stable"
+        },
+        "links": [
+          {
+            "id": "artifacts",
+            "type": "storage"
+          }
+        ],
+        "permissions": "release"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

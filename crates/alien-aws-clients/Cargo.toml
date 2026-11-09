@@ -37,6 +37,7 @@ mockall = { workspace = true, optional = true }
 # AWS specific dependencies
 aws-credential-types = { workspace = true }
 aws-sigv4 = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]

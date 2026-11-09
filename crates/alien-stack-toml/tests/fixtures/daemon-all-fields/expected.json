@@ -1,0 +1,142 @@
+{
+  "id": "acme-agent",
+  "permissions": {
+    "profiles": {
+      "agent": {
+        "reports": [
+          "storage/data-write"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "compute": {
+      "config": {
+        "id": "compute",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "edge",
+            "maxSize": 4,
+            "minSize": 4,
+            "profile": {
+              "cpu": "2",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 8589934592
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 4,
+                "max": 4,
+                "min": 4
+              },
+              "type": "fixed"
+            }
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "agent": {
+      "config": {
+        "id": "agent",
+        "type": "daemon",
+        "cluster": "compute",
+        "code": {
+          "src": "agent",
+          "toolchain": {
+            "binaryName": "acme-agent",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "command": [
+          "acme-agent",
+          "--mode",
+          "resident"
+        ],
+        "commandsEnabled": true,
+        "cpu": {
+          "desired": "0.5",
+          "min": "0.5"
+        },
+        "environment": {
+          "AGENT_MODE": "resident",
+          "AGENT_BATCH": "50"
+        },
+        "healthCheck": {
+          "failureThreshold": 4,
+          "method": "HEAD",
+          "path": "/healthz",
+          "port": 9100,
+          "timeoutSeconds": 3
+        },
+        "links": [
+          {
+            "id": "reports",
+            "type": "storage"
+          }
+        ],
+        "memory": {
+          "desired": "512Mi",
+          "min": "512Mi"
+        },
+        "permissions": "agent",
+        "pool": "edge",
+        "publicEndpoints": [
+          {
+            "hostLabel": "status",
+            "name": "status",
+            "port": 9100,
+            "protocol": "http",
+            "wildcardSubdomains": true
+          },
+          {
+            "hostLabel": "control",
+            "name": "control",
+            "port": 9100,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "runtime": {
+          "mounts": [
+            {
+              "options": "ro",
+              "source": "/var/lib/acme",
+              "target": "/state"
+            },
+            {
+              "source": "/etc/acme",
+              "target": "/config"
+            }
+          ],
+          "networkMode": "host",
+          "pidNamespace": "host",
+          "privileged": true,
+          "user": "0"
+        },
+        "stopGracePeriodSeconds": 120
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws"
+  ]
+}

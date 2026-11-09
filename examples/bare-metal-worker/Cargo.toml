@@ -1,0 +1,24 @@
+[package]
+name = "job-worker"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust job worker that runs on Linux servers and drains before it stops."
+
+# Standalone on purpose: `alien init bare-metal-worker` copies this directory out of the
+# Alien repository, so it must build without the repository's workspace.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tokio = { version = "1", features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }

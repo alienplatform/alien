@@ -1,0 +1,59 @@
+{
+  "id": "acme-postgres",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the ledger database.",
+      "env": [],
+      "id": "ledger_enabled",
+      "kind": "boolean",
+      "label": "Create ledger database",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "db-key": {
+      "config": {
+        "id": "db-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "ledger": {
+      "config": {
+        "id": "ledger",
+        "type": "postgres",
+        "cpu": "2",
+        "encryptionKey": {
+          "id": "db-key",
+          "type": "key"
+        },
+        "highAvailability": true,
+        "memory": "8Gi",
+        "storage": "100Gi",
+        "version": "16",
+        "backend": {
+          "type": "auroraServerlessV2"
+        }
+      },
+      "dependencies": [],
+      "description": "Transactional store for the ledger service.",
+      "displayName": "Ledger database",
+      "enabledWhen": "ledger_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

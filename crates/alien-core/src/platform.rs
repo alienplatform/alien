@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Represents the target cloud platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum Platform {
     Aws,
@@ -11,6 +12,8 @@ pub enum Platform {
     Kubernetes,
     Machines,
     Local,
+    /// Test-only platform; not offered to stack authors.
+    #[cfg_attr(feature = "jsonschema", schemars(skip))]
     Test,
 }
 

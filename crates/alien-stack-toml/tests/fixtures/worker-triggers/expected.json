@@ -1,0 +1,248 @@
+{
+  "id": "acme-triggers",
+  "permissions": {
+    "profiles": {
+      "order-handler": {},
+      "refund-batcher": {},
+      "import-reader": {},
+      "import-auditor": {},
+      "nightly": {},
+      "everything": {}
+    }
+  },
+  "resources": {
+    "orders": {
+      "config": {
+        "id": "orders",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "refunds": {
+      "config": {
+        "id": "refunds",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "imports": {
+      "config": {
+        "id": "imports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "order-handler": {
+      "config": {
+        "id": "order-handler",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/orders:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "order-handler",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "queue": {
+              "id": "orders",
+              "type": "queue"
+            },
+            "type": "queue"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "refund-batcher": {
+      "config": {
+        "id": "refund-batcher",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/refunds:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "refund-batcher",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "batch": {
+              "maxMessages": 100,
+              "maxWindowSeconds": 120
+            },
+            "queue": {
+              "id": "refunds",
+              "type": "queue"
+            },
+            "type": "queue"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "import-reader": {
+      "config": {
+        "id": "import-reader",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/imports:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "import-reader",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "events": [
+              "created"
+            ],
+            "storage": {
+              "id": "imports",
+              "type": "storage"
+            },
+            "type": "storage"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "import-auditor": {
+      "config": {
+        "id": "import-auditor",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/imports:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "import-auditor",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "events": [
+              "created"
+            ],
+            "storage": {
+              "id": "imports",
+              "type": "storage"
+            },
+            "type": "storage"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "nightly": {
+      "config": {
+        "id": "nightly",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/nightly:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "nightly",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "cron": "0 2 * * *",
+            "type": "schedule"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "everything": {
+      "config": {
+        "id": "everything",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/everything:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "everything",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "cron": "*/15 * * * *",
+            "type": "schedule"
+          },
+          {
+            "events": [
+              "created"
+            ],
+            "storage": {
+              "id": "imports",
+              "type": "storage"
+            },
+            "type": "storage"
+          },
+          {
+            "queue": {
+              "id": "orders",
+              "type": "queue"
+            },
+            "type": "queue"
+          },
+          {
+            "batch": {
+              "maxMessages": 5,
+              "maxWindowSeconds": 10
+            },
+            "queue": {
+              "id": "refunds",
+              "type": "queue"
+            },
+            "type": "queue"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

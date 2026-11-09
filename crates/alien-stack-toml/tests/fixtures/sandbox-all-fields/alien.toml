@@ -1,0 +1,35 @@
+name = "acme-sandbox"
+platforms = ["aws"]
+
+[sandbox.runner]
+display-name = "Code runner"
+description = "Runs customer code in isolation."
+lifecycle = "live"
+remote-access = true
+enabled-when = "runner_enabled"
+image = "s3://acme-bundles/runner/{region}/rootfs.tar"
+private-base-image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/base:1.0"
+limits = { cpu = "2", memory = "4Gi", disk = "8Gi", max-processes = 256 }
+egress = "internet"
+default-policy = { allow = ["api.acme.example", "*.cdn.acme.example:443"] }
+session = { max-lifetime = "2h", idle-pause = "10m" }
+preview-ports = [3000, 8080]
+privileged-supervisor = { command-uid = 1000 }
+
+[sandbox.builder]
+build = { toolchain = "rust", binary-name = "builder", src = "crates/builder" }
+egress = "none"
+default-policy = "internet"
+session = { max-lifetime = 3600 }
+
+[sandbox.mirror]
+image = "s3://acme-bundles/mirror/{region}/rootfs.tar"
+egress = { mode = "allow-domains", domains = ["mirror.acme.example"] }
+session = {}
+
+[input.runner_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create code runner"
+description = "Whether this deployment gets the code runner."
+default = true

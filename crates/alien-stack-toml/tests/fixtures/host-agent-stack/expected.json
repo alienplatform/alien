@@ -1,0 +1,392 @@
+{
+  "id": "acme-host-agent",
+  "inputs": [
+    {
+      "description": "Token the agent uses to enroll with the fleet service.",
+      "env": [
+        {
+          "name": "ENROLLMENT_TOKEN",
+          "targetResources": [
+            "agent"
+          ]
+        }
+      ],
+      "id": "enrollment_token",
+      "kind": "secret",
+      "label": "Enrollment token",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "minLength": 24
+      }
+    },
+    {
+      "description": "Key that signs reports leaving the host.",
+      "env": [
+        {
+          "name": "REPORT_SIGNING_KEY"
+        }
+      ],
+      "generate": {
+        "length": 64
+      },
+      "id": "signing_key",
+      "kind": "secret",
+      "label": "Signing key",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "Short name of the site this agent reports from.",
+      "env": [
+        {
+          "name": "SITE_NAME",
+          "targetResources": [
+            "agent"
+          ]
+        }
+      ],
+      "id": "site_name",
+      "kind": "string",
+      "label": "Site name",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "maxLength": 32,
+        "minLength": 2,
+        "pattern": "^[a-z][a-z0-9-]*$"
+      }
+    },
+    {
+      "default": {
+        "type": "string",
+        "value": "https://fleet.acme.example"
+      },
+      "description": "Where the agent enrolls and reports.",
+      "env": [
+        {
+          "name": "FLEET_URL"
+        }
+      ],
+      "id": "api_endpoint",
+      "kind": "string",
+      "label": "Fleet service URL",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "format": "url"
+      }
+    },
+    {
+      "default": {
+        "type": "string",
+        "value": "stable"
+      },
+      "description": "Release channel the agent follows.",
+      "env": [
+        {
+          "name": "UPDATE_CHANNEL",
+          "targetResources": [
+            "agent"
+          ]
+        }
+      ],
+      "id": "update_channel",
+      "kind": "enum",
+      "label": "Update channel",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "values": [
+          "stable",
+          "beta",
+          "nightly"
+        ]
+      }
+    },
+    {
+      "default": {
+        "type": "number",
+        "value": "300"
+      },
+      "description": "Seconds between full host scans.",
+      "env": [
+        {
+          "name": "SCAN_INTERVAL_SECONDS"
+        }
+      ],
+      "id": "scan_interval_seconds",
+      "kind": "integer",
+      "label": "Scan interval",
+      "providedBy": [
+        "developer",
+        "deployer"
+      ],
+      "required": true,
+      "validation": {
+        "max": "86400",
+        "min": "30"
+      }
+    },
+    {
+      "default": {
+        "type": "number",
+        "value": "0.1"
+      },
+      "description": "Share of one core the agent may use.",
+      "env": [
+        {
+          "name": "CPU_BUDGET",
+          "targetResources": [
+            "agent"
+          ]
+        }
+      ],
+      "id": "cpu_budget",
+      "kind": "number",
+      "label": "CPU budget",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "max": "1",
+        "min": "0.01"
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Record process starts and exits.",
+      "env": [
+        {
+          "name": "COLLECT_PROCESS_EVENTS"
+        }
+      ],
+      "id": "collect_process_events",
+      "kind": "boolean",
+      "label": "Collect process events",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true
+    },
+    {
+      "default": {
+        "type": "stringList",
+        "value": [
+          "/proc",
+          "/sys",
+          "/dev"
+        ]
+      },
+      "description": "",
+      "env": [
+        {
+          "name": "EXCLUDED_PATHS"
+        }
+      ],
+      "id": "excluded_paths",
+      "kind": "stringList",
+      "label": "Excluded paths",
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {
+        "maxItems": 50
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Send agent traffic through a proxy.",
+      "env": [],
+      "id": "use_proxy",
+      "kind": "boolean",
+      "label": "Use an outbound proxy",
+      "providedBy": [
+        "developer",
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "HTTPS_PROXY"
+        }
+      ],
+      "id": "proxy_url",
+      "kind": "string",
+      "label": "Proxy URL",
+      "providedBy": [
+        "developer",
+        "deployer"
+      ],
+      "required": false,
+      "validation": {
+        "format": "url"
+      },
+      "when": {
+        "equals": true,
+        "input": "use_proxy"
+      }
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "PROXY_PASSWORD"
+        }
+      ],
+      "id": "proxy_password",
+      "kind": "secret",
+      "label": "Proxy password",
+      "platforms": [
+        "machines"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": false,
+      "validation": {},
+      "when": {
+        "equals": true,
+        "input": "use_proxy"
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Create a bucket for audit logs and link it to the agent.",
+      "env": [],
+      "id": "ship_audit_logs",
+      "kind": "boolean",
+      "label": "Ship audit logs",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "agent": {}
+    }
+  },
+  "resources": {
+    "audit-archive": {
+      "config": {
+        "id": "audit-archive",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": true
+      },
+      "dependencies": [],
+      "enabledWhen": "ship_audit_logs",
+      "lifecycle": "frozen"
+    },
+    "agent": {
+      "config": {
+        "id": "agent",
+        "type": "daemon",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "acme-host-agent",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "command": [
+          "/usr/local/bin/acme-host-agent",
+          "--foreground"
+        ],
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.5",
+          "min": "0.5"
+        },
+        "environment": {
+          "AGENT_HOST_ROOT": "/host",
+          "AGENT_STATE_DIR": "/host/var/lib/acme-host-agent",
+          "AGENT_SOCKET": "/host/run/acme-host-agent.sock",
+          "AGENT_BANNER": "scan # not a comment",
+          "AGENT_RULES_DIR": "/host/etc/acme/site-rules.d",
+          "AGENT_QUARANTINE_DIR": "/host/var/quarantine",
+          "LOG_FORMAT": "json",
+          "SCAN_THREADS": "4",
+          "EBPF_ENABLED": "true"
+        },
+        "healthCheck": {
+          "failureThreshold": 4,
+          "path": "/healthz",
+          "port": 9477,
+          "timeoutSeconds": 2
+        },
+        "links": [
+          {
+            "id": "audit-archive",
+            "type": "storage"
+          }
+        ],
+        "memory": {
+          "desired": "256Mi",
+          "min": "256Mi"
+        },
+        "publicEndpoints": [
+          {
+            "hostLabel": "status",
+            "name": "status",
+            "port": 9477,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "runtime": {
+          "mounts": [
+            {
+              "source": "/",
+              "target": "/host"
+            }
+          ],
+          "networkMode": "host",
+          "pidNamespace": "host",
+          "privileged": true,
+          "user": "0"
+        },
+        "stopGracePeriodSeconds": 300
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws"
+  ]
+}

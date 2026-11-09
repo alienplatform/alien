@@ -1,0 +1,106 @@
+{
+  "id": "acme-pool-fields",
+  "resources": {
+    "acme-pools": {
+      "config": {
+        "id": "acme-pools",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "trainers",
+            "maxSize": 4,
+            "minSize": 4,
+            "nestedVirtualization": true,
+            "profile": {
+              "architecture": "x86_64",
+              "cpu": "16",
+              "dataDisk": {
+                "sizeBytes": 2199023255552
+              },
+              "ephemeralStorageBytes": 214748364800,
+              "gpu": {
+                "count": 4,
+                "type": "nvidia-a100"
+              },
+              "memoryBytes": 68719476736
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 4,
+                "max": 4,
+                "min": 4
+              },
+              "type": "fixed"
+            }
+          },
+          {
+            "dataDiskGibRange": {
+              "default": 100,
+              "max": 1024,
+              "min": 0
+            },
+            "groupId": "batch",
+            "maxSize": 8,
+            "minSize": 1,
+            "nestedVirtualization": false,
+            "profile": {
+              "architecture": "arm64",
+              "cpu": "4",
+              "dataDisk": {
+                "sizeBytes": 107374182400
+              },
+              "ephemeralStorageBytes": 53687091200,
+              "gpu": {
+                "count": 1,
+                "type": "nvidia-l4"
+              },
+              "memoryBytes": 17179869184
+            },
+            "scalePolicy": {
+              "max": {
+                "default": 8,
+                "max": 32,
+                "min": 4
+              },
+              "min": {
+                "default": 1,
+                "max": 4,
+                "min": 0
+              },
+              "type": "autoscale"
+            }
+          },
+          {
+            "groupId": "edge",
+            "maxSize": 2,
+            "minSize": 2,
+            "profile": {
+              "cpu": "1",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 2147483648
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 2,
+                "max": 5,
+                "min": 1
+              },
+              "type": "fixed"
+            }
+          }
+        ],
+        "dynamicContainerPool": "trainers",
+        "failureDomainSpread": {
+          "trainers": 3,
+          "batch": 2
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

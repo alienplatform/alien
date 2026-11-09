@@ -82,6 +82,7 @@ thiserror = { workspace = true }
 container-registry = { workspace = true, features = ["test-support"] }
 # Secret type used by container-registry auth
 sec = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 httpmock = { workspace = true }

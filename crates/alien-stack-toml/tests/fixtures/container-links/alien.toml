@@ -1,0 +1,24 @@
+name = "acme-links"
+platforms = ["aws", "gcp", "azure"]
+
+[storage.uploads]
+
+[kv.sessions]
+
+[queue.jobs]
+
+[vault.secrets]
+
+# Links keep the order they are written in, and can name any resource type.
+[container.api]
+image = "ghcr.io/acme/api:1.0.0"
+cpu = 1
+memory = "1Gi"
+links = ["secrets", "uploads", "database", "jobs", "sessions"]
+
+# A container can link to another container.
+[container.database]
+image = "ghcr.io/acme/database:1.0.0"
+cpu = 2
+memory = "4Gi"
+ports = [5432]

@@ -1,0 +1,91 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-media"
+platforms = ["machines", "aws", "gcp"]
+
+[pool.render]
+cpu = 4
+memory = "8Gi"
+machines = 2
+
+# A frozen bucket and the daemon that uses it share one gate, so they rise and fall together.
+[storage.uploads]
+enabled-when = "uploads_enabled"
+versioning = true
+
+[daemon.uploader]
+image = "ghcr.io/acme/uploader:1.8.0"
+links = ["uploads"]
+permissions = { uploads = ["storage/data-read", "storage/data-write"] }
+enabled-when = "uploads_enabled"
+
+# A live bucket that follows later edits to its input.
+[storage.archive]
+lifecycle = "live"
+enabled-when = "archive_enabled"
+
+[kv.sessions]
+enabled-when = "sessions_enabled"
+
+[queue.jobs]
+enabled-when = "jobs_enabled"
+
+[worker.ingest]
+image = "ghcr.io/acme/ingest:1.8.0"
+links = ["jobs"]
+enabled-when = "jobs_enabled"
+
+[vault.customer-keys]
+enabled-when = "customer_keys_enabled"
+
+[container.renderer]
+image = "ghcr.io/acme/renderer:2.1.0"
+pool = "render"
+ports = [8080]
+cpu = 1
+memory = "1Gi"
+enabled-when = "renderer_enabled"
+
+[input.uploads_enabled]
+kind = "boolean"
+provided-by = "deployer"
+default = true
+label = "Accept uploads"
+description = "Create the uploads bucket and the daemon that fills it."
+
+[input.archive_enabled]
+kind = "boolean"
+provided-by = ["developer", "deployer"]
+required = false
+default = false
+label = "Keep an archive"
+platforms = ["aws", "gcp"]
+
+[input.sessions_enabled]
+kind = "boolean"
+provided-by = "deployer"
+default = true
+label = "Store sessions"
+description = "Create the session store."
+
+[input.jobs_enabled]
+kind = "boolean"
+provided-by = "deployer"
+default = false
+label = "Run background jobs"
+description = "Create the job queue and the worker that drains it."
+platforms = ["aws", "gcp"]
+
+[input.customer_keys_enabled]
+kind = "boolean"
+provided-by = "deployer"
+default = false
+label = "Customer-managed keys"
+description = "Create a vault for keys the deployer manages."
+
+[input.renderer_enabled]
+kind = "boolean"
+provided-by = "deployer"
+default = true
+label = "Render thumbnails"
+description = "Run the thumbnail renderer on the render pool."
+platforms = ["machines"]

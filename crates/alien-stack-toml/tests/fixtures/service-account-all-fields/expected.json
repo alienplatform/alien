@@ -1,0 +1,197 @@
+{
+  "id": "acme-identity",
+  "resources": {
+    "deployer": {
+      "config": {
+        "id": "deployer",
+        "type": "service-account",
+        "stackPermissionSets": [
+          {
+            "description": "Read release artifacts across the stack.",
+            "id": "acme/release-read",
+            "platforms": {
+              "aws": [
+                {
+                  "binding": {
+                    "stack": {
+                      "condition": {
+                        "StringEquals": {
+                          "aws:ResourceTag/team": "acme",
+                          "aws:RequestedRegion": [
+                            "us-east-1",
+                            "eu-west-1"
+                          ]
+                        }
+                      },
+                      "notResources": [
+                        "arn:aws:s3:::${stackPrefix}-scratch/*"
+                      ],
+                      "resources": [
+                        "arn:aws:s3:::${stackPrefix}-*"
+                      ]
+                    }
+                  },
+                  "description": "Allows reading release objects.",
+                  "effect": "Allow",
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject",
+                      "s3:ListBucket"
+                    ]
+                  },
+                  "label": "Read artifacts"
+                },
+                {
+                  "binding": {
+                    "resource": {
+                      "condition": {
+                        "Bool": {
+                          "aws:SecureTransport": "false"
+                        }
+                      },
+                      "notResources": [
+                        "arn:aws:s3:::${stackPrefix}-archive/keep/*"
+                      ],
+                      "resources": [
+                        "arn:aws:s3:::${stackPrefix}-archive/*"
+                      ]
+                    }
+                  },
+                  "effect": "Deny",
+                  "grant": {
+                    "actions": [
+                      "s3:DeleteObject"
+                    ]
+                  }
+                }
+              ],
+              "azure": [
+                {
+                  "binding": {
+                    "stack": {
+                      "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                    }
+                  },
+                  "description": "Allows reading release blobs.",
+                  "grant": {
+                    "actions": [
+                      "Microsoft.Storage/storageAccounts/read"
+                    ],
+                    "dataActions": [
+                      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+                    ],
+                    "residualPermissions": [
+                      "Microsoft.Storage/storageAccounts/listKeys/action"
+                    ]
+                  },
+                  "label": "Read blobs"
+                },
+                {
+                  "binding": {
+                    "resource": {
+                      "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}"
+                    }
+                  },
+                  "grant": {
+                    "dataActions": [
+                      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+                    ]
+                  }
+                }
+              ],
+              "gcp": [
+                {
+                  "binding": {
+                    "stack": {
+                      "condition": {
+                        "expression": "resource.name.startsWith('projects/_/buckets/acme-')",
+                        "title": "release only"
+                      },
+                      "scope": "projects/${projectId}"
+                    }
+                  },
+                  "description": "Allows reading release buckets.",
+                  "grant": {
+                    "permissions": [
+                      "storage.objects.get"
+                    ],
+                    "predefinedRoles": [
+                      "roles/storage.objectViewer"
+                    ]
+                  },
+                  "label": "Read buckets"
+                },
+                {
+                  "binding": {
+                    "resource": {
+                      "condition": {
+                        "expression": "resource.name.endsWith('-archive')",
+                        "title": "named bucket"
+                      },
+                      "scope": "projects/${projectId}/buckets/${resourceName}"
+                    }
+                  },
+                  "grant": {
+                    "permissions": [
+                      "storage.objects.list"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "description": "A set no platform grants anything for.",
+            "id": "acme/empty",
+            "platforms": {}
+          }
+        ],
+        "resourcePermissionSets": {
+          "archive": [
+            {
+              "id": "acme/archive-read",
+              "description": "Read the archive bucket.",
+              "platforms": {
+                "aws": [
+                  {
+                    "grant": {
+                      "actions": [
+                        "s3:GetObject"
+                      ]
+                    },
+                    "binding": {
+                      "resource": {
+                        "resources": [
+                          "arn:aws:s3:::${stackPrefix}-archive/*"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "dependencies": [],
+      "description": "Identity the release pipeline assumes.",
+      "displayName": "Deployer identity",
+      "lifecycle": "live",
+      "remoteAccess": true
+    },
+    "plain": {
+      "config": {
+        "id": "plain",
+        "type": "service-account",
+        "stackPermissionSets": []
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

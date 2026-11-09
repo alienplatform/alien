@@ -1,0 +1,30 @@
+name = "acme-scaling"
+platforms = ["aws"]
+
+# `desired` left out: the container starts with `min` replicas.
+[container.elastic]
+image = "ghcr.io/acme/elastic:1.0.0"
+cpu = 1
+memory = "1Gi"
+autoscaling = { min = 2, max = 10 }
+
+# `desired` given: the container starts there.
+[container.warm]
+image = "ghcr.io/acme/warm:1.0.0"
+cpu = 1
+memory = "1Gi"
+autoscaling = { min = 1, desired = 4, max = 8 }
+
+# Scaling targets without a `desired`.
+[container.targeted]
+image = "ghcr.io/acme/targeted:1.0.0"
+cpu = 1
+memory = "1Gi"
+autoscaling = { min = 3, max = 30, target-cpu-percent = 55.5, target-http-in-flight-per-replica = 50 }
+
+# A fixed number of replicas.
+[container.fixed]
+image = "ghcr.io/acme/fixed:1.0.0"
+cpu = 1
+memory = "1Gi"
+replicas = 3

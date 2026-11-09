@@ -1,0 +1,17 @@
+name = "acme-ai"
+platforms = ["aws", "gcp", "azure"]
+
+[ai.main]
+display-name = "Primary ai"
+description = "The ai the acme services share."
+lifecycle = "live"
+remote-access = true
+enabled-when = "ai_enabled"
+
+[input.ai_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create ai"
+description = "Whether this deployment gets the ai."
+default = false
+platforms = ["aws"]

@@ -1,0 +1,9 @@
+name = "acme-registry"
+platforms = ["aws"]
+
+[artifact-registry.images]
+display-name = "Image registry"
+description = "Container images built for the acme services."
+lifecycle = "live"
+remote-access = true
+replication-regions = ["us-west-2", "eu-west-1"]
