@@ -22,7 +22,27 @@ use sha2::Sha256;
 use crate::dev::LogEntry;
 use crate::ids::sha256_hash;
 use crate::routes::AppState;
-use crate::traits::token_store::{CreateTokenParams, TokenType};
+use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
+
+/// What issuing a commands key needs. A request handler builds it from
+/// [`AppState`]; the deployment loop, which has no request state, builds it
+/// from the same parts.
+#[derive(Clone, Copy)]
+pub struct CommandsKeyStores<'a> {
+    pub signing_key: &'a [u8],
+    pub token_store: &'a dyn TokenStore,
+    pub log_buffer: &'a crate::dev::LogBuffer,
+}
+
+impl<'a> CommandsKeyStores<'a> {
+    pub fn from_state(state: &'a AppState) -> Self {
+        Self {
+            signing_key: &state.config.response_signing_key,
+            token_store: state.token_store.as_ref(),
+            log_buffer: state.log_buffer.as_ref(),
+        }
+    }
+}
 
 /// Raw key length after the prefix, in hex characters. Matches generated tokens.
 const KEY_HEX_LEN: usize = 40;
@@ -50,7 +70,21 @@ fn derive(signing_key: &[u8], deployment_id: &str, generation: u64) -> Option<St
 /// supply a key; that is logged, and the receiver that needed it fails to
 /// start with a named cause instead of starting without a credential.
 pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String]) -> Option<String> {
-    if state.config.response_signing_key.is_empty() {
+    ensure_with(
+        &CommandsKeyStores::from_state(state),
+        deployment_id,
+        receivers,
+    )
+    .await
+}
+
+/// [`ensure`] without request state.
+pub async fn ensure_with(
+    stores: &CommandsKeyStores<'_>,
+    deployment_id: &str,
+    receivers: &[String],
+) -> Option<String> {
+    if stores.signing_key.is_empty() {
         tracing::warn!(%deployment_id, "The manager has no signing key, so it cannot issue the commands key a command receiver built before capability files needs");
         return None;
     }
@@ -58,7 +92,7 @@ pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String])
     // key would leave a key of the old generation accepted, so the generation is
     // read again after the key is stored.
     for _ in 0..3 {
-        let generation = match state
+        let generation = match stores
             .token_store
             .commands_key_generation(deployment_id)
             .await
@@ -69,13 +103,9 @@ pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String])
                 return None;
             }
         };
-        let raw = derive(
-            &state.config.response_signing_key,
-            deployment_id,
-            generation,
-        )?;
+        let raw = derive(stores.signing_key, deployment_id, generation)?;
         let key_hash = sha256_hash(&raw);
-        match state.token_store.validate_token(&key_hash).await {
+        match stores.token_store.validate_token(&key_hash).await {
             Ok(Some(_)) => return Some(raw),
             Ok(None) => {}
             Err(error) => {
@@ -83,7 +113,7 @@ pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String])
                 return None;
             }
         }
-        let created = state
+        let created = stores
             .token_store
             .create_token(CreateTokenParams {
                 token_type: TokenType::CommandsReceiver,
@@ -96,7 +126,7 @@ pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String])
         match created {
             Ok(_) => {}
             // A concurrent sync may have issued it first.
-            Err(error) => match state.token_store.validate_token(&key_hash).await {
+            Err(error) => match stores.token_store.validate_token(&key_hash).await {
                 Ok(Some(_)) => return Some(raw),
                 _ => {
                     tracing::warn!(%deployment_id, %error, "Cannot issue the commands key");
@@ -104,19 +134,19 @@ pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String])
                 }
             },
         }
-        match state
+        match stores
             .token_store
             .commands_key_generation(deployment_id)
             .await
         {
             Ok(now) if now == generation => {
-                warn_vendor(state, deployment_id, receivers).await;
+                warn_vendor(stores, deployment_id, receivers).await;
                 return Some(raw);
             }
             Ok(_) => {
                 // Revoked while issuing: remove what was just stored and retry.
-                if let Ok(Some(stale)) = state.token_store.validate_token(&key_hash).await {
-                    if let Err(error) = state.token_store.delete_token(&stale.id).await {
+                if let Ok(Some(stale)) = stores.token_store.validate_token(&key_hash).await {
+                    if let Err(error) = stores.token_store.delete_token(&stale.id).await {
                         tracing::warn!(%deployment_id, %error, "Cannot remove a commands key issued during a revocation");
                         return None;
                     }
@@ -135,14 +165,14 @@ pub async fn ensure(state: &AppState, deployment_id: &str, receivers: &[String])
 /// Tell the vendor that a deployment runs on a long-lived credential and how
 /// to end it. The log reaches the deployment's log stream, which the vendor
 /// reads; the app's own logs never see it.
-async fn warn_vendor(state: &AppState, deployment_id: &str, receivers: &[String]) {
+async fn warn_vendor(stores: &CommandsKeyStores<'_>, deployment_id: &str, receivers: &[String]) {
     let resources = receivers.join(", ");
     tracing::warn!(
         %deployment_id,
         %resources,
         "Issued the commands key: command receivers built before capability files need a long-lived credential"
     );
-    state
+    stores
         .log_buffer
         .push(LogEntry {
             timestamp: Utc::now(),

@@ -526,6 +526,9 @@ async fn acquire(
         credential_resolver: state.credential_resolver.as_ref(),
         bindings_provider: &state.bindings_provider,
         target_bindings_providers: &state.target_bindings_providers,
+        commands_keys: Some(crate::auth::commands_key::CommandsKeyStores::from_state(
+            &state,
+        )),
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
@@ -4318,9 +4321,12 @@ mod tests {
             .await
             .expect("database"),
         );
+        let token_store = crate::stores::sqlite::SqliteTokenStore::new(db.clone());
+        let log_buffer = crate::dev::LogBuffer::new();
         let release_store = crate::stores::sqlite::SqliteReleaseStore::new(db);
         let manager_config = crate::config::ManagerConfig {
             base_url: Some("https://manager.example.test".to_string()),
+            response_signing_key: b"acquire-signing-key".to_vec(),
             ..Default::default()
         };
         let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
@@ -4331,6 +4337,11 @@ mod tests {
             credential_resolver: &credential_resolver,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: Some(crate::auth::commands_key::CommandsKeyStores {
+                signing_key: &manager_config.response_signing_key,
+                token_store: &token_store,
+                log_buffer: &log_buffer,
+            }),
         };
 
         let response = acquired_deployment_response(
@@ -4425,6 +4436,7 @@ mod tests {
             credential_resolver: &credential_resolver,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
         };
         let acquired = crate::traits::deployment_store::AcquiredDeployment {
             deployment: record,

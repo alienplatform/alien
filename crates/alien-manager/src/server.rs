@@ -30,6 +30,7 @@ pub struct AlienManager {
     pub(crate) server_bindings: Arc<ServerBindings>,
     pub(crate) dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     pub(crate) log_buffer: Arc<LogBuffer>,
+    pub(crate) token_store: Arc<dyn crate::traits::TokenStore>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
     pub(crate) values: Option<Arc<crate::values::ValueStore>>,
 }
@@ -115,6 +116,7 @@ impl AlienManager {
                         self.dev_status_tx,
                     )
                     .with_runtime_credentials(self.runtime_credentials.clone())
+                    .with_commands_keys(self.token_store.clone(), self.log_buffer.clone())
                     .with_value_store(self.values.clone()),
                 ))
             } else {

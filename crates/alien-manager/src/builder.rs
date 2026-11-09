@@ -1288,6 +1288,7 @@ async fn finalize(
         server_bindings,
         dev_status_tx,
         log_buffer,
+        token_store,
         command_server,
         values,
     })

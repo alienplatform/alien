@@ -231,6 +231,13 @@ pub struct DeploymentLoop {
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
+    /// Where the commands key of command receivers built before capability
+    /// files is issued. Without it, such a receiver fails to deploy with a
+    /// named cause instead of starting without a credential.
+    commands_keys: Option<(
+        Arc<dyn crate::traits::TokenStore>,
+        Arc<crate::dev::LogBuffer>,
+    )>,
 }
 
 /// A phase that can't start, to be saved as the deployment's failure.
@@ -321,7 +328,17 @@ impl DeploymentLoop {
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
             values: None,
+            commands_keys: None,
         }
+    }
+
+    pub(crate) fn with_commands_keys(
+        mut self,
+        token_store: Arc<dyn crate::traits::TokenStore>,
+        log_buffer: Arc<crate::dev::LogBuffer>,
+    ) -> Self {
+        self.commands_keys = Some((token_store, log_buffer));
+        self
     }
 
     pub(crate) fn with_runtime_credentials(
@@ -1167,6 +1184,16 @@ impl DeploymentLoop {
             credential_resolver: self.credential_resolver.as_ref(),
             bindings_provider: &self.server_bindings.bindings_provider,
             target_bindings_providers: &self.server_bindings.target_bindings_providers,
+            commands_keys: self
+                .commands_keys
+                .as_ref()
+                .map(
+                    |(token_store, log_buffer)| crate::auth::commands_key::CommandsKeyStores {
+                        signing_key: &self.config.response_signing_key,
+                        token_store: token_store.as_ref(),
+                        log_buffer: log_buffer.as_ref(),
+                    },
+                ),
         }
         .deployment_config(&held, deployment_stack.as_ref(), management_config)
         .await?;
@@ -1554,6 +1581,9 @@ pub(crate) struct RunnerConfigSources<'a> {
     pub credential_resolver: &'a dyn CredentialResolver,
     pub bindings_provider: &'a Option<Arc<dyn BindingsProviderApi>>,
     pub target_bindings_providers: &'a HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    /// Issues the commands key of command receivers built before capability
+    /// files. `None` hands such receivers no key.
+    pub commands_keys: Option<crate::auth::commands_key::CommandsKeyStores<'a>>,
 }
 
 /// What renders a deployment's stack, which decides where its management identity comes from.
@@ -1706,8 +1736,26 @@ impl RunnerConfigSources<'_> {
         deployment_stack: Option<&Stack>,
         management_config: Option<ManagementConfig>,
     ) -> Result<DeploymentConfig, AlienError> {
-        let environment_variables =
-            deployment_environment_variables(self.config, deployment, deployment_stack)?;
+        // A command receiver built before capability files cannot read the
+        // capability file, so it starts only with `ALIEN_COMMANDS_TOKEN`. It
+        // gets the deployment's commands-only key, never the deployment token.
+        let commands_key = match (deployment_stack, &self.commands_keys) {
+            (Some(stack), Some(stores)) => {
+                let unmarked = stack.command_receivers_without_capability_file();
+                if unmarked.is_empty() {
+                    None
+                } else {
+                    crate::auth::commands_key::ensure_with(stores, &deployment.id, &unmarked).await
+                }
+            }
+            _ => None,
+        };
+        let environment_variables = deployment_environment_variables(
+            self.config,
+            deployment,
+            deployment_stack,
+            commands_key.as_deref(),
+        )?;
         let monitoring = deployment
             .deployment_config
             .as_ref()
@@ -1914,6 +1962,7 @@ pub(crate) fn deployment_environment_variables(
     config: &ManagerConfig,
     deployment: &DeploymentRecord,
     deployment_stack: Option<&Stack>,
+    commands_key: Option<&str>,
 ) -> Result<EnvironmentVariablesSnapshot, AlienError> {
     let mut vars: Vec<EnvironmentVariable> = vec![
         EnvironmentVariable {
@@ -1954,8 +2003,13 @@ pub(crate) fn deployment_environment_variables(
         // `alien-deployment::inject_into_environment` (Container/Daemon downcast).
         // Empty when the stack declares no command-enabled Container/Daemon targets.
         vars.extend(
-            commands_receiver_env_vars(config.commands_base_url(), deployment, deployment_stack)
-                .map_err(|e| e.into_generic())?,
+            commands_receiver_env_vars(
+                config.commands_base_url(),
+                deployment,
+                deployment_stack,
+                commands_key,
+            )
+            .map_err(|e| e.into_generic())?,
         );
     }
 
@@ -2024,14 +2078,18 @@ fn worker_commands_push_env_vars(
 /// A Container or Daemon on a machine with a runtime identity gets no token:
 /// the machine writes a short-lived command credential into the files named in
 /// its environment. That holds only when `alien build` recorded that the
-/// receiver reads the capability file. Everything else keeps the deployment
-/// token in `ALIEN_COMMANDS_TOKEN`: Local (`alien dev`), Kubernetes (the
-/// operator replaces it for marked receivers), machines that do not have a
-/// runtime identity yet, and receivers built before capability files.
+/// receiver reads the capability file.
+///
+/// A receiver built before capability files gets `commands_key`, the
+/// deployment's commands-only key, in `ALIEN_COMMANDS_TOKEN`; with no key it
+/// fails to deploy with a named cause. Other receivers that cannot use host
+/// files keep the deployment token: Local (`alien dev`), Kubernetes (the
+/// operator replaces it), and machines that do not have a runtime identity yet.
 fn commands_receiver_env_vars(
     commands_base_url: String,
     deployment: &DeploymentRecord,
     deployment_stack: &alien_core::Stack,
+    commands_key: Option<&str>,
 ) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
     let compute_backend = deployment
         .deployment_config
@@ -2039,15 +2097,18 @@ fn commands_receiver_env_vars(
         .and_then(|config| config.compute_backend.as_ref());
     deployment_stack.receiver_command_env_vars(&commands_base_url, |resource_id| {
         // A receiver the build did not record as reading the capability file
-        // is an older receiver. It cannot start without the token.
-        if deployment_stack.command_receiver_reads_capability_file(resource_id)
-            && machine_writes_command_credentials(
-                deployment.platform,
-                compute_backend,
-                deployment_stack,
-                resource_id,
-            )
-        {
+        // is an older receiver. It cannot start without `ALIEN_COMMANDS_TOKEN`,
+        // and gets the deployment's commands-only key there, never the
+        // deployment token.
+        if !deployment_stack.command_receiver_reads_capability_file(resource_id) {
+            return ReceiverCommandCredential::Token(commands_key.map(str::to_owned));
+        }
+        if machine_writes_command_credentials(
+            deployment.platform,
+            compute_backend,
+            deployment_stack,
+            resource_id,
+        ) {
             ReceiverCommandCredential::HostFiles
         } else {
             ReceiverCommandCredential::Token(deployment.deployment_token.clone())
@@ -5971,6 +6032,7 @@ mod tests {
             credential_resolver: &UnresolvableManagementIdentity,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
         };
         let tenant = |config: Option<alien_core::ManagementConfig>| {
             config.map(|config| serde_json::to_value(config).unwrap()["managingTenantId"].clone())
@@ -6072,6 +6134,7 @@ mod tests {
             &crate::config::ManagerConfig::default(),
             &deployment,
             Some(&stack),
+            None,
         )
         .expect("snapshot");
 
@@ -6128,7 +6191,7 @@ mod tests {
         let config = crate::config::ManagerConfig::default();
 
         let with_inputs =
-            deployment_environment_variables(&config, &deployment, Some(&stack)).unwrap();
+            deployment_environment_variables(&config, &deployment, Some(&stack), None).unwrap();
         // The old push path: the deployment's identity, then its own variables
         // as carried, hashed name=value per line.
         let mut expected = vec![
@@ -6178,6 +6241,7 @@ mod tests {
             &crate::config::ManagerConfig::default(),
             &deployment,
             Some(&stack),
+            None,
         )
         .unwrap();
 
@@ -6218,6 +6282,7 @@ mod tests {
             &crate::config::ManagerConfig::default(),
             &deployment,
             Some(&stack),
+            None,
         )
         .expect("a push snapshot never fails on inputs");
 
@@ -6270,20 +6335,34 @@ mod tests {
         let state_dir = TempDir::new().expect("temp dir");
         let manager_config = crate::config::ManagerConfig {
             base_url: Some("https://manager.example.test".to_string()),
+            response_signing_key: b"runner-config-signing-key".to_vec(),
             ..Default::default()
         };
         let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
             state_dir.path().to_path_buf(),
         );
+        let token_store = token_store_in(state_dir.path()).await;
+        let log_buffer = crate::dev::LogBuffer::new();
         let config = RunnerConfigSources {
             config: &manager_config,
             credential_resolver: &credential_resolver,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: Some(crate::auth::commands_key::CommandsKeyStores {
+                signing_key: &manager_config.response_signing_key,
+                token_store: token_store.as_ref(),
+                log_buffer: &log_buffer,
+            }),
         }
         .deployment_config(&deployment, Some(&stack), None)
         .await
         .expect("runner config");
+        // The daemon was built before capability files: it gets the commands
+        // key, not the deployment token.
+        let commands_key = receiver_environment(&config, "debug-daemon")
+            .remove(ENV_ALIEN_COMMANDS_TOKEN)
+            .expect("commands key");
+        assert!(commands_key.starts_with("ax_cmds_"), "{commands_key}");
 
         let scoped = Some(vec!["debug-daemon".to_string()]);
         let variable =
@@ -6318,7 +6397,7 @@ mod tests {
                 ),
                 variable(
                     ENV_ALIEN_COMMANDS_TOKEN,
-                    "ax_dep_test",
+                    &commands_key,
                     EnvironmentVariableType::Secret,
                     &scoped,
                 ),
@@ -6407,16 +6486,24 @@ mod tests {
         let state_dir = TempDir::new().expect("temp dir");
         let manager_config = crate::config::ManagerConfig {
             base_url: Some("https://manager.example.test".to_string()),
+            response_signing_key: b"identity-test-signing-key".to_vec(),
             ..Default::default()
         };
         let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
             state_dir.path().to_path_buf(),
         );
+        let token_store = token_store_in(state_dir.path()).await;
+        let log_buffer = crate::dev::LogBuffer::new();
         let sources = RunnerConfigSources {
             config: &manager_config,
             credential_resolver: &credential_resolver,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: Some(crate::auth::commands_key::CommandsKeyStores {
+                signing_key: &manager_config.response_signing_key,
+                token_store: token_store.as_ref(),
+                log_buffer: &log_buffer,
+            }),
         };
         let environment_of = |config: &DeploymentConfig, resource_id: &str| {
             config
@@ -6462,10 +6549,11 @@ mod tests {
             Some("https://manager.example.test/v1")
         );
         let old_build = environment_of(&config, "old-build");
-        assert_eq!(
-            old_build.get(ENV_ALIEN_COMMANDS_TOKEN).map(String::as_str),
-            Some("ax_dep_test"),
-            "an older receiver on an identity cluster keeps the token"
+        assert!(
+            old_build
+                .get(ENV_ALIEN_COMMANDS_TOKEN)
+                .is_some_and(|key| key.starts_with("ax_cmds_")),
+            "an older receiver on an identity cluster gets the commands key, not the token: {old_build:?}"
         );
         assert!(!old_build.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
         let legacy = environment_of(&config, "legacy");
@@ -6504,6 +6592,172 @@ mod tests {
         );
     }
 
+    /// The environment the manager's own push model gives a stack with one
+    /// receiver built before capability files and one that reads the
+    /// capability file, both on a cluster whose machines hold a runtime
+    /// identity.
+    async fn push_model_environment(
+        deployment_token: Option<&str>,
+    ) -> (
+        Result<DeploymentConfig, AlienError>,
+        Arc<crate::stores::sqlite::SqliteTokenStore>,
+        TempDir,
+    ) {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let mut marked = command_container("marked", true);
+        marked.cluster = Some("compute".to_string());
+        marked.commands_capability_file = true;
+        let mut unmarked = command_container("unmarked", true);
+        unmarked.cluster = Some("compute".to_string());
+        let stack = Stack::new("push-model-commands-stack".to_string())
+            .add(marked, ResourceLifecycle::Live)
+            .add(unmarked, ResourceLifecycle::Live)
+            .build();
+        let backend = alien_core::ComputeBackend::Horizon(alien_core::HorizonConfig {
+            url: "https://machines.example.test".to_string(),
+            horizon_machine_image: None,
+            clusters: HashMap::from([(
+                "compute".to_string(),
+                alien_core::HorizonClusterConfig {
+                    cluster_id: "cluster".to_string(),
+                    management_token: "hm_test".to_string(),
+                    runtime_identity: Some(alien_core::MachineRuntimeIdentity {
+                        exchange_url: "https://manager.example.test/v1/identity/exchange"
+                            .to_string(),
+                        deployment_id: "dep_test".to_string(),
+                        audience: "https://manager.example.test".to_string(),
+                    }),
+                    horizon_machine_image: None,
+                },
+            )]),
+        });
+        let mut deployment = deployment_record(DeploymentStatus::UpdatePending, None);
+        deployment.platform = Platform::Aws;
+        deployment.deployment_token = deployment_token.map(str::to_string);
+        deployment.deployment_config = Some(
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: "control-plane-snapshot".to_string(),
+                    created_at: "2026-01-01T00:00:00Z".to_string(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .compute_backend(backend)
+                .build(),
+        );
+        let dir = TempDir::new().expect("temp dir");
+        let db = Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &dir.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let token_store = Arc::new(crate::stores::sqlite::SqliteTokenStore::new(db));
+        let log_buffer = crate::dev::LogBuffer::new();
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            response_signing_key: b"push-model-signing-key".to_vec(),
+            ..Default::default()
+        };
+        let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
+            dir.path().to_path_buf(),
+        );
+        let config = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &credential_resolver,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+            commands_keys: Some(crate::auth::commands_key::CommandsKeyStores {
+                signing_key: &manager_config.response_signing_key,
+                token_store: token_store.as_ref(),
+                log_buffer: &log_buffer,
+            }),
+        }
+        .deployment_config(&deployment, Some(&stack), None)
+        .await;
+        (config, token_store, dir)
+    }
+
+    async fn token_store_in(dir: &std::path::Path) -> Arc<crate::stores::sqlite::SqliteTokenStore> {
+        let db = Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(&dir.join("tokens.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        Arc::new(crate::stores::sqlite::SqliteTokenStore::new(db))
+    }
+
+    fn receiver_environment(
+        config: &DeploymentConfig,
+        resource_id: &str,
+    ) -> HashMap<String, String> {
+        config
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|variable| {
+                variable
+                    .target_resources
+                    .as_ref()
+                    .is_none_or(|targets| targets.iter().any(|id| id == resource_id))
+            })
+            .map(|variable| (variable.name.clone(), variable.value.clone()))
+            .collect()
+    }
+
+    /// A receiver built before capability files gets the commands-only key,
+    /// never the deployment token, and the key is one the manager accepts.
+    #[tokio::test]
+    async fn push_model_gives_an_unmarked_receiver_the_commands_key_not_the_deployment_token() {
+        let (config, token_store, _dir) = push_model_environment(Some("ax_dep_test")).await;
+        let config = config.expect("runner config");
+        let unmarked = receiver_environment(&config, "unmarked");
+        let key = unmarked
+            .get(ENV_ALIEN_COMMANDS_TOKEN)
+            .expect("an unmarked receiver needs ALIEN_COMMANDS_TOKEN");
+        assert!(key.starts_with("ax_cmds_"), "got {key}");
+        assert!(unmarked.values().all(|value| !value.starts_with("ax_dep_")));
+        let record = crate::traits::TokenStore::validate_token(
+            token_store.as_ref(),
+            &crate::ids::sha256_hash(key),
+        )
+        .await
+        .unwrap()
+        .expect("the manager accepts the key it handed out");
+        assert_eq!(record.deployment_id.as_deref(), Some("dep_test"));
+    }
+
+    /// A deployment with no deployment token on record still deploys an
+    /// unmarked receiver.
+    #[tokio::test]
+    async fn push_model_deploys_an_unmarked_receiver_without_a_deployment_token() {
+        let (config, _token_store, _dir) = push_model_environment(None).await;
+        let config = config.expect("no COMMAND_TOKEN_MISSING without a deployment token");
+        let unmarked = receiver_environment(&config, "unmarked");
+        assert!(unmarked
+            .get(ENV_ALIEN_COMMANDS_TOKEN)
+            .is_some_and(|key| key.starts_with("ax_cmds_")));
+    }
+
+    /// A receiver that reads the capability file gets the file and no token.
+    #[tokio::test]
+    async fn push_model_gives_a_marked_receiver_only_the_capability_file() {
+        let (config, _token_store, _dir) = push_model_environment(Some("ax_dep_test")).await;
+        let config = config.expect("runner config");
+        let marked = receiver_environment(&config, "marked");
+        assert!(!marked.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
+        assert!(marked.values().all(|value| !value.starts_with("ax_")));
+        assert_eq!(
+            marked
+                .get("ALIEN_COMMANDS_CAPABILITY_FILE")
+                .map(String::as_str),
+            Some("/var/run/alien-runtime/commands.json")
+        );
+    }
+
     #[test]
     fn commands_receiver_env_vars_scopes_contract_per_command_enabled_container_and_daemon() {
         let container = command_container("container-a", true);
@@ -6538,6 +6792,7 @@ mod tests {
             "https://manager.example.test/v1".to_string(),
             &deployment,
             &stack,
+            Some("ax_cmds_test"),
         )
         .expect("token present");
 
@@ -6569,7 +6824,7 @@ mod tests {
             assert!(scoped
                 .iter()
                 .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN
-                    && v.value == "ax_dep_test"
+                    && v.value == "ax_cmds_test"
                     && v.var_type == alien_core::EnvironmentVariableType::Secret));
             assert!(scoped.iter().any(|v| {
                 v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
