@@ -356,10 +356,8 @@ pub fn select_instance_type(
                 architecture: Some(architecture),
                 ..requirements.clone()
             };
-            let selection = select_instance_type_for_architecture(
-                platform,
-                &with_architecture(default),
-            );
+            let selection =
+                select_instance_type_for_architecture(platform, &with_architecture(default));
             if selection.is_ok() {
                 return selection;
             }
@@ -1039,7 +1037,10 @@ mod tests {
         };
         let message = select_instance_type(Platform::Aws, &oversized)
             .expect_err("no AWS machine fits 1000 vCPU per replica");
-        assert!(message.starts_with("Arm64: architecture Arm64 is unavailable"), "{message}");
+        assert!(
+            message.starts_with("Arm64: architecture Arm64 is unavailable"),
+            "{message}"
+        );
         assert!(
             message.contains("; X86_64: no aws machine can fit one replica"),
             "{message}"

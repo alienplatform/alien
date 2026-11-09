@@ -146,8 +146,8 @@ pub mod file_utils;
 pub mod image_rewrite;
 pub mod import;
 pub mod instance_catalog;
-pub mod stack_authoring;
 pub mod network_ids;
+pub mod stack_authoring;
 pub use import::*;
 
 pub use alien_macros::alien_event;
