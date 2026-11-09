@@ -68,18 +68,25 @@ sudo snap install zig --classic --beta     # or download a release from https://
 ```bash
 alien login
 alien init bare-metal-worker && cd bare-metal-worker
-alien release
+alien link
 ```
 
-Then, on the Linux server, join the `workers` pool with the join token from your deployment:
+In the dashboard, open Settings > Artifacts > CLI and set the setup CLI command name. Then release and create a deployment for your server:
 
 ```bash
-sudo alien-deploy join --token <join-token> --pool workers
+alien release
+alien deploy --name lab --machines
 ```
 
-The pool asks for at least 2 CPUs and 4Gi of memory. Lower `cpu` and `memory` in `alien.toml` for a smaller server.
+`alien deploy --machines` prints a join command like this one:
 
-Check that it is up, and start a job that takes five minutes:
+```bash
+curl -fsSL https://pkg.alien.dev/<workspace>/<project>/install.sh | sudo bash -s -- join --token ...
+```
+
+Run it on the Linux server. The stack has one pool, so the server joins it without further options. The pool asks for at least 2 CPUs and 4Gi of memory; lower `cpu` and `memory` in `alien.toml` for a smaller server.
+
+On the server, check that it is up, and start a job that takes five minutes:
 
 ```bash
 curl localhost:8080/healthz
@@ -101,6 +108,17 @@ The server's running worker gets SIGINT. Because the worker listens on the host 
 - `curl localhost:8080/healthz` returns 503 and `POST /jobs` is refused.
 
 When `j-1` finishes, the old worker exits, 0.2.0 starts, and new jobs run on 0.2.0. A job that was running is never cut short, as long as it ends within `stop-grace-period`.
+
+## Roll back
+
+Every release has an id. List them and promote the earlier one:
+
+```bash
+alien releases ls
+alien releases promote <release-id> --channel production
+```
+
+The server replaces the running worker with the earlier version the same way: the current one drains, then the earlier one starts.
 
 ## Tests
 

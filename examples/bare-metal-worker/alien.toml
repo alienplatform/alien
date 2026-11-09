@@ -2,7 +2,6 @@
 name = "acme-jobs"
 platforms = ["machines"]
 
-# Servers join this pool with `join --pool workers`.
 [pool.workers]
 cpu = 2
 memory = "4Gi"
