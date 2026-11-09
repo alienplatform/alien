@@ -891,3 +891,21 @@ fn service_account_quota_inventory_is_project_scoped(
             .any(|p| p.contains("getAccessToken") || p.contains("keys"))
     );
 }
+
+#[test]
+fn a_set_that_declares_no_gcp_entries_grants_nothing_on_gcp() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+    let permission_set = get_permission_set("redis/management").expect("permission set exists");
+
+    let roles = generator
+        .generate_custom_roles(permission_set, &context)
+        .expect("an explicitly empty GCP list is valid");
+    assert!(roles.is_empty());
+
+    let plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("an explicitly empty GCP list is valid");
+    assert!(plan.bindings.is_empty());
+    assert!(plan.custom_roles.is_empty());
+}
