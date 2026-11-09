@@ -61,6 +61,43 @@ impl Stack {
             .collect()
     }
 
+    /// Whether `alien build` recorded that the command receiver of this
+    /// Container or Daemon reads `ALIEN_COMMANDS_CAPABILITY_FILE`
+    /// (`commands_capability_file`). Everything else is treated as a receiver
+    /// from an older build: it needs `ALIEN_COMMANDS_TOKEN` to start. This is
+    /// the one place that rule lives; deployers and token revocation use it.
+    pub fn command_receiver_reads_capability_file(&self, resource_id: &str) -> bool {
+        let Some(entry) = self.resources.get(resource_id) else {
+            return false;
+        };
+        if let Some(container) = entry.config.downcast_ref::<crate::Container>() {
+            container.commands_capability_file
+        } else if let Some(daemon) = entry.config.downcast_ref::<crate::Daemon>() {
+            daemon.commands_capability_file
+        } else {
+            false
+        }
+    }
+
+    /// Ids of the command-enabled Containers and Daemons whose receiver is not
+    /// recorded as reading the capability file. While any exists, the
+    /// deployment token must stay valid: those receivers cannot start without it.
+    pub fn command_receivers_without_capability_file(&self) -> Vec<String> {
+        use crate::commands_types::CommandTargetType;
+
+        self.command_targets()
+            .into_iter()
+            .filter(|target| {
+                matches!(
+                    target.resource_type,
+                    CommandTargetType::Container | CommandTargetType::Daemon
+                )
+            })
+            .map(|target| target.resource_id)
+            .filter(|id| !self.command_receiver_reads_capability_file(id))
+            .collect()
+    }
+
     /// Returns the authentication token used by the manager/operator to push
     /// commands to each command-enabled Local/Kubernetes Worker runtime.
     /// Cloud-native Worker transports authenticate through their platform and
@@ -599,5 +636,78 @@ mod tests {
             })
             .expect("no command targets")
             .is_empty());
+    }
+
+    #[test]
+    fn a_receiver_counts_as_reading_the_capability_file_only_when_marked() {
+        let container = |id: &str, marked: bool, enabled: bool| {
+            Container::new(id.to_string())
+                .code(ContainerCode::Image {
+                    image: "container:latest".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .port(8080)
+                .permissions("container-execution".to_string())
+                .commands_enabled(enabled)
+                .commands_capability_file(marked)
+                .build()
+        };
+        let daemon = |id: &str, marked: bool| {
+            Daemon::new(id.to_string())
+                .code(DaemonCode::Image {
+                    image: "daemon:latest".to_string(),
+                })
+                .permissions("daemon-execution".to_string())
+                .commands_enabled(true)
+                .commands_capability_file(marked)
+                .build()
+        };
+        let stack = Stack::new("marker-stack".to_string())
+            .add(
+                container("old-container", false, true),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                container("new-container", true, true),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                container("quiet-container", false, false),
+                ResourceLifecycle::Live,
+            )
+            .add(daemon("old-daemon", false), ResourceLifecycle::Live)
+            .add(daemon("new-daemon", true), ResourceLifecycle::Live)
+            .build();
+
+        assert!(stack.command_receiver_reads_capability_file("new-container"));
+        assert!(stack.command_receiver_reads_capability_file("new-daemon"));
+        assert!(!stack.command_receiver_reads_capability_file("old-container"));
+        assert!(!stack.command_receiver_reads_capability_file("missing"));
+        // A resource that receives no commands has no receiver to wait for.
+        assert_eq!(
+            stack.command_receivers_without_capability_file(),
+            vec!["old-container".to_string(), "old-daemon".to_string()]
+        );
+
+        // The marker survives a release round trip; an old release has none.
+        let json = serde_json::to_value(&stack).unwrap();
+        let round_trip: Stack = serde_json::from_value(json.clone()).unwrap();
+        assert!(round_trip.command_receiver_reads_capability_file("new-daemon"));
+        let resource = &json["resources"]["old-daemon"]["config"];
+        assert!(
+            resource.get("commandsCapabilityFile").is_none(),
+            "{resource}"
+        );
+        assert_eq!(
+            json["resources"]["new-daemon"]["config"]["commandsCapabilityFile"],
+            true
+        );
     }
 }

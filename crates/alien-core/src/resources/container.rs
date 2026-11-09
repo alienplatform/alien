@@ -503,6 +503,15 @@ pub struct Container {
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
     pub commands_enabled: bool,
 
+    /// Set by `alien build` when the container's command receiver reads its
+    /// credential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the
+    /// receiver may be older, so a deployer that rotates credentials keeps
+    /// the long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any
+    /// value written in the stack definition.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commands_capability_file: bool,
+
     /// Grace period in seconds for stopping replicas during updates, drains, and deletes.
     ///
     /// When omitted, the runtime backend applies its default. Valid values are
