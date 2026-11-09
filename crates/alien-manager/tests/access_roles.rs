@@ -1186,7 +1186,7 @@ mod runtime_credentials {
     }
 
     #[tokio::test]
-    async fn command_children_expire_with_parent_and_fresh_receiver_can_complete() {
+    async fn receiver_authority_expires_with_parent_and_fresh_receiver_can_refresh() {
         let (mut state, deployment_id, tmp) = state().await;
         let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
         let server_clock = clock.clone();
@@ -1256,14 +1256,13 @@ mod runtime_credentials {
             .submit_response_url;
         let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
         let callback = base.join(callback).unwrap();
-        let path = format!("{}?{}", callback.path(), callback.query().unwrap());
         assert!(
             leases.leases[0]
                 .envelope
                 .response_handling
                 .storage_upload_request
                 .expiration
-                <= deadline
+                <= leases.leases[0].lease_expires_at
         );
         let callback_expiry = callback
             .query_pairs()
@@ -1272,30 +1271,13 @@ mod runtime_credentials {
             .1
             .parse::<i64>()
             .unwrap();
-        assert_eq!(callback_expiry, deadline.timestamp());
-        clock.store(deadline.timestamp(), Ordering::SeqCst);
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(path)
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&alien_core::SubmitResponseRequest {
-                            response: alien_core::CommandResponse::success(b"expired-parent"),
-                        })
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        // The result credential follows the lease, not the receiver's
+        // shorter credential.
         assert_eq!(
-            response.status(),
-            StatusCode::UNAUTHORIZED,
-            "copied response credential must fail at the exact parent deadline"
+            callback_expiry,
+            leases.leases[0].lease_expires_at.timestamp()
         );
+        clock.store(deadline.timestamp(), Ordering::SeqCst);
         assert_eq!(
             state
                 .command_server
@@ -1403,6 +1385,135 @@ mod runtime_credentials {
                 .unwrap()
                 .state,
             alien_core::CommandState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn long_command_still_completes_after_the_relay_capability_expires() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
+        let server_clock = clock.clone();
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target("worker-a", alien_core::CommandTargetType::Worker)
+            .await
+            .unwrap();
+        state.command_server = Arc::new(
+            CommandServer::new(
+                state.kv.clone(),
+                Arc::new(
+                    LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                        .unwrap(),
+                ),
+                Arc::new(NullCommandDispatcher),
+                registry,
+                "http://localhost:0/v1".to_owned(),
+                b"test-signing-key".to_vec(),
+            )
+            .with_clock(Arc::new(move || {
+                Utc.timestamp_opt(server_clock.load(Ordering::SeqCst), 0)
+                    .unwrap()
+            })),
+        );
+        let mut command_ids = Vec::new();
+        for _ in 0..2 {
+            command_ids.push(
+                state
+                    .command_server
+                    .create_command(alien_core::CreateCommandRequest {
+                        deployment_id: deployment_id.clone(),
+                        command: "echo".to_owned(),
+                        params: alien_core::BodySpec::inline(b"hello"),
+                        deadline: None,
+                        idempotency_key: None,
+                        target_resource_id: Some("worker-a".to_owned()),
+                        operation_result_contract: None,
+                    })
+                    .await
+                    .unwrap()
+                    .command_id,
+            );
+        }
+        // The operator's relay capability lasts five minutes. The command it
+        // leases may run for an hour.
+        let issuer = credentials("manager-a", clock.clone());
+        let mut authority = grant(&deployment_id);
+        authority.purpose = RuntimePurpose::ReceiveCommands {
+            target: alien_core::CommandTarget::new(
+                "worker-a",
+                alien_core::CommandTargetType::Worker,
+            ),
+        };
+        let relay_deadline = Utc
+            .timestamp_opt(clock.load(Ordering::SeqCst) + 300, 0)
+            .unwrap();
+        let issued = issuer.issue(authority, relay_deadline).unwrap();
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(issuer, state.auth_validator));
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let response = router.clone().oneshot(Request::builder().method("POST").uri("/v1/commands/leases")
+            .header(header::AUTHORIZATION, format!("Bearer {}", issued.token))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&json!({"deploymentId": deployment_id, "target": {"resourceId": "worker-a", "resourceType": "worker"}, "maxLeases": 2, "leaseSeconds": 3660})).unwrap())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let leases: alien_core::LeaseResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(leases.leases.len(), 2);
+        let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
+        let submit_path = |lease: &alien_core::LeaseInfo| {
+            let callback = base
+                .join(&lease.envelope.response_handling.submit_response_url)
+                .unwrap();
+            format!("{}?{}", callback.path(), callback.query().unwrap())
+        };
+        let submit = |path: String, body: &'static [u8]| {
+            let router = router.clone();
+            async move {
+                router
+                    .oneshot(
+                        Request::builder()
+                            .method("PUT")
+                            .uri(path)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                serde_json::to_vec(&alien_core::SubmitResponseRequest {
+                                    response: alien_core::CommandResponse::success(body),
+                                })
+                                .unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+
+        // Ten minutes in: the relay capability is long gone.
+        clock.fetch_add(600, Ordering::SeqCst);
+        assert_eq!(
+            submit(submit_path(&leases.leases[0]), b"ten minutes").await,
+            StatusCode::OK,
+            "a command still inside its lease must be able to report its result"
+        );
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&leases.leases[0].command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Succeeded
+        );
+
+        // The result credential still ends with the lease.
+        clock.store(
+            leases.leases[1].lease_expires_at.timestamp(),
+            Ordering::SeqCst,
+        );
+        assert_eq!(
+            submit(submit_path(&leases.leases[1]), b"too late").await,
+            StatusCode::UNAUTHORIZED
         );
     }
 

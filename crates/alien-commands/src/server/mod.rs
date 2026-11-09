@@ -973,8 +973,20 @@ impl CommandServer {
             // absolute URLs: push transports have no configured base, and
             // reaching the manager's public address is inherent to push
             // delivery.
+            // The params download is needed right away, so it stays within the
+            // receiver's credential. The result upload and response URL must
+            // outlive that credential: a running command still has to be able
+            // to report its result. They last as long as the lease, which the
+            // receiver sizes to the command's execution time.
+            let response_deadline = authority_deadline.map(|_| expires_at);
             let mut envelope = self
-                .build_envelope(&command_id, &metadata, params, authority_deadline)
+                .build_envelope(
+                    &command_id,
+                    &metadata,
+                    params,
+                    authority_deadline,
+                    response_deadline,
+                )
                 .await?;
             Self::relativize_manager_urls(&mut envelope, &self.base_url);
 
@@ -1811,7 +1823,7 @@ impl CommandServer {
 
         // Build envelope
         let envelope = self
-            .build_envelope(command_id, &metadata, params, None)
+            .build_envelope(command_id, &metadata, params, None, None)
             .await?;
 
         // Mark Dispatched BEFORE invoking the transport: a fast worker can
@@ -1880,9 +1892,12 @@ impl CommandServer {
         metadata: &CommandEnvelopeData,
         mut params: BodySpec,
         authority_deadline: Option<DateTime<Utc>>,
+        response_deadline: Option<DateTime<Utc>>,
     ) -> Result<Envelope> {
+        // The result credentials follow the command's execution window
+        // (`response_deadline`), not the receiver credential that leased it.
         let response_handling = self
-            .create_response_handling(command_id, authority_deadline)
+            .create_response_handling(command_id, response_deadline)
             .await?;
 
         // Re-inline: if params are in blob but fit in transport limit, read and embed inline.
