@@ -690,6 +690,7 @@ pub async fn stack_import(
                     setup_fingerprint_version: req.setup_fingerprint_version,
                     activation_status,
                     schedule_reconciliation: should_reconcile,
+                    expected_updated_at: None,
                     input_values: req.input_values.clone(),
                 },
             )

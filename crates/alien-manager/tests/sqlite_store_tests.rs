@@ -348,12 +348,91 @@ async fn input_values_survive_create_import_and_reimport() {
                 setup_fingerprint_version: 1,
                 activation_status: None,
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: edited.clone(),
             },
         )
         .await
         .unwrap();
     assert_eq!(updated.input_values, edited);
+}
+
+fn import_params(
+    stack_state: StackState,
+    expected_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> UpdateImportedDeploymentParams {
+    UpdateImportedDeploymentParams {
+        stack_settings: StackSettings::default(),
+        stack_state,
+        environment_info: None,
+        runtime_metadata: RuntimeMetadata::default(),
+        setup_metadata: None,
+        current_release_id: None,
+        setup_target: "test".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
+        activation_status: None,
+        schedule_reconciliation: false,
+        expected_updated_at,
+        input_values: HashMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn conditional_import_write_refuses_a_deployment_that_moved() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep-cond", Platform::Aws).await;
+
+    // The caller reads the record, then a checkpoint lands before its write.
+    let read = store
+        .update_imported_stack_state(
+            &test_subject(),
+            &dep.id,
+            import_params(StackState::new(Platform::Aws), None),
+        )
+        .await
+        .unwrap();
+    let checkpoint = store
+        .update_imported_stack_state(
+            &test_subject(),
+            &dep.id,
+            import_params(StackState::new(Platform::Gcp), None),
+        )
+        .await
+        .unwrap();
+    assert_ne!(read.updated_at, checkpoint.updated_at);
+
+    let stale = store
+        .update_imported_stack_state(
+            &test_subject(),
+            &dep.id,
+            import_params(StackState::new(Platform::Aws), read.updated_at),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code, "DEPLOYMENT_CHANGED_CONCURRENTLY");
+    let stored = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.stack_state.unwrap().platform,
+        Platform::Gcp,
+        "the checkpoint was not overwritten"
+    );
+
+    // With the current revision the write goes through.
+    store
+        .update_imported_stack_state(
+            &test_subject(),
+            &dep.id,
+            import_params(StackState::new(Platform::Aws), checkpoint.updated_at),
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

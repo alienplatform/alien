@@ -399,21 +399,6 @@ async fn write(
     runtime_metadata: alien_core::RuntimeMetadata,
     schedule_reconciliation: bool,
 ) -> Result<(), AlienError> {
-    // The store update writes the whole snapshot, and release lookup and
-    // preparation took time. If the record moved since it was read (a
-    // checkpoint, a settings change), writing now would put old state over it.
-    // Skip: the report repeats on the next sync.
-    let Some(fresh) = state
-        .deployment_store
-        .get_deployment(subject, &deployment.id)
-        .await?
-    else {
-        return Ok(());
-    };
-    if fresh.updated_at != deployment.updated_at || fresh.status != deployment.status {
-        info!(deployment_id = %deployment.id, "Deployment changed while handling the setup report; the next report retries");
-        return Ok(());
-    }
     let (Some(stack_settings), Some(stack_state)) = (
         deployment.stack_settings.clone(),
         deployment.stack_state.clone(),
@@ -421,7 +406,7 @@ async fn write(
         return Ok(());
     };
     let lane_known = deployment.setup_target.is_some();
-    state
+    let result = state
         .deployment_store
         .update_imported_stack_state(
             subject,
@@ -450,11 +435,21 @@ async fn write(
                 },
                 activation_status: None,
                 schedule_reconciliation,
+                expected_updated_at: deployment.updated_at,
                 input_values: deployment.input_values.clone(),
             },
         )
-        .await?;
-    Ok(())
+        .await;
+    match result {
+        Ok(_) => Ok(()),
+        // A checkpoint or settings change landed after the record was read.
+        // Nothing was written; the report repeats on the next sync.
+        Err(error) if error.code == "DEPLOYMENT_CHANGED_CONCURRENTLY" => {
+            info!(deployment_id = %deployment.id, "Deployment changed while handling the setup report; the next report retries");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
