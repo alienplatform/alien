@@ -15,7 +15,7 @@ use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::AlienError;
 
 use crate::auth::Subject;
-use crate::traits::deployment_store::{ExecutionClaim, ReconcileData};
+use crate::traits::deployment_store::{ExecutionClaim, ReconcileData, ReconcileInput};
 use crate::traits::DeploymentStore;
 
 /// Transport that persists state directly to the deployment store and
@@ -29,6 +29,8 @@ pub struct ManagerTransport {
     execution_claim: Option<ExecutionClaim>,
     /// AWS regions the artifact registry serves; see `reconcile_registry_access_with_proxy`.
     supported_aws_regions: Vec<String>,
+    held_values: crate::values::HeldValues,
+    generated_slots: Vec<crate::values::ValueMeta>,
 }
 
 impl ManagerTransport {
@@ -49,7 +51,23 @@ impl ManagerTransport {
             session,
             execution_claim,
             supported_aws_regions,
+            held_values: crate::values::HeldValues::default(),
+            generated_slots: Vec::new(),
         }
+    }
+
+    /// Keep the values the step loaded out of the state this transport saves.
+    pub fn with_held_values(mut self, held_values: crate::values::HeldValues) -> Self {
+        self.held_values = held_values;
+        self
+    }
+}
+
+impl ManagerTransport {
+    /// Report these generated secret inputs with every step.
+    pub fn with_generated_slots(mut self, slots: Vec<crate::values::ValueMeta>) -> Self {
+        self.generated_slots = slots;
+        self
     }
 }
 
@@ -115,25 +133,33 @@ impl DeploymentLoopTransport for ManagerTransport {
         // synthetic system subject (empty bearer signals to embedders that
         // no caller passthrough is available).
         let caller = Subject::system();
-        let outcome = self
-            .deployment_store
-            .reconcile(
-                &caller,
-                ReconcileData {
-                    deployment_id: deployment_id.to_string(),
-                    session: self.session.clone(),
-                    state: updated_state.clone(),
-                    update_heartbeat,
-                    suggested_delay_ms,
-                    heartbeats,
-                    observed_inventory_batches,
-                    capabilities: Vec::new(),
-                    operator_version: None,
-                    execution_claim: self.execution_claim.clone(),
-                    operations_report: None,
-                },
-            )
-            .await?;
+        let mut saved_state = updated_state.clone();
+        self.held_values
+            .redact(saved_state.stack_state.as_mut())
+            .map_err(|error| error.into_generic())?;
+        let data = ReconcileData {
+            deployment_id: deployment_id.to_string(),
+            session: self.session.clone(),
+            state: saved_state,
+            update_heartbeat,
+            suggested_delay_ms,
+            heartbeats,
+            observed_inventory_batches,
+            capabilities: Vec::new(),
+            operator_version: None,
+            execution_claim: self.execution_claim.clone(),
+            operations_report: None,
+        };
+        let outcome = if self.generated_slots.is_empty() {
+            self.deployment_store.reconcile(&caller, data).await?
+        } else {
+            let request = ReconcileInput::builder(data)
+                .generated_slots(self.generated_slots.clone())
+                .build();
+            self.deployment_store
+                .reconcile_request(&caller, request)
+                .await?
+        };
 
         crate::registry_access::revoke_after_persisting(
             self.deployment_store.as_ref(),
@@ -164,5 +190,171 @@ impl DeploymentLoopTransport for ManagerTransport {
             },
             config: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_core::{
+        DeploymentConfig, DeploymentStatus, EnvironmentVariablesSnapshot, Platform,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    use chrono::Utc;
+
+    use super::*;
+    use crate::traits::deployment_store::{MockDeploymentStore, ReconcileOutcome};
+    use crate::traits::DeploymentRecord;
+    use crate::values::{ValueKind, ValueMeta};
+
+    const CANARY: &str = "generated-canary-7c1d";
+
+    fn state() -> DeploymentState {
+        DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn config() -> alien_core::DeploymentConfig {
+        let mut config = DeploymentConfig::builder()
+            .deployment_name("dep".to_string())
+            .stack_settings(Default::default())
+            .input_values(Default::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        // The step's config carries the generated value; it is never reported.
+        config
+            .input_values
+            .insert("signingKey".to_string(), serde_json::json!(CANARY));
+        config
+    }
+
+    fn record() -> DeploymentRecord {
+        DeploymentRecord {
+            supplied_stacks: None,
+            id: "dep_1".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "project".to_string(),
+            name: "dep".to_string(),
+            deployment_group_id: "group".to_string(),
+            platform: Platform::Local,
+            deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: "running".to_string(),
+            stack_settings: Some(Default::default()),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            configuration_revision: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            input_values: Default::default(),
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    fn meta() -> ValueMeta {
+        ValueMeta {
+            slot: "input:signingKey".parse().unwrap(),
+            kind: ValueKind::Secret,
+            digest: "ab".repeat(32),
+            updated_at: Utc::now(),
+        }
+    }
+
+    async fn steps(store: MockDeploymentStore, slots: Vec<ValueMeta>, count: usize) {
+        let transport = ManagerTransport::new(
+            Arc::new(store),
+            None,
+            HashMap::new(),
+            "project".to_string(),
+            "session".to_string(),
+            None,
+            Vec::new(),
+        )
+        .with_generated_slots(slots);
+        for _ in 0..count {
+            transport
+                .reconcile_step("dep_1", &state(), &config(), false, None, vec![], vec![])
+                .await
+                .expect("the step is reconciled");
+        }
+    }
+
+    fn outcome() -> ReconcileOutcome {
+        ReconcileOutcome {
+            record: record(),
+            target_operations_bundle_set: None,
+            target_dynamic_containers: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn every_step_reports_the_generated_slots_and_not_their_values() {
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let mut store = MockDeploymentStore::new();
+        let log = reported.clone();
+        store
+            .expect_reconcile_request()
+            .times(2)
+            .returning(move |_, request| {
+                log.lock()
+                    .unwrap()
+                    .push((request.generated_slots().to_vec(), format!("{request:?}")));
+                Ok(outcome())
+            });
+        let slots = vec![meta()];
+
+        steps(store, slots.clone(), 2).await;
+
+        let reported = reported.lock().unwrap();
+        assert_eq!(reported.len(), 2);
+        for (generated, debug) in reported.iter() {
+            assert_eq!(generated, &slots);
+            assert!(!debug.contains(CANARY), "{debug}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_deployment_without_generated_slots_reconciles_as_before() {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_reconcile()
+            .times(1)
+            .returning(|_, _| Ok(outcome()));
+        store.expect_reconcile_request().never();
+
+        steps(store, Vec::new(), 1).await;
     }
 }

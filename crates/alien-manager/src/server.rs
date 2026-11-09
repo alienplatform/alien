@@ -30,6 +30,7 @@ pub struct AlienManager {
     pub(crate) log_buffer: Arc<LogBuffer>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
     pub(crate) signing: Option<Arc<dyn crate::traits::SigningStore>>,
+    pub(crate) values: Option<Arc<crate::values::ValueStore>>,
 }
 
 impl AlienManager {
@@ -112,7 +113,8 @@ impl AlienManager {
                         self.server_bindings.clone(),
                         self.dev_status_tx,
                     )
-                    .with_signing(self.signing.clone()),
+                    .with_signing(self.signing.clone())
+                    .with_value_store(self.values.clone()),
                 ))
             } else {
                 None

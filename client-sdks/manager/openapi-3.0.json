@@ -2262,6 +2262,180 @@
         ]
       }
     },
+    "/v1/values/{scope}": {
+      "get": {
+        "tags": [
+          "values"
+        ],
+        "operationId": "list_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "dep:<deploymentId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata of the stored values, with plain values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSlotsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "values"
+        ],
+        "description": "Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.",
+        "operationId": "put_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "dep:<deploymentId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "`*` writes only when the slot is empty",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutValuesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata of the stored values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSlotsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/values/{scope}/verify": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "operationId": "verify_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "dep:<deploymentId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyValuesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Whether each value equals the stored one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyValuesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/values/{scope}/{slot}": {
+      "delete": {
+        "tags": [
+          "values"
+        ],
+        "operationId": "delete_value",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "dep:<deploymentId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slot",
+            "in": "path",
+            "description": "env:<NAME>, input:<id> or cenv.<containerName>.<NAME>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, or there was nothing to delete"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/whoami": {
       "get": {
         "tags": [
@@ -13316,6 +13490,13 @@
           "tunnels": {
             "type": "boolean",
             "description": "Requests into deployments through `/v1/deployments/{id}/tunnels/...`."
+          },
+          "values": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Deployment values held by this manager at `/v1/values/{scope}`. The\nnumber is the version of that API; absent when values are not served.",
+            "minimum": 0,
+            "nullable": true
           }
         }
       },
@@ -14804,6 +14985,40 @@
           }
         ],
         "description": "DNS target mode for public endpoints."
+      },
+      "PutValue": {
+        "type": "object",
+        "required": [
+          "slot",
+          "value",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ValueKind"
+          },
+          "slot": {
+            "type": "string",
+            "description": "`env:<NAME>`, `input:<id>` or `cenv.<containerName>.<NAME>`."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "PutValuesRequest": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PutValue"
+            }
+          }
+        }
       },
       "QueueBinding": {
         "oneOf": [
@@ -18890,6 +19105,57 @@
         }
       },
       "Value": {},
+      "ValueKind": {
+        "type": "string",
+        "description": "Whether a value is shown back to people. Secrets never are.",
+        "enum": [
+          "plain",
+          "secret"
+        ]
+      },
+      "ValueSlotEntry": {
+        "type": "object",
+        "required": [
+          "slot",
+          "kind",
+          "digest",
+          "updatedAt"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "Keyed digest of the value, lowercase hex."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ValueKind"
+          },
+          "slot": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "The value, for plain slots only.",
+            "nullable": true
+          }
+        }
+      },
+      "ValueSlotsResponse": {
+        "type": "object",
+        "required": [
+          "slots"
+        ],
+        "properties": {
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValueSlotEntry"
+            }
+          }
+        }
+      },
       "VaultBinding": {
         "oneOf": [
           {
@@ -19165,6 +19431,64 @@
           }
         }
       },
+      "VerifyResult": {
+        "type": "object",
+        "required": [
+          "slot",
+          "match"
+        ],
+        "properties": {
+          "match": {
+            "type": "boolean"
+          },
+          "slot": {
+            "type": "string"
+          }
+        }
+      },
+      "VerifyValue": {
+        "type": "object",
+        "required": [
+          "slot",
+          "value"
+        ],
+        "properties": {
+          "slot": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "VerifyValuesRequest": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerifyValue"
+            }
+          }
+        }
+      },
+      "VerifyValuesResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerifyResult"
+            }
+          }
+        }
+      },
       "WhoamiResponse": {
         "type": "object",
         "required": [
@@ -19425,6 +19749,10 @@
     {
       "name": "vault",
       "description": "Deployment Vault secret management"
+    },
+    {
+      "name": "values",
+      "description": "Deployment values held by this manager"
     },
     {
       "name": "telemetry",

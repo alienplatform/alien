@@ -833,17 +833,31 @@ impl KubernetesContainerController {
             // here rather than by the synchronous deployment-snapshot check.
             if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
                 let secrets = self.additional_environment_secrets(config, ctx).await?;
+                self.env_secret.adopt_unkeyed(
+                    &config.id,
+                    workload_name,
+                    &ctx.deployment_config.environment_variables.variables,
+                    &secrets,
+                )?;
                 if self.env_secret.drifted_with_additional_secrets(
                     &config.id,
                     workload_name,
                     &ctx.deployment_config.environment_variables.variables,
                     &secrets,
-                ) {
+                )? {
                     return Ok(HandlerAction::Continue {
                         state: UpdateStart,
                         suggested_delay: None,
                     });
                 }
+            }
+            if config.id != alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+                self.env_secret.adopt_unkeyed(
+                    &config.id,
+                    workload_name,
+                    &ctx.deployment_config.environment_variables.variables,
+                    &direct_monitoring_auth_headers(ctx),
+                )?;
             }
             let deployment_client = ctx
                 .service_provider
@@ -2104,7 +2118,7 @@ impl KubernetesContainerController {
             workload_name,
             &ctx.deployment_config.environment_variables.variables,
             &monitoring_headers,
-        ))
+        )?)
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
@@ -3795,14 +3809,12 @@ mod tests {
                 &[],
                 &environment,
             )
+            .expect("checksum key")
             .as_ref(),
         );
-        assert!(!applied.drifted_with_additional_secrets(
-            "sandbox-egress-gateway",
-            "gateway",
-            &[],
-            &environment
-        ));
+        assert!(!applied
+            .drifted_with_additional_secrets("sandbox-egress-gateway", "gateway", &[], &environment)
+            .expect("checksum key"));
         let mut moved = environment.clone();
         moved.insert(
             GATEWAY_RESTART_SETTINGS_ENV.to_string(),
@@ -3812,12 +3824,9 @@ mod tests {
             }})
             .to_string(),
         );
-        assert!(applied.drifted_with_additional_secrets(
-            "sandbox-egress-gateway",
-            "gateway",
-            &[],
-            &moved
-        ));
+        assert!(applied
+            .drifted_with_additional_secrets("sandbox-egress-gateway", "gateway", &[], &moved)
+            .expect("checksum key"));
 
         let pod = controller
             .build_deployment(
@@ -4198,6 +4207,7 @@ mod tests {
             &variables,
             &monitoring_headers,
         )
+        .expect("checksum key")
         .expect("plan");
         let controller = manifest_test_controller();
 
@@ -4262,7 +4272,9 @@ mod tests {
     async fn statefulset_manifest_projects_secrets_and_stamps_checksum() {
         let variables = vec![secret_env_var("APP_SECRET", "s3cret", None)];
         let config = manifest_test_container(&[], true);
-        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let plan = environment_secret_plan("web", "web", &variables)
+            .expect("checksum key")
+            .expect("plan");
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
         let controller = manifest_test_controller();
 
@@ -4300,7 +4312,9 @@ mod tests {
         let mut templates = Vec::new();
         for value in ["v1", "v1", "v2"] {
             let variables = vec![secret_env_var("APP_SECRET", value, None)];
-            let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+            let plan = environment_secret_plan("web", "web", &variables)
+                .expect("checksum key")
+                .expect("plan");
             let harness =
                 KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
             let deployment = controller
@@ -4402,7 +4416,9 @@ mod tests {
     fn needs_update_detects_env_secret_rotation() {
         let config = manifest_test_container(&[], false);
         let original = vec![secret_env_var("APP_SECRET", "v1", None)];
-        let original_plan = environment_secret_plan("web", "web", &original).expect("plan");
+        let original_plan = environment_secret_plan("web", "web", &original)
+            .expect("checksum key")
+            .expect("plan");
 
         let mut controller = manifest_test_controller();
         controller.env_secret.record(Some(&original_plan));

@@ -512,9 +512,22 @@ async fn status_report(
     }
     let last_batch = report.telemetry.iter().filter_map(|batch| batch.id).max();
     let report_state = report.state.clone();
+    let held_values = match crate::values::HeldValues::current(
+        state.values.as_deref(),
+        &state.config,
+        state.release_store.as_ref(),
+        &deployment,
+        report_state.stack_state.as_ref(),
+    )
+    .await
+    {
+        Ok(held_values) => held_values,
+        Err(error) => return error.into_response(),
+    };
     if !deleting {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),
+            &held_values,
             &subject,
             &deployment.id,
             report.state,
@@ -563,6 +576,7 @@ async fn status_report(
     {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),
+            &held_values,
             &subject,
             &deployment.id,
             report_state,
@@ -589,12 +603,16 @@ async fn status_report(
 
 async fn reconcile_report(
     store: &dyn crate::traits::DeploymentStore,
+    held_values: &crate::values::HeldValues,
     subject: &Subject,
     deployment_id: &str,
-    report: DeploymentState,
+    mut report: DeploymentState,
     heartbeats: Vec<ResourceHeartbeat>,
     applied_configuration_revision: Option<String>,
 ) -> Result<(), alien_error::AlienError> {
+    held_values
+        .redact(report.stack_state.as_mut())
+        .map_err(|error| error.into_generic())?;
     let data = ReconcileData {
         deployment_id: deployment_id.to_string(),
         session: "airgap-status-report".to_string(),
@@ -1629,6 +1647,7 @@ mod tests {
                 .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
             let error = reconcile_report(
                 &store,
+                &crate::values::HeldValues::default(),
                 &Subject::system(),
                 "dep_1",
                 report.state,

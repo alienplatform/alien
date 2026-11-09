@@ -223,6 +223,7 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
             volume_restores: Vec::new(),
+            value_slots: Vec::new(),
             deletion_policy: Default::default(),
         }
     }

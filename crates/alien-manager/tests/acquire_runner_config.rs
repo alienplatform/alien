@@ -99,6 +99,7 @@ struct Fixture {
 /// record keeps the deployment token the command variables are built from
 /// unless `record_token` is false.
 async fn deployment_with_queued_update(record_token: bool) -> Fixture {
+    alien_deployment::set_ephemeral_secrets_digest_key();
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let dir = temp_dir.path().to_path_buf();
     let db = Arc::new(
@@ -230,6 +231,9 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
+        values: None,
+        value_access: None,
+        verify_limiter: std::sync::Arc::new(alien_manager::values::VerifyLimiter::default()),
         project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
     };
 

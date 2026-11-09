@@ -465,3 +465,35 @@ pub fn statement_grants(documents: &[serde_json::Value]) -> std::collections::BT
     }
     grants
 }
+
+/// Every `resource "<kind>"` block in the module as `(label, attributes)`, each attribute
+/// rendered back to HCL text.
+pub fn resource_attributes(
+    module: &ModuleFiles,
+    kind: &str,
+) -> Vec<(String, std::collections::BTreeMap<String, String>)> {
+    module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .flat_map(|(path, contents)| {
+            hcl::parse(contents)
+                .unwrap_or_else(|error| panic!("{path} parses: {error}"))
+                .into_blocks()
+                .filter(|block| block.identifier() == "resource")
+                .filter(|block| block.labels()[0].as_str() == kind)
+                .map(|block| {
+                    (
+                        block.labels()[1].as_str().to_string(),
+                        block
+                            .body()
+                            .attributes()
+                            .map(|attribute| {
+                                (attribute.key().to_string(), attribute.expr().to_string())
+                            })
+                            .collect(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}

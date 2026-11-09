@@ -1821,6 +1821,9 @@ mod tests {
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
+            values: None,
+            value_access: None,
+            verify_limiter: std::sync::Arc::new(crate::values::VerifyLimiter::default()),
         };
         let app = router()
             .merge(super::super::sync::router())

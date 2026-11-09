@@ -14,6 +14,7 @@ use alien_core::{
 use alien_error::Context;
 use alien_permissions::{
     aws_key_policy::{aws_key_policy, key_has_native_service_use, key_runtime_service_accounts},
+    key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY},
     BindingTarget,
 };
 use hcl::{
@@ -199,6 +200,25 @@ impl TfEmitter for AwsKeyEmitter {
                         ctx.resource_id,
                         iam_policy_name_sanitize(&permission_set.id)
                     ),
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
+        }
+
+        if let Some(permission_set) = alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY) {
+            for account_id in cryptography_service_accounts(ctx.stack, ctx.resource_id) {
+                let Some(role_label) = ctx.name_for(&account_id) else {
+                    continue;
+                };
+                let context = stack_permission_context(ctx)
+                    .with_resource_name(format!("${{local.{label}_selected_key.arn}}"));
+                emit_iam_role_policy_for_target_with_label(
+                    &mut fragment,
+                    role_label,
+                    permission_set,
+                    &format!("{role_label}_{label}_cryptography"),
+                    &format!("runtime-{}-cryptography", ctx.resource_id),
                     &context,
                     BindingTarget::Resource,
                 )?;

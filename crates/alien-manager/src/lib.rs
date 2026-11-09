@@ -57,6 +57,7 @@ pub mod registry_access;
 pub mod routes;
 pub mod server;
 pub mod transports;
+pub mod values;
 
 // Re-export key types
 pub use builder::AlienManagerBuilder;

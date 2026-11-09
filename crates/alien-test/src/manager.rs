@@ -600,6 +600,7 @@ impl TestManager {
                     storage: Some(StorageBinding::S3(S3StorageBinding::bucket(
                         BindingValue::Value(bucket.clone()),
                     ))),
+                    ..Default::default()
                 };
             }
         }

@@ -35,6 +35,9 @@ pub mod tokens;
 pub mod upgrade;
 #[cfg(feature = "platform")]
 pub mod usage;
+mod value_access;
+#[cfg(test)]
+mod value_flow_tests;
 pub mod vault;
 pub mod whoami;
 

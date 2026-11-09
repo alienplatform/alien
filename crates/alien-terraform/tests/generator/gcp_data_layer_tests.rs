@@ -5,7 +5,7 @@
 //! goes through `terraform fmt -check` + `terraform validate` against
 //! the real Google provider.
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{assert_terraform_valid, render, resource_attributes, snapshot_module};
 use alien_core::{
     Ai, Key, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
     RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
@@ -59,6 +59,47 @@ fn gcp_key_package_is_valid_and_retained() {
         .collect()
     );
     assert_terraform_valid(&module, "gcp_key_package");
+}
+
+#[test]
+fn gcp_runtime_only_key_is_usable_by_the_granted_service_account_and_no_other() {
+    let stack = Stack::new("instance-secrets".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "manager",
+            alien_core::PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        ))
+        .add(
+            Key::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("manager-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("bystander-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+
+    let members = resource_attributes(&module, "google_kms_crypto_key_iam_member");
+    assert_eq!(
+        members.len(),
+        1,
+        "one grant, for the manager only: {members:?}"
+    );
+    let (_, grant) = &members[0];
+    assert_eq!(
+        grant["role"],
+        "\"roles/cloudkms.cryptoKeyEncrypterDecrypter\""
+    );
+    assert_eq!(grant["crypto_key_id"], "google_kms_crypto_key.secrets.id");
+    assert!(
+        grant["member"].contains("google_service_account.manager_sa.email"),
+        "{grant:?}"
+    );
+    assert_terraform_valid(&module, "gcp_runtime_only_key_grant");
 }
 
 #[test]

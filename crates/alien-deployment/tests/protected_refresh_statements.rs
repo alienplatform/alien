@@ -158,6 +158,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
     DeploymentConfig {
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
+        value_slots: Vec::new(),
         input_values: Default::default(),
         deployment_name: Some("machines".to_string()),
         stack_settings,

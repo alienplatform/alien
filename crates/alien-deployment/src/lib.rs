@@ -14,11 +14,12 @@ pub mod loop_contract;
 pub mod manager_api_transport;
 mod observe;
 mod pending;
+pub mod persisted_digest_key;
 pub use pending::{
-    enforce_frozen_gate_fixity, frozen_gating_inputs, FrozenGateFixityCheck, prepare_direct_setup_update,
+    enforce_frozen_gate_fixity, frozen_gating_inputs, prepare_direct_setup_update,
     resolve_frozen_gate_answers, resolve_frozen_gate_answers_from_presence,
     strip_declined_live_resources, strip_frozen_declines,
-    strip_frozen_declines_with_compute_settings,
+    strip_frozen_declines_with_compute_settings, FrozenGateFixityCheck,
 };
 mod provisioning;
 pub mod runner;
@@ -39,8 +40,11 @@ pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
 pub use helpers::{
-    check_deployer_secrets, collect_environment_info, secrets_digest_key_is_set,
+    check_deployer_secrets, collect_environment_info, environment_snapshot_hash,
+    inject_monitoring_environment_variables, redact_held_values, redact_planned_values,
+    redact_values_by_content, restore_held_values, secrets_digest_key_is_set,
     set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
+    value_digest,
 };
 pub use observe::run_observe_pass;
 
@@ -203,6 +207,14 @@ pub async fn step(
         "Executing deployment step (status: {:?}, platform: {:?})",
         current.status, current.platform
     );
+
+    if let Some(stack_state) = current.stack_state.as_mut() {
+        helpers::adopt_unkeyed_hashes(
+            stack_state,
+            &config.environment_variables,
+            config.monitoring.as_ref(),
+        )?;
+    }
 
     // Resolve GCP project number for IAM condition expressions
     let client_config = resolve_gcp_project_number(client_config).await;

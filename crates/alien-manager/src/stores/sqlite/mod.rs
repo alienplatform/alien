@@ -6,6 +6,7 @@ pub mod migrations;
 pub mod release;
 pub mod signing;
 pub mod token;
+pub mod values;
 
 pub use channel::SqliteReleaseChannelStore;
 pub use command_registry::SqliteCommandRegistry;
@@ -14,3 +15,4 @@ pub use deployment::SqliteDeploymentStore;
 pub use release::SqliteReleaseStore;
 pub use signing::SqliteSigningStore;
 pub use token::SqliteTokenStore;
+pub use values::SqliteValueBackend;

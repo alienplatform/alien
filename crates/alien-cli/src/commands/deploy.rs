@@ -11,7 +11,7 @@ mod setup_validation;
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 
 use crate::commands::{
-    create_initial_deployment, fetch_dev_deployment_live_state,
+    create_initial_deployment, deployment_actions, fetch_dev_deployment_live_state, value_access,
     wait_for_dev_deployment_ready_with_progress,
 };
 use crate::deployment_tracking::{
@@ -34,7 +34,7 @@ use alien_deployment::manager_api_transport::{
     ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::types::{
@@ -772,17 +772,9 @@ async fn create_self_deployment(
     )
     .await?;
 
-    // Bind the preparation request to this exact channel even without inputs.
-    set_first_party_deployment_inputs(
-        &base_url,
-        &session.token,
-        &resolved_args.platform,
-        &resolved_args.input_values,
-        &args.channel,
-    )
-    .await?;
-
-    let create_response = create_deployment_with_group_session(
+    let create_response = create_first_party_deployment(
+        auth.sdk_client(),
+        &workspace.name,
         &base_url,
         &session.token,
         resolved_args,
@@ -1051,13 +1043,147 @@ fn first_party_inputs_request_body(
     })
 }
 
-async fn create_deployment_with_group_session(
+/// Creates a deployment from a first-party session. Only the answers to
+/// boolean inputs go to the hosted inputs endpoint: the platform plans
+/// resources from them, a boolean is never a secret, and the manager can start
+/// the first apply as soon as the deployment exists. No other answer does,
+/// whether the user gave it as a secret or as an ordinary input: whether an
+/// input is a secret is the stack's to say, and a deployment manager that holds
+/// values must be the only one to see them, so they are written after the
+/// create, to the manager for the inputs it holds and to the platform for the
+/// rest. An older platform that validates and stores inputs itself and
+/// refuses the create for a missing required input gets that one answer back
+/// in the inputs, once.
+async fn create_first_party_deployment(
+    client: &alien_platform_api::Client,
+    workspace: &str,
     base_url: &str,
     session_token: &str,
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
     project_id: &str,
 ) -> Result<CreateDeploymentApiResponse> {
+    let mut inputs = HashMap::new();
+    let mut withheld = serde_json::Map::new();
+    for (id, value) in resolved_args.input_values.clone() {
+        withheld.insert(id, value);
+    }
+    if !withheld.is_empty()
+        && setup_validation::is_prepared_before_creation(resolved_args.platform_enum)
+    {
+        // Reading the release needs the session bound to this channel first.
+        set_first_party_deployment_inputs(
+            base_url,
+            session_token,
+            &resolved_args.platform,
+            &inputs,
+            &args.channel,
+        )
+        .await?;
+        let gates =
+            setup_validation::boolean_input_ids(base_url, session_token, resolved_args, args).await;
+        for id in gates {
+            if let Some(value) = withheld.remove(&id) {
+                inputs.insert(id, value);
+            }
+        }
+    }
+    loop {
+        // Bind the preparation request to this exact channel even without inputs.
+        set_first_party_deployment_inputs(
+            base_url,
+            session_token,
+            &resolved_args.platform,
+            &inputs,
+            &args.channel,
+        )
+        .await?;
+        match send_group_session_create(base_url, session_token, resolved_args, args, project_id)
+            .await?
+        {
+            Ok(response) => {
+                store_withheld_answers(client, workspace, &response.deployment.id, &withheld)
+                    .await?;
+                return Ok(response);
+            }
+            Err(error) => {
+                let Some(input) = value_access::missing_required_input(&error, &withheld) else {
+                    return Err(group_session_create_failed(&error));
+                };
+                if let Some(value) = withheld.remove(&input) {
+                    inputs.insert(input, value);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn deploy_inputs_for_test(
+    platform: &str,
+    input_values: HashMap<String, serde_json::Value>,
+) -> (ResolvedDeployArgs, DeployArgs) {
+    let resolved = ResolvedDeployArgs {
+        name: "customer".to_string(),
+        platform: platform.to_string(),
+        platform_enum: Platform::from_str(platform).expect("a platform"),
+        setup_management: alien_core::SetupManagement::Manual,
+        network_settings: None,
+        compute_settings: None,
+        domain_settings: None,
+        input_values,
+        public_subdomain: None,
+    };
+    let args = DeployArgs::try_parse_from(["deploy", "--name", "customer", "--platform", platform])
+        .expect("deployment arguments should parse");
+    (resolved, args)
+}
+
+#[cfg(test)]
+pub(crate) async fn create_first_party_deployment_for_test(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    base_url: &str,
+    platform: &str,
+    input_values: HashMap<String, serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let (resolved, args) = deploy_inputs_for_test(platform, input_values);
+    let created = create_first_party_deployment(
+        client, workspace, base_url, "session", &resolved, &args, "prj",
+    )
+    .await?;
+    Ok(serde_json::json!({ "deploymentId": created.deployment.id }))
+}
+
+#[cfg(test)]
+pub(crate) async fn gate_inputs_for_test(
+    base_url: &str,
+    platform: &str,
+) -> std::collections::HashSet<String> {
+    let (resolved, args) = deploy_inputs_for_test(platform, HashMap::new());
+    setup_validation::validate_before_creation(base_url, "token", &resolved, &args)
+        .await
+        .expect("the release is prepared")
+}
+
+fn group_session_create_failed(error: &AlienError<GenericError>) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "Failed to create deployment ({}): {}",
+            error.code, error.message
+        ),
+    })
+}
+
+/// The outer error is a failure to send or to read the answer; the inner one
+/// is the platform's refusal, with its code and context.
+async fn send_group_session_create(
+    base_url: &str,
+    session_token: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<std::result::Result<CreateDeploymentApiResponse, AlienError<GenericError>>> {
     setup_validation::validate_before_creation(base_url, session_token, resolved_args, args)
         .await?;
     let http_client = create_platform_http_client(session_token)?;
@@ -1073,7 +1199,19 @@ async fn create_deployment_with_group_session(
         .context(ErrorData::ConfigurationError {
             message: "Failed to create deployment".to_string(),
         })?;
-    parse_api_response(response, "Failed to create deployment").await
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Ok(Err(value_access::platform_error(status.as_u16(), &text)));
+    }
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create deployment: failed to parse response".to_string(),
+        })
+        .map(Ok)
 }
 
 pub(crate) fn deployment_manager_http_client(
@@ -1383,6 +1521,120 @@ where
     Ok(typed)
 }
 
+/// Creates a deployment with the stack input answers given to `alien deploy`.
+///
+/// Only the answers to boolean inputs (`gate_inputs`) are in the first create
+/// request. The platform plans resources from them, a boolean is never a
+/// secret, and the manager can start the first apply as soon as the
+/// deployment exists. Whether any other input is a secret is the stack's to
+/// say, and a deployment manager that holds values must be the only one to
+/// see a secret: the hosted API would read it from the request body even if
+/// it refused the request. The other answers are written after the
+/// deployment exists, to the manager for the inputs it holds and to the
+/// platform for the rest. When the platform rejects the create for a missing
+/// required input (an older platform that validates and stores inputs
+/// itself), that one answer is put back and the create is sent again. An
+/// answer is put back at most once over the whole create: any refusal or
+/// missing-input error for an input already put back fails it. A failure to
+/// store the answers leaves the deployment in place and says how to retry.
+pub(crate) async fn create_deployment_with_answers(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    request: &mut alien_platform_api::types::NewDeploymentRequest,
+    answers: &HashMap<String, serde_json::Value>,
+    gate_inputs: &std::collections::HashSet<String>,
+) -> Result<alien_platform_api::types::CreateDeploymentResponse> {
+    let failed = |message: &str| ErrorData::ConfigurationError {
+        message: message.to_string(),
+    };
+    let mut withheld = serde_json::Map::new();
+    let ids: Vec<String> = request.input_values.keys().cloned().collect();
+    for id in ids {
+        if gate_inputs.contains(&id) {
+            continue;
+        }
+        if request.input_values.remove(&id).is_some() {
+            if let Some(value) = answers.get(&id) {
+                withheld.insert(id, value.clone());
+            }
+        }
+    }
+    let mut put_back = std::collections::HashSet::new();
+    let response = loop {
+        match client
+            .create_deployment()
+            .workspace(workspace)
+            .body(&*request)
+            .send()
+            .await
+            .into_sdk_error()
+        {
+            Ok(response) => break response.into_inner(),
+            Err(error) if value_access::is_held_value_refusal(&error) => {
+                let Some(input) = value_access::refused_input(&error)
+                    .filter(|input| request.input_values.contains_key(input))
+                else {
+                    return Err(error).context(failed(
+                        "Failed to create deployment with deployment group token",
+                    ));
+                };
+                if put_back.contains(&input) {
+                    return Err(error).context(failed(&format!(
+                        "The platform refused the answer for '{input}' again after it was put back"
+                    )));
+                }
+                request.input_values.remove(&input);
+                if let Some(value) = answers.get(&input) {
+                    withheld.insert(input, value.clone());
+                }
+            }
+            Err(error) => {
+                let Some(input) = value_access::missing_required_input(&error, &withheld) else {
+                    return Err(error).context(failed(
+                        "Failed to create deployment with deployment group token",
+                    ));
+                };
+                if !put_back.insert(input.clone()) {
+                    return Err(error).context(failed(&format!(
+                        "The platform asked for the answer for '{input}' again after it was put back"
+                    )));
+                }
+                if let Some(value) = withheld
+                    .remove(&input)
+                    .and_then(|value| serde_json::from_value(value).ok())
+                {
+                    request.input_values.insert(input, value);
+                }
+            }
+        }
+    };
+
+    store_withheld_answers(client, workspace, &response.deployment.id, &withheld).await?;
+    Ok(response)
+}
+
+async fn store_withheld_answers(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    created_id: &str,
+    withheld: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    if withheld.is_empty() {
+        return Ok(());
+    }
+    let mut ids: Vec<&str> = withheld.keys().map(String::as_str).collect();
+    ids.sort_unstable();
+    deployment_actions::store_created_inputs(client, workspace, created_id, withheld)
+        .await
+        .context(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Deployment '{created_id}' was created, but the answers for {} were not stored. It was not deleted. Store them with `alien deployments set-inputs {created_id}` (--secret-input ID=<value> for each).",
+                ids.join(", ")
+            ),
+            url: None,
+        })
+}
+
 async fn create_standalone_deployment(
     token: &str,
     base_url: &str,
@@ -1398,8 +1650,18 @@ async fn create_standalone_deployment(
             .context(ErrorData::ConfigurationError {
                 message: "Failed to convert deployment platform for the manager".to_string(),
             })?;
-    let client =
-        alien_manager_api::Client::new_with_client(base_url, create_platform_http_client(token)?);
+    // The answers go to the manager URL the user gave, so it must be a TLS
+    // endpoint or this machine, and a redirect must not send them again.
+    let http = if resolved_args.input_values.is_empty() {
+        create_platform_http_client(token)?
+    } else {
+        value_access::checked_manager_url(base_url)?;
+        build_platform_http_client(
+            token,
+            crate::http_client::builder().redirect(reqwest::redirect::Policy::none()),
+        )?
+    };
+    let client = alien_manager_api::Client::new_with_client(base_url, http);
     let response = client
         .create_deployment()
         .body_map(|body| {
@@ -1434,6 +1696,13 @@ async fn create_standalone_deployment(
 }
 
 fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
+    build_platform_http_client(token, crate::http_client::builder())
+}
+
+fn build_platform_http_client(
+    token: &str,
+    builder: reqwest::ClientBuilder,
+) -> Result<reqwest::Client> {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
@@ -1448,7 +1717,7 @@ fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
         HeaderValue::from_static(crate::http_client::USER_AGENT),
     );
 
-    crate::http_client::builder()
+    builder
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -1686,21 +1955,20 @@ async fn deploy_task_with_environment(
                             None => None,
                         };
 
-                        if ctx.is_platform() {
+                        let gate_inputs = if ctx.is_platform() {
                             setup_validation::validate_before_creation(
                                 &base_url,
                                 token,
                                 &resolved_args,
                                 &args,
                             )
-                            .await?;
-                        }
+                            .await?
+                        } else {
+                            Default::default()
+                        };
 
                         let response_json = if ctx.is_platform() {
-                            let create_response = sdk_client
-                            .create_deployment()
-                            .workspace(&workspace_name)
-                            .body(alien_platform_api::types::NewDeploymentRequest {
+                            let mut request = alien_platform_api::types::NewDeploymentRequest {
                                 deployment_group_external_id: None,
                                 installation: None,
         base_platform: None,
@@ -1759,6 +2027,7 @@ async fn deploy_task_with_environment(
                                 input_values: to_sdk_stack_input_values(
                                     &resolved_args.input_values,
                                 )?,
+                                held_env_names: Vec::new(),
                                 public_subdomain: None,
                                 initial_desired_release: alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
                                 setup_method: None,
@@ -1767,15 +2036,15 @@ async fn deploy_task_with_environment(
                                 cloud_account_id: None,
                                 region: None,
                                 dedicated_account: None,
-                            })
-                            .send()
-                            .await
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to create deployment with deployment group token"
-                                    .to_string(),
-                            })?
-                            .into_inner();
+                            };
+                            let create_response = create_deployment_with_answers(
+                                &sdk_client,
+                                &workspace_name,
+                                &mut request,
+                                &resolved_args.input_values,
+                                &gate_inputs,
+                            )
+                            .await?;
 
                             serde_json::to_value(&create_response)
                                 .into_alien_error()
@@ -2467,8 +2736,8 @@ async fn deploy_task_with_environment(
         session.clone(),
         acquired_deployment.execution_claim.clone(),
     );
-    // This process alone steps the deployment, so a key of its own is enough.
-    alien_deployment::set_ephemeral_secrets_digest_key();
+    // The checksums saved in the deployment must match the next run too.
+    alien_deployment::persisted_digest_key::use_user_secrets_digest_key();
 
     let policy = RunnerPolicy {
         max_steps: 400,
@@ -3505,6 +3774,22 @@ async fn request_deployment_retry(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_later_flag_wins_for_the_same_input() {
+        let values = collect_raw_input_values(
+            None,
+            &["region=eu".to_string(), "token=plain-now".to_string()],
+            &[
+                "api_key=s3cret".to_string(),
+                "token=s3cret-later".to_string(),
+            ],
+        )
+        .expect("inputs parse");
+        assert_eq!(values["region"], serde_json::json!("eu"));
+        assert_eq!(values["api_key"], serde_json::json!("s3cret"));
+        assert_eq!(values["token"], serde_json::json!("s3cret-later"));
+    }
+
     #[test]
     fn machines_join_token_response_preserves_capacity_requirements() {
         let response = serde_json::from_value(serde_json::json!({
@@ -5067,7 +5352,7 @@ mod tests {
                 "preview",
             ])
             .expect("deploy args");
-            create_deployment_with_group_session(
+            send_group_session_create(
                 &server.base_url(),
                 "test-group-token",
                 &resolved,
@@ -5075,6 +5360,7 @@ mod tests {
                 "test-project",
             )
             .await
+            .and_then(|answer| answer.map_err(|error| group_session_create_failed(&error)))
             .expect_err("preparation or synthetic creation must reject this request");
             create.assert_hits_async(usize::from(should_create)).await;
             preparation.assert_hits_async(1).await;
@@ -5225,6 +5511,81 @@ max = 1
         .expect_err("manager rejects the correctly formed request");
         assert!(error.to_string().contains("409"), "{error}");
         create.assert_hits_async(1).await;
+    }
+
+    fn standalone_resolved(input_values: HashMap<String, serde_json::Value>) -> ResolvedDeployArgs {
+        ResolvedDeployArgs {
+            name: "test".to_string(),
+            platform: "aws".to_string(),
+            platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
+            network_settings: None,
+            compute_settings: None,
+            domain_settings: None,
+            input_values,
+            public_subdomain: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_creation_sends_no_answers_to_a_plain_http_manager() {
+        let resolved = standalone_resolved(HashMap::from([(
+            "secret".to_string(),
+            serde_json::json!("canary-standalone-http"),
+        )]));
+        let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+            .expect("valid standalone arguments");
+
+        let error = create_standalone_deployment(
+            "test-group-token",
+            "http://manager.example.com",
+            &resolved,
+            &args,
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("answers are not sent over plain http");
+
+        assert!(error.to_string().contains("not safe"), "{error}");
+        assert!(!error.to_string().contains("canary-standalone-http"));
+    }
+
+    #[tokio::test]
+    async fn standalone_creation_does_not_follow_a_redirect_with_the_answers() {
+        let elsewhere = httpmock::MockServer::start_async().await;
+        let target = elsewhere
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).json_body(serde_json::json!({}));
+            })
+            .await;
+        let server = httpmock::MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/deployments");
+                then.status(307)
+                    .header("location", elsewhere.url("/v1/deployments"));
+            })
+            .await;
+        let resolved = standalone_resolved(HashMap::from([(
+            "secret".to_string(),
+            serde_json::json!("canary-standalone-redirect"),
+        )]));
+        let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+            .expect("valid standalone arguments");
+
+        create_standalone_deployment(
+            "test-group-token",
+            &server.base_url(),
+            &resolved,
+            &args,
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a redirect is an error, not a second request");
+
+        first.assert_hits_async(1).await;
+        target.assert_hits_async(0).await;
     }
 
     /// A deploy config's data disk choice, including 0 for no disk, must reach

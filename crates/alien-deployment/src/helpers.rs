@@ -581,7 +581,7 @@ pub fn inject_monitoring_environment_variables(
                         .metrics_endpoint
                         .as_ref()
                         .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
-                    hash: runtime_monitoring_secrets_hash(monitoring),
+                    hash: runtime_monitoring_secrets_hash(monitoring)?,
                 };
                 let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
                     .into_alien_error()
@@ -1327,12 +1327,19 @@ fn vault_secret_names_to_remove(
     removed
 }
 
-fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(monitoring.logs_auth_header.as_bytes());
+/// Fingerprint of the runtime-owned monitoring secrets, so a changed header rolls the worker.
+/// Keyed, so a copy of the worker settings cannot be used to test guesses at the headers.
+fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> Result<String> {
+    let key = process_digest_key()?;
+    let mut derive = HmacSha256::new_from_slice(&key).expect("HMAC accepts any key length");
+    derive.update(b"alien-runtime-secrets\0");
+    let derived = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&derived).expect("HMAC accepts any key length");
+    mac.update(monitoring.logs_auth_header.as_bytes());
     if monitoring.metrics_endpoint.is_some() {
-        hasher.update(b"\0metrics\0");
-        hasher.update(
+        mac.update(b"\0metrics\0");
+        mac.update(
             monitoring
                 .metrics_auth_header
                 .as_ref()
@@ -1340,11 +1347,22 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
                 .as_bytes(),
         );
     }
-    format!("{:x}", hasher.finalize())
+    Ok(format!("{:x}", mac.finalize().into_bytes()))
 }
 
-/// The key for digests of secret values, set once at startup.
-static SECRETS_DIGEST_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+fn process_digest_key() -> Result<[u8; 32]> {
+    #[cfg(test)]
+    let key = alien_core::secrets_digest_key::get().or(Some([7; 32]));
+    #[cfg(not(test))]
+    let key = alien_core::secrets_digest_key::get();
+    key.ok_or_else(|| {
+        AlienError::new(ErrorData::InternalError {
+            message: "No secrets digest key is set; the embedding process must call \
+                      set_secrets_digest_key"
+                .to_string(),
+        })
+    })
+}
 
 /// Sets the key that digests of secret values are computed with.
 ///
@@ -1355,10 +1373,10 @@ static SECRETS_DIGEST_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::
 /// can't read. Without a key, syncing secrets fails. Setting the key that is
 /// already set is allowed; a different key is an error.
 pub fn set_secrets_digest_key(key: [u8; 32]) -> Result<()> {
-    match SECRETS_DIGEST_KEY.set(key) {
-        Ok(()) => Ok(()),
-        Err(_) if SECRETS_DIGEST_KEY.get() == Some(&key) => Ok(()),
-        Err(_) => Err(AlienError::new(ErrorData::InternalError {
+    match alien_core::secrets_digest_key::set_if_unset(key) {
+        true => Ok(()),
+        false if alien_core::secrets_digest_key::get() == Some(key) => Ok(()),
+        false => Err(AlienError::new(ErrorData::InternalError {
             message: "A different secrets digest key is already set for this process".to_string(),
         })),
     }
@@ -1369,7 +1387,7 @@ pub fn set_secrets_digest_key(key: [u8; 32]) -> Result<()> {
 /// For managers built several times in one process, each reading its own key
 /// file: the first key wins.
 pub fn set_secrets_digest_key_if_unset(key: [u8; 32]) -> bool {
-    SECRETS_DIGEST_KEY.set(key).is_ok()
+    alien_core::secrets_digest_key::set_if_unset(key)
 }
 
 /// Uses a random key that lives as long as this process.
@@ -1380,13 +1398,13 @@ pub fn set_secrets_digest_key_if_unset(key: [u8; 32]) -> bool {
 pub fn set_ephemeral_secrets_digest_key() {
     let mut key = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
-    let _ = SECRETS_DIGEST_KEY.set(key);
+    alien_core::secrets_digest_key::set_if_unset(key);
 }
 
 /// Whether a key has been set, by [`set_secrets_digest_key`] or
 /// [`set_ephemeral_secrets_digest_key`].
 pub fn secrets_digest_key_is_set() -> bool {
-    SECRETS_DIGEST_KEY.get().is_some()
+    alien_core::secrets_digest_key::get().is_some()
 }
 
 /// Digest of the secrets last written to the vault, recorded in runtime
@@ -1400,10 +1418,10 @@ fn secrets_sync_hash(
 ) -> Result<String> {
     // Unit tests step deployments without an embedding process to set the key.
     #[cfg(test)]
-    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    let key = alien_core::secrets_digest_key::get().or(Some([7; 32]));
     #[cfg(not(test))]
-    let key = SECRETS_DIGEST_KEY.get();
-    configured_secrets_sync_hash(key, deployment_scope, desired_secrets)
+    let key = alien_core::secrets_digest_key::get();
+    configured_secrets_sync_hash(key.as_ref(), deployment_scope, desired_secrets)
 }
 
 fn configured_secrets_sync_hash(
@@ -1443,6 +1461,311 @@ fn keyed_secrets_sync_hash(
         mac.update(value.as_bytes());
         mac.update(b"\0");
     }
+    format!("{:x}", mac.finalize().into_bytes())
+}
+
+/// Keyed digest of one value held by a manager, as lowercase hex.
+///
+/// `HMAC(HMAC(K, "alien-values\0" || scope), slot || 0x00 || value)` with `K`
+/// the process's key (see [`set_secrets_digest_key`]). The scope (`dep:<id>`)
+/// is part of the key, so the same value in two deployments has two digests
+/// and a digest cannot be matched across deployments. The control plane
+/// stores the digest to notice changes and cannot use it to test guesses.
+pub fn value_digest(scope: &str, slot: &str, value: &str) -> Result<String> {
+    let key = process_digest_key()?;
+    Ok(keyed_value_digest(&key, scope, slot, value))
+}
+
+/// Fingerprint of a deployment's environment variables, as `env-<hex>`.
+///
+/// Workloads carry it (in `ALIEN_SECRETS`) so a changed variable rolls them
+/// out. It is keyed from the process's key (see [`set_secrets_digest_key`]),
+/// so a copy of the workload settings cannot be used to test guesses at the
+/// values.
+pub fn environment_snapshot_hash(variables: &[EnvironmentVariable]) -> Result<String> {
+    let key = process_digest_key()?;
+    let mut derive = HmacSha256::new_from_slice(&key).expect("HMAC accepts any key length");
+    derive.update(b"alien-env-snapshot\0");
+    let snapshot_key = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&snapshot_key).expect("HMAC accepts any key length");
+    for variable in variables {
+        mac.update(variable.name.as_bytes());
+        mac.update(b"=");
+        mac.update(variable.value.as_bytes());
+        mac.update(b"\n");
+    }
+    Ok(format!("env-{:x}", mac.finalize().into_bytes()))
+}
+
+/// Deploy 1 upgrade check: delete it, with the old hash functions below, in Deploy 2.
+///
+/// The hashes a workload carries were plain SHA-256 values before they were keyed. A workload
+/// saved with an old hash and unchanged values must not roll because the hash is now keyed.
+/// For each compute resource whose `ALIEN_SECRETS` carries the old hash of the snapshot's
+/// variables, and each worker whose `ALIEN_RUNTIME_SECRETS` carries the old hash of the
+/// monitoring headers, this rewrites the hash to the keyed one, so the resource compares equal
+/// to its desired config. A hash that matches neither is left alone: its values changed and
+/// the resource rolls. Returns the number of hashes rewritten.
+pub(crate) fn adopt_unkeyed_hashes(
+    stack_state: &mut StackState,
+    snapshot: &EnvironmentVariablesSnapshot,
+    monitoring: Option<&OtlpConfig>,
+) -> Result<usize> {
+    let environment_hashes = (
+        unkeyed_environment_snapshot_hash(&snapshot.variables),
+        snapshot.hash.clone(),
+    );
+    let runtime_hashes = monitoring
+        .map(|monitoring| {
+            Ok::<_, AlienError<ErrorData>>((
+                unkeyed_runtime_monitoring_secrets_hash(monitoring),
+                runtime_monitoring_secrets_hash(monitoring)?,
+            ))
+        })
+        .transpose()?;
+
+    let mut adopted = 0;
+    for resource_state in stack_state.resources.values_mut() {
+        let configs = std::iter::once(&mut resource_state.config)
+            .chain(resource_state.previous_config.as_mut());
+        for config in configs {
+            let Some(environment) = compute_environment_mut(config) else {
+                continue;
+            };
+            if let Some(stored) = environment.get_mut(ENV_ALIEN_SECRETS) {
+                adopted += usize::from(adopt_hash::<AlienSecretsConfig>(
+                    stored,
+                    &environment_hashes,
+                    |config| &mut config.hash,
+                )?);
+            }
+            if let (Some(stored), Some(hashes)) = (
+                environment.get_mut(ENV_ALIEN_RUNTIME_SECRETS),
+                &runtime_hashes,
+            ) {
+                adopted += usize::from(adopt_hash::<AlienRuntimeSecretsConfig>(
+                    stored,
+                    hashes,
+                    |config| &mut config.hash,
+                )?);
+            }
+        }
+    }
+    if adopted > 0 {
+        info!(
+            adopted,
+            "Rewrote unkeyed workload hashes of unchanged values to keyed hashes"
+        );
+    }
+    Ok(adopted)
+}
+
+/// Rewrites the hash in a stored JSON setting from `old` to `keyed`, when it equals `old`.
+fn adopt_hash<T: Serialize + serde::de::DeserializeOwned>(
+    stored: &mut String,
+    (old, keyed): &(String, String),
+    hash_of: impl Fn(&mut T) -> &mut String,
+) -> Result<bool> {
+    let Ok(mut parsed) = serde_json::from_str::<T>(stored) else {
+        return Ok(false);
+    };
+    let hash = hash_of(&mut parsed);
+    if hash != old || hash == keyed {
+        return Ok(false);
+    }
+    *hash = keyed.clone();
+    *stored =
+        serde_json::to_string(&parsed)
+            .into_alien_error()
+            .context(ErrorData::InternalError {
+                message: "Failed to serialize a workload hash setting".to_string(),
+            })?;
+    Ok(true)
+}
+
+/// The environment hash before it was keyed. Used only by [`adopt_unkeyed_hashes`].
+fn unkeyed_environment_snapshot_hash(variables: &[EnvironmentVariable]) -> String {
+    let mut hasher = Sha256::new();
+    for variable in variables {
+        hasher.update(variable.name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(variable.value.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("env-{:x}", hasher.finalize())
+}
+
+/// The monitoring secrets hash before it was keyed. Used only by [`adopt_unkeyed_hashes`].
+fn unkeyed_runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(monitoring.logs_auth_header.as_bytes());
+    if monitoring.metrics_endpoint.is_some() {
+        hasher.update(b"\0metrics\0");
+        hasher.update(
+            monitoring
+                .metrics_auth_header
+                .as_ref()
+                .unwrap_or(&monitoring.logs_auth_header)
+                .as_bytes(),
+        );
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+const HELD_VALUE_PREFIX: &str = "alien-held:";
+
+/// The environment of a compute resource's config, if it is one.
+fn compute_environment_mut(
+    resource: &mut alien_core::Resource,
+) -> Option<&mut HashMap<String, String>> {
+    if resource.downcast_ref::<alien_core::Worker>().is_some() {
+        return resource
+            .downcast_mut::<alien_core::Worker>()
+            .map(|r| &mut r.environment);
+    }
+    if resource.downcast_ref::<alien_core::Container>().is_some() {
+        return resource
+            .downcast_mut::<alien_core::Container>()
+            .map(|r| &mut r.environment);
+    }
+    resource
+        .downcast_mut::<alien_core::Daemon>()
+        .map(|r| &mut r.environment)
+}
+
+fn held_value_marker(scope: &str, name: &str, value: &str) -> Result<String> {
+    Ok(format!(
+        "{HELD_VALUE_PREFIX}{}",
+        value_digest(scope, &format!("env:{name}"), value)?
+    ))
+}
+
+/// Replaces values a manager holds in `scope` (`held`: name and value) in the compute
+/// resources' environments with `alien-held:<digest>`, so the state it hands
+/// to a control plane carries no deployment value. Environment entries that
+/// differ from the held value are left as they are.
+pub fn redact_held_values(
+    stack_state: &mut StackState,
+    scope: &str,
+    held: &[(String, String)],
+) -> Result<()> {
+    rewrite_held_values(stack_state, held, |name, value, current| {
+        Ok((current == value)
+            .then(|| held_value_marker(scope, name, value))
+            .transpose()?)
+    })
+}
+
+/// Like [`redact_held_values`], for values known only by the digest a sender
+/// planned them with (`planned`: name and digest of `env:NAME`). An
+/// environment entry whose own digest equals the planned one is replaced with
+/// the same marker, so a value that was changed or deleted on the manager
+/// after the step loaded it is still kept out of saved state.
+pub fn redact_planned_values(
+    stack_state: &mut StackState,
+    scope: &str,
+    planned: &[(String, String)],
+) -> Result<()> {
+    rewrite_held_values(stack_state, planned, |name, digest, current| {
+        Ok(
+            (value_digest(scope, &format!("env:{name}"), current)? == digest)
+                .then(|| format!("{HELD_VALUE_PREFIX}{digest}")),
+        )
+    })
+}
+
+/// Replaces every compute environment entry whose value equals one of
+/// `values` (`slot` and value) with `alien-held:<digest of that slot>`,
+/// whatever the entry is named. For state whose environment names are not
+/// known, because the stack that maps held inputs to variables is gone.
+/// Empty values are skipped. An entry that only happens to equal a held value
+/// is replaced too: that is the cost of not knowing the names.
+pub fn redact_values_by_content(
+    stack_state: &mut StackState,
+    scope: &str,
+    values: &[(String, String)],
+) -> Result<()> {
+    let markers = values
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(slot, value)| {
+            Ok((
+                value.as_str(),
+                format!("{HELD_VALUE_PREFIX}{}", value_digest(scope, slot, value)?),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if markers.is_empty() {
+        return Ok(());
+    }
+    for resource_state in stack_state.resources.values_mut() {
+        let configs = std::iter::once(&mut resource_state.config)
+            .chain(resource_state.previous_config.as_mut());
+        for config in configs {
+            let Some(environment) = compute_environment_mut(config) else {
+                continue;
+            };
+            for current in environment.values_mut() {
+                if let Some((_, marker)) = markers.iter().find(|(value, _)| *value == current) {
+                    *current = marker.clone();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Undoes [`redact_held_values`] for the values `held` now has. A marker for
+/// a value that has since changed stays, so it differs from the desired
+/// environment and the resource is updated.
+pub fn restore_held_values(
+    stack_state: &mut StackState,
+    scope: &str,
+    held: &[(String, String)],
+) -> Result<()> {
+    rewrite_held_values(stack_state, held, |name, value, current| {
+        Ok((current == held_value_marker(scope, name, value)?).then(|| value.to_string()))
+    })
+}
+
+fn rewrite_held_values(
+    stack_state: &mut StackState,
+    held: &[(String, String)],
+    replacement: impl Fn(&str, &str, &str) -> Result<Option<String>>,
+) -> Result<()> {
+    if held.is_empty() {
+        return Ok(());
+    }
+    for resource_state in stack_state.resources.values_mut() {
+        let configs = std::iter::once(&mut resource_state.config)
+            .chain(resource_state.previous_config.as_mut());
+        for config in configs {
+            let Some(environment) = compute_environment_mut(config) else {
+                continue;
+            };
+            for (name, value) in held {
+                if let Some(current) = environment.get(name) {
+                    if let Some(next) = replacement(name, value, current)? {
+                        environment.insert(name.clone(), next);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn keyed_value_digest(key: &[u8; 32], scope: &str, slot: &str, value: &str) -> String {
+    let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    derive.update(b"alien-values\0");
+    derive.update(scope.as_bytes());
+    let value_key = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&value_key).expect("HMAC accepts any key length");
+    mac.update(slot.as_bytes());
+    mac.update(b"\0");
+    mac.update(value.as_bytes());
     format!("{:x}", mac.finalize().into_bytes())
 }
 
@@ -3073,6 +3396,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn value_digests_depend_on_the_key_the_scope_the_slot_and_the_value() {
+        let d = |key: u8, scope: &str, slot: &str, value: &str| {
+            keyed_value_digest(&[key; 32], scope, slot, value)
+        };
+        let digest = d(1, "dep:a", "env:API_TOKEN", "value");
+        assert_eq!(digest.len(), 64);
+        assert_eq!(digest, d(1, "dep:a", "env:API_TOKEN", "value"));
+        assert_ne!(digest, d(2, "dep:a", "env:API_TOKEN", "value"));
+        assert_ne!(digest, d(1, "dep:b", "env:API_TOKEN", "value"));
+        assert_ne!(digest, d(1, "dep:a", "env:OTHER", "value"));
+        assert_ne!(digest, d(1, "dep:a", "env:API_TOKEN", "other"));
+        // Scope, slot and value are separated, so moving a byte between them changes the digest.
+        assert_ne!(d(1, "dep:a", "env:AB", "C"), d(1, "dep:a", "env:A", "BC"));
+        assert_ne!(d(1, "dep:ab", "env:C", "v"), d(1, "dep:a", "env:bC", "v"));
+    }
+
     /// A deployment upgraded from the unkeyed digest writes its secrets once,
     /// then skips unchanged syncs again.
     #[tokio::test]
@@ -3599,5 +3939,178 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn worker_state_with_environment(id: &str, environment: &[(&str, &str)]) -> StackResourceState {
+        let mut state = make_worker_resource_state(id, None);
+        let worker = state.config.downcast_mut::<Worker>().unwrap();
+        worker.environment = environment
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        state
+    }
+
+    fn environment_of(state: &StackState, id: &str) -> HashMap<String, String> {
+        state.resources[id]
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .environment
+            .clone()
+    }
+
+    #[test]
+    fn redacted_state_carries_no_held_value_and_restores_to_the_original() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let canary = "canary-value-7f3a".to_string();
+        let held = vec![("API_URL".to_string(), canary.clone())];
+        let mut state = StackState::new(Platform::Aws);
+        let mut worker = worker_state_with_environment(
+            "api",
+            &[("API_URL", &canary), ("OTHER", "plain"), ("SAME_NAME", "x")],
+        );
+        worker.previous_config = Some(worker.config.clone());
+        state.resources.insert("api".to_string(), worker);
+        // A resource whose variable has the held name but another value is not held.
+        state.resources.insert(
+            "other".to_string(),
+            worker_state_with_environment("other", &[("API_URL", "someone-else")]),
+        );
+        let original = serde_json::to_value(&state).unwrap();
+
+        redact_held_values(&mut state, "dep:dep_1", &held).unwrap();
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains(&canary), "{json}");
+        let env = environment_of(&state, "api");
+        assert!(env["API_URL"].starts_with("alien-held:"), "{env:?}");
+        assert_eq!(env["OTHER"], "plain");
+        assert_eq!(environment_of(&state, "other")["API_URL"], "someone-else");
+        assert_ne!(serde_json::to_value(&state).unwrap(), original);
+
+        restore_held_values(&mut state, "dep:dep_1", &held).unwrap();
+        assert_eq!(serde_json::to_value(&state).unwrap(), original);
+    }
+
+    #[test]
+    fn a_value_known_by_its_planned_digest_is_redacted_to_the_same_marker() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let scope = "dep:dep_1";
+        let planned_digest = value_digest(scope, "env:TOKEN", "planned").unwrap();
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "planned"), ("OTHER", "planned")]),
+        );
+        let mut by_value = state.clone();
+
+        redact_planned_values(
+            &mut state,
+            scope,
+            &[("TOKEN".to_string(), planned_digest.clone())],
+        )
+        .unwrap();
+
+        let env = environment_of(&state, "api");
+        assert_eq!(env["TOKEN"], format!("alien-held:{planned_digest}"));
+        assert_eq!(env["OTHER"], "planned", "only the planned name is touched");
+        redact_held_values(
+            &mut by_value,
+            scope,
+            &[("TOKEN".to_string(), "planned".to_string())],
+        )
+        .unwrap();
+        assert_eq!(
+            environment_of(&by_value, "api")["TOKEN"],
+            env["TOKEN"],
+            "the marker is the one redacting by value gives"
+        );
+
+        let mut changed = StackState::new(Platform::Aws);
+        changed.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "someone-elses")]),
+        );
+        redact_planned_values(
+            &mut changed,
+            scope,
+            &[("TOKEN".to_string(), planned_digest)],
+        )
+        .unwrap();
+        assert_eq!(environment_of(&changed, "api")["TOKEN"], "someone-elses");
+    }
+
+    #[test]
+    fn a_marker_for_a_value_that_changed_is_not_restored() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "first")]),
+        );
+        redact_held_values(
+            &mut state,
+            "dep:dep_1",
+            &[("TOKEN".to_string(), "first".to_string())],
+        )
+        .unwrap();
+        let marker = environment_of(&state, "api")["TOKEN"].clone();
+
+        restore_held_values(
+            &mut state,
+            "dep:dep_1",
+            &[("TOKEN".to_string(), "second".to_string())],
+        )
+        .unwrap();
+
+        // The desired environment has "second"; the stale marker differs from it.
+        assert_eq!(environment_of(&state, "api")["TOKEN"], marker);
+    }
+
+    #[test]
+    fn a_marker_from_another_deployment_is_not_restored() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let held = vec![("TOKEN".to_string(), "value".to_string())];
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "value")]),
+        );
+        redact_held_values(&mut state, "dep:dep_1", &held).unwrap();
+        let marker = environment_of(&state, "api")["TOKEN"].clone();
+
+        restore_held_values(&mut state, "dep:dep_2", &held).unwrap();
+
+        assert_eq!(environment_of(&state, "api")["TOKEN"], marker);
+    }
+
+    #[test]
+    fn the_environment_snapshot_hash_is_keyed_and_follows_the_values() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let variable = |name: &str, value: &str| EnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: None,
+        };
+        let one = environment_snapshot_hash(&[variable("A", "1")]).unwrap();
+        assert_eq!(
+            one,
+            environment_snapshot_hash(&[variable("A", "1")]).unwrap()
+        );
+        assert_ne!(
+            one,
+            environment_snapshot_hash(&[variable("A", "2")]).unwrap()
+        );
+        assert_ne!(
+            one,
+            environment_snapshot_hash(&[variable("B", "1")]).unwrap()
+        );
+
+        let mut unkeyed = Sha256::new();
+        unkeyed.update(b"A=1\n");
+        assert_ne!(one, format!("env-{:x}", unkeyed.finalize()));
+        assert!(one.starts_with("env-") && one.len() == 4 + 64);
     }
 }

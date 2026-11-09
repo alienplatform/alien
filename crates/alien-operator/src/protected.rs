@@ -781,6 +781,9 @@ fn protect_config(
             created_at: manager.environment_variables.created_at.clone(),
         },
         input_values,
+        // Values the manager holds never reach a protected install: its
+        // variables and inputs come from the signed config above.
+        value_slots: Vec::new(),
         // Secret inputs are resolved from the deployment's own vault.
         stored_secret_input_ids: manager.stored_secret_input_ids.clone(),
         // Logs can carry customer data, so they go only where the signed
