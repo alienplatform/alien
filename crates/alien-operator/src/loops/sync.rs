@@ -387,7 +387,7 @@ async fn sync_with_manager(
     {
         deployment_state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     }
-    let installed_config_missing = installed_config_missing(state, &deployment_state).await?;
+    let installed_config = installed_config(state, &deployment_state).await?;
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
@@ -403,7 +403,7 @@ async fn sync_with_manager(
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
     };
     let mut sync_input = SyncInput::builder(sync_request)
-        .installed_config_missing(installed_config_missing)
+        .installed_config_missing(installed_config != InstalledConfig::Usable)
         .pull_secret_refreshed(state.db.pull_secret_refreshed());
     if let Some(operator_image) = operator_image.cloned() {
         sync_input = sync_input.operator_image(operator_image);
@@ -595,13 +595,14 @@ async fn sync_with_manager(
             // Operator completed last (its applied operation). Any other
             // claim is new work: an update, a corrective target or a retry.
             // A target with no claim that answers a missing config is the
-            // installed release sent again: refresh it in place.
+            // installed release sent again: refresh it in place. One that
+            // answers a config without the commands key is applied again.
             let maintenance = match sync_response.execution_claim.as_ref() {
                 Some(claim) => {
                     state.db.get_applied_operation_id().await?.as_deref()
                         == Some(claim.operation_id.as_str())
                 }
-                None => installed_config_missing,
+                None => installed_config == InstalledConfig::Missing,
             };
             let repeated_failed_target = if sync_response.execution_claim == durable_execution.claim
             {
@@ -643,42 +644,68 @@ async fn sync_with_manager(
     Ok(has_update || state_hydrated)
 }
 
-/// Whether an enrolled Operator runs a settled release without a config it
-/// can use. A token-mode Operator cleared the config after each apply; once it
-/// enrolls, it needs the config to keep workload credentials fresh. A config
-/// the previous pod saved before enrollment (it has no manager audience) is
-/// also unusable when the release has a command receiver built before
-/// capability files: that config holds no commands key for the receiver, and
-/// the Operator must not pass on the deployment token it holds instead.
-async fn installed_config_missing(
+/// What an enrolled Operator holds for the release it runs or is applying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledConfig {
+    /// A config the Operator can use to keep workload credentials fresh.
+    Usable,
+    /// No config at all. A token-mode Operator cleared the config after each
+    /// apply; once it enrolls, it needs the config again.
+    Missing,
+    /// A config the previous pod saved before enrollment (it has no manager
+    /// audience) while the release has a command receiver built before
+    /// capability files. It holds no commands key for the receiver, and the
+    /// Operator must not pass on the deployment token it holds instead. The
+    /// receiver also still holds that token, so the release has to be applied
+    /// again, not just refreshed.
+    WithoutCommandsKey,
+}
+
+async fn installed_config(
     state: &OperatorState,
     deployment_state: &alien_core::DeploymentState,
-) -> crate::error::Result<bool> {
+) -> crate::error::Result<InstalledConfig> {
+    // A settled deployment runs its current release. One that is applying a
+    // target (an update the previous pod accepted before it was replaced)
+    // runs on the config of that target.
     let settled = deployment_state.target_release.is_none()
         && matches!(
             deployment_state.status,
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
-        )
-        && deployment_state
-            .current_release
-            .as_ref()
-            .is_some_and(|release| release.release_id.is_some());
-    if !settled || !crate::daily_identity::has_runtime_identity(&state.db).await? {
-        return Ok(false);
+        );
+    let applying = matches!(
+        deployment_state.status,
+        DeploymentStatus::UpdatePending | DeploymentStatus::Updating
+    );
+    let release = if settled {
+        deployment_state.current_release.as_ref()
+    } else if applying {
+        deployment_state.target_release.as_ref()
+    } else {
+        None
+    };
+    let Some(release) = release.filter(|release| release.release_id.is_some()) else {
+        return Ok(InstalledConfig::Usable);
+    };
+    if !crate::daily_identity::has_runtime_identity(&state.db).await? {
+        return Ok(InstalledConfig::Usable);
     }
     let Some(config) = state.db.get_deployment_config().await? else {
-        return Ok(true);
+        // An update in flight with no config cannot be applied; the target
+        // that carried it is gone. Ask for the release again.
+        return Ok(InstalledConfig::Missing);
     };
-    let needs_commands_key = deployment_state
-        .current_release
-        .as_ref()
-        .is_some_and(|release| {
-            !release
-                .stack
-                .command_receivers_without_capability_file()
-                .is_empty()
-        });
-    Ok(config.runtime_identity_audience.is_none() && needs_commands_key)
+    let needs_commands_key = !release
+        .stack
+        .command_receivers_without_capability_file()
+        .is_empty();
+    Ok(
+        if config.runtime_identity_audience.is_none() && needs_commands_key {
+            InstalledConfig::WithoutCommandsKey
+        } else {
+            InstalledConfig::Usable
+        },
+    )
 }
 
 /// Make `target_deployment` the Operator's target: record the release as the
@@ -1128,7 +1155,7 @@ mod tests {
         accept_target_release, apply_manager_control_state, create_authenticated_client,
         dynamic_containers_capability, is_uninitialized_deployment_state,
         operation_command_address_capability, report_operator_capabilities,
-        reported_operations_config, sync_with_manager,
+        reported_operations_config, sync_with_manager, InstalledConfig,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
@@ -2435,6 +2462,56 @@ mod tests {
         let later = requests.lock().unwrap().last().cloned().unwrap();
         assert!(later.get("installedConfigMissing").is_none(), "{later}");
 
+        // The config the previous pod saved before enrollment holds no
+        // commands key for a receiver built before capability files, and that
+        // receiver still has the deployment token. The manager's answer is
+        // applied again, so the receiver gets the key, not refreshed in place.
+        let receiver_release = ReleaseInfo {
+            release_id: Some("rel_installed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("enrolled".to_string())
+                .add(
+                    container_receiver("api", false),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .build(),
+        };
+        let mut keyless = config.clone();
+        keyless.runtime_identity_audience = None;
+        let mut settled_state = state.db.get_deployment_state().await.unwrap().unwrap();
+        settled_state.current_release = Some(receiver_release.clone());
+        state.db.set_deployment_state(&settled_state).await.unwrap();
+        state.db.set_deployment_config(&keyless).await.unwrap();
+        *response.lock().unwrap() = json!({
+            "target": { "releaseInfo": receiver_release, "config": config },
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let asked = requests.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(asked["installedConfigMissing"], json!(true), "{asked}");
+        let applying = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(applying.status, DeploymentStatus::UpdatePending);
+        assert_eq!(
+            applying
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.as_deref()),
+            Some("rel_installed")
+        );
+
+        // The Operator restarted with that update still pending and the config
+        // still unusable: it asks again instead of waiting for work that never
+        // comes.
+        state.db.set_deployment_config(&keyless).await.unwrap();
+        *response.lock().unwrap() = json!({});
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let asked = requests.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(asked["installedConfigMissing"], json!(true), "{asked}");
+
         server.abort();
         std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
@@ -3715,10 +3792,10 @@ mod tests {
 
     /// A config saved before the Operator enrolled has no commands key for a
     /// receiver built before capability files, and the manager sends the
-    /// settled release again only when the config is missing. The Operator
-    /// asks for it then, so the receiver gets its key on the next sync. A
-    /// config that already has the manager's audience, or a release with no
-    /// such receiver, needs nothing.
+    /// release again when the Operator asks. The Operator asks for it, settled
+    /// or still applying that release, so the receiver gets its key on the
+    /// next sync. A config that already has the manager's audience, or a
+    /// release with no such receiver, needs nothing.
     #[tokio::test]
     async fn a_config_saved_before_enrollment_is_asked_for_again_when_a_receiver_needs_the_key() {
         let directory = tempfile::tempdir().unwrap();
@@ -3754,10 +3831,10 @@ mod tests {
             pod_log_collection: false,
             cancel: CancellationToken::new(),
         };
-        let deployment_state = |receiver_marked: bool| DeploymentState {
-            platform: Platform::Kubernetes,
-            status: DeploymentStatus::Running,
-            current_release: Some(ReleaseInfo {
+        // A settled deployment, or one applying the same release as a target
+        // (the previous pod accepted it before it was replaced).
+        let deployment_state_with = |status: DeploymentStatus, receiver_marked: bool| {
+            let release = ReleaseInfo {
                 release_id: Some("rel_settled".to_string()),
                 version: None,
                 description: None,
@@ -3767,15 +3844,28 @@ mod tests {
                         alien_core::ResourceLifecycle::Live,
                     )
                     .build(),
-            }),
-            target_release: None,
-            stack_state: None,
-            error: None,
-            environment_info: None,
-            runtime_metadata: None,
-            retry_requested: false,
-            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            let applying = status == DeploymentStatus::UpdatePending;
+            DeploymentState {
+                platform: Platform::Kubernetes,
+                status,
+                current_release: Some(release.clone()),
+                target_release: applying.then_some(release),
+                stack_state: None,
+                error: None,
+                environment_info: None,
+                runtime_metadata: None,
+                retry_requested: false,
+                protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            }
         };
+        let deployment_state = |receiver_marked: bool| {
+            deployment_state_with(DeploymentStatus::Running, receiver_marked)
+        };
+        let applying_state = |receiver_marked: bool| {
+            deployment_state_with(DeploymentStatus::UpdatePending, receiver_marked)
+        };
+        let states: [&dyn Fn(bool) -> DeploymentState; 2] = [&deployment_state, &applying_state];
         let saved_config = |audience: Option<&str>| {
             let mut config = alien_core::DeploymentConfig::builder()
                 .base_platform(Platform::Aws)
@@ -3792,38 +3882,51 @@ mod tests {
             config
         };
 
+        // A config with no audience, and a receiver that needs the key: the
+        // release must be applied again, whether settled or in flight.
         state
             .db
             .set_deployment_config(&saved_config(None))
             .await
             .unwrap();
-        assert!(
-            super::installed_config_missing(&state, &deployment_state(false))
-                .await
-                .unwrap()
-        );
-        assert!(
-            !super::installed_config_missing(&state, &deployment_state(true))
-                .await
-                .unwrap()
-        );
+        for state_of in states {
+            assert_eq!(
+                super::installed_config(&state, &state_of(false))
+                    .await
+                    .unwrap(),
+                InstalledConfig::WithoutCommandsKey
+            );
+            assert_eq!(
+                super::installed_config(&state, &state_of(true))
+                    .await
+                    .unwrap(),
+                InstalledConfig::Usable
+            );
+        }
 
         state
             .db
             .set_deployment_config(&saved_config(Some("https://manager.example.com")))
             .await
             .unwrap();
-        assert!(
-            !super::installed_config_missing(&state, &deployment_state(false))
-                .await
-                .unwrap()
-        );
+        for state_of in states {
+            assert_eq!(
+                super::installed_config(&state, &state_of(false))
+                    .await
+                    .unwrap(),
+                InstalledConfig::Usable
+            );
+        }
 
+        // No config at all: the release is refreshed in place.
         state.db.clear_deployment_config().await.unwrap();
-        assert!(
-            super::installed_config_missing(&state, &deployment_state(true))
-                .await
-                .unwrap()
-        );
+        for state_of in states {
+            assert_eq!(
+                super::installed_config(&state, &state_of(true))
+                    .await
+                    .unwrap(),
+                InstalledConfig::Missing
+            );
+        }
     }
 }

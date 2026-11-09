@@ -1253,6 +1253,7 @@ mod tests {
             SyncReport {
                 installed_config_missing,
                 reconciled_image: reconciled_image.map(str::to_owned),
+                status: None,
             },
         )
         .await;
@@ -1338,6 +1339,9 @@ mod tests {
     struct SyncReport {
         installed_config_missing: bool,
         reconciled_image: Option<String>,
+        /// The status the Operator reports; `running` when unset. Any other
+        /// status reports the release as the target it is applying.
+        status: Option<&'static str>,
     }
 
     async fn sync_operator_full(
@@ -1356,6 +1360,7 @@ mod tests {
         let SyncReport {
             installed_config_missing,
             reconciled_image,
+            status,
         } = report;
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
@@ -1455,6 +1460,10 @@ mod tests {
             "currentRelease": { "releaseId": "rel_target", "stack": { "id": "app", "resources": {} } },
             "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         });
+        if let Some(status) = status {
+            body["currentState"]["status"] = json!(status);
+            body["currentState"]["targetRelease"] = body["currentState"]["currentRelease"].clone();
+        }
         if installed_config_missing {
             body["installedConfigMissing"] = json!(true);
         }
@@ -2975,6 +2984,39 @@ mod tests {
         updating.desired_release_id = Some("rel_target".to_string());
         let (response, _) = sync_operator_without_claim_reporting(updating, true).await;
         assert!(response.get("target").is_none(), "{response}");
+    }
+
+    /// A new Operator pod can start while its predecessor was applying the
+    /// install-time target, whose config holds no commands key. It reports the
+    /// update as pending and asks for its config. The manager has no work of
+    /// its own to send, so it sends the release it runs again.
+    #[tokio::test]
+    async fn an_operator_stuck_applying_a_config_it_cannot_use_gets_its_release_again() {
+        let mut record = pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        record.desired_release_id = None;
+        let (response, _, _) = sync_operator_full(
+            record,
+            None,
+            None,
+            Stack::new("app".to_string()).build(),
+            None,
+            false,
+            SyncReport {
+                installed_config_missing: true,
+                status: Some("update-pending"),
+                ..SyncReport::default()
+            },
+        )
+        .await;
+        let target = response
+            .get("target")
+            .unwrap_or_else(|| panic!("the release again: {response}"));
+        let current = response["currentState"]["currentRelease"]["releaseId"].clone();
+        assert!(current.is_string(), "{response}");
+        assert_eq!(target["releaseInfo"]["releaseId"], current, "{response}");
     }
 
     /// A manager that serves no charts names no Operator image itself. The
@@ -5026,14 +5068,13 @@ async fn agent_sync(
         requires_execution_claims,
         execution_claim.is_some() && (!report_has_claim || reported_claim_is_terminal),
     );
-    // An Operator that lost the config of its settled release gets that
-    // release again. It refreshes in place and keeps the config this time.
-    let resend_installed = !may_deliver_target
-        && installed_config_missing
-        && settled_release_to_resend(&deployment).is_some();
+    // An Operator that lost the config of its release, or holds one without
+    // the commands key its receivers need, gets that release again.
+    let resend_installed =
+        !may_deliver_target && installed_config_missing && release_to_resend(&deployment).is_some();
     let target = if may_deliver_target || resend_installed {
         let release_id = if resend_installed {
-            settled_release_to_resend(&deployment)
+            release_to_resend(&deployment)
         } else {
             deployment_target_release_id(&deployment)
         };
@@ -6056,18 +6097,26 @@ async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) -> bool
     revoked_all
 }
 
-/// The release a settled deployment runs, when no other work is pending.
-fn settled_release_to_resend(deployment: &DeploymentRecord) -> Option<&str> {
+/// The release a deployment runs, when no other work is pending. An Operator
+/// that restarted while applying that release (`UpdatePending`, `Updating`)
+/// asks for it again like a settled one does: its saved config is the one it
+/// cannot use.
+fn release_to_resend(deployment: &DeploymentRecord) -> Option<&str> {
     let current = deployment.current_release_id.as_deref()?;
-    let settled = matches!(
+    let holds_release = matches!(
         deployment_status_from_record(&deployment.status),
-        Some(DeploymentStatus::Running | DeploymentStatus::RefreshFailed)
+        Some(
+            DeploymentStatus::Running
+                | DeploymentStatus::RefreshFailed
+                | DeploymentStatus::UpdatePending
+                | DeploymentStatus::Updating
+        )
     );
     let no_other_target = deployment
         .desired_release_id
         .as_deref()
         .is_none_or(|desired| desired == current);
-    (settled && no_other_target).then_some(current)
+    (holds_release && no_other_target).then_some(current)
 }
 
 fn may_deliver_agent_target(
