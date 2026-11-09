@@ -359,7 +359,9 @@ fn manager_client(grant: &Grant) -> Result<alien_manager_api::Client> {
             })?;
     authorization.set_sensitive(true);
     headers.insert(reqwest::header::AUTHORIZATION, authorization);
+    // A redirect would send the value again, possibly over plain http.
     let http = crate::http_client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -607,6 +609,81 @@ mod tests {
         };
         let error = manager_client(&grant).expect_err("no client for plain http");
         assert!(!error.to_string().contains("canary-token"), "{error}");
+    }
+
+    /// A manager that answers a value write with a redirect must not make the
+    /// CLI send the value again to the address it names, for example an
+    /// `http://` one.
+    #[tokio::test]
+    async fn a_redirect_from_the_manager_never_gets_the_value_again() {
+        use std::sync::{Arc, Mutex};
+
+        use axum::{extract::State, http::HeaderMap, response::IntoResponse, routing::any, Router};
+
+        const VALUE: &str = "canary-redirect-5b2f7a";
+        type Seen = Arc<Mutex<Vec<String>>>;
+
+        async fn record(State(seen): State<Seen>, body: String) -> impl IntoResponse {
+            seen.lock().unwrap().push(body);
+            axum::http::StatusCode::OK
+        }
+        async fn serve(router: Router) -> std::net::SocketAddr {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            addr
+        }
+
+        let elsewhere: Seen = Arc::default();
+        let second = serve(
+            Router::new()
+                .route("/{*path}", any(record))
+                .with_state(elsewhere.clone()),
+        )
+        .await;
+        let target = format!("http://{second}/v1/values");
+        let first_requests: Seen = Arc::default();
+        let first = serve(
+            Router::new()
+                .route(
+                    "/{*path}",
+                    any(
+                        |State(seen): State<Seen>, _headers: HeaderMap, body: String| async move {
+                            seen.lock().unwrap().push(body);
+                            (
+                                axum::http::StatusCode::TEMPORARY_REDIRECT,
+                                [(axum::http::header::LOCATION, target)],
+                            )
+                        },
+                    ),
+                )
+                .with_state(first_requests.clone()),
+        )
+        .await;
+
+        let grant = Grant {
+            manager_url: format!("http://{first}"),
+            token: "token".to_string(),
+        };
+        let write = ValueWrite {
+            slot: "env:API_KEY".to_string(),
+            kind: ValueKind::Secret,
+            value: VALUE.to_string(),
+        };
+        put_values(&grant, "dep_1", &[write])
+            .await
+            .expect_err("a redirect is an error, not a second request");
+
+        assert_eq!(
+            first_requests.lock().unwrap().len(),
+            1,
+            "the manager was asked once"
+        );
+        assert!(
+            elsewhere.lock().unwrap().is_empty(),
+            "the redirect target received the value: {:?}",
+            elsewhere.lock().unwrap()
+        );
     }
 
     #[test]
