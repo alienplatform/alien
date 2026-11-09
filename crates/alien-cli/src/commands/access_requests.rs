@@ -1259,6 +1259,7 @@ mod tests {
                 "deploymentId": "dep_1",
                 "title": "Restart api",
                 "reason": "api is wedged",
+                "approver": "customer",
                 "status": "revoked",
                 "operationPattern": null,
                 "maxRisk": null,

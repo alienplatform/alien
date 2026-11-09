@@ -1,18 +1,17 @@
 use std::collections::{HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::io::{self, Write};
-use std::sync::Arc;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::{types, ClientInfo as _, SdkResultExt as _};
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, SecondsFormat, Utc};
 use clap::{Parser, ValueEnum};
 use console::style;
-use deepstore_client::{DeepstoreClient, DeepstoreError, SearchParams};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
+use super::logs_data::{DataClient, GrantSource, QueryBody, NEWEST_FIRST, OLDEST_FIRST};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
@@ -21,12 +20,18 @@ use crate::ui::supports_ansi;
 const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 1000;
 const SEEN_KEYS_LIMIT: usize = 20_000;
-const DEFAULT_LOG_SEARCH_FIELDS: &[&str] = &["body.message"];
+/// Rows requested per page. A larger `--limit` is collected over several pages.
+const PAGE_SIZE: usize = 500;
+/// A follow poll starts this far before the newest row seen, so rows indexed
+/// slightly late still show up. Duplicates are dropped by `SeenLogKeys`.
+const FOLLOW_OVERLAP_SECONDS: i64 = 1;
+/// Projects named in the error shown when no project is selected.
+const READABLE_PROJECTS_SHOWN: usize = 20;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Show and search deployment logs",
-    long_about = "Show and search deployment logs.\n\nA manager you run keeps recent logs for each deployment; long-term search lives in the OpenTelemetry backend it forwards to.",
+    long_about = "Show and search deployment logs.\n\nA manager you run keeps recent logs for each deployment; long-term search lives in the OpenTelemetry backend it forwards to.\n\nLogs are read one project at a time: pass --project or --deployment, or run the command in a linked directory.",
     after_help = "EXAMPLES:
     alien logs --deployment acme/production --follow
     alien logs --source ai-gateway --status provider-error --provider anthropic
@@ -51,7 +56,7 @@ pub struct LogsArgs {
     #[arg(long, value_enum)]
     pub cloud: Option<LogsCloud>,
 
-    /// Deepstore query text.
+    /// Search text, such as `timeout`, `body.message:timeout`, or `resource.service.name:api`.
     #[arg(long, short = 'q', default_value = "*")]
     pub query: String,
 
@@ -175,12 +180,14 @@ pub enum LogLevel {
 #[serde(rename_all = "camelCase")]
 struct LogsOutput {
     target: LogsTarget,
+    /// The search text sent to the data service.
     query: String,
+    /// Exact-match filters sent with the search text.
+    filter: Map<String, Value>,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
-    num_hits: usize,
+    num_hits: u64,
     logs: Vec<LogEntry>,
-    errors: Vec<String>,
     elapsed_time_micros: u64,
 }
 
@@ -188,7 +195,7 @@ struct LogsOutput {
 #[serde(rename_all = "camelCase")]
 struct LogsTarget {
     manager_id: String,
-    project_id: Option<String>,
+    project_id: String,
     project_name: Option<String>,
     deployment_id: Option<String>,
     deployment_name: Option<String>,
@@ -212,7 +219,7 @@ struct LogEntry {
 #[derive(Debug, Clone)]
 struct ResolvedLogsTarget {
     manager_id: String,
-    project_id: Option<String>,
+    project_id: String,
     project_name: Option<String>,
     deployment_id: Option<String>,
     deployment_name: Option<String>,
@@ -233,60 +240,16 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
     let project_override = args.project.as_deref().or(ctx.project_override());
     let target =
         resolve_logs_target(&ctx, &platform_client, &workspace, &args, project_override).await?;
-    let token_scope_project = target.project_id.as_deref();
-    let token = generate_logs_token(
-        &platform_client,
-        &workspace,
-        &target.manager_id,
-        token_scope_project,
-    )
-    .await?;
 
-    let database_id = token.database_id.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: format!(
-                "Manager {} does not have Deepstore logs configured.",
-                target.manager_id
-            ),
-        })
-    })?;
-    let control_plane_url = token.control_plane_url.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: format!(
-                "Manager {} did not return a Deepstore control plane URL.",
-                target.manager_id
-            ),
-        })
-    })?;
-
-    let shared_client = Arc::new(platform_client);
-    let provider_workspace = workspace.clone();
-    let provider_manager = target.manager_id.clone();
-    let provider_project = target.project_id.clone();
-    let deepstore = DeepstoreClient::builder()
-        .control_plane_url(control_plane_url)
-        .auth_proxy_url(token.manager_url)
-        .query_token_provider(move || {
-            let client = Arc::clone(&shared_client);
-            let workspace = provider_workspace.clone();
-            let manager_id = provider_manager.clone();
-            let project = provider_project.clone();
-            async move {
-                let token =
-                    generate_logs_token(&client, &workspace, &manager_id, project.as_deref())
-                        .await
-                        .map_err(|error| {
-                            deepstore_client::DeepstoreError::Authentication(error.to_string())
-                        })?;
-                Ok(token.access_token)
-            }
-        })
-        .build()
-        .map_err(|error| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!("Failed to configure Deepstore client: {error}"),
-            })
-        })?;
+    let mut data = DataClient::new(GrantSource::new(
+        platform_client,
+        workspace,
+        target.manager_id.clone(),
+        target.project_id.clone(),
+    ))?;
+    // Ask for the grant before building the query, so a missing permission or
+    // data service is reported before anything else.
+    let database_id = data.grant().await?.database_id.clone();
 
     let rendered_target = LogsTarget {
         manager_id: target.manager_id.clone(),
@@ -295,7 +258,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         deployment_id: target.deployment_id.clone(),
         deployment_name: target.deployment_name.clone(),
         deployment_group_name: target.deployment_group_name.clone(),
-        database_id: database_id.clone(),
+        database_id,
     };
     let deployment_filter =
         deployment_filter_for_source(args.source, target.deployment_id.as_deref());
@@ -310,13 +273,12 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         provider: args.provider.as_deref(),
         operation: args.operation.as_deref(),
         deployment_group: args.deployment_group.as_deref(),
-    })?;
+    });
     let (start_time, end_time) = resolve_time_window(&args);
 
     if args.follow {
         follow_logs(
-            &deepstore,
-            &database_id,
+            &mut data,
             &query,
             &rendered_target,
             start_time,
@@ -327,8 +289,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         .await
     } else {
         let output = fetch_logs(
-            &deepstore,
-            &database_id,
+            &mut data,
             &query,
             &rendered_target,
             start_time,
@@ -428,30 +389,25 @@ async fn resolve_logs_target(
         .await;
     }
 
-    if let Some(manager_id) = args.manager.as_deref() {
-        let (project_id, project_name) =
-            resolve_optional_project(ctx, project_override, workspace, !args.json).await?;
-        return Ok(ResolvedLogsTarget {
-            manager_id: manager_id.to_string(),
-            project_id,
-            project_name,
-            deployment_id: None,
-            deployment_name: None,
-            deployment_group_name: None,
-            log_collector_off: false,
-        });
-    }
-
-    resolve_default_manager_target(
-        ctx,
-        client,
-        workspace,
-        project_override,
-        args.cloud,
-        args.source,
-        !args.json,
-    )
-    .await
+    // A data grant covers one project, so the project is settled first.
+    let (project_id, project_name) =
+        require_project(ctx, client, workspace, project_override, !args.json).await?;
+    let manager_id = match args.manager.as_deref() {
+        Some(manager_id) => manager_id.to_string(),
+        None => select_logs_manager(client, workspace, args.cloud, args.source)
+            .await?
+            .id
+            .to_string(),
+    };
+    Ok(ResolvedLogsTarget {
+        manager_id,
+        project_id,
+        project_name,
+        deployment_id: None,
+        deployment_name: None,
+        deployment_group_name: None,
+        log_collector_off: false,
+    })
 }
 
 async fn resolve_deployment_target(
@@ -518,7 +474,7 @@ async fn target_from_deployment_detail(
 
     Ok(ResolvedLogsTarget {
         manager_id,
-        project_id: Some(project_id),
+        project_id,
         project_name,
         deployment_id: Some(deployment_id),
         deployment_name: Some(deployment_name),
@@ -527,48 +483,62 @@ async fn target_from_deployment_detail(
     })
 }
 
-async fn resolve_default_manager_target(
+/// The project whose logs to read: `--project`, else the linked project. Without
+/// either, say which projects can be read.
+async fn require_project(
     ctx: &ExecutionMode,
     client: &alien_platform_api::Client,
     workspace: &str,
     project_override: Option<&str>,
-    cloud: Option<LogsCloud>,
-    source: Option<LogSource>,
     allow_prompt: bool,
-) -> Result<ResolvedLogsTarget> {
-    let (project_id, project_name) =
-        resolve_project_scope(ctx, project_override, workspace, allow_prompt).await?;
-    let selected = select_logs_manager(client, workspace, cloud, source).await?;
-
-    Ok(ResolvedLogsTarget {
-        manager_id: selected.id.to_string(),
-        project_id,
-        project_name,
-        deployment_id: None,
-        deployment_name: None,
-        deployment_group_name: None,
-        log_collector_off: false,
-    })
+) -> Result<(String, Option<String>)> {
+    match resolve_project_scope(ctx, project_override, workspace, allow_prompt).await? {
+        Some((project_id, project_name)) => Ok((project_id, Some(project_name))),
+        None => Err(AlienError::new(ErrorData::LogsProjectRequired {
+            readable: readable_projects_suffix(client, workspace).await,
+        })),
+    }
 }
 
-async fn resolve_optional_project(
-    ctx: &ExecutionMode,
-    project_override: Option<&str>,
-    workspace: &str,
-    allow_prompt: bool,
-) -> Result<(Option<String>, Option<String>)> {
-    resolve_project_scope(ctx, project_override, workspace, allow_prompt).await
+/// " Readable projects: name (id), ..." for the no-project error. Empty when the
+/// list cannot be fetched, since the error is still useful without it.
+async fn readable_projects_suffix(client: &alien_platform_api::Client, workspace: &str) -> String {
+    let Ok(workspace) = types::ListProjectsWorkspace::try_from(workspace) else {
+        return String::new();
+    };
+    let Ok(response) = client.list_projects().workspace(&workspace).send().await else {
+        return String::new();
+    };
+    let projects = response.into_inner().items;
+    if projects.is_empty() {
+        return " This workspace has no projects.".to_string();
+    }
+    let mut listed = projects
+        .iter()
+        .take(READABLE_PROJECTS_SHOWN)
+        .map(|project| format!("{} ({})", project.name.as_str(), project.id.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if projects.len() > READABLE_PROJECTS_SHOWN {
+        listed.push_str(&format!(
+            ", and {} more",
+            projects.len() - READABLE_PROJECTS_SHOWN
+        ));
+    }
+    format!(" Readable projects: {listed}.")
 }
 
+/// `--project` or the linked project, as `(id, name)`. `None` when neither
+/// applies. A project linked in a different workspace does not apply.
 async fn resolve_project_scope(
     ctx: &ExecutionMode,
     project_override: Option<&str>,
     workspace: &str,
     allow_prompt: bool,
-) -> Result<(Option<String>, Option<String>)> {
+) -> Result<Option<(String, String)>> {
     if project_override.is_some() {
         let (project_id, link) = ctx.resolve_project(project_override, allow_prompt).await?;
-        return Ok((Some(project_id), Some(link.project_name)));
+        return Ok(Some((project_id, link.project_name)));
     }
 
     let current_dir = crate::get_current_dir()?;
@@ -576,7 +546,7 @@ async fn resolve_project_scope(
         crate::project_link::ProjectLinkStatus::Linked(link)
             if workspace.is_empty() || link.workspace == workspace =>
         {
-            Ok((Some(link.project_id), Some(link.project_name)))
+            Ok(Some((link.project_id, link.project_name)))
         }
         crate::project_link::ProjectLinkStatus::Error(message) => {
             Err(AlienError::new(ErrorData::ConfigurationError { message }))
@@ -584,13 +554,13 @@ async fn resolve_project_scope(
         crate::project_link::ProjectLinkStatus::Linked(link) => {
             if allow_prompt {
                 eprintln!(
-                    "The linked project is in workspace '{}'. Searching every readable project in workspace '{}'.",
+                    "The linked project is in workspace '{}', not '{}', so it is not used.",
                     link.workspace, workspace
                 );
             }
-            Ok((None, None))
+            Ok(None)
         }
-        _ => Ok((None, None)),
+        _ => Ok(None),
     }
 }
 
@@ -638,17 +608,17 @@ async fn select_logs_manager(
         .ok_or_else(|| {
             let message = if let Some(source) = system_source {
                 format!(
-                    "No system manager with a Deepstore logs database is listed at {}, and `--source {}` request logs are stored only on the system manager. Check that ALIEN_BASE_URL points at the Alien API you meant to use.",
+                    "No system manager with a log data service is listed at {}, and `--source {}` request logs are stored only on the system manager. Check that ALIEN_BASE_URL points at the Alien API you meant to use.",
                     client.baseurl(),
                     source.flag()
                 )
             } else if let Some(cloud) = cloud {
                 format!(
-                    "No manager with a Deepstore logs database is available for {}. Pass --manager <mgr_...> or try without --cloud.",
+                    "No manager with a log data service is available for {}. Pass --manager <mgr_...> or try without --cloud.",
                     cloud.as_str()
                 )
             } else {
-                "No managers have Deepstore logs databases configured. Deploy a manager or pass --manager <mgr_...>.".to_string()
+                "No managers have a log data service configured. Deploy a manager or pass --manager <mgr_...>.".to_string()
             };
             AlienError::new(ErrorData::ConfigurationError { message })
         })
@@ -666,105 +636,141 @@ impl LogsCloud {
     }
 }
 
-async fn generate_logs_token(
-    client: &alien_platform_api::Client,
-    workspace: &str,
-    manager_id: &str,
-    project: Option<&str>,
-) -> Result<types::GenerateManagerTokenResponse> {
-    let project = project
-        .map(types::GenerateManagerTokenRequestProject::try_from)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "project".to_string(),
-            message: "Invalid project scope for logs token".to_string(),
-        })?;
-
-    client
-        .generate_manager_token()
-        .id(manager_id)
-        .workspace(workspace)
-        .body(types::GenerateManagerTokenRequest { project })
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Failed to generate Deepstore token for manager {manager_id}"),
-            url: None,
-        })
-        .map(|response| response.into_inner())
+fn query_body(
+    query: &LogsQuery,
+    sort_by: &'static str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    page_limit: usize,
+) -> QueryBody {
+    QueryBody {
+        search: query.search.clone(),
+        filter: query.filter.clone(),
+        sort_by,
+        start: start.to_rfc3339_opts(SecondsFormat::Nanos, true),
+        end: end.to_rfc3339_opts(SecondsFormat::Nanos, true),
+        limit: page_limit,
+        cursor: None,
+    }
 }
 
+/// The newest `limit` logs in the window, oldest first.
 async fn fetch_logs(
-    client: &DeepstoreClient,
-    database_id: &str,
-    query: &str,
+    data: &mut DataClient,
+    query: &LogsQuery,
     target: &LogsTarget,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     limit: usize,
 ) -> Result<LogsOutput> {
-    let result = client
-        .search(SearchParams {
-            database_id: database_id.to_string(),
-            query: query.to_string(),
-            start_time,
-            end_time,
-            max_hits: Some(limit),
-            sort_by: Some("-timestamp_nanos".to_string()),
-            search_fields: Some(
-                DEFAULT_LOG_SEARCH_FIELDS
-                    .iter()
-                    .map(|field| field.to_string())
-                    .collect(),
-            ),
-            ..Default::default()
-        })
-        .await
-        .map_err(|error| match error {
-            DeepstoreError::InvalidRequest(body) => {
-                // Error bodies may be structured or plain text. Show the reason,
-                // rather than embedding the serialized response in the message.
-                let message = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or(body);
-                AlienError::new(ErrorData::LogSearchRejected { message })
-            }
-            error => AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Deepstore search failed: {error}"),
-                url: None,
-            }),
-        })?;
+    let started = Instant::now();
+    let body = query_body(
+        query,
+        NEWEST_FIRST,
+        start_time,
+        end_time,
+        limit.min(PAGE_SIZE),
+    );
+    let result = data.query(&body, limit).await?;
     let mut logs = result
-        .hits
+        .rows
         .into_iter()
-        .map(log_entry_from_hit)
+        .map(log_entry_from_row)
         .collect::<Vec<_>>();
     logs.sort_by_key(|entry| entry.timestamp_nanos.unwrap_or(i64::MIN));
 
     Ok(LogsOutput {
         target: target.clone(),
-        query: query.to_string(),
+        query: query.search.clone(),
+        filter: query.filter.clone(),
         start_time,
         end_time,
         num_hits: result.num_hits,
         logs,
-        errors: result.errors,
-        elapsed_time_micros: result.elapsed_time_micros,
+        elapsed_time_micros: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
     })
 }
 
+/// Tracks what `--follow` has already shown, and where the next poll starts.
+struct Follower {
+    seen: SeenLogKeys,
+    start: DateTime<Utc>,
+    limit: usize,
+    newest_nanos: Option<i64>,
+    polled: bool,
+}
+
+impl Follower {
+    fn new(start: DateTime<Utc>, limit: usize) -> Self {
+        Self {
+            seen: SeenLogKeys::default(),
+            start,
+            limit,
+            newest_nanos: None,
+            polled: false,
+        }
+    }
+
+    /// Logs not shown yet, oldest first. The first poll returns the newest
+    /// `limit` logs since the start time. Later polls read everything after the
+    /// newest log seen, oldest first, so a burst is never cut off by the limit.
+    async fn poll(
+        &mut self,
+        data: &mut DataClient,
+        query: &LogsQuery,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<LogEntry>> {
+        let first = !self.polled;
+        let (body, max_rows) = if first {
+            let body = query_body(
+                query,
+                NEWEST_FIRST,
+                self.start,
+                now.max(self.start),
+                self.limit.min(PAGE_SIZE),
+            );
+            (body, self.limit)
+        } else {
+            let body = query_body(
+                query,
+                OLDEST_FIRST,
+                self.next_start(),
+                now.max(self.start),
+                PAGE_SIZE,
+            );
+            (body, usize::MAX)
+        };
+        let rows = data.query(&body, max_rows).await?.rows;
+        self.polled = true;
+
+        let mut entries = rows.into_iter().map(log_entry_from_row).collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.timestamp_nanos.unwrap_or(i64::MIN));
+
+        let mut fresh = Vec::new();
+        for entry in entries {
+            if let Some(nanos) = entry.timestamp_nanos {
+                self.newest_nanos =
+                    Some(self.newest_nanos.map_or(nanos, |newest| newest.max(nanos)));
+            }
+            if self.seen.insert(log_key(&entry)) {
+                fresh.push(entry);
+            }
+        }
+        Ok(fresh)
+    }
+
+    fn next_start(&self) -> DateTime<Utc> {
+        self.newest_nanos
+            .and_then(timestamp_from_nanos)
+            .map_or(self.start, |newest| {
+                newest - Duration::seconds(FOLLOW_OVERLAP_SECONDS)
+            })
+    }
+}
+
 async fn follow_logs(
-    client: &DeepstoreClient,
-    database_id: &str,
-    query: &str,
+    data: &mut DataClient,
+    query: &LogsQuery,
     target: &LogsTarget,
     start_time: DateTime<Utc>,
     limit: usize,
@@ -775,42 +781,15 @@ async fn follow_logs(
         emit_json_line(&serde_json::json!({
             "type": "metadata",
             "target": target,
-            "query": query,
+            "query": query.search,
+            "filter": query.filter,
             "startTime": start_time,
         }))?;
     }
 
-    let mut seen = SeenLogKeys::default();
-    let mut cursor_start = start_time;
-
+    let mut follower = Follower::new(start_time, limit);
     loop {
-        let output = fetch_logs(
-            client,
-            database_id,
-            query,
-            target,
-            cursor_start,
-            Utc::now(),
-            limit,
-        )
-        .await?;
-
-        let mut newest_timestamp = None;
-        for entry in output.logs {
-            if let Some(timestamp) = entry.timestamp {
-                newest_timestamp = Some(newest_timestamp.map_or(timestamp, |current| {
-                    if timestamp > current {
-                        timestamp
-                    } else {
-                        current
-                    }
-                }));
-            }
-
-            if !seen.insert(log_key(&entry)) {
-                continue;
-            }
-
+        for entry in follower.poll(data, query, Utc::now()).await? {
             if json {
                 emit_json_line(&serde_json::json!({
                     "type": "log",
@@ -820,11 +799,6 @@ async fn follow_logs(
                 render_human_log(&entry);
             }
         }
-
-        if let Some(newest) = newest_timestamp {
-            cursor_start = newest - Duration::seconds(1);
-        }
-
         tokio::time::sleep(interval).await;
     }
 }
@@ -965,32 +939,22 @@ fn emit_json_line(value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn log_entry_from_hit(hit: Value) -> LogEntry {
-    let timestamp_nanos = hit.get("timestamp_nanos").and_then(Value::as_i64);
+/// A log row as the data service returns it: `timestampNanos` (a string),
+/// `severityText`, `severityNumber`, `body`, and `resource` and `attributes`
+/// maps keyed by the OpenTelemetry attribute names.
+fn log_entry_from_row(row: Value) -> LogEntry {
+    let timestamp_nanos = row.get("timestampNanos").and_then(nanos_value);
     let timestamp = timestamp_nanos.and_then(timestamp_from_nanos);
-    let level = hit
-        .get("severity_text")
+    let level = row
+        .get("severityText")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let severity_number = hit.get("severity_number").and_then(Value::as_i64);
-    let resource_attrs = hit.get("resource_attributes");
-    let service = hit
-        .get("service_name")
-        .and_then(Value::as_str)
+    let severity_number = row.get("severityNumber").and_then(Value::as_i64);
+    let service = resource_attribute(&row, "service.name")
         .filter(|service| *service != "alien-worker-runtime")
-        .map(str::to_string)
-        .or_else(|| {
-            resource_attrs?
-                .get("service.name")
-                .and_then(Value::as_str)
-                .filter(|service| *service != "alien-worker-runtime")
-                .map(str::to_string)
-        });
-    let deployment_id = resource_attrs
-        .and_then(|attrs| attrs.get("alien.deployment_id"))
-        .and_then(Value::as_str)
         .map(str::to_string);
-    let message = extract_message(&hit);
+    let deployment_id = resource_attribute(&row, "alien.deployment_id").map(str::to_string);
+    let message = extract_message(&row);
 
     LogEntry {
         timestamp,
@@ -1000,25 +964,47 @@ fn log_entry_from_hit(hit: Value) -> LogEntry {
         service,
         deployment_id,
         message,
-        raw: hit,
+        raw: row,
     }
 }
 
-fn extract_message(hit: &Value) -> String {
-    if let Some(message) = hit
+/// Nanosecond timestamps arrive as strings, since they exceed what JSON numbers
+/// hold exactly.
+fn nanos_value(value: &Value) -> Option<i64> {
+    match value {
+        Value::String(text) => text.parse().ok(),
+        other => other.as_i64(),
+    }
+}
+
+/// An attribute of the log's resource. Dotted names such as `service.name` are
+/// single keys, so a nested path is only a fallback.
+fn resource_attribute<'a>(row: &'a Value, name: &str) -> Option<&'a str> {
+    let resource = row.get("resource")?;
+    resource
+        .get(name)
+        .or_else(|| {
+            name.split('.')
+                .try_fold(resource, |value, part| value.get(part))
+        })
+        .and_then(Value::as_str)
+}
+
+fn extract_message(row: &Value) -> String {
+    if let Some(message) = row
         .get("body")
         .and_then(|body| body.get("message"))
         .and_then(Value::as_str)
     {
         return tracing_json_message(message).unwrap_or_else(|| message.to_string());
     }
-    if let Some(body) = hit.get("body").and_then(Value::as_str) {
+    if let Some(body) = row.get("body").and_then(Value::as_str) {
+        return tracing_json_message(body).unwrap_or_else(|| body.to_string());
+    }
+    if let Some(body) = row.get("body") {
         return body.to_string();
     }
-    if let Some(body) = hit.get("body") {
-        return body.to_string();
-    }
-    hit.to_string()
+    row.to_string()
 }
 
 fn tracing_json_message(input: &str) -> Option<String> {
@@ -1041,7 +1027,12 @@ fn timestamp_from_nanos(timestamp_nanos: i64) -> Option<DateTime<Utc>> {
     DateTime::<Utc>::from_timestamp(secs, nanos)
 }
 
+/// Identifies a row across follow polls: the row's own id when the data service
+/// gives one, else its timestamp and content.
 fn log_key(entry: &LogEntry) -> String {
+    if let Some(id) = entry.raw.get("id").and_then(Value::as_str) {
+        return id.to_string();
+    }
     format!(
         "{}:{}:{}:{}",
         entry.timestamp_nanos.unwrap_or_default(),
@@ -1070,11 +1061,20 @@ struct LogQueryFilters<'a> {
     deployment_group: Option<&'a str>,
 }
 
-fn build_logs_query(options: LogQueryFilters<'_>) -> Result<String> {
-    let mut filters = Vec::new();
+/// What to ask the data service: search text plus exact-match filters on
+/// attributes. Filter keys are plain dotted paths into the log row.
+#[derive(Debug, Clone, PartialEq)]
+struct LogsQuery {
+    search: String,
+    filter: Map<String, Value>,
+}
+
+fn build_logs_query(options: LogQueryFilters<'_>) -> LogsQuery {
+    let mut clauses = Vec::new();
+    let mut filter = Map::new();
     let query = options.user_query.trim();
     if query != "*" {
-        filters.push(format!("({query})"));
+        clauses.push(format!("({query})"));
     }
     if !options.levels.is_empty() {
         let level_filters = options
@@ -1082,64 +1082,66 @@ fn build_logs_query(options: LogQueryFilters<'_>) -> Result<String> {
             .iter()
             .map(|level| {
                 let (min, max) = severity_range(*level);
-                format!("(severity_number:>={min} AND severity_number:<={max})")
+                format!("severityNumber:[{min} TO {max}]")
             })
             .collect::<Vec<_>>()
             .join(" OR ");
-        filters.push(format!("({level_filters})"));
+        clauses.push(format!("({level_filters})"));
     }
     if let Some(deployment_id) = options.deployment_id {
-        filters.push(format!(
-            "{}:\"{}\"",
-            deployment_id_resource_attribute_field(),
-            escape_query_string(deployment_id)
-        ));
+        filter.insert(
+            DEPLOYMENT_ID_FIELD.to_string(),
+            Value::String(deployment_id.to_string()),
+        );
     }
     if let Some(source) = options.source {
         if source == LogSource::Application {
-            filters.push("NOT attributes.alien\\.log\\.source:*".to_string());
+            clauses.push(format!("NOT {SOURCE_FIELD}:*"));
         } else {
-            filters.push(format!(
-                "attributes.alien\\.log\\.source:\"{}\"",
-                source.as_str()
-            ));
+            filter.insert(
+                SOURCE_FIELD.to_string(),
+                Value::String(source.as_str().to_string()),
+            );
         }
     }
     for (field, value) in [
-        ("gateway\\.outcome", options.status),
-        ("ai\\.model\\.requested", options.model),
-        ("ai\\.provider", options.provider),
-        ("encryption\\.operation", options.operation),
-        ("alien\\.deployment_group_id", options.deployment_group),
+        ("attributes.gateway.outcome", options.status),
+        ("attributes.ai.model.requested", options.model),
+        ("attributes.ai.provider", options.provider),
+        ("attributes.encryption.operation", options.operation),
+        (
+            "attributes.alien.deployment_group_id",
+            options.deployment_group,
+        ),
     ] {
         if let Some(value) = value {
-            filters.push(format!(
-                "attributes.{field}:\"{}\"",
-                escape_query_string(value)
-            ));
+            filter.insert(field.to_string(), Value::String(value.to_string()));
         }
     }
     if !options.include_system {
         // Hide Alien system-component logs (e.g. infrastructure daemons) unless
         // explicitly requested. `NOT field:value` keeps documents that lack the
         // attribute entirely, so user workload logs are always shown.
-        filters.push(format!(
-            "NOT {}:\"true\" AND NOT {}:\"true\"",
-            system_resource_attribute_field(),
-            system_log_attribute_field()
+        clauses.push(format!(
+            "NOT resource.{marker}:\"true\" AND NOT attributes.{marker}:\"true\"",
+            marker = alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE
         ));
     }
 
-    if filters.is_empty() {
-        Ok("*".to_string())
-    } else if filters.iter().all(|filter| filter.starts_with("NOT ")) {
-        // Quickwit/tantivy rejects a query made up of only negative clauses, so
-        // prepend a match-all positive term.
-        Ok(format!("* AND {}", filters.join(" AND ")))
+    let search = if clauses.is_empty() {
+        "*".to_string()
+    } else if clauses.iter().all(|clause| clause.starts_with("NOT ")) {
+        // A query made up of only negative clauses matches nothing, so prepend a
+        // match-all positive term.
+        format!("* AND {}", clauses.join(" AND "))
     } else {
-        Ok(filters.join(" AND "))
-    }
+        clauses.join(" AND ")
+    };
+    LogsQuery { search, filter }
 }
+
+const DEPLOYMENT_ID_FIELD: &str = "resource.alien.deployment_id";
+const SOURCE_FIELD: &str = "attributes.alien.log.source";
 
 fn deployment_filter_for_source(
     source: Option<LogSource>,
@@ -1161,33 +1163,6 @@ fn severity_range(level: LogLevel) -> (u8, u8) {
         LogLevel::Error => (17, 20),
         LogLevel::Fatal => (21, 24),
     }
-}
-
-fn escape_query_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn deployment_id_resource_attribute_field() -> &'static str {
-    // `alien.deployment_id` is a single OpenTelemetry resource attribute key
-    // nested under `resource_attributes`, not two nested JSON fields.
-    "resource_attributes.alien\\.deployment_id"
-}
-
-fn system_resource_attribute_field() -> String {
-    // The marker key contains a dot that is part of the attribute name, not a
-    // path separator — escape it so Quickwit treats the segment under
-    // `resource_attributes.` as a single field name.
-    format!(
-        "resource_attributes.{}",
-        alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE.replace('.', "\\.")
-    )
-}
-
-fn system_log_attribute_field() -> String {
-    format!(
-        "attributes.{}",
-        alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE.replace('.', "\\.")
-    )
 }
 
 fn parse_rfc3339_arg(value: &str) -> std::result::Result<DateTime<Utc>, String> {
@@ -1231,132 +1206,277 @@ fn parse_std_duration_arg(value: &str) -> std::result::Result<StdDuration, Strin
 
 #[cfg(test)]
 mod tests {
+    use super::super::logs_data::test_server::TestServer;
     use super::*;
-    use httpmock::{
-        Method::{GET, POST},
-        MockServer,
-    };
+    use httpmock::{Method::GET, MockServer};
     use serde_json::json;
 
-    async fn fetch_from_http(status: u16, body: &str, query: &str) -> Result<LogsOutput> {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .unwrap_or_else(|_| {
-                assert!(rustls::crypto::CryptoProvider::get_default().is_some());
-            });
-        let server = MockServer::start_async().await;
-        let splits = server
-            .mock_async(|when, then| {
-                when.method(GET)
-                    .path("/v1/databases/db_test/splits")
-                    .header("authorization", "Bearer test-query-token");
-                then.status(200).json_body(json!({"splits": []}));
-            })
-            .await;
-        let search = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .path("/v1/logs/search")
-                    .header("authorization", "Bearer test-query-token")
-                    .json_body_partial(json!({"max_hits": 10}).to_string());
-                then.status(status).body(body);
-            })
-            .await;
-        let client = DeepstoreClient::builder()
-            .control_plane_url(server.url("/v1"))
-            .auth_proxy_url(server.base_url())
-            .query_token_provider(|| async { Ok("test-query-token".to_string()) })
-            .build()
-            .expect("local search client");
-        let target = LogsTarget {
+    fn target() -> LogsTarget {
+        LogsTarget {
             manager_id: "mgr_test".to_string(),
-            project_id: Some("prj_test".to_string()),
+            project_id: "prj_test".to_string(),
             project_name: None,
             deployment_id: None,
             deployment_name: None,
             deployment_group_name: None,
-            database_id: "db_test".to_string(),
-        };
-        let end = Utc::now();
-        let result = fetch_logs(
-            &client,
-            "db_test",
-            query,
-            &target,
-            end - Duration::hours(1),
-            end,
-            10,
+            database_id: "prj_test".to_string(),
+        }
+    }
+
+    fn match_all() -> LogsQuery {
+        LogsQuery {
+            search: "*".to_string(),
+            filter: Map::new(),
+        }
+    }
+
+    /// A row as the data service returns it.
+    fn native_row(nanos: i64, message: &str) -> Value {
+        json!({
+            "id": format!("auto_{nanos}"),
+            "timestampNanos": nanos.to_string(),
+            "observedTimestampNanos": nanos.to_string(),
+            "severityText": "INFO",
+            "severityNumber": 9,
+            "body": message,
+            "resource": {"service.name": "api", "alien.deployment_id": "dep_abc"},
+            "attributes": {},
+        })
+    }
+
+    fn page(rows: Vec<Value>, cursor: Option<&str>) -> (u16, Value) {
+        (
+            200,
+            json!({
+                "rows": rows, "rowMetadata": [], "coverage": {"complete": true},
+                "numHits": rows.len(), "nextCursor": cursor,
+            }),
         )
+    }
+
+    const T0: i64 = 1_700_000_000_000_000_000;
+    const SECOND: i64 = 1_000_000_000;
+
+    #[tokio::test]
+    async fn fetch_returns_the_newest_logs_oldest_first_with_native_rows_parsed() {
+        // The data service answers newest first.
+        let server = TestServer::start(|_, _| {
+            page(
+                vec![
+                    native_row(T0 + 2 * SECOND, "third"),
+                    native_row(T0 + SECOND, "second"),
+                    native_row(T0, "first"),
+                ],
+                None,
+            )
+        })
         .await;
-        splits.assert_hits_async(1).await;
-        search.assert_hits_async(1).await;
-        result
+        let mut data = server.data_client();
+        let end = Utc::now();
+        let start = end - Duration::hours(1);
+
+        let output = fetch_logs(&mut data, &match_all(), &target(), start, end, 10)
+            .await
+            .unwrap();
+
+        let messages: Vec<_> = output.logs.iter().map(|log| log.message.as_str()).collect();
+        assert_eq!(messages, ["first", "second", "third"]);
+        assert_eq!(output.num_hits, 3);
+        assert_eq!(output.logs[0].level.as_deref(), Some("INFO"));
+        assert_eq!(output.logs[0].service.as_deref(), Some("api"));
+        assert_eq!(output.logs[0].deployment_id.as_deref(), Some("dep_abc"));
+        assert_eq!(output.logs[0].timestamp_nanos, Some(T0));
+
+        let body = &server.query_requests()[0].body;
+        assert_eq!(body["limit"], 10);
+        assert_eq!(body["sortBy"], "-timestampNanos");
+        assert_eq!(
+            body["start"],
+            start.to_rfc3339_opts(SecondsFormat::Nanos, true)
+        );
+        assert_eq!(body["end"], end.to_rfc3339_opts(SecondsFormat::Nanos, true));
     }
 
     #[tokio::test]
-    async fn rejected_search_keeps_bad_request_status_and_plain_message() {
-        for body in [
-            json!({
-                "error": "INVALID_REQUEST",
-                "message": "Numeric ranges require TO between bounds"
-            })
-            .to_string(),
-            "Numeric ranges require TO between bounds".to_string(),
-        ] {
-            let error = fetch_from_http(400, &body, "count:[10,100]")
-                .await
-                .expect_err("query is refused over HTTP");
-            assert_eq!(error.http_status_code, Some(400));
-            assert_eq!(error.code, "INVALID_REQUEST");
-            assert_eq!(
-                error.message,
-                "Log search rejected: Numeric ranges require TO between bounds"
-            );
-            assert!(!error.retryable);
-            assert!(!error.internal);
+    async fn fetch_collects_a_limit_larger_than_a_page_over_cursor_pages() {
+        // 1,200 rows exist; the limit is 1,000 and a page holds 500.
+        let server = TestServer::start(|number, body| {
+            assert_eq!(body["limit"], 500, "pages are fetched at the page size");
+            let rows = (0..500)
+                .map(|index| native_row(T0 - (number as i64 * 500 + index), "row"))
+                .collect();
+            page(rows, Some("next"))
+        })
+        .await;
+        let mut data = server.data_client();
+        let end = Utc::now();
+
+        let output = fetch_logs(
+            &mut data,
+            &match_all(),
+            &target(),
+            end - Duration::hours(1),
+            end,
+            1000,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.logs.len(), 1000);
+        assert_eq!(server.query_requests().len(), 2);
+        let timestamps: Vec<_> = output
+            .logs
+            .iter()
+            .filter_map(|log| log.timestamp_nanos)
+            .collect();
+        assert!(
+            timestamps.windows(2).all(|pair| pair[0] <= pair[1]),
+            "oldest first"
+        );
+        assert_eq!(timestamps.last(), Some(&T0), "the newest row is kept");
+    }
+
+    #[tokio::test]
+    async fn follow_polls_after_the_newest_log_without_repeating_any() {
+        let server = TestServer::start(|number, body| match number {
+            0 => {
+                assert_eq!(body["sortBy"], "-timestampNanos");
+                page(
+                    vec![native_row(T0 + SECOND, "b"), native_row(T0, "a")],
+                    None,
+                )
+            }
+            1 => {
+                // Asks for logs after the newest one, oldest first. The overlap
+                // returns "b" again together with a new row.
+                assert_eq!(body["sortBy"], "timestampNanos");
+                page(
+                    vec![
+                        native_row(T0 + SECOND, "b"),
+                        native_row(T0 + 2 * SECOND, "c"),
+                    ],
+                    None,
+                )
+            }
+            2 => page(vec![native_row(T0 + 2 * SECOND, "c")], None),
+            _ => page(vec![], None),
+        })
+        .await;
+        let mut data = server.data_client();
+        let start = DateTime::<Utc>::from_timestamp(1_699_999_000, 0).unwrap();
+        let mut follower = Follower::new(start, 100);
+        let query = match_all();
+
+        let mut shown = Vec::new();
+        for _ in 0..4 {
+            let fresh = follower.poll(&mut data, &query, Utc::now()).await.unwrap();
+            shown.push(fresh.into_iter().map(|log| log.message).collect::<Vec<_>>());
+        }
+
+        assert_eq!(shown, [vec!["a", "b"], vec!["c"], vec![], vec![]]);
+        let requests = server.query_requests();
+        assert_eq!(requests[0].body["start"], "2023-11-14T21:56:40.000000000Z");
+        // One second before the newest log seen (T0 + 1s), then (T0 + 2s).
+        assert_eq!(requests[1].body["start"], "2023-11-14T22:13:20.000000000Z");
+        assert_eq!(requests[2].body["start"], "2023-11-14T22:13:21.000000000Z");
+        assert_eq!(requests[3].body["start"], "2023-11-14T22:13:21.000000000Z");
+        for request in &requests[1..] {
+            assert_eq!(request.body["sortBy"], "timestampNanos");
         }
     }
 
     #[tokio::test]
-    async fn server_failure_is_not_a_query_rejection() {
-        let body = json!({"error": "UNAVAILABLE", "message": "Search temporarily unavailable"})
-            .to_string();
-        let error = fetch_from_http(503, &body, "*")
+    async fn follow_reads_a_burst_larger_than_a_page_in_full() {
+        let server = TestServer::start(|number, body| match number {
+            0 => page(vec![], None),
+            1 => page(
+                (0..500)
+                    .map(|index| native_row(T0 + index, "burst"))
+                    .collect(),
+                Some("more"),
+            ),
+            2 => {
+                assert_eq!(body["cursor"], "more");
+                page(
+                    (500..650)
+                        .map(|index| native_row(T0 + index, "burst"))
+                        .collect(),
+                    None,
+                )
+            }
+            _ => unreachable!(),
+        })
+        .await;
+        let mut data = server.data_client();
+        let start = DateTime::<Utc>::from_timestamp(1_699_999_000, 0).unwrap();
+        let mut follower = Follower::new(start, 10);
+        let query = match_all();
+
+        assert!(follower
+            .poll(&mut data, &query, Utc::now())
             .await
-            .expect_err("server is unavailable");
-        assert_eq!(error.code, "API_REQUEST_FAILED");
-        assert_ne!(error.http_status_code, Some(400));
+            .unwrap()
+            .is_empty());
+        let fresh = follower.poll(&mut data, &query, Utc::now()).await.unwrap();
+
+        assert_eq!(fresh.len(), 650, "the limit only bounds the first fetch");
     }
 
     #[tokio::test]
-    async fn successful_search_still_returns_renderable_logs() {
-        let body = json!({
-            "num_hits": 1,
-            "hits": [{"timestamp_nanos": 1700000000000000000i64, "body": {"message": "hello"}, "severity_text": "INFO"}],
-            "elapsed_time_micros": 123,
-            "errors": []
-        }).to_string();
-        let output = fetch_from_http(200, &body, "*")
-            .await
-            .expect("valid search succeeds");
-        assert_eq!(output.num_hits, 1);
-        assert_eq!(output.logs.len(), 1);
-        assert_eq!(output.logs[0].message, "hello");
-        assert_eq!(output.logs[0].level.as_deref(), Some("INFO"));
-        assert_eq!(output.elapsed_time_micros, 123);
-        assert!(output.errors.is_empty());
-    }
+    async fn follow_replaces_a_grant_that_is_about_to_expire() {
+        let server = TestServer::start(|_, _| page(vec![], None)).await;
+        server.set_grant_ttl(20);
+        let mut data = server.data_client();
+        let mut follower = Follower::new(Utc::now() - Duration::hours(1), 10);
+        let query = match_all();
 
-    #[tokio::test]
-    async fn search_makes_one_request_with_the_requested_limit() {
-        let hits: Vec<_> = (0..10)
-            .map(|index| json!({"timestamp_nanos": 1700000000000000000i64, "body": {"message": format!("line {index}")}}))
+        for _ in 0..3 {
+            follower.poll(&mut data, &query, Utc::now()).await.unwrap();
+        }
+
+        assert_eq!(server.grant_requests().len(), 3);
+        let tokens: Vec<_> = server
+            .query_requests()
+            .into_iter()
+            .map(|request| request.authorization.unwrap())
             .collect();
-        let body = json!({"num_hits": 100, "hits": hits, "elapsed_time_micros": 1, "errors": []});
-        let output = fetch_from_http(200, &body.to_string(), "*")
-            .await
-            .expect("one limited search succeeds even when more matches exist");
-        assert_eq!(output.logs.len(), 10);
+        assert_eq!(
+            tokens,
+            ["Bearer grant-1", "Bearer grant-2", "Bearer grant-3"]
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_search_keeps_bad_request_status_and_plain_message() {
+        let server = TestServer::start(|_, _| {
+            (
+                400,
+                json!({"code": "INVALID_REQUEST", "error": "Numeric ranges require TO between bounds", "status": "error"}),
+            )
+        })
+        .await;
+        let mut data = server.data_client();
+        let end = Utc::now();
+
+        let error = fetch_logs(
+            &mut data,
+            &match_all(),
+            &target(),
+            end - Duration::hours(1),
+            end,
+            10,
+        )
+        .await
+        .expect_err("query is refused over HTTP");
+
+        assert_eq!(error.http_status_code, Some(400));
+        assert_eq!(error.code, "INVALID_REQUEST");
+        assert_eq!(
+            error.message,
+            "Log search rejected: Numeric ranges require TO between bounds"
+        );
+        assert!(!error.retryable);
+        assert!(!error.internal);
     }
 
     fn manager_json(id: &str, is_system: bool) -> serde_json::Value {
@@ -1476,7 +1596,7 @@ mod tests {
         deployment_id: Option<&'a str>,
         include_system: bool,
         source: Option<LogSource>,
-    ) -> Result<String> {
+    ) -> LogsQuery {
         build_logs_query(LogQueryFilters {
             user_query,
             levels,
@@ -1491,83 +1611,114 @@ mod tests {
         })
     }
 
+    fn filter(pairs: &[(&str, &str)]) -> Map<String, Value> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), json!(value)))
+            .collect()
+    }
+
     #[test]
     fn builds_query_with_levels_and_deployment() {
         // `include_system = true` keeps the system-exclusion clause out of the
         // way so this asserts only the level + deployment composition.
         let query = test_query(
-            "service_name:api",
+            "resource.service.name:api",
             &[LogLevel::Warn, LogLevel::Error],
             Some("dep_123"),
             true,
             None,
-        )
-        .unwrap();
+        );
 
         assert_eq!(
-            query,
-            "(service_name:api) AND ((severity_number:>=13 AND severity_number:<=16) OR (severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\""
+            query.search,
+            "(resource.service.name:api) AND (severityNumber:[13 TO 16] OR severityNumber:[17 TO 20])"
+        );
+        assert_eq!(
+            query.filter,
+            filter(&[("resource.alien.deployment_id", "dep_123")])
         );
     }
 
     #[test]
-    fn deployment_filter_escapes_resource_attribute_key_dot() {
-        let query = test_query("*", &[], Some("dep_123"), true, None).unwrap();
+    fn a_deployment_alone_is_only_a_filter() {
+        let query = test_query("*", &[], Some("dep_123"), true, None);
 
+        assert_eq!(query.search, "*");
         assert_eq!(
-            query,
-            "resource_attributes.alien\\.deployment_id:\"dep_123\""
+            query.filter,
+            filter(&[("resource.alien.deployment_id", "dep_123")])
         );
     }
 
     #[test]
     fn hides_system_components_by_default_with_match_all_base() {
         // Default (no query, levels, or deployment) must not produce a
-        // pure-negative query — it needs a positive `*` base.
-        let query = test_query("*", &[], None, false, None).unwrap();
+        // pure-negative query: it needs a positive `*` base.
+        let query = test_query("*", &[], None, false, None);
 
         assert_eq!(
-            query,
-            "* AND NOT resource_attributes.alien\\.system:\"true\" AND NOT attributes.alien\\.system:\"true\""
+            query.search,
+            "* AND NOT resource.alien.system:\"true\" AND NOT attributes.alien.system:\"true\""
         );
+        assert!(query.filter.is_empty());
     }
 
     #[test]
     fn system_flag_omits_exclusion() {
-        let query = test_query("*", &[], None, true, None).unwrap();
+        let query = test_query("*", &[], None, true, None);
 
-        assert_eq!(query, "*");
+        assert_eq!(query.search, "*");
+        assert!(query.filter.is_empty());
     }
 
     #[test]
     fn system_exclusion_appends_after_positive_clauses() {
         let query = test_query(
-            "service_name:api",
+            "resource.service.name:api",
             &[LogLevel::Error],
             Some("dep_123"),
             false,
             None,
-        )
-        .unwrap();
+        );
 
         assert_eq!(
-            query,
-            "(service_name:api) AND ((severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\" AND NOT resource_attributes.alien\\.system:\"true\" AND NOT attributes.alien\\.system:\"true\""
+            query.search,
+            "(resource.service.name:api) AND (severityNumber:[17 TO 20]) AND NOT resource.alien.system:\"true\" AND NOT attributes.alien.system:\"true\""
+        );
+        assert_eq!(
+            query.filter,
+            filter(&[("resource.alien.deployment_id", "dep_123")])
         );
     }
 
     #[test]
-    fn gateway_source_filter_uses_the_trusted_record_attribute() {
-        let query = test_query("*", &[], None, true, Some(LogSource::AiGateway)).unwrap();
+    fn gateway_source_filters_on_the_trusted_record_attribute() {
+        let query = test_query("*", &[], None, true, Some(LogSource::AiGateway));
 
-        assert_eq!(query, "attributes.alien\\.log\\.source:\"ai-gateway\"");
+        assert_eq!(query.search, "*");
+        assert_eq!(
+            query.filter,
+            filter(&[("attributes.alien.log.source", "ai-gateway")])
+        );
     }
 
     #[test]
     fn remote_sandbox_source_reads_the_records_its_gateway_writes() {
-        let query = test_query("*", &[], None, true, Some(LogSource::RemoteSandbox)).unwrap();
+        let query = test_query("*", &[], None, true, Some(LogSource::RemoteSandbox));
 
-        assert_eq!(query, "attributes.alien\\.log\\.source:\"sandbox-gateway\"");
+        assert_eq!(
+            query.filter,
+            filter(&[("attributes.alien.log.source", "sandbox-gateway")])
+        );
+    }
+
+    #[test]
+    fn application_source_is_logs_without_a_source_attribute() {
+        let query = test_query("*", &[], None, true, Some(LogSource::Application));
+
+        assert_eq!(query.search, "* AND NOT attributes.alien.log.source:*");
+        assert!(query.filter.is_empty());
     }
 
     #[test]
@@ -1581,14 +1732,32 @@ mod tests {
             status: Some("provider-error"),
             model: Some("byo/claude-opus-5"),
             provider: Some("anthropic"),
-            operation: None,
+            operation: Some("decrypt"),
             deployment_group: Some("dg_123"),
-        })
-        .unwrap();
+        });
+
+        assert_eq!(query.search, "*");
+        assert_eq!(
+            query.filter,
+            filter(&[
+                ("attributes.alien.log.source", "ai-gateway"),
+                ("attributes.gateway.outcome", "provider-error"),
+                ("attributes.ai.model.requested", "byo/claude-opus-5"),
+                ("attributes.ai.provider", "anthropic"),
+                ("attributes.encryption.operation", "decrypt"),
+                ("attributes.alien.deployment_group_id", "dg_123"),
+            ])
+        );
+    }
+
+    #[test]
+    fn filter_values_with_quotes_stay_literal() {
+        // Filters are JSON values, not query syntax, so nothing needs escaping.
+        let query = test_query("*", &[], Some("dep\" OR \"x"), true, None);
 
         assert_eq!(
-            query,
-            "attributes.alien\\.log\\.source:\"ai-gateway\" AND attributes.gateway\\.outcome:\"provider-error\" AND attributes.ai\\.model\\.requested:\"byo/claude-opus-5\" AND attributes.ai\\.provider:\"anthropic\" AND attributes.alien\\.deployment_group_id:\"dg_123\""
+            query.filter["resource.alien.deployment_id"],
+            json!("dep\" OR \"x")
         );
     }
 
@@ -1734,25 +1903,64 @@ mod tests {
 
     #[test]
     fn extracts_log_entry_fields() {
-        let entry = log_entry_from_hit(serde_json::json!({
-            "timestamp_nanos": 1_700_000_000_123_000_000i64,
-            "severity_text": "INFO",
-            "severity_number": 9,
-            "service_name": "api",
-            "body": { "message": "ready" },
-            "resource_attributes": {
+        let entry = log_entry_from_row(json!({
+            "timestampNanos": "1700000000123000000",
+            "severityText": "INFO",
+            "severityNumber": 9,
+            "body": "ready",
+            "resource": {
+                "service.name": "api",
                 "alien.deployment_id": "dep_abc"
             }
         }));
 
         assert_eq!(entry.message, "ready");
         assert_eq!(entry.level.as_deref(), Some("INFO"));
+        assert_eq!(entry.severity_number, Some(9));
         assert_eq!(entry.service.as_deref(), Some("api"));
         assert_eq!(entry.deployment_id.as_deref(), Some("dep_abc"));
+        assert_eq!(entry.timestamp_nanos, Some(1_700_000_000_123_000_000));
         assert_eq!(
             entry.timestamp.unwrap().to_rfc3339(),
             "2023-11-14T22:13:20.123+00:00"
         );
+    }
+
+    #[test]
+    fn reads_nested_resource_attributes_and_hides_the_runtime_service() {
+        let entry = log_entry_from_row(json!({
+            "timestampNanos": 1_700_000_000_000_000_000i64,
+            "resource": {"service": {"name": "worker"}, "alien": {"deployment_id": "dep_n"}},
+        }));
+        assert_eq!(entry.service.as_deref(), Some("worker"));
+        assert_eq!(entry.deployment_id.as_deref(), Some("dep_n"));
+        assert_eq!(entry.timestamp_nanos, Some(1_700_000_000_000_000_000));
+
+        let entry =
+            log_entry_from_row(json!({"resource": {"service.name": "alien-worker-runtime"}}));
+        assert_eq!(entry.service, None);
+    }
+
+    #[test]
+    fn structured_bodies_show_their_message() {
+        let entry = log_entry_from_row(json!({"body": {"message": "from object"}}));
+        assert_eq!(entry.message, "from object");
+
+        let entry = log_entry_from_row(json!({"body": {"code": 7}}));
+        assert_eq!(entry.message, r#"{"code":7}"#);
+    }
+
+    #[test]
+    fn rows_are_told_apart_by_id_else_by_content() {
+        let a = log_entry_from_row(native_row(T0, "same"));
+        let mut b = log_entry_from_row(native_row(T0, "same"));
+        assert_eq!(log_key(&a), log_key(&b));
+        b.raw["id"] = json!("auto_other");
+        assert_ne!(log_key(&a), log_key(&b));
+
+        let a = log_entry_from_row(json!({"timestampNanos": "5", "body": "x"}));
+        let b = log_entry_from_row(json!({"timestampNanos": "5", "body": "y"}));
+        assert_ne!(log_key(&a), log_key(&b));
     }
 
     #[test]
@@ -1769,7 +1977,7 @@ mod tests {
         .to_string();
         let hit = serde_json::json!({ "body": { "message": original } });
 
-        let entry = log_entry_from_hit(hit.clone());
+        let entry = log_entry_from_row(hit.clone());
 
         assert_eq!(entry.message, "Processed pending jobs");
         assert_eq!(entry.raw, hit);
@@ -1781,7 +1989,7 @@ mod tests {
             r#"{"timestamp":"2026-08-24T09:12:53Z","level":"INFO","fields":{"message":"ready"}}"#;
         let hit = serde_json::json!({ "body": { "message": original } });
 
-        let entry = log_entry_from_hit(hit.clone());
+        let entry = log_entry_from_row(hit.clone());
 
         assert_eq!(entry.message, original);
         assert_eq!(entry.raw, hit);

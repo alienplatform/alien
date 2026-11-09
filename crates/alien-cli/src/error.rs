@@ -107,6 +107,70 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// `alien logs` was run without a project to read logs from.
+    #[error(
+        code = "LOGS_PROJECT_REQUIRED",
+        message = "No project selected. `alien logs` reads one project's logs at a time: pass --project <name-or-id> or --deployment <deployment>, or run `alien link` in this directory.{readable}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    LogsProjectRequired {
+        /// Readable projects, already formatted as a message suffix (may be empty).
+        readable: String,
+    },
+
+    /// The Alien server has no data grant endpoint.
+    #[error(
+        code = "LOG_DATA_GRANTS_UNSUPPORTED",
+        message = "This Alien server doesn't support log queries with data grants yet; update the server or use an older CLI",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    LogDataGrantsUnsupported,
+
+    /// The caller cannot read the project's logs on this manager.
+    #[error(
+        code = "LOG_DATA_ACCESS_DENIED",
+        message = "You don't have access to the logs of project '{project}' on manager '{manager_id}'",
+        hint = "Ask a workspace admin for read access to the project and the manager.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    LogDataAccessDenied {
+        /// Project the logs belong to.
+        project: String,
+        /// Manager that holds the logs.
+        manager_id: String,
+    },
+
+    /// The server has no log data service to send queries to.
+    #[error(
+        code = "LOG_DATA_SERVICE_NOT_CONFIGURED",
+        message = "This Alien server has no log data service configured, so it cannot serve log queries",
+        hint = "Ask the server operator to configure the log data service.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    LogDataServiceNotConfigured,
+
+    /// The manager that holds the logs is offline.
+    #[error(
+        code = "LOG_MANAGER_OFFLINE",
+        message = "Manager '{manager_id}' is offline, so its logs can't be queried right now",
+        hint = "Check the manager's status and try again.",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    LogManagerOffline {
+        /// Manager that holds the logs.
+        manager_id: String,
+    },
+
     /// Network or connectivity issue.
     #[error(
         code = "NETWORK_ERROR",
