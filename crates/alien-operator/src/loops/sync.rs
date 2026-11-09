@@ -106,7 +106,7 @@ pub(crate) async fn run_sync_loop_with_command_address_support(
 }
 
 /// Discard manager credentials from older responses before writing durable state.
-fn sanitize_identity_config(
+pub(super) fn sanitize_identity_config(
     config: &mut alien_core::DeploymentConfig,
     manager_url: &str,
     audience: &str,

@@ -687,6 +687,49 @@ pub(super) async fn enrich_config(
     db: &OperatorDb,
     stack: Option<&alien_core::Stack>,
 ) -> Result<DeploymentConfig> {
+    // The previous Operator pod accepted this config before it enrolled, so it
+    // still carries the deployment token and no manager audience, and the
+    // manager does not send it again. Treat it the way a synced target is
+    // treated, and keep the deployment token only for the command receivers
+    // built before capability files: they start only with it, and the Operator's
+    // session credential must never reach a workload.
+    if config.runtime_identity_audience.is_none() {
+        if let Some(identity) = db.read_daily_identity().await? {
+            let deployment_token = config.deployment_token.take();
+            super::sync::sanitize_identity_config(
+                &mut config,
+                &identity.manager_url,
+                &identity.audience,
+            )?;
+            if let (Some(token), Some(stack)) = (deployment_token, stack) {
+                for resource_id in stack.command_receivers_without_capability_file() {
+                    let supplied = config
+                        .environment_variables
+                        .variables
+                        .iter()
+                        .any(|variable| {
+                            variable.name == "ALIEN_COMMANDS_TOKEN"
+                                && variable
+                                    .target_resources
+                                    .as_ref()
+                                    .is_some_and(|targets| targets.contains(&resource_id))
+                        });
+                    if !supplied {
+                        config
+                            .environment_variables
+                            .variables
+                            .push(EnvironmentVariable {
+                                name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                                value: token.clone(),
+                                var_type: EnvironmentVariableType::Secret,
+                                target_resources: Some(vec![resource_id]),
+                            });
+                    }
+                }
+            }
+        }
+    }
+
     // Pass through public endpoints from operator config.
     if operator_config.public_endpoints.is_some() {
         config.public_endpoints = operator_config.public_endpoints.clone();
@@ -881,17 +924,6 @@ pub(super) async fn enrich_config(
                 // sync token. The Worker runtime keeps it out of the application
                 // child environment; Container/Daemon receivers necessarily read it.
                 if let Some(stack) = stack {
-                    // After enrollment the Operator's token is a session
-                    // credential that must not reach a workload. A config saved
-                    // before enrollment has no runtime identity audience and
-                    // lands here; wait for the manager's settings instead.
-                    if !stack.command_targets().is_empty()
-                        && db.read_daily_identity().await?.is_some()
-                    {
-                        return Err(AlienError::new(ErrorData::ConfigurationError {
-                            message: "The deployment settings were saved before the Operator enrolled; waiting for the manager's current settings".into(),
-                        }));
-                    }
                     vars.extend(
                         stack
                             .worker_command_push_env_vars(Some(&sync_config.token))
@@ -1784,11 +1816,12 @@ mod tests {
             .collect()
     }
 
-    /// A deployment config saved before enrollment has no runtime identity
-    /// audience. The enrolled Operator's token is a session credential, so it
-    /// must wait for the manager's settings, not hand that token to a receiver.
+    /// The previous Operator pod accepted this config before it enrolled, so it
+    /// has no manager audience and the manager does not send it again. The
+    /// receiver built before capability files gets the deployment token the
+    /// config carries. Neither workload gets the Operator's session token.
     #[tokio::test]
-    async fn enrolled_operator_does_not_give_its_session_token_to_a_receiver() {
+    async fn enrolled_operator_keeps_the_deployment_token_for_a_config_saved_before_enrollment() {
         let temp_dir = tempfile::tempdir().unwrap();
         let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
@@ -1817,23 +1850,44 @@ mod tests {
             }))
             .encryption_key(encryption_key)
             .build();
-        let stack = alien_core::Stack::new("old-receiver".to_string())
+        let stack = alien_core::Stack::new("mixed".to_string())
             .add(
                 receiver_container("old-api", false),
                 alien_core::ResourceLifecycle::Live,
             )
+            .add(
+                receiver_container("new-api", true),
+                alien_core::ResourceLifecycle::Live,
+            )
             .build();
+        let mut config = test_deployment_config();
+        config.deployment_token = Some("ax_dep_before_enrollment".to_string());
 
-        // No `runtime_identity_audience`: the config predates enrollment.
-        let result = enrich_config(
-            test_deployment_config(),
+        let enriched = enrich_config(
+            config,
             &operator_config,
             Platform::Kubernetes,
             &db,
             Some(&stack),
         )
-        .await;
-        assert!(result.is_err(), "the session token reached a receiver");
+        .await
+        .unwrap();
+
+        assert_eq!(
+            scoped_values(&enriched, "old-api", "ALIEN_COMMANDS_TOKEN"),
+            ["ax_dep_before_enrollment"]
+        );
+        assert!(scoped_values(&enriched, "new-api", "ALIEN_COMMANDS_TOKEN").is_empty());
+        assert_eq!(
+            scoped_values(&enriched, "new-api", "ALIEN_COMMANDS_CAPABILITY_FILE"),
+            ["/var/run/alien-runtime/commands.json"]
+        );
+        assert!(enriched.deployment_token.is_none());
+        assert!(enriched
+            .environment_variables
+            .variables
+            .iter()
+            .all(|var| var.value != "ax_session_not_for_workloads"));
     }
 
     #[tokio::test]
