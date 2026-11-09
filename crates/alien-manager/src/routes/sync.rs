@@ -3312,6 +3312,29 @@ mod tests {
     }
 
     #[test]
+    fn a_report_from_the_operator_does_not_erase_the_recorded_helm_release() {
+        let mut stored = deployment_record_with_state("running", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            installed_helm_release: Some(alien_core::InstalledHelmRelease {
+                name: "shop".into(),
+                namespace: "apps".into(),
+            }),
+            ..RuntimeMetadata::default()
+        });
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(RuntimeMetadata::default());
+        preserve_setup_update_authorization(&mut incoming, &stored);
+        assert_eq!(
+            incoming
+                .runtime_metadata
+                .unwrap()
+                .installed_helm_release
+                .map(|release| (release.name, release.namespace)),
+            Some(("shop".to_string(), "apps".to_string()))
+        );
+    }
+
+    #[test]
     fn a_report_without_the_minted_authorization_does_not_erase_it_until_the_update_ran() {
         let authorization = alien_core::SetupUpdateAuthorization {
             nonce: "n".into(),
@@ -4470,6 +4493,17 @@ fn preserve_setup_update_authorization(incoming: &mut DeploymentState, stored: &
     ) {
         if metadata.setup_report_refusal.is_none() {
             metadata.setup_report_refusal = Some(refusal.clone());
+        }
+    }
+    if let (Some(release), Some(metadata)) = (
+        stored
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.installed_helm_release.as_ref()),
+        incoming.runtime_metadata.as_mut(),
+    ) {
+        if metadata.installed_helm_release.is_none() {
+            metadata.installed_helm_release = Some(release.clone());
         }
     }
     let Some(authorization) = stored

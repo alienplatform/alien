@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use super::stack::{
     can_reconcile_after_import, prepare_setup_stack, resolve_stack, PrepareSetupStack,
 };
+use super::sync::HelmRelease;
 use super::AppState;
 use crate::auth::{Scope, Subject};
 use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
@@ -228,10 +229,11 @@ async fn apply_report(
     match decide(deployment, report, &target) {
         ReportDecision::NoOp => {
             // The chart matches what runs; a stale refusal no longer applies.
-            if metadata.setup_report_refusal.is_some() {
-                let mut metadata = metadata.clone();
-                metadata.setup_report_refusal = None;
-                write(state, subject, deployment, report, metadata, false).await?;
+            let mut next = metadata.clone();
+            next.setup_report_refusal = None;
+            let release_changed = record_release(&mut next, report);
+            if release_changed || metadata.setup_report_refusal.is_some() {
+                write(state, subject, deployment, report, next, false).await?;
             }
             Ok(())
         }
@@ -256,6 +258,7 @@ async fn apply_report(
             let mut metadata = metadata.clone();
             metadata.setup_update_authorization = Some(authorization);
             metadata.setup_report_refusal = None;
+            record_release(&mut metadata, report);
             write(state, subject, deployment, report, metadata, true).await
         }
     }
@@ -329,6 +332,31 @@ async fn prepare_target(
     .map_err(|e| e.into_generic())
 }
 
+/// Records the Helm release the report names, so the exact upgrade command can
+/// be shown. The names end up in a shell command the customer pastes, so a
+/// value Helm and Kubernetes would not accept is dropped. Returns whether the
+/// stored release changed.
+fn record_release(metadata: &mut alien_core::RuntimeMetadata, report: &InstalledSetup) -> bool {
+    let (Some(name), Some(namespace)) = (report.release_name.clone(), report.namespace.clone())
+    else {
+        return false;
+    };
+    if !(HelmRelease {
+        name: name.clone(),
+        namespace: namespace.clone(),
+    })
+    .is_valid()
+    {
+        return false;
+    }
+    let release = alien_core::InstalledHelmRelease { name, namespace };
+    if metadata.installed_helm_release.as_ref() == Some(&release) {
+        return false;
+    }
+    metadata.installed_helm_release = Some(release);
+    true
+}
+
 /// Keeps the refusal on the deployment, once per distinct reason.
 async fn record_refusal(
     state: &AppState,
@@ -340,17 +368,19 @@ async fn record_refusal(
     let Some(metadata) = deployment.runtime_metadata.as_ref() else {
         return Ok(());
     };
-    if metadata
-        .setup_report_refusal
-        .as_ref()
-        .is_some_and(|refusal| {
-            refusal.reason == reason && refusal.reported_release_id == report.release_id
-        })
+    let mut metadata = metadata.clone();
+    let release_changed = record_release(&mut metadata, report);
+    if !release_changed
+        && metadata
+            .setup_report_refusal
+            .as_ref()
+            .is_some_and(|refusal| {
+                refusal.reason == reason && refusal.reported_release_id == report.release_id
+            })
     {
         return Ok(());
     }
     warn!(deployment_id = %deployment.id, %reason, "Declined the installed setup report");
-    let mut metadata = metadata.clone();
     metadata.setup_report_refusal = Some(SetupReportRefusal {
         reason,
         reported_release_id: report.release_id.clone(),
@@ -518,7 +548,33 @@ mod tests {
             setup_target: "helm".to_string(),
             setup_fingerprint: "fp_2".to_string(),
             setup_fingerprint_version: 1,
+            release_name: None,
+            namespace: None,
         }
+    }
+
+    #[test]
+    fn the_reported_release_is_recorded_only_when_helm_would_accept_it() {
+        let named = |name: &str, namespace: &str| InstalledSetup {
+            release_name: Some(name.to_string()),
+            namespace: Some(namespace.to_string()),
+            ..report("rel_2")
+        };
+        let mut metadata = RuntimeMetadata::default();
+        assert!(record_release(&mut metadata, &named("shop", "apps")));
+        assert!(!record_release(&mut metadata, &named("shop", "apps")));
+        // A name that would put shell syntax into the pasted command is dropped.
+        assert!(!record_release(
+            &mut metadata,
+            &named("x; rm -rf ~", "apps")
+        ));
+        assert!(!record_release(&mut metadata, &named("shop", "$(id)")));
+        assert!(!record_release(&mut metadata, &report("rel_2")));
+        let release = metadata.installed_helm_release.unwrap();
+        assert_eq!(
+            (release.name.as_str(), release.namespace.as_str()),
+            ("shop", "apps")
+        );
     }
 
     #[test]

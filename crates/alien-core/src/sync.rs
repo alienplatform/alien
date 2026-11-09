@@ -336,6 +336,12 @@ pub struct InstalledSetup {
     pub setup_fingerprint: String,
     /// Fingerprint algorithm version.
     pub setup_fingerprint_version: u32,
+    /// Helm release name the chart is installed as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_name: Option<String>,
+    /// Kubernetes namespace of the Helm release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// Where the Operator read the application identity from.

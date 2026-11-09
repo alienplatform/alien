@@ -9851,9 +9851,19 @@
           "setupFingerprintVersion"
         ],
         "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Kubernetes namespace of the Helm release.",
+            "nullable": true
+          },
           "releaseId": {
             "type": "string",
             "description": "Release the chart was built from."
+          },
+          "releaseName": {
+            "type": "string",
+            "description": "Helm release name the chart is installed as.",
+            "nullable": true
           },
           "setupFingerprint": {
             "type": "string",

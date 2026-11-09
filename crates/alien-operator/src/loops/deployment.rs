@@ -915,6 +915,8 @@ mod tests {
             setup_target: "helm".into(),
             setup_fingerprint: fingerprint.into(),
             setup_fingerprint_version: 1,
+            release_name: None,
+            namespace: None,
         }
     }
 

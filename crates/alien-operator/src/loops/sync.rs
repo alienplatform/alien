@@ -1070,6 +1070,8 @@ mod tests {
                 setup_target: "helm".into(),
                 setup_fingerprint: "fp".into(),
                 setup_fingerprint_version: 1,
+                release_name: None,
+                namespace: None,
             })
             .setup_release_file(file.clone())
             .build();

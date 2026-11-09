@@ -730,6 +730,9 @@ async fn run_operator_cli(
         args.setup_target.clone(),
         args.setup_fingerprint.clone(),
         args.setup_fingerprint_version,
+        helm_release
+            .as_ref()
+            .map(|r| (r.name.clone(), r.namespace.clone())),
     )?;
 
     let operator_config = OperatorConfig::builder()
@@ -1245,6 +1248,7 @@ fn installed_setup_from_args(
     setup_target: Option<String>,
     setup_fingerprint: Option<String>,
     setup_fingerprint_version: Option<u32>,
+    release: Option<(String, String)>,
 ) -> Result<Option<alien_core::sync::InstalledSetup>> {
     let release_id = match release_file {
         Some(path) => Some(
@@ -1278,6 +1282,8 @@ fn installed_setup_from_args(
                 setup_target,
                 setup_fingerprint,
                 setup_fingerprint_version: version,
+                release_name: release.as_ref().map(|(name, _)| name.clone()),
+                namespace: release.map(|(_, namespace)| namespace),
             }))
         }
         _ => Err(AlienError::new(ErrorData::ConfigurationError {
