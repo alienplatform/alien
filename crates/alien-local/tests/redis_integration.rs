@@ -317,6 +317,75 @@ async fn a_server_that_is_slow_to_answer_is_kept_and_found_ready_by_the_next_sta
 
 #[tokio::test]
 #[ignore = "requires Docker"]
+async fn a_container_created_but_never_configured_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = LocalRedisManager::new(dir.path().to_path_buf());
+    manager
+        .start_redis("halfmade", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+
+    // Leave what an interrupted create leaves: the container with its final labels, never
+    // configured and never started.
+    let docker = docker();
+    let name = docker
+        .list_containers(Some(bollard::query_parameters::ListContainersOptions {
+            all: true,
+            filters: Some(std::collections::HashMap::from([(
+                "name".to_string(),
+                vec!["halfmade".to_string()],
+            )])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()[0]
+        .names
+        .clone()
+        .unwrap()[0]
+        .trim_start_matches('/')
+        .to_string();
+    let existing = docker.inspect_container(&name, None).await.unwrap();
+    let config = existing.config.unwrap();
+    docker
+        .remove_container(
+            &name,
+            Some(
+                bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                    .force(true)
+                    .build(),
+            ),
+        )
+        .await
+        .unwrap();
+    docker
+        .create_container(
+            Some(bollard::query_parameters::CreateContainerOptions {
+                name: Some(name.clone()),
+                ..Default::default()
+            }),
+            bollard::models::ContainerCreateBody {
+                image: config.image,
+                cmd: config.cmd,
+                labels: config.labels,
+                exposed_ports: config.exposed_ports,
+                host_config: existing.host_config,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    manager
+        .start_redis("halfmade", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    let binding = manager.get_binding("halfmade").unwrap();
+    assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
+    manager.delete_redis("halfmade").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
 async fn a_settings_change_keeps_every_acknowledged_write() {
     let dir = tempfile::tempdir().unwrap();
     let manager = LocalRedisManager::new(dir.path().to_path_buf());

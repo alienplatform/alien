@@ -15,8 +15,8 @@ use crate::{
 use alien_core::bindings::RedisBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::models::{
-    ContainerCreateBody, HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum,
-    VolumeCreateRequest,
+    ContainerCreateBody, ContainerStateStatusEnum, HostConfig, PortBinding, RestartPolicy,
+    RestartPolicyNameEnum, VolumeCreateRequest,
 };
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptionsBuilder, RemoveContainerOptions, RemoveVolumeOptions,
@@ -306,7 +306,11 @@ impl LocalRedisManager {
                 .and_then(|config| config.labels.as_ref())
                 .and_then(|labels| labels.get(LABEL_CONFIG))
                 .cloned();
-            if current.as_deref() == Some(desired.as_str()) {
+            // A container that was created but never started was interrupted before its config
+            // was uploaded, although it already carries the final label: replace it.
+            let never_started = existing.state.as_ref().and_then(|s| s.status)
+                == Some(ContainerStateStatusEnum::CREATED);
+            if current.as_deref() == Some(desired.as_str()) && !never_started {
                 if existing.state.as_ref().and_then(|s| s.running) != Some(true) {
                     docker
                         .start_container(&name, None)
