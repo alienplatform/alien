@@ -1741,7 +1741,7 @@ impl RunnerConfigSources<'_> {
         // gets the deployment's commands-only key, never the deployment token.
         let commands_key = match (deployment_stack, &self.commands_keys) {
             (Some(stack), Some(stores)) => {
-                let unmarked = stack.command_receivers_without_capability_file();
+                let unmarked = receivers_needing_commands_key(deployment, stack);
                 if unmarked.is_empty() {
                     None
                 } else {
@@ -2080,40 +2080,58 @@ fn worker_commands_push_env_vars(
 /// its environment. That holds only when `alien build` recorded that the
 /// receiver reads the capability file.
 ///
-/// A receiver built before capability files gets `commands_key`, the
-/// deployment's commands-only key, in `ALIEN_COMMANDS_TOKEN`; with no key it
-/// fails to deploy with a named cause. Other receivers that cannot use host
-/// files keep the deployment token: Local (`alien dev`), Kubernetes (the
-/// operator replaces it), and machines that do not have a runtime identity yet.
+/// Every other receiver gets `commands_key`, the deployment's commands-only
+/// key, in `ALIEN_COMMANDS_TOKEN`: receivers built before capability files, and
+/// receivers on Local (`alien dev`), Kubernetes, Azure or a cluster without a
+/// runtime identity, where no machine writes the files. With no key the deploy
+/// fails with a named cause. No receiver gets the deployment token.
 fn commands_receiver_env_vars(
     commands_base_url: String,
     deployment: &DeploymentRecord,
     deployment_stack: &alien_core::Stack,
     commands_key: Option<&str>,
 ) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
+    let needs_key = receivers_needing_commands_key(deployment, deployment_stack);
+    deployment_stack.receiver_command_env_vars(&commands_base_url, |resource_id| {
+        if needs_key.iter().any(|id| id == resource_id) {
+            ReceiverCommandCredential::Token(commands_key.map(str::to_owned))
+        } else {
+            ReceiverCommandCredential::HostFiles
+        }
+    })
+}
+
+/// The command-enabled Containers and Daemons that do not get the capability
+/// file, and so need `ALIEN_COMMANDS_TOKEN`.
+fn receivers_needing_commands_key(
+    deployment: &DeploymentRecord,
+    deployment_stack: &alien_core::Stack,
+) -> Vec<String> {
+    use alien_core::CommandTargetType;
     let compute_backend = deployment
         .deployment_config
         .as_ref()
         .and_then(|config| config.compute_backend.as_ref());
-    deployment_stack.receiver_command_env_vars(&commands_base_url, |resource_id| {
-        // A receiver the build did not record as reading the capability file
-        // is an older receiver. It cannot start without `ALIEN_COMMANDS_TOKEN`,
-        // and gets the deployment's commands-only key there, never the
-        // deployment token.
-        if !deployment_stack.command_receiver_reads_capability_file(resource_id) {
-            return ReceiverCommandCredential::Token(commands_key.map(str::to_owned));
-        }
-        if machine_writes_command_credentials(
-            deployment.platform,
-            compute_backend,
-            deployment_stack,
-            resource_id,
-        ) {
-            ReceiverCommandCredential::HostFiles
-        } else {
-            ReceiverCommandCredential::Token(deployment.deployment_token.clone())
-        }
-    })
+    deployment_stack
+        .command_targets()
+        .into_iter()
+        .filter(|target| {
+            matches!(
+                target.resource_type,
+                CommandTargetType::Container | CommandTargetType::Daemon
+            )
+        })
+        .map(|target| target.resource_id)
+        .filter(|id| {
+            !(deployment_stack.command_receiver_reads_capability_file(id)
+                && machine_writes_command_credentials(
+                    deployment.platform,
+                    compute_backend,
+                    deployment_stack,
+                    id,
+                ))
+        })
+        .collect()
 }
 
 /// Whether the machines that run this Container or Daemon hold a runtime
@@ -6557,39 +6575,36 @@ mod tests {
         );
         assert!(!old_build.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
         let legacy = environment_of(&config, "legacy");
-        assert_eq!(
-            legacy.get(ENV_ALIEN_COMMANDS_TOKEN).map(String::as_str),
-            Some("ax_dep_test"),
-            "a cluster without machine identity keeps the token until it migrates"
+        assert!(
+            legacy
+                .get(ENV_ALIEN_COMMANDS_TOKEN)
+                .is_some_and(|key| key.starts_with("ax_cmds_")),
+            "a cluster without machine identity gets the commands key until it migrates: {legacy:?}"
         );
         assert!(!legacy.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
 
         // horizond has no Azure proof, so an Azure machine never writes the
-        // files. Its Container keeps the token or commands stop for it.
+        // files. Its Container gets the commands key or commands stop for it.
         deployment.platform = Platform::Azure;
         let azure = sources
             .deployment_config(&deployment, Some(&stack), None)
             .await
             .expect("azure runner config");
         let azure_api = environment_of(&azure, "api");
-        assert_eq!(
-            azure_api.get(ENV_ALIEN_COMMANDS_TOKEN).map(String::as_str),
-            Some("ax_dep_test")
-        );
+        assert!(azure_api
+            .get(ENV_ALIEN_COMMANDS_TOKEN)
+            .is_some_and(|key| key.starts_with("ax_cmds_")));
         assert!(!azure_api.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
 
-        // `alien dev` keeps the token: it never runs in a customer environment.
+        // `alien dev` follows the same rule: a commands key, never the token.
         deployment.platform = Platform::Local;
         let local = sources
             .deployment_config(&deployment, Some(&stack), None)
             .await
             .expect("local runner config");
-        assert_eq!(
-            environment_of(&local, "api")
-                .get(ENV_ALIEN_COMMANDS_TOKEN)
-                .map(String::as_str),
-            Some("ax_dep_test")
-        );
+        assert!(environment_of(&local, "api")
+            .get(ENV_ALIEN_COMMANDS_TOKEN)
+            .is_some_and(|key| key.starts_with("ax_cmds_")));
     }
 
     /// The environment the manager's own push model gives a stack with one
@@ -6597,6 +6612,7 @@ mod tests {
     /// capability file, both on a cluster whose machines hold a runtime
     /// identity.
     async fn push_model_environment(
+        platform: Platform,
         deployment_token: Option<&str>,
     ) -> (
         Result<DeploymentConfig, AlienError>,
@@ -6632,7 +6648,7 @@ mod tests {
             )]),
         });
         let mut deployment = deployment_record(DeploymentStatus::UpdatePending, None);
-        deployment.platform = Platform::Aws;
+        deployment.platform = platform;
         deployment.deployment_token = deployment_token.map(str::to_string);
         deployment.deployment_config = Some(
             DeploymentConfig::builder()
@@ -6712,7 +6728,8 @@ mod tests {
     /// never the deployment token, and the key is one the manager accepts.
     #[tokio::test]
     async fn push_model_gives_an_unmarked_receiver_the_commands_key_not_the_deployment_token() {
-        let (config, token_store, _dir) = push_model_environment(Some("ax_dep_test")).await;
+        let (config, token_store, _dir) =
+            push_model_environment(Platform::Aws, Some("ax_dep_test")).await;
         let config = config.expect("runner config");
         let unmarked = receiver_environment(&config, "unmarked");
         let key = unmarked
@@ -6734,7 +6751,7 @@ mod tests {
     /// unmarked receiver.
     #[tokio::test]
     async fn push_model_deploys_an_unmarked_receiver_without_a_deployment_token() {
-        let (config, _token_store, _dir) = push_model_environment(None).await;
+        let (config, _token_store, _dir) = push_model_environment(Platform::Aws, None).await;
         let config = config.expect("no COMMAND_TOKEN_MISSING without a deployment token");
         let unmarked = receiver_environment(&config, "unmarked");
         assert!(unmarked
@@ -6742,10 +6759,32 @@ mod tests {
             .is_some_and(|key| key.starts_with("ax_cmds_")));
     }
 
+    /// A receiver that reads the capability file but runs where no machine
+    /// writes the file (Kubernetes push, Azure, `alien dev`) gets the commands
+    /// key, never the deployment token.
+    #[tokio::test]
+    async fn push_model_gives_a_marked_receiver_without_machine_files_the_commands_key() {
+        for platform in [Platform::Kubernetes, Platform::Azure, Platform::Local] {
+            let (config, _token_store, _dir) =
+                push_model_environment(platform, Some("ax_dep_test")).await;
+            let config = config.expect("runner config");
+            let marked = receiver_environment(&config, "marked");
+            let key = marked
+                .get(ENV_ALIEN_COMMANDS_TOKEN)
+                .unwrap_or_else(|| panic!("{platform:?}: the receiver needs a commands token"));
+            assert!(key.starts_with("ax_cmds_"), "{platform:?}: got {key}");
+            assert!(
+                marked.values().all(|value| !value.starts_with("ax_dep_")),
+                "{platform:?}: {marked:?}"
+            );
+        }
+    }
+
     /// A receiver that reads the capability file gets the file and no token.
     #[tokio::test]
     async fn push_model_gives_a_marked_receiver_only_the_capability_file() {
-        let (config, _token_store, _dir) = push_model_environment(Some("ax_dep_test")).await;
+        let (config, _token_store, _dir) =
+            push_model_environment(Platform::Aws, Some("ax_dep_test")).await;
         let config = config.expect("runner config");
         let marked = receiver_environment(&config, "marked");
         assert!(!marked.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
