@@ -774,7 +774,21 @@ pub(super) async fn enrich_config(
                         message: "Local container credential file access is not configured".into(),
                     }));
                 }
-                vars.retain(|variable| variable.name != "ALIEN_COMMANDS_TOKEN");
+                // A Container or Daemon whose receiver the build did not record as
+                // reading the capability file is an older receiver. It cannot
+                // start without `ALIEN_COMMANDS_TOKEN`, so that token stays for
+                // it and for no one else.
+                let unmarked: std::collections::BTreeSet<String> = stack
+                    .command_receivers_without_capability_file()
+                    .into_iter()
+                    .collect();
+                vars.retain(|variable| {
+                    variable.name != "ALIEN_COMMANDS_TOKEN"
+                        || variable.target_resources.as_ref().is_some_and(|targets| {
+                            !targets.is_empty()
+                                && targets.iter().all(|target| unmarked.contains(target))
+                        })
+                });
                 // Worker runtimes built before capability files accept a push
                 // only with `ALIEN_COMMANDS_TOKEN`. Give them the Operator's
                 // own push secret, which grants nothing at the manager. Newer
@@ -789,6 +803,44 @@ pub(super) async fn enrich_config(
                     None
                 };
                 for target in targets {
+                    if unmarked.contains(&target.resource_id) {
+                        // The manager supplied this receiver's token with its
+                        // other settings. Without it the receiver cannot start,
+                        // so fail here where the cause can be named.
+                        let has_token = vars.iter().any(|variable| {
+                            variable.name == "ALIEN_COMMANDS_TOKEN"
+                                && variable
+                                    .target_resources
+                                    .as_ref()
+                                    .is_some_and(|targets| targets.contains(&target.resource_id))
+                        });
+                        if !has_token {
+                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: format!(
+                                    "Command receiver '{}' was built before capability files and needs ALIEN_COMMANDS_TOKEN, which the manager did not supply",
+                                    target.resource_id
+                                ),
+                            }));
+                        }
+                        let values = [
+                            ("ALIEN_COMMANDS_URL", commands_url.clone()),
+                            (
+                                "ALIEN_COMMANDS_TARGET_RESOURCE_ID",
+                                target.resource_id.clone(),
+                            ),
+                            (
+                                "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE",
+                                target.resource_type.as_str().to_owned(),
+                            ),
+                        ];
+                        vars.extend(values.into_iter().map(|(name, value)| EnvironmentVariable {
+                            name: name.into(),
+                            value,
+                            var_type: EnvironmentVariableType::Plain,
+                            target_resources: Some(vec![target.resource_id.clone()]),
+                        }));
+                        continue;
+                    }
                     if let (CommandTargetType::Worker, Some(secret)) =
                         (target.resource_type, push_secret.as_ref())
                     {
@@ -1638,6 +1690,162 @@ mod tests {
             }));
         }
     }
+    fn receiver_container(id: &str, reads_capability_file: bool) -> alien_core::Container {
+        let mut container = alien_core::Container::new(id.to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        container.commands_capability_file = reads_capability_file;
+        container
+    }
+
+    fn manager_receiver_token(resource_id: &str) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+            value: "ax_dep_manager".to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: Some(vec![resource_id.to_string()]),
+        }
+    }
+
+    async fn enrich_enrolled_kubernetes(
+        stack: &alien_core::Stack,
+        manager_tokens: &[&str],
+    ) -> Result<DeploymentConfig> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_k8s").await.unwrap();
+        let mut config = test_deployment_config();
+        config.runtime_identity_audience = Some("https://manager.example.com".to_string());
+        config.environment_variables.variables = manager_tokens
+            .iter()
+            .map(|id| manager_receiver_token(id))
+            .collect();
+        // After enrollment the operator's own token is a short session token.
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .agent_name("k8s-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_session_not_for_workloads".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+        enrich_config(
+            config,
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            Some(stack),
+        )
+        .await
+    }
+
+    fn scoped_values<'a>(
+        config: &'a DeploymentConfig,
+        resource_id: &str,
+        name: &str,
+    ) -> Vec<&'a str> {
+        config
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|var| {
+                var.name == name
+                    && var.target_resources.as_deref() == Some(&[resource_id.to_string()][..])
+            })
+            .map(|var| var.value.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn enrolled_receivers_get_the_capability_file_only_when_the_build_marked_them() {
+        let mut daemon = alien_core::Daemon::new("old-agent".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        daemon.commands_capability_file = false;
+        let stack = alien_core::Stack::new("operator-marker-stack".to_string())
+            .add(
+                receiver_container("new-web", true),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                receiver_container("old-web", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let enriched = enrich_enrolled_kubernetes(&stack, &["new-web", "old-web", "old-agent"])
+            .await
+            .unwrap();
+
+        // Marked: only the capability file, no token.
+        assert!(scoped_values(&enriched, "new-web", "ALIEN_COMMANDS_TOKEN").is_empty());
+        assert_eq!(
+            scoped_values(&enriched, "new-web", "ALIEN_COMMANDS_CAPABILITY_FILE"),
+            ["/var/run/alien-runtime/commands.json"]
+        );
+        // Unmarked (older receiver): the token the manager supplied, no file.
+        for id in ["old-web", "old-agent"] {
+            assert_eq!(
+                scoped_values(&enriched, id, "ALIEN_COMMANDS_TOKEN"),
+                ["ax_dep_manager"],
+                "{id} keeps its token"
+            );
+            assert!(
+                scoped_values(&enriched, id, "ALIEN_COMMANDS_CAPABILITY_FILE").is_empty(),
+                "{id} gets no capability file"
+            );
+            assert_eq!(
+                scoped_values(&enriched, id, "ALIEN_COMMANDS_URL"),
+                ["https://manager.example.com/v1"]
+            );
+        }
+        // The session token is never given to a workload.
+        assert!(!enriched
+            .environment_variables
+            .variables
+            .iter()
+            .any(|var| var.value == "ax_session_not_for_workloads"));
+    }
+
+    #[tokio::test]
+    async fn an_older_receiver_without_a_manager_token_fails_the_deploy_with_its_name() {
+        let stack = alien_core::Stack::new("operator-marker-stack".to_string())
+            .add(
+                receiver_container("old-web", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        let error = enrich_enrolled_kubernetes(&stack, &[]).await.unwrap_err();
+
+        assert!(
+            error.to_string().contains("old-web"),
+            "the error names the receiver: {error}"
+        );
+    }
+
     #[tokio::test]
     async fn disconnected_commands_are_disabled_only_for_command_targets() {
         let directory = tempfile::tempdir().unwrap();
