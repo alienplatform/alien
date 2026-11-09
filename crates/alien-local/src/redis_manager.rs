@@ -810,9 +810,6 @@ async fn wait_until_ready(
                 "The Valkey container exited during startup; check `docker logs`",
             )));
         }
-        if ping(metadata.port, &metadata.password).await {
-            return Ok(());
-        }
         if tokio::time::Instant::now() >= deadline {
             return Err(AlienError::new(container_error(
                 name,
@@ -822,6 +819,9 @@ async fn wait_until_ready(
                     metadata.port
                 ),
             )));
+        }
+        if ping(metadata.port, &metadata.password).await {
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
