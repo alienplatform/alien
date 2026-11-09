@@ -184,6 +184,8 @@ enum Access {
     NotServed,
     /// A platform whose manager stores values but cannot be reached.
     Unavailable,
+    /// A gateway in front of the platform answering with its own 404 page.
+    GatewayPage,
 }
 
 #[derive(Clone)]
@@ -226,6 +228,12 @@ async fn platform_handler(
             Access::NoRoute => old_platform_not_found(),
             Access::NotServed => not_served(),
             Access::Unavailable => unavailable(),
+            Access::GatewayPage => (
+                StatusCode::NOT_FOUND,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                "<html><body><h1>404 Not Found</h1></body></html>",
+            )
+                .into_response(),
         },
         ("GET", "environment-variables") => {
             let variables: Vec<Value> = platform
@@ -1492,4 +1500,25 @@ async fn a_first_party_deploy_on_an_older_platform_sends_a_required_secret_once(
     assert!(puts[0]["inputValues"].get("api_key").is_none());
     assert_eq!(puts[1]["inputValues"]["api_key"], CANARY);
     assert_eq!(create_count(&platform), 2);
+}
+
+#[tokio::test]
+async fn a_gateway_404_page_does_not_send_the_secret_to_the_platform() {
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "heldInputIds": ["api_key"],
+        "values": {},
+    });
+    let platform = start_platform(Access::GatewayPage, inputs).await;
+    let answers = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect_err("a 404 that is not the older platform's own cannot select the older path");
+
+    for (method, path, body) in platform.requests() {
+        assert!(!body.contains(CANARY), "{method} {path} carried it: {body}");
+    }
 }

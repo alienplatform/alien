@@ -71,10 +71,15 @@ enum Reply {
     OldPath,
 }
 
+/// What the older platform's router answers for a path it has no route for.
+const OLD_PLATFORM_NOT_FOUND_BODY: &str = "404 Not Found";
+
 /// Reads the platform's answer to a value-access request.
 ///
-/// A 404 that is not an Alien error body means the platform has no such route
-/// (an older platform). A 404 with an error code is a real answer. A 409 with
+/// A 404 whose body is exactly the router's default text means the platform
+/// has no such route (an older platform). Any other 404, with or without an
+/// error code, is an error: a gateway or firewall page must not make the CLI
+/// send values to the platform. A 409 with
 /// a code that says the deployment's manager does not store values selects the
 /// older path. Every other failure is an error: a manager that stores values
 /// and refuses a write is never worked around by sending the value elsewhere.
@@ -92,7 +97,7 @@ fn interpret_reply(status: u16, body: &str) -> Result<Reply> {
                 message: "reading the value access grant".to_string(),
                 url: None,
             }),
-        (404, None) => Ok(Reply::OldPath),
+        (404, _) if body == OLD_PLATFORM_NOT_FOUND_BODY => Ok(Reply::OldPath),
         (409, Some(code)) if OLD_PATH_CODES.contains(&code) => Ok(Reply::OldPath),
         _ => Err::<Reply, _>(platform_error(status, body)).context(ErrorData::ApiRequestFailed {
             message: "requesting access to store values".to_string(),
@@ -508,11 +513,19 @@ mod tests {
             interpret_reply(404, "404 Not Found").unwrap(),
             Reply::OldPath
         );
-        assert_eq!(interpret_reply(404, "").unwrap(), Reply::OldPath);
-        assert_eq!(
-            interpret_reply(404, r#"{"message":"gone"}"#).unwrap(),
-            Reply::OldPath
-        );
+    }
+
+    #[test]
+    fn a_404_that_is_not_the_routers_default_text_is_an_error() {
+        for body in [
+            "",
+            r#"{"message":"gone"}"#,
+            "<html><body>404 Not Found</body></html>",
+            "404 Not Found\n<!-- cdn -->",
+        ] {
+            interpret_reply(404, body)
+                .expect_err("only the older platform's own 404 selects the older path");
+        }
     }
 
     #[test]
