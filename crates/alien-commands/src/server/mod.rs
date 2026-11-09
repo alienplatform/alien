@@ -27,6 +27,8 @@ use crate::error::{ErrorData, Result};
 use crate::types::*;
 use crate::INLINE_MAX_BYTES;
 
+type HmacSha256 = Hmac<Sha256>;
+
 /// Max serialized KV value size. Conservative threshold below the hard 24KB
 /// boundary (Azure Table Storage) to account for JSON wrapping overhead.
 const KV_VALUE_THRESHOLD: usize = 20_000;
@@ -191,40 +193,54 @@ impl CommandServer {
     /// need to outlive both; 2 hours stays within the verifier cap.
     const RESPONSE_CREDENTIAL_LIFETIME_SECS: u64 = 7200;
 
-    /// Sign a response URL for a specific command.
+    /// Sign a response URL for a specific command, and for one lease of it when
+    /// the command was leased to a polling receiver.
     ///
     /// Returns `(hmac_hex, expires_epoch)`. The HMAC is computed over
-    /// `"arc.v1:{command_id}:{expires}"` using the server's signing key.
-    fn sign_response_url(&self, command_id: &str, deadline: DateTime<Utc>) -> (String, i64) {
+    /// `"commands.v1:{command_id}:{expires}"`, or
+    /// `"commands.v2:{command_id}:{lease_id}:{expires}"` for a lease, using the
+    /// server's signing key.
+    fn sign_response_url(
+        &self,
+        command_id: &str,
+        lease_id: Option<&str>,
+        deadline: DateTime<Utc>,
+    ) -> (String, i64) {
         let expires = deadline.timestamp();
-        let message = format!("commands.v1:{}:{}", command_id, expires);
+        let token = self.response_mac(command_id, lease_id, expires).finalize().into_bytes();
+        (hex::encode(token), expires)
+    }
 
-        type HmacSha256 = Hmac<Sha256>;
+    fn response_mac(&self, command_id: &str, lease_id: Option<&str>, expires: i64) -> HmacSha256 {
+        let message = match lease_id {
+            Some(lease_id) => format!("commands.v2:{command_id}:{lease_id}:{expires}"),
+            None => format!("commands.v1:{command_id}:{expires}"),
+        };
         let mut mac =
             HmacSha256::new_from_slice(&self.response_signing_key).expect("HMAC accepts any key");
         mac.update(message.as_bytes());
-        let result = mac.finalize();
-        let token = hex::encode(result.into_bytes());
-
-        (token, expires)
+        mac
     }
 
-    /// Verify a response token for a specific command.
+    /// Verify a response token for a specific command, and for the lease it
+    /// names when the URL carries one. A token signed for a lease does not
+    /// verify without it, so the lease cannot be dropped from the URL.
     ///
     /// Performs HMAC verification first (constant-time), then checks expiration,
     /// to avoid leaking timing information about token validity windows.
-    pub fn verify_response_token(&self, command_id: &str, token: &str, expires: i64) -> bool {
+    pub fn verify_response_token(
+        &self,
+        command_id: &str,
+        lease_id: Option<&str>,
+        token: &str,
+        expires: i64,
+    ) -> bool {
         // Validate token format: SHA-256 HMAC = 32 bytes = 64 hex chars.
         if token.len() != 64 {
             return false;
         }
 
-        let message = format!("commands.v1:{}:{}", command_id, expires);
-
-        type HmacSha256 = Hmac<Sha256>;
-        let mut mac =
-            HmacSha256::new_from_slice(&self.response_signing_key).expect("HMAC accepts any key");
-        mac.update(message.as_bytes());
+        let mac = self.response_mac(command_id, lease_id, expires);
 
         // Decode hex and verify HMAC (constant-time comparison).
         let Ok(token_bytes) = hex::decode(token) else {
@@ -238,6 +254,43 @@ impl CommandServer {
         let within_max_lifetime = expires <= now + Self::MAX_RESPONSE_TOKEN_LIFETIME_SECS;
 
         hmac_valid && not_expired && within_max_lifetime
+    }
+
+    /// Refuse a response from a lease that another lease has replaced. The
+    /// command is held by one lease at a time; a holder whose lease expired
+    /// without a successor may still report what it ran, but once the command
+    /// was leased again the new holder is the one running it.
+    pub async fn require_lease_not_superseded(
+        &self,
+        command_id: &str,
+        lease_id: &str,
+    ) -> Result<()> {
+        let key = format!("cmd:{command_id}:lease");
+        let Some(entry) = self
+            .kv
+            .get(&key)
+            .await
+            .context(ErrorData::KvOperationFailed {
+                operation: "get".to_string(),
+                key,
+                message: "Failed to read the command lease".to_string(),
+            })?
+        else {
+            return Ok(());
+        };
+        let lease: LeaseData = serde_json::from_slice(&entry.value)
+            .into_alien_error()
+            .context(ErrorData::SerializationFailed {
+                message: "Failed to deserialize lease data".to_string(),
+                data_type: Some("LeaseData".to_string()),
+            })?;
+        if lease.lease_id == lease_id {
+            return Ok(());
+        }
+        Err(AlienError::new(ErrorData::LeaseSuperseded {
+            command_id: command_id.to_string(),
+            lease_id: lease_id.to_string(),
+        }))
     }
 
     // =========================================================================
@@ -986,6 +1039,7 @@ impl CommandServer {
                     params,
                     authority_deadline,
                     response_deadline,
+                    Some(&lease_id),
                 )
                 .await?;
             Self::relativize_manager_urls(&mut envelope, &self.base_url);
@@ -1823,7 +1877,7 @@ impl CommandServer {
 
         // Build envelope
         let envelope = self
-            .build_envelope(command_id, &metadata, params, None, None)
+            .build_envelope(command_id, &metadata, params, None, None, None)
             .await?;
 
         // Mark Dispatched BEFORE invoking the transport: a fast worker can
@@ -1893,11 +1947,13 @@ impl CommandServer {
         mut params: BodySpec,
         authority_deadline: Option<DateTime<Utc>>,
         response_deadline: Option<DateTime<Utc>>,
+        lease_id: Option<&str>,
     ) -> Result<Envelope> {
         // The result credentials follow the command's execution window
         // (`response_deadline`), not the receiver credential that leased it.
+        // A leased command's response URL names its lease.
         let response_handling = self
-            .create_response_handling(command_id, response_deadline)
+            .create_response_handling(command_id, response_deadline, lease_id)
             .await?;
 
         // Re-inline: if params are in blob but fit in transport limit, read and embed inline.
@@ -2018,7 +2074,7 @@ impl CommandServer {
         let deadline =
             authority_deadline.map_or(lease.expires_at, |deadline| deadline.min(lease.expires_at));
         let handling = self
-            .create_response_handling(command_id, Some(deadline))
+            .create_response_handling(command_id, Some(deadline), Some(lease_id))
             .await?;
         let current = self
             .kv
@@ -2042,6 +2098,7 @@ impl CommandServer {
         &self,
         command_id: &str,
         authority_deadline: Option<DateTime<Utc>>,
+        lease_id: Option<&str>,
     ) -> Result<ResponseHandling> {
         let upload_path = StoragePath::from(format!("arc/commands/{}/response", command_id));
         let default_deadline =
@@ -2060,16 +2117,19 @@ impl CommandServer {
             })?;
 
         self.check_storage_deadline(&presigned, deadline)?;
-        let (response_token, expires) = self.sign_response_url(command_id, deadline);
+        let (response_token, expires) = self.sign_response_url(command_id, lease_id, deadline);
 
         Ok(ResponseHandling {
             max_inline_bytes: self.inline_max_bytes as u64,
             submit_response_url: format!(
-                "{}/commands/{}/response?response_token={}&expires={}",
+                "{}/commands/{}/response?response_token={}&expires={}{}",
                 self.base_url.trim_end_matches('/'),
                 command_id,
                 response_token,
                 expires,
+                lease_id
+                    .map(|lease_id| format!("&lease_id={lease_id}"))
+                    .unwrap_or_default(),
             ),
             storage_upload_request: presigned,
         })

@@ -1724,6 +1724,157 @@ mod runtime_credentials {
         assert_eq!(completed.state, alien_core::CommandState::Succeeded);
     }
 
+    /// The response URL a lease hands out belongs to that lease. When the
+    /// command was released and leased again, the first holder's URL must not
+    /// complete it: the new holder is the one running it.
+    #[tokio::test]
+    async fn a_response_url_completes_only_the_command_its_lease_still_holds() {
+        async fn request(
+            router: &axum::Router,
+            bearer: &str,
+            method: &str,
+            path: &str,
+            body: Value,
+        ) -> axum::response::Response {
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+        async fn lease(router: &axum::Router, bearer: &str, deployment_id: &str) -> alien_core::LeaseInfo {
+            let response = request(
+                router,
+                bearer,
+                "POST",
+                "/v1/commands/leases",
+                json!({"deploymentId": deployment_id, "target": {
+                    "resourceId": "worker-a", "resourceType": "worker"
+                }, "maxLeases": 1, "leaseSeconds": 60}),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut leases: alien_core::LeaseResponse =
+                serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap())
+                    .unwrap();
+            assert_eq!(leases.leases.len(), 1);
+            leases.leases.remove(0)
+        }
+        async fn submit(router: &axum::Router, lease: &alien_core::LeaseInfo, body: &[u8]) -> StatusCode {
+            let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
+            let url = base
+                .join(&lease.envelope.response_handling.submit_response_url)
+                .unwrap();
+            let path = format!("{}?{}", url.path(), url.query().unwrap());
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(path)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&alien_core::SubmitResponseRequest {
+                                response: alien_core::CommandResponse::success(body),
+                            })
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+
+        let (mut state, deployment_id, tmp) = state().await;
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target("worker-a", alien_core::CommandTargetType::Worker)
+            .await
+            .unwrap();
+        state.command_server = Arc::new(CommandServer::new(
+            state.kv.clone(),
+            Arc::new(
+                LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                    .unwrap(),
+            ),
+            Arc::new(NullCommandDispatcher),
+            registry,
+            "http://localhost:0/v1".to_owned(),
+            b"test-signing-key".to_vec(),
+        ));
+        let created = state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.clone(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"hello"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some("worker-a".to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap();
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::DeploymentManager);
+
+        let first = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(
+            request(
+                &router,
+                &bearer,
+                "POST",
+                &format!("/v1/commands/leases/{}/release", first.lease_id),
+                json!({})
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let second = lease(&router, &bearer, &deployment_id).await;
+        assert_ne!(first.lease_id, second.lease_id);
+
+        // The first holder lost the command: it cannot complete it.
+        assert_eq!(
+            submit(&router, &first, b"from the first lease").await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&created.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Dispatched
+        );
+        // The current holder completes it.
+        assert_eq!(
+            submit(&router, &second, b"from the second lease").await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&created.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
     /// Clients are generated from the published schema, so a request built
     /// with the generated types must be accepted for every proof kind.
     #[tokio::test]

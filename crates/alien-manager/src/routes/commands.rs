@@ -420,12 +420,15 @@ async fn upload_complete(
 struct SubmitResponseQuery {
     response_token: Option<String>,
     expires: Option<i64>,
+    /// The lease the response URL was issued for. The signature covers it, so
+    /// it cannot be dropped or swapped. A bearer caller may name its lease too.
+    lease_id: Option<String>,
 }
 
 /// Submit response from deployment.
 ///
 /// Auth: Bearer token (Admin/Deployment) OR presigned URL query params
-/// (`response_token` + `expires`). The presigned URL approach is used by
+/// (`response_token` + `expires`, plus `lease_id` when the URL was issued with a lease). The presigned URL approach is used by
 /// push-mode runtimes (Lambda, Cloud Run, Container Apps) that have no
 /// pre-existing auth token — the signed URL is embedded in the command envelope.
 async fn submit_response(
@@ -471,11 +474,25 @@ async fn submit_response(
                 .into_response();
         };
 
-        if !state
-            .command_server
-            .verify_response_token(&command_id, token, expires)
-        {
+        if !state.command_server.verify_response_token(
+            &command_id,
+            query.lease_id.as_deref(),
+            token,
+            expires,
+        ) {
             return ErrorData::unauthorized("Invalid or expired response token").into_response();
+        }
+    }
+
+    // A response names the lease it was issued for. A lease the command has
+    // since been handed on from does not complete it.
+    if let Some(lease_id) = query.lease_id.as_deref() {
+        if let Err(e) = state
+            .command_server
+            .require_lease_not_superseded(&command_id, lease_id)
+            .await
+        {
+            return e.into_response();
         }
     }
 
