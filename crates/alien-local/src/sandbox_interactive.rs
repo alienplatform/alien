@@ -36,6 +36,7 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::sandbox_manager::{InteractiveExec, LocalSandboxManager};
 
@@ -71,6 +72,10 @@ const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(10);
 
 /// How long to wait for the output to end after the group was killed.
 const KILL_SETTLE: Duration = Duration::from_secs(10);
+
+/// How long to wait between attempts to stop a command that could not be confirmed stopped, as
+/// when every process slot in the container is taken and the kill itself cannot start.
+const KILL_RETRY: Duration = Duration::from_secs(5);
 
 type Output = std::pin::Pin<
     Box<
@@ -275,14 +280,27 @@ impl InteractiveRegistry {
             .map_err(|error| ControlError::Failed(error.to_string()))?;
         let deadline = tokio::time::Instant::now() + request.timeout;
 
-        let ((process_group, started), pending) = match announcement(&mut output).await {
-            Ok(announced) => announced,
-            Err(reason) => {
-                // Without the pid there is nothing to signal, so end the input and the attach and
-                // report the start as failed; a wrapper that never ran has started nothing.
+        let mut heard = Heard::default();
+        let announced =
+            tokio::time::timeout(ANNOUNCEMENT_WAIT, announcement(&mut output, &mut heard)).await;
+        let ((process_group, started), pending) = match announced {
+            Ok(Ok(announced)) => announced,
+            Ok(Err(reason)) => {
+                // Docker has started the exec, so the command may be running even though its
+                // wrapper did not say so as written. The id stays held until its output ends.
                 drop(input);
-                drop(output);
+                tokio::spawn(outlast(output, reservation));
                 return Err(ControlError::Failed(reason));
+            }
+            Err(_) => {
+                // The announcement may still come. Until the command is known to be gone, it is
+                // stopped as soon as its group is named, and its id stays held.
+                drop(input);
+                tokio::spawn(abandon(manager, container_id, output, heard, reservation));
+                return Err(ControlError::Failed(format!(
+                    "the command wrapper did not report a pid within {}s",
+                    ANNOUNCEMENT_WAIT.as_secs()
+                )));
             }
         };
 
@@ -453,46 +471,84 @@ type Early = Vec<(bool, Vec<u8>)>;
 /// whatever output arrived around it. The line is the first thing on stderr, but Docker does not
 /// order stdout against stderr, so the program's first stdout can arrive before it and is kept,
 /// not refused.
-async fn announcement(output: &mut Output) -> Result<((i64, String), Early), String> {
-    let read = async {
-        let mut stderr = Vec::new();
-        let mut early: Early = Vec::new();
-        loop {
-            match output.next().await {
-                None => return Err("the command wrapper ended before reporting a pid".to_string()),
-                Some(Err(error)) => return Err(format!("reading the command wrapper: {error}")),
-                Some(Ok(bollard::container::LogOutput::StdOut { message })) => {
-                    early.push((true, message.to_vec()));
-                }
-                Some(Ok(bollard::container::LogOutput::StdErr { message })) => {
-                    stderr.extend_from_slice(&message);
-                    if let Some(end) = stderr.iter().position(|byte| *byte == b'\n') {
-                        let line = String::from_utf8_lossy(&stderr[..end]).into_owned();
-                        let announced = parse_announcement(&line).ok_or_else(|| {
-                            format!("the command wrapper did not report a pid: {line:?}")
-                        })?;
-                        let rest = stderr[end + 1..].to_vec();
-                        if !rest.is_empty() {
-                            early.push((false, rest));
-                        }
-                        return Ok((announced, early));
-                    }
-                    if stderr.len() > MAX_ANNOUNCEMENT {
-                        return Err("the command wrapper did not report a pid".to_string());
-                    }
-                }
-                Some(Ok(_)) => {}
+/// What has arrived ahead of the announcement, kept across a timed-out wait so the reading can
+/// go on where it stopped.
+#[derive(Default)]
+struct Heard {
+    stderr: Vec<u8>,
+    early: Early,
+}
+
+/// Reads the wrapper's line off the front of stderr, returning the pid, the start time and
+/// whatever output arrived around it. The caller bounds the wait; a wait cut short leaves what
+/// was read in `heard`.
+async fn announcement(
+    output: &mut Output,
+    heard: &mut Heard,
+) -> Result<((i64, String), Early), String> {
+    loop {
+        match output.next().await {
+            None => return Err("the command wrapper ended before reporting a pid".to_string()),
+            Some(Err(error)) => return Err(format!("reading the command wrapper: {error}")),
+            Some(Ok(bollard::container::LogOutput::StdOut { message })) => {
+                heard.early.push((true, message.to_vec()));
             }
+            Some(Ok(bollard::container::LogOutput::StdErr { message })) => {
+                heard.stderr.extend_from_slice(&message);
+                if let Some(end) = heard.stderr.iter().position(|byte| *byte == b'\n') {
+                    let line = String::from_utf8_lossy(&heard.stderr[..end]).into_owned();
+                    let announced = parse_announcement(&line).ok_or_else(|| {
+                        format!("the command wrapper did not report a pid: {line:?}")
+                    })?;
+                    let rest = heard.stderr[end + 1..].to_vec();
+                    let mut early = std::mem::take(&mut heard.early);
+                    if !rest.is_empty() {
+                        early.push((false, rest));
+                    }
+                    return Ok((announced, early));
+                }
+                if heard.stderr.len() > MAX_ANNOUNCEMENT {
+                    return Err("the command wrapper did not report a pid".to_string());
+                }
+            }
+            Some(Ok(_)) => {}
         }
+    }
+}
+
+/// Holds the id of a command whose start was answered as failed until its output ends, which is
+/// Docker saying the exec is gone. Nothing names its group, so nothing can stop it sooner.
+async fn outlast(mut output: Output, reservation: Reservation) {
+    while output.next().await.is_some() {}
+    drop(reservation);
+}
+
+/// A start that timed out waiting for the announcement: the command may be running anyway. If
+/// the announcement still comes, its group is stopped; the id is released only once the output
+/// has ended.
+async fn abandon(
+    manager: Arc<LocalSandboxManager>,
+    container_id: String,
+    mut output: Output,
+    mut heard: Heard,
+    reservation: Reservation,
+) {
+    let (process_group, started) = match announcement(&mut output, &mut heard).await {
+        Ok((announced, _)) => announced,
+        Err(_) => return outlast(output, reservation).await,
     };
-    tokio::time::timeout(ANNOUNCEMENT_WAIT, read)
-        .await
-        .map_err(|_| {
-            format!(
-                "the command wrapper did not report a pid within {}s",
-                ANNOUNCEMENT_WAIT.as_secs()
-            )
-        })?
+    let command = Command {
+        container_id,
+        stdin: tokio::sync::Mutex::new(Stdin {
+            pipe: None,
+            accepted: 0,
+            generation: 0,
+        }),
+        process_group,
+        started,
+    };
+    stop_until_gone(&manager, &command, &mut output).await;
+    drop(reservation);
 }
 
 /// `PID START`, where the start time is empty when `/proc` could not be read. A start time that
@@ -626,27 +682,29 @@ async fn pump(
         },
     };
 
-    let terminal = match ending {
-        Ending::Exited => match manager.exec_exit_code(&exec_id).await {
-            Ok(Some(code)) => Frame::Exit {
-                code: i32::try_from(code).unwrap_or(-1),
-                truncated: false,
-            },
-            Ok(None) => Frame::Error {
-                code: "waitFailed".to_string(),
-                message: "the command's output ended without an exit code".to_string(),
-            },
-            Err(error) => Frame::Error {
-                code: "waitFailed".to_string(),
-                message: error.to_string(),
-            },
-        },
-        Ending::Departed => {
-            stop(&manager, &command, &mut output).await;
-            return;
-        }
+    // Whether the command is known to be gone, and the frame that ends the stream, if any.
+    let (gone, terminal) = match ending {
+        Ending::Exited => (
+            true,
+            Some(match manager.exec_exit_code(&exec_id).await {
+                Ok(Some(code)) => Frame::Exit {
+                    code: i32::try_from(code).unwrap_or(-1),
+                    truncated: false,
+                },
+                Ok(None) => Frame::Error {
+                    code: "waitFailed".to_string(),
+                    message: "the command's output ended without an exit code".to_string(),
+                },
+                Err(error) => Frame::Error {
+                    code: "waitFailed".to_string(),
+                    message: error.to_string(),
+                },
+            }),
+        ),
+        Ending::Departed => (stop(&manager, &command, &mut output).await, None),
         Ending::TimedOut => {
-            if stop(&manager, &command, &mut output).await {
+            let gone = stop(&manager, &command, &mut output).await;
+            let frame = if gone {
                 Frame::Error {
                     code: "timeoutExceeded".to_string(),
                     message: format!("exceeded its {}ms timeout", timeout.as_millis()),
@@ -660,21 +718,59 @@ async fn pump(
                         timeout.as_millis()
                     ),
                 }
-            }
+            };
+            (gone, Some(frame))
         }
         Ending::Failed(message) => {
-            stop(&manager, &command, &mut output).await;
-            Frame::Error {
-                code: "outputReadFailed".to_string(),
-                message,
-            }
+            let gone = stop(&manager, &command, &mut output).await;
+            (
+                gone,
+                Some(Frame::Error {
+                    code: "outputReadFailed".to_string(),
+                    message,
+                }),
+            )
         }
     };
 
-    // The output has ended, so Docker has reaped the exec: release the id before the terminal
-    // frame, which a slow reader can hold off indefinitely.
+    if gone {
+        // The output has ended, so Docker has reaped the exec: release the id before the
+        // terminal frame, which a slow reader can hold off indefinitely.
+        drop(reservation);
+        if let Some(terminal) = terminal {
+            let _ = frames.send(terminal).await;
+        }
+        return;
+    }
+    // Not confirmed stopped: the caller hears so now, but the id stays held, and counts against
+    // the session's limit, until the command is gone.
+    if let Some(terminal) = terminal {
+        tokio::spawn(async move {
+            let _ = frames.send(terminal).await;
+        });
+    }
+    tokio::time::sleep(KILL_RETRY).await;
+    stop_until_gone(&manager, &command, &mut output).await;
     drop(reservation);
-    let _ = frames.send(terminal).await;
+}
+
+/// Stops the command, trying again every `KILL_RETRY` until its output has ended. A container
+/// whose every process slot is taken refuses the kill's own exec until one is free; a container
+/// that is removed ends the output too.
+async fn stop_until_gone(manager: &LocalSandboxManager, command: &Command, output: &mut Output) {
+    let mut attempts = 0u32;
+    while !stop(manager, command, output).await {
+        attempts += 1;
+        if attempts == 1 {
+            warn!(
+                container_id = %command.container_id,
+                process_group = command.process_group,
+                "An interactive command could not be confirmed stopped; its slot stays taken and \
+                 the stop is retried"
+            );
+        }
+        tokio::time::sleep(KILL_RETRY).await;
+    }
 }
 
 /// Kills the command's group and waits for its output to end, which is Docker saying the exec's
