@@ -6,6 +6,10 @@
 //! the manager holds the exec's attached stdin and enforces the deadline from outside, where the
 //! command cannot reach the supervisor.
 //!
+//! Signals go through a shell kept running in each container, started before the container's
+//! first command and using only builtins, so a command that takes every process slot in the
+//! container cannot keep it from being stopped.
+//!
 //! Signals need the command's process group, and Docker reports only a host pid. The command is
 //! started under a one-line shell that writes its own pid and start time to stderr and then
 //! `exec`s the command, so both are the command's. A `docker exec` process already leads its own
@@ -60,12 +64,21 @@ const MAX_ANNOUNCEMENT: usize = 64;
 const WRAPPER: &str = "f() { printf '%s %s\\n' \"$$\" \"${20}\" >&2; }; \
      read -r s 2>/dev/null < /proc/$$/stat || s=; f ${s##*) }; exec \"$@\"";
 
-/// Signals a process group, unless its leader has been replaced. `$1` is the signal, `$2` the
-/// group and `$3` the leader's start time. Exit 3 means the group no longer exists, or what has
-/// its number is not the command. `kill -SIG -N` is the one spelling dash and busybox both take.
-const KILL_GROUP: &str = "if [ -n \"$3\" ] && read -r s 2>/dev/null < \"/proc/$2/stat\"; then \
-     f() { [ \"${21}\" = \"$1\" ]; }; f \"$3\" ${s##*) } || exit 3; fi; \
-     kill -\"$1\" -\"$2\" 2>/dev/null && exit 0; kill -0 -\"$2\" 2>/dev/null && exit 2; exit 3";
+/// The signal shell kept running in each container. Each line it reads is `SIGNAL GROUP START`
+/// (the start time may be empty), and it answers each with one line: 0 when the group was
+/// signalled, 3 when the group no longer exists or what has its number is not the command (its
+/// leader's start time differs), 2 when the signal failed. It uses only builtins, so it starts no
+/// process: a command that has taken every process slot in the container cannot keep it from
+/// killing that command. `kill -SIG -N` is the one spelling dash and busybox both take.
+const SIGNAL_SHELL: &str = "while read -r g n t; do r=0; \
+     if [ -n \"$t\" ] && read -r s 2>/dev/null < \"/proc/$n/stat\"; then \
+     set -- ${s##*) }; [ \"${20}\" = \"$t\" ] || r=3; fi; \
+     if [ \"$r\" = 0 ] && ! kill -\"$g\" -\"$n\" 2>/dev/null; then \
+     if kill -0 -\"$n\" 2>/dev/null; then r=2; else r=3; fi; fi; \
+     echo \"$r\"; done";
+
+/// How long the signal shell may take to answer one request before it is replaced.
+const SIGNAL_ANSWER_WAIT: Duration = Duration::from_secs(5);
 
 /// How long the start waits for the wrapper to announce the pid.
 const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(10);
@@ -74,7 +87,7 @@ const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(10);
 const KILL_SETTLE: Duration = Duration::from_secs(10);
 
 /// How long to wait between attempts to stop a command that could not be confirmed stopped, as
-/// when every process slot in the container is taken and the kill itself cannot start.
+/// when the container's signal shell has ended and a new one cannot start.
 const KILL_RETRY: Duration = Duration::from_secs(5);
 
 type Output = std::pin::Pin<
@@ -162,6 +175,136 @@ impl ControlError {
 #[derive(Default)]
 pub struct InteractiveRegistry {
     commands: Mutex<HashMap<(String, String), Slot>>,
+    signal_shells: Arc<SignalShells>,
+}
+
+/// The signal shell of each container, by container id. One is started before a container's
+/// first command, and again whenever the last one has ended, so a running command always has
+/// one that was started while a process slot was free.
+#[derive(Default)]
+struct SignalShells {
+    by_container: tokio::sync::Mutex<HashMap<String, Arc<SignalShell>>>,
+}
+
+/// One container's signal shell. `None` once it has ended or stopped answering in step.
+struct SignalShell {
+    io: tokio::sync::Mutex<Option<SignalShellIo>>,
+}
+
+struct SignalShellIo {
+    input: std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>,
+    output: Output,
+    /// stdout read past the last answer
+    stdout: Vec<u8>,
+}
+
+impl SignalShells {
+    /// The container's signal shell, starting one if it has none that is still running.
+    async fn get(
+        &self,
+        manager: &LocalSandboxManager,
+        container_id: &str,
+    ) -> Result<Arc<SignalShell>, ControlError> {
+        let mut shells = self.by_container.lock().await;
+        // Forget shells that have ended, so removed containers do not pile up. One in use is
+        // kept: its request ends within `SIGNAL_ANSWER_WAIT` either way.
+        shells.retain(|_, shell| shell.io.try_lock().map_or(true, |io| io.is_some()));
+        if let Some(shell) = shells.get(container_id) {
+            return Ok(Arc::clone(shell));
+        }
+        let InteractiveExec { input, output, .. } = manager
+            .exec_interactive(
+                container_id,
+                &["sh".to_string(), "-c".to_string(), SIGNAL_SHELL.to_string()],
+                None,
+                &BTreeMap::new(),
+            )
+            .await
+            .map_err(|error| {
+                ControlError::Failed(format!("starting the container's signal shell: {error}"))
+            })?;
+        let shell = Arc::new(SignalShell {
+            io: tokio::sync::Mutex::new(Some(SignalShellIo {
+                input,
+                output,
+                stdout: Vec::new(),
+            })),
+        });
+        shells.insert(container_id.to_string(), Arc::clone(&shell));
+        Ok(shell)
+    }
+}
+
+impl SignalShell {
+    /// Sends `signal` to `process_group` unless its leader's start time is not `started`.
+    async fn signal(
+        &self,
+        signal: &str,
+        process_group: i64,
+        started: &str,
+    ) -> Result<(), ControlError> {
+        let mut io = self.io.lock().await;
+        let Some(shell) = io.as_mut() else {
+            return Err(ControlError::Failed(
+                "the container's signal shell has ended".to_string(),
+            ));
+        };
+        let request = format!("{signal} {process_group} {started}\n");
+        let answer = match tokio::time::timeout(SIGNAL_ANSWER_WAIT, shell.ask(&request)).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(reason)) => {
+                // Dropping its input ends the shell; the next request starts another.
+                *io = None;
+                return Err(ControlError::Failed(reason));
+            }
+            Err(_) => {
+                // A late answer would be read as the next request's, so this shell is done.
+                *io = None;
+                return Err(ControlError::Failed(format!(
+                    "the container's signal shell did not answer within {}s",
+                    SIGNAL_ANSWER_WAIT.as_secs()
+                )));
+            }
+        };
+        match answer.as_str() {
+            "0" => Ok(()),
+            "3" => Err(ControlError::NotRunning),
+            other => Err(ControlError::Failed(format!(
+                "signalling the command's process group answered {other:?}"
+            ))),
+        }
+    }
+}
+
+impl SignalShellIo {
+    /// Writes one request and reads the line that answers it.
+    async fn ask(&mut self, request: &str) -> Result<String, String> {
+        self.input
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|error| format!("writing to the container's signal shell: {error}"))?;
+        self.input
+            .flush()
+            .await
+            .map_err(|error| format!("writing to the container's signal shell: {error}"))?;
+        loop {
+            if let Some(end) = self.stdout.iter().position(|byte| *byte == b'\n') {
+                let line = String::from_utf8_lossy(&self.stdout[..end]).into_owned();
+                self.stdout.drain(..=end);
+                return Ok(line);
+            }
+            match self.output.next().await {
+                None => return Err("the container's signal shell has ended".to_string()),
+                Some(Err(error)) => {
+                    return Err(format!("reading the container's signal shell: {error}"))
+                }
+                Some(Ok(bollard::container::LogOutput::StdOut { message })) => {
+                    self.stdout.extend_from_slice(&message);
+                }
+                Some(Ok(_)) => {}
+            }
+        }
+    }
 }
 
 /// An id in use. It is held from the moment a start is accepted, before anything awaits, so
@@ -174,6 +317,7 @@ enum Slot {
 
 struct Command {
     container_id: String,
+    signal_shells: Arc<SignalShells>,
     stdin: tokio::sync::Mutex<Stdin>,
     /// Set before the start answers; never changes. Docker reaps the exec inside the container,
     /// and the id is released only once the exec's output has ended.
@@ -262,6 +406,10 @@ impl InteractiveRegistry {
             }
         };
 
+        // The command may take every process slot in the container, after which nothing new can
+        // start there to stop it. Its signal shell is running before it is.
+        self.signal_shells.get(&manager, &container_id).await?;
+
         let mut argv = vec![
             "sh".to_string(),
             "-c".to_string(),
@@ -296,7 +444,14 @@ impl InteractiveRegistry {
                 // The announcement may still come. Until the command is known to be gone, it is
                 // stopped as soon as its group is named, and its id stays held.
                 drop(input);
-                tokio::spawn(abandon(manager, container_id, output, heard, reservation));
+                tokio::spawn(abandon(
+                    manager,
+                    container_id,
+                    Arc::clone(&self.signal_shells),
+                    output,
+                    heard,
+                    reservation,
+                ));
                 return Err(ControlError::Failed(format!(
                     "the command wrapper did not report a pid within {}s",
                     ANNOUNCEMENT_WAIT.as_secs()
@@ -306,6 +461,7 @@ impl InteractiveRegistry {
 
         let command = Arc::new(Command {
             container_id,
+            signal_shells: Arc::clone(&self.signal_shells),
             stdin: tokio::sync::Mutex::new(Stdin {
                 pipe: Some(input),
                 accepted: 0,
@@ -420,8 +576,9 @@ impl InteractiveRegistry {
         Ok(())
     }
 
-    /// Signals the command's process group, from a second exec in the same container and as the
-    /// same user, so it can reach nothing the command could not reach itself.
+    /// Signals the command's process group through the container's signal shell, which runs in
+    /// the same container as the same user, so it can reach nothing the command could not reach
+    /// itself.
     pub async fn signal(
         &self,
         manager: &LocalSandboxManager,
@@ -529,6 +686,7 @@ async fn outlast(mut output: Output, reservation: Reservation) {
 async fn abandon(
     manager: Arc<LocalSandboxManager>,
     container_id: String,
+    signal_shells: Arc<SignalShells>,
     mut output: Output,
     mut heard: Heard,
     reservation: Reservation,
@@ -539,6 +697,7 @@ async fn abandon(
     };
     let command = Command {
         container_id,
+        signal_shells,
         stdin: tokio::sync::Mutex::new(Stdin {
             pipe: None,
             accepted: 0,
@@ -568,30 +727,12 @@ async fn kill_group(
     command: &Command,
     signal: &str,
 ) -> Result<(), ControlError> {
-    // Exit 3 means the group no longer exists or is no longer the command's; any other failure
-    // is the signal failing, which is not the same answer.
-    let result = manager
-        .exec(
-            &command.container_id,
-            &[
-                "sh".to_string(),
-                "-c".to_string(),
-                KILL_GROUP.to_string(),
-                "sh".to_string(),
-                signal.to_string(),
-                command.process_group.to_string(),
-                command.started.clone(),
-            ],
-        )
+    command
+        .signal_shells
+        .get(manager, &command.container_id)
+        .await?
+        .signal(signal, command.process_group, &command.started)
         .await
-        .map_err(|error| ControlError::Failed(error.to_string()))?;
-    match result.exit_code {
-        0 => Ok(()),
-        3 => Err(ControlError::NotRunning),
-        code => Err(ControlError::Failed(format!(
-            "signalling the command's process group exited with {code}"
-        ))),
-    }
 }
 
 /// Moves Docker's output to the caller until the command ends, enforcing its deadline whether or
@@ -754,8 +895,8 @@ async fn pump(
     drop(reservation);
 }
 
-/// Stops the command, trying again every `KILL_RETRY` until its output has ended. A container
-/// whose every process slot is taken refuses the kill's own exec until one is free; a container
+/// Stops the command, trying again every `KILL_RETRY` until its output has ended. A signal shell
+/// that has ended is replaced on the next attempt, which needs a free process slot; a container
 /// that is removed ends the output too.
 async fn stop_until_gone(manager: &LocalSandboxManager, command: &Command, output: &mut Output) {
     let mut attempts = 0u32;
@@ -835,20 +976,79 @@ mod tests {
         let _ = child.wait();
     }
 
+    /// The signal shell as the manager runs it, reading requests on stdin and answering on
+    /// stdout. `nproc`, when set, caps the processes its user may run, so it can start none.
+    struct SignalShellProcess {
+        child: std::process::Child,
+        answers: std::io::BufReader<std::process::ChildStdout>,
+    }
+
+    impl SignalShellProcess {
+        fn start(nproc: Option<libc::rlim_t>) -> Self {
+            let mut command = sh(SIGNAL_SHELL, &[]);
+            command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped());
+            if let Some(limit) = nproc {
+                limit_processes(&mut command, limit);
+            }
+            let mut child = command.spawn().expect("spawns");
+            let answers = std::io::BufReader::new(child.stdout.take().expect("piped"));
+            Self { child, answers }
+        }
+
+        fn ask(&mut self, signal: &str, group: &str, started: &str) -> String {
+            use std::io::{BufRead, Write};
+
+            let stdin = self.child.stdin.as_mut().expect("piped");
+            writeln!(stdin, "{signal} {group} {started}").expect("writes");
+            stdin.flush().expect("flushes");
+            let mut line = String::new();
+            self.answers.read_line(&mut line).expect("reads an answer");
+            line.trim_end().to_string()
+        }
+    }
+
+    impl Drop for SignalShellProcess {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// Caps the processes the child's user may run at `limit`, from inside the child before it
+    /// runs the program, so the cap binds it and nothing else.
+    fn limit_processes(command: &mut std::process::Command, limit: libc::rlim_t) {
+        use std::os::unix::process::CommandExt;
+
+        // SAFETY: setrlimit is async-signal-safe and touches only the forked child.
+        unsafe {
+            command.pre_exec(move || {
+                let cap = libc::rlimit {
+                    rlim_cur: limit,
+                    rlim_max: limit,
+                };
+                if libc::setrlimit(libc::RLIMIT_NPROC, &cap) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+
     /// The check that keeps a signal off a process that took a finished command's number: a
     /// leader with the right pid but another start time is left alone.
     #[test]
     fn a_signal_reaches_the_group_only_while_its_leader_is_the_command() {
         let (mut child, pid, started) = announced_leader();
         let group = pid.to_string();
+        let mut shell = SignalShellProcess::start(None);
 
         let other = (started.parse::<u64>().expect("a number") + 1).to_string();
-        let status = sh(KILL_GROUP, &["TERM", &group, &other])
-            .status()
-            .expect("runs");
         assert_eq!(
-            status.code(),
-            Some(3),
+            shell.ask("TERM", &group, &other),
+            "3",
             "another start time is another process"
         );
         assert!(
@@ -856,23 +1056,59 @@ mod tests {
             "and it was not signalled"
         );
 
-        let status = sh(KILL_GROUP, &["TERM", &group, &started])
-            .status()
-            .expect("runs");
-        assert_eq!(status.code(), Some(0), "the command's own start time");
+        assert_eq!(
+            shell.ask("TERM", &group, &started),
+            "0",
+            "the command's own start time"
+        );
         let ended = child.wait().expect("waits");
         assert_eq!(
             std::os::unix::process::ExitStatusExt::signal(&ended),
             Some(libc::SIGTERM)
         );
 
-        let status = sh(KILL_GROUP, &["TERM", &group, &started])
-            .status()
-            .expect("runs");
         assert_eq!(
-            status.code(),
-            Some(3),
+            shell.ask("TERM", &group, &started),
+            "3",
             "a group that is gone is reported gone"
+        );
+    }
+
+    /// A command can take every process slot in its container. The signal shell was started
+    /// before it, and must still kill it without starting a process of its own.
+    #[test]
+    fn the_signal_shell_kills_a_command_while_no_process_can_start() {
+        // A cap of one process for the user is below what the user already runs, so every fork
+        // under it fails. Root is exempt, which would make this test prove nothing: the probe
+        // below fails it instead.
+        let mut probe = sh("( : ) && echo forked", &[]);
+        probe.stdout(std::process::Stdio::piped());
+        limit_processes(&mut probe, 1);
+        let probed = probe.output().expect("runs");
+        assert!(
+            probed.stdout.is_empty(),
+            "a shell under the cap must not be able to fork (is the test running as root?)"
+        );
+
+        let (mut child, pid, started) = announced_leader();
+        let group = pid.to_string();
+        let mut shell = SignalShellProcess::start(Some(1));
+
+        assert_eq!(shell.ask("KILL", &group, &started), "0", "killed");
+        let ended = child.wait().expect("waits");
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&ended),
+            Some(libc::SIGKILL)
+        );
+        assert_eq!(
+            shell.ask("KILL", &group, &started),
+            "3",
+            "and then reported gone"
+        );
+        assert_eq!(
+            shell.ask("KILL", &group, ""),
+            "3",
+            "with no start time to check, too"
         );
     }
 
