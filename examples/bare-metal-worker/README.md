@@ -107,7 +107,9 @@ The server's running worker gets SIGINT. Because the worker listens on the host 
 - `curl localhost:8080/jobs/j-1` still answers, with `"status":"running"` and `"version":"0.1.0"`.
 - `curl localhost:8080/healthz` returns 503 and `POST /jobs` is refused.
 
-When `j-1` finishes, the old worker exits, 0.2.0 starts, and new jobs run on 0.2.0. A job that was running is never cut short, as long as it ends within `stop-grace-period`.
+When `j-1` finishes, the old worker exits, 0.2.0 starts a few seconds later, and new jobs run on 0.2.0. A job that was running is never cut short, as long as it ends within `stop-grace-period`.
+
+Because job state is in memory, 0.2.0 does not know about `j-1`: `curl localhost:8080/jobs/j-1` returns 404 once the new worker is up.
 
 ## Roll back
 
@@ -118,7 +120,9 @@ alien releases ls
 alien releases promote <release-id> --channel production
 ```
 
-The server replaces the running worker with the earlier version the same way: the current one drains, then the earlier one starts.
+The server replaces the running worker with the earlier version the same way: the current one drains, then the earlier one starts. With no job running, `curl localhost:8080/healthz` shows the earlier version again within about 20 seconds.
+
+A release does not have to be healthy to be rolled out. If a new worker's `/healthz` keeps failing, the old worker is already gone (it shares the host network, so it stops first) and the deployment stays in `updating` instead of `running`. Promote the earlier release to get back.
 
 ## Tests
 
