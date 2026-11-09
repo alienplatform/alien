@@ -464,6 +464,60 @@ async fn a_pruned_container_and_a_server_started_while_docker_was_down_come_back
     manager.delete_redis("cache").await.unwrap();
 }
 
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn recovery_starts_the_settings_on_disk_and_keeps_the_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = LocalRedisManager::new(dir.path().to_path_buf());
+    manager
+        .start_redis("cache", spec(true, "noeviction", 64))
+        .await
+        .unwrap();
+    // The latest settings: a recovery that kept an older copy would revert these.
+    manager
+        .start_redis("cache", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    let binding = manager.get_binding("cache").unwrap();
+    assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
+    manager.stop_redis("cache").await.unwrap();
+
+    // Keep the sender alive: a dropped sender reads as a shutdown and stops the server.
+    let (_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let (recovered, _task) =
+        LocalRedisManager::new_with_shutdown(dir.path().to_path_buf(), shutdown_rx);
+    // Recovery runs in the background: wait until the server answers a PING.
+    let BindingValue::Value(port) = (match &binding {
+        RedisBinding::Local(local) => local.port.clone(),
+        _ => panic!("expected a local binding"),
+    }) else {
+        panic!("unexpected port");
+    };
+    let mut ready = false;
+    for _ in 0..50 {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)).await {
+            let _ = stream.write_all(b"PING\r\n").await;
+            let mut buf = [0u8; 64];
+            if let Ok(n) = stream.read(&mut buf).await {
+                // Ready means it answers (NOAUTH is a reply from a live server).
+                ready = n > 0;
+            }
+        }
+        if ready {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(ready, "recovery should bring the server back");
+    recovered.check_health("cache").await.unwrap();
+    assert_eq!(recovered.get_binding("cache").unwrap(), binding);
+    assert!(command(&binding, &["CONFIG", "GET", "maxmemory-policy"])
+        .await
+        .contains("volatile-lru"));
+    assert_eq!(command(&binding, &["GET", "k"]).await, "$1\r\nv\r\n");
+    recovered.delete_redis("cache").await.unwrap();
+}
+
 async fn containers_named_exact(docker: &Docker) -> String {
     docker
         .list_containers(Some(bollard::query_parameters::ListContainersOptions {

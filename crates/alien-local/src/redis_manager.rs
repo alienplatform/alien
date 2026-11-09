@@ -149,16 +149,30 @@ impl LocalRedisManager {
     /// details.
     pub async fn start_redis(&self, id: &str, spec: RedisSpec) -> Result<()> {
         let _guard = self.lock.lock().await;
+        self.start_redis_locked(id, Some(spec)).await
+    }
+
+    /// Starts a server from the settings already on disk. The metadata is read under the lock,
+    /// so recovery can never write back settings a concurrent update has just replaced.
+    async fn recover_redis(&self, id: &str) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        self.start_redis_locked(id, None).await
+    }
+
+    async fn start_redis_locked(&self, id: &str, spec: Option<RedisSpec>) -> Result<()> {
         let docker = connect_redis_docker().await?;
         let metadata = match self.try_read_metadata(id)? {
             Some(mut metadata) => {
-                if metadata.spec != spec {
+                if let Some(spec) = spec.filter(|spec| *spec != metadata.spec) {
                     metadata.spec = spec;
                     self.write_metadata(&metadata).await?;
                 }
                 metadata
             }
             None => {
+                let Some(spec) = spec else {
+                    return Ok(());
+                };
                 let metadata = RedisMetadata {
                     resource_id: id.to_string(),
                     port: allocate_port(id)?,
@@ -586,16 +600,8 @@ impl LocalRedisManager {
                 continue;
             }
             let id = entry.file_name().to_string_lossy().to_string();
-            match self.try_read_metadata(&id) {
-                Ok(Some(metadata)) => {
-                    if let Err(error) = self.start_redis(&id, metadata.spec).await {
-                        warn!(redis_id = %id, ?error, "Failed to recover local Redis");
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    warn!(redis_id = %id, ?error, "Skipping local Redis: unreadable metadata")
-                }
+            if let Err(error) = self.recover_redis(&id).await {
+                warn!(redis_id = %id, ?error, "Failed to recover local Redis");
             }
         }
     }

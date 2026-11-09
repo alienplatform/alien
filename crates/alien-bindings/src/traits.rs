@@ -854,6 +854,12 @@ impl RedisConnectionParams {
     /// `redis://` or `rediss://` URL with the password percent-encoded, so a generated
     /// password with URL-special characters cannot corrupt it.
     pub fn connection_url(&self) -> String {
+        // A bare IPv6 address must be bracketed to separate it from the port.
+        let host = if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
         format!(
             "{}://{}:{}@{}:{}/0",
             if self.tls.is_enabled() {
@@ -863,7 +869,7 @@ impl RedisConnectionParams {
             },
             encode_userinfo(&self.username),
             encode_userinfo(&self.password),
-            self.host,
+            host,
             self.port,
         )
     }
@@ -1711,7 +1717,22 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use super::CreateSandboxRequest;
+    use super::{CreateSandboxRequest, RedisConnectionParams, RedisTlsPolicy};
+
+    #[test]
+    fn a_redis_url_brackets_an_ipv6_host() {
+        let params = |host: &str| RedisConnectionParams {
+            host: host.to_string(),
+            port: 6379,
+            username: "default".to_string(),
+            password: "pw".to_string(),
+            tls: RedisTlsPolicy::Disabled,
+        };
+        assert_eq!(params("::1").connection_url(), "redis://default:pw@[::1]:6379/0");
+        assert_eq!(params("[::1]").connection_url(), "redis://default:pw@[::1]:6379/0");
+        assert_eq!(params("10.0.0.5").connection_url(), "redis://default:pw@10.0.0.5:6379/0");
+        assert_eq!(params("host.example").host, "host.example");
+    }
 
     /// A field this struct does not know is a caller asking for something it will not get, and
     /// the field it would most want is the one that bounds the sandbox. Read as "absent",
