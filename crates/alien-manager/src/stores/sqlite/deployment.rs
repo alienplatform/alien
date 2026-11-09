@@ -1219,6 +1219,19 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to remove deployment metadata".to_string(),
             })?;
+        // The deployment's commands keys end with it. On the manager's own
+        // deploy path no sync ever revokes them.
+        for statement in [
+            "DELETE FROM tokens WHERE type = 'commands-receiver' AND deployment_id = ?1",
+            "DELETE FROM commands_key_generations WHERE deployment_id = ?1",
+        ] {
+            conn.execute(statement, [id.to_owned()])
+                .await
+                .into_alien_error()
+                .context(GenericError {
+                    message: "Failed to remove the deployment's commands keys".to_string(),
+                })?;
+        }
         Ok(())
     }
 

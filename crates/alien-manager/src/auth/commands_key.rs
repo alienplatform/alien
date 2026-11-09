@@ -170,7 +170,7 @@ async fn warn_vendor(stores: &CommandsKeyStores<'_>, deployment_id: &str, receiv
     tracing::warn!(
         %deployment_id,
         %resources,
-        "Issued the commands key: command receivers built before capability files need a long-lived credential"
+        "Issued the commands key: command receivers without a capability file need a long-lived credential"
     );
     stores
         .log_buffer
@@ -178,10 +178,10 @@ async fn warn_vendor(stores: &CommandsKeyStores<'_>, deployment_id: &str, receiv
             timestamp: Utc::now(),
             deployment_id: deployment_id.to_owned(),
             body: format!(
-                "Command receivers built before capability files ({resources}) run on a \
-                 long-lived commands-only key. Rebuild them with a current `alien build` and \
-                 release the deployment again; the key is revoked once no release of the \
-                 deployment needs it."
+                "Command receivers ({resources}) run on a long-lived commands-only key: \
+                 they were built before capability files, or this platform does not give \
+                 them one. Redeploy on a current build where the platform supports \
+                 capability files to end the key."
             ),
             severity: "WARN".to_owned(),
             resource_name: None,
