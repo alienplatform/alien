@@ -171,6 +171,26 @@ impl StackMutation for SecretsVaultMutation {
     }
 }
 
+/// The deployer secret slots of `config`'s deployment. A protected install reads every one from
+/// the vault: the verifier's list for a worker comes from the signed stack alone, so setup
+/// links and grants the same slots.
+fn deployer_slots<'a>(
+    inputs: &'a [alien_core::StackInputDefinition],
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Vec<alien_core::DeployerSecretSlot<'a>> {
+    if config.stack_settings.signing.is_some() {
+        return alien_core::protected_deployer_secret_slots(inputs, &config.input_values, platform);
+    }
+    alien_core::deployer_secret_slots(
+        inputs,
+        &config.input_values,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
+    )
+}
+
 /// Adds the setup-owned vault for customer-written deployer secret slots.
 pub struct DeployerSecretsVaultMutation;
 
@@ -182,15 +202,9 @@ impl StackMutation for DeployerSecretsVaultMutation {
 
     fn should_run(&self, stack: &Stack, state: &StackState, config: &DeploymentConfig) -> bool {
         state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID)
-            || alien_core::deployer_secret_slots(
-                &stack.inputs,
-                &config.input_values,
-                config.stored_secret_input_ids.as_deref(),
-                &config.environment_variables.variables,
-                state.platform,
-            )
-            .iter()
-            .any(|slot| !slot.has_stored_value)
+            || deployer_slots(&stack.inputs, config, state.platform)
+                .iter()
+                .any(|slot| !slot.has_stored_value)
             || (state.platform == Platform::Aws
                 && stack
                     .permissions
@@ -205,15 +219,9 @@ impl StackMutation for DeployerSecretsVaultMutation {
         state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
-        let has_native_slots = alien_core::deployer_secret_slots(
-            &stack.inputs,
-            &config.input_values,
-            config.stored_secret_input_ids.as_deref(),
-            &config.environment_variables.variables,
-            state.platform,
-        )
-        .iter()
-        .any(|slot| !slot.has_stored_value);
+        let has_native_slots = deployer_slots(&stack.inputs, config, state.platform)
+            .iter()
+            .any(|slot| !slot.has_stored_value);
         let installed_vault = state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID);
         if !has_native_slots && !installed_vault {
             if state.platform == Platform::Aws {
@@ -283,13 +291,7 @@ impl StackMutation for DeployerSecretsVaultMutation {
             add_deployer_secret_read_permissions(&mut stack, DEPLOYER_SECRETS_VAULT_ID, keys)?;
         }
         if !SecretDelivery::resolve(state.platform, ComputeKind::Worker).is_native_projection() {
-            let slots = alien_core::deployer_secret_slots(
-                &stack.inputs,
-                &config.input_values,
-                config.stored_secret_input_ids.as_deref(),
-                &config.environment_variables.variables,
-                state.platform,
-            );
+            let slots = deployer_slots(&stack.inputs, config, state.platform);
             for (id, entry) in &mut stack.resources {
                 if let Some(worker) = entry.config.downcast_mut::<Worker>() {
                     if slots.iter().any(|slot| {
@@ -550,13 +552,7 @@ fn deployer_secret_keys_by_profile(
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     // The same slots delivery reads: a secret the developer may also provide
     // and has a stored developer value is not a slot.
-    let slots = alien_core::deployer_secret_slots(
-        &stack.inputs,
-        &config.input_values,
-        config.stored_secret_input_ids.as_deref(),
-        &config.environment_variables.variables,
-        platform,
-    );
+    let slots = deployer_slots(&stack.inputs, config, platform);
     if slots.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -1486,6 +1482,35 @@ mod tests {
             .push(StackInputProvider::Developer);
         config.stored_secret_input_ids = Some(Vec::new());
         assert!(DeployerSecretsVaultMutation.should_run(&stack, &state, &config));
+    }
+
+    #[test]
+    fn a_protected_install_reads_a_stored_secret_from_the_vault_too() {
+        let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        stack.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        let state = StackState::new(Platform::Gcp);
+        let mut config = deployer_secret_config();
+        config.stored_secret_input_ids = Some(vec![stack.inputs[0].id.clone()]);
+        assert!(!DeployerSecretsVaultMutation.should_run(&stack, &state, &config));
+
+        config.stack_settings.signing = Some(
+            serde_json::from_value(serde_json::json!({
+                "fingerprint": format!("SHA256:{}", "9f2c".repeat(16)),
+                "channel": "production",
+            }))
+            .unwrap(),
+        );
+        assert!(
+            DeployerSecretsVaultMutation.should_run(&stack, &state, &config),
+            "the signed release lists the secret for the worker, so the worker needs the vault"
+        );
+        assert!(
+            !deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     fn secret_daemon_stack() -> Stack {

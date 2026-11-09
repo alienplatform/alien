@@ -410,7 +410,7 @@ pub fn signed_deployer_secrets(
     let stack = signed_stack(body, platform)?;
     let values = input_values(&stack, platform, config_inputs, deployer_values);
     Ok(
-        crate::deployer_secret_slots(&stack.inputs, &values, Some(&[]), &[], platform)
+        crate::protected_deployer_secret_slots(&stack.inputs, &values, platform)
             .into_iter()
             .flat_map(|slot| {
                 slot.input
@@ -1147,6 +1147,30 @@ mod tests {
             signed_workload_secrets(&body, "worker-without-any", "d", &none, &stored(&[])).is_err(),
             "a workload the release doesn't name has no list"
         );
+    }
+
+    #[test]
+    fn a_stored_value_for_a_secret_input_does_not_change_the_signed_list() {
+        let body = deployer_env_stack(serde_json::json!([
+            {"id": "sharedKey", "kind": "secret", "providedBy": ["developer", "deployer"],
+             "required": false, "label": "Shared key", "description": "d",
+             "env": [{"name": "SHARED_KEY"}]},
+        ]));
+        let none = BTreeMap::new();
+        for stored_values in [
+            stored(&[]),
+            stored(&[("sharedKey", "from-the-control-plane")]),
+        ] {
+            let secrets = signed_deployer_secrets(&body, "api", &none, &stored_values).unwrap();
+            assert_eq!(
+                secrets
+                    .iter()
+                    .map(|secret| secret.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["SHARED_KEY"],
+                "the controller and the verifier see the same list whatever the store holds"
+            );
+        }
     }
 
     fn alien_core_resource(container: Container) -> Resource {

@@ -21,17 +21,19 @@ pub fn key_vault_secret_name(secret_name: &str) -> String {
     secret_name.replace('_', "-")
 }
 
-/// A fresh Azure deployer vault name, limited to 24 characters including its
-/// six-character alphanumeric installation suffix. The saved name survives retries.
+/// A fresh Azure deployer vault name: up to eight characters of the resource prefix, the fixed
+/// word `deployer` and a six-character alphanumeric installation suffix, within Key Vault's 24
+/// characters. The word keeps the name apart from the stack's own vaults (`{prefix}-{id}`), whatever
+/// the prefix length. The saved name survives retries.
 pub fn azure_deployer_vault_name(resource_prefix: &str, suffix: &str) -> String {
-    let prefix: String = format!("{resource_prefix}-deployer-secrets")
+    let prefix: String = resource_prefix
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
-        .take(17)
+        .take(8)
         .collect::<String>()
         .trim_matches('-')
         .to_ascii_lowercase();
-    format!("{prefix}-{suffix}")
+    format!("{prefix}-deployer-{suffix}")
 }
 
 /// Whether `name` is the name [`azure_deployer_vault_name`] gives an installation's deployer
@@ -85,7 +87,7 @@ mod tests {
         assert!(!is_azure_deployer_vault_name("acme-stage", &name));
         assert!(!is_azure_deployer_vault_name(
             "acme-prod",
-            "acme-prod-deployer-secrets-a1b2c3d4"
+            "acme-pro-deployer-a1b2c3d4"
         ));
         assert!(!is_azure_deployer_vault_name(
             "acme-prod",
@@ -95,6 +97,17 @@ mod tests {
             "acme-prod",
             "acme-prod-deployer-secrets-A1B2C3"
         ));
+    }
+
+    #[test]
+    fn a_stack_vault_is_never_taken_for_the_deployer_vault() {
+        for prefix in ["acme", "acme-prod-eastus", "acme-prod-eastus1"] {
+            let orders = format!("{prefix}-orders");
+            assert!(!is_azure_deployer_vault_name(prefix, &orders), "{orders}");
+            let own = azure_deployer_vault_name(prefix, "a1b2c3");
+            assert!(is_azure_deployer_vault_name(prefix, &own), "{own}");
+            assert!(own.len() <= 24, "{own}");
+        }
     }
 
     #[test]
