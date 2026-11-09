@@ -289,19 +289,14 @@ const FORBIDDEN_AWS: &[&str] = &[
     "secretsmanager:GetSecretValue",
     "secretsmanager:BatchGetSecretValue",
 ];
-const FORBIDDEN_GCP: &[&str] = &["secretmanager.versions.access", "secretmanager.secrets.get"];
 const FORBIDDEN_GCP_ROLES: &[&str] = &[
     "roles/secretmanager.secretAccessor",
     "roles/secretmanager.admin",
-];
-const GCP_TOKEN_READS: &[&str] = &[
-    "memorystore.tokenAuthUsers.list",
-    "memorystore.authTokens.list",
+    "roles/memorystore.admin",
 ];
 
-/// The management-side sets never read the password: no secret-value read on AWS, none on GCP
-/// beyond the Memorystore-generated token copy (which only `provision` and `management` carry,
-/// never `heartbeat`), and no key listing on Azure.
+/// The management-side sets never read the password: no secret-value read on AWS, no Memorystore
+/// token permission and no Secret Manager permission at all on GCP, and no key listing on Azure.
 #[test]
 fn management_side_sets_never_read_the_password() {
     for id in ["redis/provision", "redis/heartbeat", "redis/management"] {
@@ -319,10 +314,12 @@ fn management_side_sets_never_read_the_password() {
                 .chain(permission.grant.residual_permissions.iter())
                 .flatten();
             for name in permissions {
-                assert!(!FORBIDDEN_GCP.contains(&name.as_str()), "{id}: {name}");
-                if GCP_TOKEN_READS.contains(&name.as_str()) {
-                    assert_ne!(id, "redis/heartbeat", "heartbeat must stay status-only");
-                }
+                assert!(
+                    !name.starts_with("memorystore.authTokens.")
+                        && !name.starts_with("memorystore.tokenAuthUsers.")
+                        && !name.starts_with("secretmanager."),
+                    "{id}: {name}"
+                );
             }
             for role in permission.grant.predefined_roles.iter().flatten() {
                 assert!(
@@ -358,19 +355,6 @@ fn management_side_sets_never_read_the_password() {
             }
         }
     }
-    // The token copy exists in provision (live create) and management (frozen import).
-    for id in ["redis/provision", "redis/management"] {
-        let set = get_permission_set(id).unwrap();
-        let has_token_read = set.platforms.gcp.iter().flatten().any(|permission| {
-            permission
-                .grant
-                .permissions
-                .iter()
-                .flatten()
-                .any(|name| name == "memorystore.authTokens.list")
-        });
-        assert!(has_token_read, "{id} must carry the GCP token copy");
-    }
 }
 
 fn gcp_context(resource: &str) -> PermissionContext {
@@ -379,6 +363,7 @@ fn gcp_context(resource: &str) -> PermissionContext {
         .with_resource_name(resource)
         .with_project_name("my-project")
         .with_project_number("123456789012")
+        .with_region("us-east4")
 }
 
 /// Evaluates the `==` and `startsWith` clauses of a rendered Secret Manager condition against a
@@ -418,94 +403,103 @@ fn gcp_condition_allows(expression: &str, secret_resource_name: &str) -> bool {
     })
 }
 
-/// The Secret Manager write grant lands only on this stack's (or this resource's) secrets, and
-/// never on the deployer secrets.
+const TOKEN_PREFIX: &str = "projects/my-project/locations/us-east4/instances";
+
+fn token_conditions(target: BindingTarget, resource: &str) -> Vec<String> {
+    let plan = GcpRuntimePermissionsGenerator::new()
+        .generate_grant_plan(
+            get_permission_set("redis/data-access").unwrap(),
+            target,
+            &gcp_context(resource),
+        )
+        .unwrap();
+    assert!(
+        plan.bindings.iter().all(|b| b.condition.is_some()),
+        "the token read is never granted without a condition"
+    );
+    plan.bindings
+        .iter()
+        .filter_map(|b| b.condition.as_ref())
+        .map(|c| c.expression.clone())
+        .collect()
+}
+
+/// The workload's only GCP grant is `memorystore.authTokens.list`, conditioned to the instance's
+/// default token user, in the project-ID form that Memorystore evaluates.
 #[test]
-fn gcp_secret_writes_stay_on_the_resources_own_secrets() {
-    let generator = GcpRuntimePermissionsGenerator::new();
-    let own = "projects/123456789012/secrets/my-stack-cache-auth";
-    let sibling = "projects/123456789012/secrets/my-stack-sessions-auth";
-    let other_stack = "projects/123456789012/secrets/other-stack-cache-auth";
-    let deployer = "projects/123456789012/secrets/my-stack-deployer-secrets-x";
-    let app_secret = "projects/123456789012/secrets/my-stack-app-token";
-    for id in ["redis/provision", "redis/management"] {
-        for (target, covers_sibling) in [
-            (BindingTarget::Stack, true),
-            (BindingTarget::Resource, false),
-        ] {
-            let plan = generator
-                .generate_grant_plan(
-                    get_permission_set(id).unwrap(),
-                    target,
-                    &gcp_context("my-stack-cache"),
-                )
-                .unwrap_or_else(|e| panic!("{id}: {e}"));
-            let conditions: Vec<_> = plan
-                .bindings
-                .iter()
-                .filter_map(|b| b.condition.as_ref())
-                .map(|c| c.expression.clone())
-                .collect();
-            assert_eq!(
-                conditions.len(),
-                1,
-                "{id}: one conditioned (secret write) binding"
-            );
-            let expression = &conditions[0];
-            assert!(gcp_condition_allows(expression, own), "{id}: {expression}");
-            assert_eq!(
-                gcp_condition_allows(expression, sibling),
-                covers_sibling,
-                "{id}"
-            );
-            assert!(!gcp_condition_allows(expression, other_stack), "{id}");
-            assert!(!gcp_condition_allows(expression, deployer), "{id}");
-            // Another resource's secret in the same stack is not a Redis auth secret, even at
-            // the stack level.
-            assert!(
-                !gcp_condition_allows(expression, &format!("{app_secret}")),
-                "{id}: {expression}"
-            );
-            assert!(
-                !gcp_condition_allows(expression, &format!("{app_secret}/versions/1")),
-                "{id}"
-            );
-            assert!(
-                gcp_condition_allows(expression, &format!("{own}/versions/1")),
-                "{id}"
-            );
-        }
+fn gcp_data_access_reads_only_its_own_instances_token() {
+    let set = get_permission_set("redis/data-access").unwrap();
+    let permissions: Vec<_> = set
+        .platforms
+        .gcp
+        .iter()
+        .flatten()
+        .flat_map(|p| p.grant.permissions.iter().flatten())
+        .collect();
+    assert_eq!(permissions, ["memorystore.authTokens.list"]);
+
+    let conditions = token_conditions(BindingTarget::Resource, "my-stack-cache");
+    assert_eq!(
+        conditions,
+        [format!(
+            "resource.name == \"{TOKEN_PREFIX}/my-stack-cache/tokenAuthUsers/default\""
+        )]
+    );
+    let own = format!("{TOKEN_PREFIX}/my-stack-cache/tokenAuthUsers/default");
+    let sibling = format!("{TOKEN_PREFIX}/my-stack-cache-prod/tokenAuthUsers/default");
+    let number_form = "projects/123456789012/locations/us-east4/instances/my-stack-cache/tokenAuthUsers/default";
+    assert!(gcp_condition_allows(&conditions[0], &own));
+    assert!(!gcp_condition_allows(&conditions[0], &sibling));
+    assert!(!gcp_condition_allows(&conditions[0], number_form));
+}
+
+/// At stack level the grant covers this stack's instances only, in this region, and only their
+/// token user.
+#[test]
+fn gcp_stack_token_read_stops_at_other_stacks_regions_and_resources() {
+    let conditions = token_conditions(BindingTarget::Stack, "my-stack-cache");
+    assert_eq!(
+        conditions,
+        [format!(
+            "resource.name.startsWith(\"{TOKEN_PREFIX}/my-stack-\") && resource.name.endsWith(\"/tokenAuthUsers/default\")"
+        )]
+    );
+    let c = &conditions[0];
+    for ok in ["my-stack-cache", "my-stack-sessions"] {
+        assert!(gcp_condition_allows(
+            c,
+            &format!("{TOKEN_PREFIX}/{ok}/tokenAuthUsers/default")
+        ));
+    }
+    for bad in [
+        format!("{TOKEN_PREFIX}/other-stack-cache/tokenAuthUsers/default"),
+        format!("{TOKEN_PREFIX}/my-stack-cache/tokenAuthUsers/other"),
+        format!("{TOKEN_PREFIX}/my-stack-cache"),
+        "projects/my-project/locations/us-west1/instances/my-stack-cache/tokenAuthUsers/default"
+            .to_string(),
+        "projects/other-project/locations/us-east4/instances/my-stack-cache/tokenAuthUsers/default"
+            .to_string(),
+    ] {
+        assert!(!gcp_condition_allows(c, &bad), "{bad}");
     }
 }
 
-/// A workload granted `redis/data-access` on `cache` reads that resource's connection secret
-/// and its versions, and never the secret of a sibling whose id starts with `cache-`.
+/// No Redis set on GCP carries any Secret Manager permission: there is no Redis secret on GCP.
 #[test]
-fn gcp_data_access_does_not_reach_sibling_resources_with_a_longer_id() {
-    let generator = GcpRuntimePermissionsGenerator::new();
-    let own = "projects/123456789012/secrets/my-stack-cache-auth";
-    let own_version = "projects/123456789012/secrets/my-stack-cache-auth/versions/3";
-    let sibling = "projects/123456789012/secrets/my-stack-cache-prod-auth";
-    let sibling_version = "projects/123456789012/secrets/my-stack-cache-prod-auth/versions/1";
-    for id in ["redis/data-access", "redis/provision", "redis/management"] {
-        let plan = generator
-            .generate_grant_plan(
-                get_permission_set(id).unwrap(),
-                BindingTarget::Resource,
-                &gcp_context("my-stack-cache"),
-            )
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        let expression = plan
-            .bindings
-            .iter()
-            .filter_map(|b| b.condition.as_ref())
-            .map(|c| c.expression.clone())
-            .next()
-            .unwrap_or_else(|| panic!("{id}: a conditioned secret binding"));
-        assert!(gcp_condition_allows(&expression, own), "{id}: {expression}");
-        assert!(gcp_condition_allows(&expression, own_version), "{id}");
-        assert!(!gcp_condition_allows(&expression, sibling), "{id}");
-        assert!(!gcp_condition_allows(&expression, sibling_version), "{id}");
+fn gcp_redis_sets_hold_no_secret_manager_permission() {
+    for id in [
+        "redis/data-access",
+        "redis/provision",
+        "redis/management",
+        "redis/setup",
+        "redis/heartbeat",
+    ] {
+        let set = get_permission_set(id).unwrap();
+        for permission in set.platforms.gcp.iter().flatten() {
+            for name in permission.grant.permissions.iter().flatten() {
+                assert!(!name.starts_with("secretmanager."), "{id}: {name}");
+            }
+        }
     }
 }
 
@@ -554,8 +548,8 @@ fn azure_resource_bindings_name_only_their_own_cluster() {
     }
 }
 
-/// The stack-level Redis sets read (data-access) or describe (setup) only `-auth` secrets, so a
-/// workload holding them cannot reach another resource's secret in the same stack.
+/// The stack-level AWS data-access set reads only `-auth` secrets, so a workload holding it
+/// cannot reach another resource's secret in the same stack.
 #[test]
 fn stack_level_redis_sets_do_not_reach_other_resources_secrets() {
     // AWS
@@ -572,71 +566,4 @@ fn stack_level_redis_sets_do_not_reach_other_resources_secrets() {
     let statements = aws("redis/data-access", BindingTarget::Stack, "cache");
     assert!(allowed(&statements, &own));
     assert!(!allowed(&statements, &foreign));
-
-    // GCP
-    let generator = GcpRuntimePermissionsGenerator::new();
-    for id in ["redis/data-access", "redis/setup"] {
-        let plan = generator
-            .generate_grant_plan(
-                get_permission_set(id).unwrap(),
-                BindingTarget::Stack,
-                &gcp_context("cache"),
-            )
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        let expressions: Vec<_> = plan
-            .bindings
-            .iter()
-            .filter_map(|b| b.condition.as_ref())
-            .map(|c| c.expression.clone())
-            .filter(|e| e.contains("Secret"))
-            .collect();
-        assert!(!expressions.is_empty(), "{id}");
-        for expression in expressions {
-            assert!(
-                !gcp_condition_allows(
-                    &expression,
-                    "projects/123456789012/secrets/my-stack-db-password"
-                ),
-                "{id}: {expression}"
-            );
-            assert!(
-                !gcp_condition_allows(
-                    &expression,
-                    "projects/123456789012/secrets/my-stack-db-password/versions/1"
-                ),
-                "{id}"
-            );
-        }
-    }
-}
-
-/// Setup's metadata read on a resource's secret is the exact `-auth` secret, not a prefix.
-#[test]
-fn gcp_setup_metadata_read_is_the_exact_auth_secret() {
-    let plan = GcpRuntimePermissionsGenerator::new()
-        .generate_grant_plan(
-            get_permission_set("redis/setup").unwrap(),
-            BindingTarget::Resource,
-            &gcp_context("cache"),
-        )
-        .unwrap();
-    let expression = plan
-        .bindings
-        .iter()
-        .filter_map(|b| b.condition.as_ref())
-        .map(|c| c.expression.clone())
-        .find(|e| e.contains("secrets/cache-auth"))
-        .expect("a resource-scoped secret condition");
-    assert!(gcp_condition_allows(
-        &expression,
-        "projects/123456789012/secrets/cache-auth"
-    ));
-    assert!(!gcp_condition_allows(
-        &expression,
-        "projects/123456789012/secrets/cache-prod-auth"
-    ));
-    assert!(!gcp_condition_allows(
-        &expression,
-        "projects/123456789012/secrets/cache-prod"
-    ));
 }

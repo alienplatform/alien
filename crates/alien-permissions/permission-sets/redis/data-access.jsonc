@@ -42,27 +42,31 @@
     ],
     "gcp": [
       {
-        "label": "read-connection-secret",
-        "description": "Read the generated auth-token secret version.",
+        // Memorystore generates the token and only its API returns it. The workload reads its own
+        // instance's token when it loads the binding, like Azure listKeys. Memorystore checks this
+        // permission against
+        // projects/<project ID>/locations/<region>/instances/<id>/tokenAuthUsers/default and
+        // evaluates resource.name conditions on that name (measured; Google's conditions docs do not
+        // list Memorystore). Only the project ID form matches, not the project number. If Google
+        // stopped sending the name, the condition would be false and the read would fail closed.
+        "label": "read-instance-auth-token",
+        "description": "Read the auth token of this Redis instance's default user.",
         "grant": {
-          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
+          "permissions": ["memorystore.authTokens.list"]
         },
-        // Secret-value reads are sensitive content: condition them to the stack/resource
-        // secret prefix (mirrors `vault/data-read`) so the workload can read only its own
-        // connection secret, never every secret in the project.
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
-              "title": "StackRedisSecretRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && (resource.name.endsWith(\"-auth\") || resource.name.contains(\"-auth/versions/\")) && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+              "title": "StackRedisTokenRead",
+              "expression": "resource.name.startsWith(\"projects/${projectName}/locations/${region}/instances/${stackPrefix}-\") && resource.name.endsWith(\"/tokenAuthUsers/default\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
-              "title": "ResourceRedisSecretRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && (resource.name == \"projects/${projectNumber}/secrets/${resourceName}-auth\" || resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-auth/\")) && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+              "title": "ResourceRedisTokenRead",
+              "expression": "resource.name == \"projects/${projectName}/locations/${region}/instances/${resourceName}/tokenAuthUsers/default\""
             }
           }
         }

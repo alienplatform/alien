@@ -1,7 +1,8 @@
 //! Cloud Redis bindings: resolve the password from where the cloud keeps it.
 //!
-//! AWS and GCP bindings point at a secret the deployment's controller wrote; Azure's binding
-//! points at the database, whose access key is read with `listKeys`. Every load reads again,
+//! The AWS binding points at a secret the deployment's controller wrote. Azure's binding points
+//! at the database, whose access key is read with `listKeys`, and GCP's at the instance, whose
+//! token is read from Memorystore. Every load reads again,
 //! so a rotated credential is picked up. Each function makes exactly one cloud call and returns
 //! its failure to the caller, which owns any retry policy.
 
@@ -72,24 +73,44 @@ pub(crate) async fn resolve_elasticache(
     )
 }
 
+/// `(location, instance id)` from `projects/<p>/locations/<l>/instances/<i>`.
+#[cfg(feature = "gcp")]
+pub(crate) fn parse_instance_name(name: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = name.split('/').collect();
+    match parts.as_slice() {
+        ["projects", project, "locations", location, "instances", instance]
+            if !project.is_empty() && !location.is_empty() && !instance.is_empty() =>
+        {
+            Some((location.to_string(), instance.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// The newest ACTIVE token. During a rotation both tokens are valid, and the newer one survives
+/// the delete of the old one.
+#[cfg(feature = "gcp")]
+fn newest_active_token(tokens: Vec<alien_gcp_clients::memorystore::AuthToken>) -> Option<String> {
+    tokens
+        .into_iter()
+        .filter(|token| token.state.as_deref() == Some("ACTIVE") && !token.token.is_empty())
+        .max_by(|a, b| a.create_time.cmp(&b.create_time))
+        .map(|token| token.token)
+}
+
 #[cfg(feature = "gcp")]
 pub(crate) async fn resolve_memorystore(
     binding_name: &str,
     binding: &alien_core::bindings::MemorystoreRedisBinding,
-    secrets: &dyn alien_gcp_clients::secret_manager::SecretManagerApi,
+    memorystore: &dyn alien_gcp_clients::memorystore::MemorystoreApi,
 ) -> Result<RedisConnectionParams> {
-    use base64::engine::general_purpose::STANDARD as base64_standard;
-    use base64::Engine;
-    let name = locator(
-        binding_name,
-        "passwordSecretName",
-        &binding.password_secret_name,
-    )?;
-    let invalid = |reason: &str| ErrorData::RedisCredentialInvalid {
-        binding_name: binding_name.to_string(),
-        source_locator: name.clone(),
-        reason: reason.to_string(),
-    };
+    let name = locator(binding_name, "instanceName", &binding.instance_name)?;
+    let (location, instance) = parse_instance_name(&name).ok_or_else(|| {
+        AlienError::new(ErrorData::config_invalid(
+            binding_name,
+            "instanceName must be projects/<project>/locations/<region>/instances/<id>",
+        ))
+    })?;
     let cas = binding
         .server_ca_certificates
         .clone()
@@ -105,26 +126,21 @@ pub(crate) async fn resolve_memorystore(
             "serverCaCertificates must be a non-empty list of PEM certificates",
         ))
     })?;
-    let response = secrets
-        .access_secret_version(format!("{name}/versions/latest"))
+    let tokens = memorystore
+        .list_auth_tokens(&location, &instance, "default")
         .await
         .context(ErrorData::RedisCredentialResolutionFailed {
             binding_name: binding_name.to_string(),
             source_locator: name.clone(),
-            reason: "Secret Manager accessSecretVersion failed".to_string(),
+            reason: "Memorystore authTokens.list failed".to_string(),
         })?;
-    let encoded = response
-        .payload
-        .and_then(|payload| payload.data)
-        .ok_or_else(|| AlienError::new(invalid("secret version has no payload")))?;
-    let decoded = base64_standard
-        .decode(&encoded)
-        .map_err(|_| AlienError::new(invalid("payload is not valid base64")))?;
-    let password = String::from_utf8(decoded)
-        .map_err(|_| AlienError::new(invalid("payload is not valid UTF-8")))?;
-    if password.is_empty() {
-        return Err(AlienError::new(invalid("secret version payload is empty")));
-    }
+    let password = newest_active_token(tokens).ok_or_else(|| {
+        AlienError::new(ErrorData::RedisCredentialInvalid {
+            binding_name: binding_name.to_string(),
+            source_locator: name,
+            reason: "the instance's default user has no ACTIVE token".to_string(),
+        })
+    })?;
     resolve_params(
         binding_name,
         &binding.host,
@@ -319,11 +335,7 @@ mod tests {
     #[cfg(feature = "gcp")]
     mod gcp {
         use super::*;
-        use alien_gcp_clients::secret_manager::{
-            AccessSecretVersionResponse, MockSecretManagerApi, SecretPayload,
-        };
-        use base64::engine::general_purpose::STANDARD as base64_standard;
-        use base64::Engine;
+        use alien_gcp_clients::memorystore::{AuthToken, MockMemorystoreApi};
 
         const CA: &str = "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----";
 
@@ -333,37 +345,102 @@ mod tests {
                 port: BindingValue::value(6379),
                 username: BindingValue::value("default".to_string()),
                 server_ca_certificates: BindingValue::value(cas),
-                password_secret_name: BindingValue::value("test-cache-auth".to_string()),
+                instance_name: BindingValue::value(
+                    "projects/p/locations/us-east4/instances/test-cache".to_string(),
+                ),
             }
         }
 
-        #[tokio::test]
-        async fn reads_the_latest_version_and_verifies_against_the_binding_cas() {
-            let mut secrets = MockSecretManagerApi::new();
-            secrets
-                .expect_access_secret_version()
+        fn token(value: &str, state: &str, created: &str) -> AuthToken {
+            AuthToken {
+                name: format!("t-{value}"),
+                token: value.to_string(),
+                state: Some(state.to_string()),
+                create_time: Some(created.to_string()),
+            }
+        }
+
+        fn memorystore_returning(tokens: Vec<AuthToken>) -> MockMemorystoreApi {
+            let mut memorystore = MockMemorystoreApi::new();
+            memorystore
+                .expect_list_auth_tokens()
                 .times(1)
-                .withf(|name| name == "test-cache-auth/versions/latest")
-                .returning(|_| {
-                    Ok(AccessSecretVersionResponse {
-                        name: None,
-                        payload: Some(SecretPayload {
-                            data: Some(base64_standard.encode("token-value")),
-                        }),
-                    })
-                });
-            let params = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &secrets)
+                .withf(|location, instance, user| {
+                    location == "us-east4" && instance == "test-cache" && user == "default"
+                })
+                .return_once(move |_, _, _| Ok(tokens));
+            memorystore
+        }
+
+        #[tokio::test]
+        async fn reads_the_token_from_the_instance_and_verifies_against_the_binding_cas() {
+            let memorystore =
+                memorystore_returning(vec![token("token-value", "ACTIVE", "2026-01-01T00:00:00Z")]);
+            let params = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
                 .await
                 .unwrap();
             assert_eq!(params.password, "token-value");
             assert_eq!(params.tls.ca_certificates(), [CA.to_string()]);
         }
 
+        /// A rotation adds a second token before deleting the first; the newer one is the one
+        /// that survives.
         #[tokio::test]
-        async fn missing_cas_fail_before_any_secret_read() {
-            // The mock has no expectation, so a secret read would panic.
-            let secrets = MockSecretManagerApi::new();
-            let error = resolve_memorystore("cache", &binding(vec![]), &secrets)
+        async fn picks_the_newest_active_token() {
+            let memorystore = memorystore_returning(vec![
+                token("old", "ACTIVE", "2026-01-01T00:00:00Z"),
+                token("new", "ACTIVE", "2026-03-01T00:00:00Z"),
+                token("newer-but-inactive", "CREATING", "2026-04-01T00:00:00Z"),
+            ]);
+            let params = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
+                .await
+                .unwrap();
+            assert_eq!(params.password, "new");
+        }
+
+        #[tokio::test]
+        async fn no_active_token_is_an_invalid_credential() {
+            let memorystore =
+                memorystore_returning(vec![token("t", "CREATING", "2026-01-01T00:00:00Z")]);
+            let error = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "REDIS_CREDENTIAL_INVALID");
+            assert!(!format!("{error:?}").contains("\"t\""));
+        }
+
+        #[tokio::test]
+        async fn a_denied_read_is_a_resolution_failure_naming_the_instance() {
+            let mut memorystore = MockMemorystoreApi::new();
+            memorystore.expect_list_auth_tokens().returning(|_, _, _| {
+                Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "token".to_string(),
+                        resource_name: "default".to_string(),
+                    },
+                ))
+            });
+            let error = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "REDIS_CREDENTIAL_RESOLUTION_FAILED");
+        }
+
+        #[tokio::test]
+        async fn missing_cas_fail_before_any_token_read() {
+            // The mock has no expectation, so a token read would panic.
+            let memorystore = MockMemorystoreApi::new();
+            let error = resolve_memorystore("cache", &binding(vec![]), &memorystore)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+        }
+
+        #[tokio::test]
+        async fn a_malformed_instance_name_is_refused_before_any_call() {
+            let mut bad = binding(vec![CA.to_string()]);
+            bad.instance_name = BindingValue::value("test-cache".to_string());
+            let error = resolve_memorystore("cache", &bad, &MockMemorystoreApi::new())
                 .await
                 .unwrap_err();
             assert_eq!(error.code, "BINDING_CONFIG_INVALID");

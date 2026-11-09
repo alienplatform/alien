@@ -454,7 +454,6 @@ fn validate_gcp_permissions(
 const GCP_UNPUBLISHED_PERMISSIONS: &[&str] = &[
     // Memorystore for Valkey auth tokens. Listed under Memorystore Admin in the public role
     // reference; the dataset mirror predates them.
-    "memorystore.tokenAuthUsers.list",
     "memorystore.authTokens.list",
     // Agent-platform sandbox environments and their templates, in preview.
     "aiplatform.sandboxEnvironmentTemplates.create",

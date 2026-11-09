@@ -95,33 +95,7 @@
         }
       }
     ],
-    "gcp": [
-      {
-        // The Terraform provider reads the secret container back on every refresh. This is a
-        // metadata read; no grant here reads a secret version.
-        "label": "read-auth-secret-container",
-        "description": "Read the auth-token secret container's metadata.",
-        "grant": {
-          "permissions": ["secretmanager.secrets.get", "secretmanager.secrets.update"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "StackRedisSecretMetadata",
-              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && resource.name.endsWith(\"-auth\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
-            }
-          },
-          "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "ResourceRedisSecretMetadata",
-              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name == \"projects/${projectNumber}/secrets/${resourceName}-auth\" && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
-            }
-          }
-        }
-      }
-    ],
+    "gcp": [],
     "azure": [
       {
         // The azurerm provider reads the default database's access keys on every refresh and

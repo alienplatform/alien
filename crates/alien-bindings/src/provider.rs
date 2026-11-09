@@ -44,6 +44,9 @@ pub struct BindingsProvider {
     #[cfg(feature = "azure")]
     azure_managed_redis:
         tokio::sync::OnceCell<Arc<dyn alien_azure_clients::managed_redis::ManagedRedisApi>>,
+    /// Memorystore client for reading a Redis instance's token, reused across binding loads.
+    #[cfg(feature = "gcp")]
+    gcp_memorystore: tokio::sync::OnceCell<Arc<dyn alien_gcp_clients::memorystore::MemorystoreApi>>,
 }
 
 /// Environment-backed provider that defers cloud client configuration until the
@@ -107,6 +110,8 @@ impl BindingsProvider {
             postgres,
             #[cfg(feature = "azure")]
             azure_managed_redis: tokio::sync::OnceCell::new(),
+            #[cfg(feature = "gcp")]
+            gcp_memorystore: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -1515,11 +1520,29 @@ impl BindingsProviderApi for BindingsProvider {
             RedisBinding::Memorystore(config) => {
                 #[cfg(feature = "gcp")]
                 {
-                    let secrets = self.postgres.gcp_secrets().await?;
+                    let client = self
+                        .gcp_memorystore
+                        .get_or_try_init(|| async {
+                            let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
+                                AlienError::new(ErrorData::ClientConfigInvalid {
+                                    platform: Platform::Gcp,
+                                    message: "GCP config not available".to_string(),
+                                })
+                            })?;
+                            Ok::<_, AlienError<ErrorData>>(Arc::new(
+                                alien_gcp_clients::memorystore::MemorystoreClient::new(
+                                    crate::http_client::create_http_client(),
+                                    gcp_config.clone(),
+                                ),
+                            )
+                                as Arc<dyn alien_gcp_clients::memorystore::MemorystoreApi>)
+                        })
+                        .await?;
+                    // Read on every load so a rotated token is picked up.
                     let params = crate::providers::redis::cloud::resolve_memorystore(
                         binding_name,
                         config,
-                        secrets.as_ref(),
+                        client.as_ref(),
                     )
                     .await?;
                     Ok(Arc::new(ResolvedRedis::new(params)))

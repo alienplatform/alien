@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 /// GCP Memorystore for Valkey registration data: the handles by which a setup-created
-/// instance is registered as a Frozen Redis resource. Setup owns the instance and the secret
-/// container; Alien copies the server-generated auth token into that secret, then refreshes
-/// and heartbeats the instance. The token itself is never carried.
+/// instance is registered as a Frozen Redis resource. Setup owns the instance; Alien refreshes
+/// and heartbeats it. The auth token is never carried or copied: workloads read it from
+/// Memorystore.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
@@ -13,8 +13,6 @@ pub struct GcpMemorystoreImportData {
     pub instance_name: String,
     /// Region the instance runs in.
     pub region: String,
-    /// Secret Manager secret that receives the auth token (never the token itself).
-    pub password_secret_name: String,
     /// Private Service Connect endpoint IP (the binding host).
     pub endpoint_ip: String,
     /// Listening port.

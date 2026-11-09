@@ -6,7 +6,7 @@
 import * as z from "zod";
 
 /**
- * @description GCP Memorystore for Valkey registration data: the handles by which a setup-created\ninstance is registered as a Frozen Redis resource. Setup owns the instance and the secret\ncontainer; Alien copies the server-generated auth token into that secret, then refreshes\nand heartbeats the instance. The token itself is never carried.
+ * @description GCP Memorystore for Valkey registration data: the handles by which a setup-created\ninstance is registered as a Frozen Redis resource. Setup owns the instance; Alien refreshes\nand heartbeats it. The auth token is never carried or copied: workloads read it from\nMemorystore.
  */
 export const GcpMemorystoreImportDataSchema = z.object({
     "endpointIp": z.string().describe("Private Service Connect endpoint IP (the binding host)."),
@@ -14,10 +14,9 @@ export const GcpMemorystoreImportDataSchema = z.object({
 "highAvailability": z.optional(z.boolean().describe("Whether the instance has a replica.")),
 "instanceName": z.string().describe("Instance id."),
 "nodeType": z.string().describe("Node type, such as `shared-core-nano`."),
-"passwordSecretName": z.string().describe("Secret Manager secret that receives the auth token (never the token itself)."),
 "persistence": z.optional(z.boolean().describe("Whether RDB persistence is on.")),
 "port": z.int().min(0).describe("Listening port."),
 "region": z.string().describe("Region the instance runs in.")
-    }).describe("GCP Memorystore for Valkey registration data: the handles by which a setup-created\ninstance is registered as a Frozen Redis resource. Setup owns the instance and the secret\ncontainer; Alien copies the server-generated auth token into that secret, then refreshes\nand heartbeats the instance. The token itself is never carried.")
+    }).describe("GCP Memorystore for Valkey registration data: the handles by which a setup-created\ninstance is registered as a Frozen Redis resource. Setup owns the instance; Alien refreshes\nand heartbeats it. The auth token is never carried or copied: workloads read it from\nMemorystore.")
 
 export type GcpMemorystoreImportData = z.infer<typeof GcpMemorystoreImportDataSchema>

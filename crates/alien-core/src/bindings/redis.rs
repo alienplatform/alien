@@ -58,8 +58,9 @@ pub struct MemorystoreRedisBinding {
     pub username: BindingValue<String>,
     /// Instance CA certificates (PEM), including every root accepted during a rotation.
     pub server_ca_certificates: BindingValue<Vec<String>>,
-    /// Secret Manager secret name of the token; resolved at load time.
-    pub password_secret_name: BindingValue<String>,
+    /// Full instance name `projects/<project ID>/locations/<region>/instances/<id>`. The SDK
+    /// reads the default user's token from Memorystore when it loads the binding.
+    pub instance_name: BindingValue<String>,
 }
 
 /// Azure Managed Redis binding.

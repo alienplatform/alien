@@ -15263,15 +15263,15 @@
           "port",
           "username",
           "serverCaCertificates",
-          "passwordSecretName"
+          "instanceName"
         ],
         "properties": {
           "host": {
             "$ref": "#/components/schemas/BindingValue_String"
           },
-          "passwordSecretName": {
+          "instanceName": {
             "$ref": "#/components/schemas/BindingValue_String",
-            "description": "Secret Manager secret name of the token; resolved at load time."
+            "description": "Full instance name `projects/<project ID>/locations/<region>/instances/<id>`. The SDK\nreads the default user's token from Memorystore when it loads the binding."
           },
           "port": {
             "$ref": "#/components/schemas/BindingValue_u16"

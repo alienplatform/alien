@@ -580,68 +580,6 @@
             "scope": "projects/${projectName}"
           }
         }
-      },
-      // `secretmanager.secrets.create` cannot be IAM-conditioned on the secret name: the secret does
-      // not exist yet at create time. Versioning and deleting act on an existing secret, so they are
-      // prefix-scoped to this deployment's secrets.
-      {
-        "label": "create-auth-secret",
-        "description": "Create the secret container that holds the Redis auth token.",
-        "grant": {
-          "permissions": ["secretmanager.secrets.create"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
-          },
-          "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      },
-      {
-        "label": "write-auth-secret",
-        "description": "Delete the auth-token secret and add versions to it. Never reads a version.",
-        "grant": {
-          "permissions": ["secretmanager.secrets.delete", "secretmanager.versions.add"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "StackRedisSecretWrite",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && (resource.name.endsWith(\"-auth\") || resource.name.contains(\"-auth/versions/\")) && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
-            }
-          },
-          "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "ResourceRedisSecretWrite",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && (resource.name == \"projects/${projectNumber}/secrets/${resourceName}-auth\" || resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-auth/\")) && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
-            }
-          }
-        }
-      },
-      // Memorystore generates the auth token and the API is the only place to read it: the
-      // controller reads it once and adds it as a new Secret Manager version (the write grant
-      // above), never into controller state or logs. The grant is project-wide because Memorystore
-      // supports no IAM conditions. It belongs here and in redis/management because both the live
-      // create and the import of a setup-created instance run the copy; neither the workload nor the
-      // heartbeat identity gets it.
-      {
-        "label": "read-generated-auth-token",
-        "description": "Read the server-generated auth token of the Redis instance so it can be copied to Secret Manager.",
-        "grant": {
-          "permissions": ["memorystore.tokenAuthUsers.list", "memorystore.authTokens.list"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
-          },
-          "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
       }
     ],
     "azure": [

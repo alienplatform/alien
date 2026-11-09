@@ -15,7 +15,7 @@ export const MemorystoreRedisBindingSchema = z.object({
     get "host"(){
                 return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },
-get "passwordSecretName"(){
+get "instanceName"(){
                 return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },
 get "port"(){

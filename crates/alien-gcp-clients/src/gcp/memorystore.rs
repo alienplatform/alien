@@ -203,16 +203,6 @@ impl CertificateAuthority {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct TokenAuthUser {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// ACTIVE once usable (response only).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
-}
-
 /// One auth token of a user. The value is a secret: keep it out of logs and state.
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,6 +211,9 @@ pub struct AuthToken {
     pub token: String,
     #[serde(default)]
     pub state: Option<String>,
+    /// RFC 3339 creation time. Same-length UTC timestamps sort as strings.
+    #[serde(default)]
+    pub create_time: Option<String>,
 }
 
 impl Debug for AuthToken {
@@ -229,6 +222,7 @@ impl Debug for AuthToken {
             .field("name", &self.name)
             .field("token", &"<redacted>")
             .field("state", &self.state)
+            .field("create_time", &self.create_time)
             .finish()
     }
 }
@@ -309,19 +303,8 @@ pub trait MemorystoreApi: Send + Sync + Debug {
         location: &str,
         instance_id: &str,
     ) -> Result<CertificateAuthority>;
-    async fn create_token_auth_user(
-        &self,
-        location: &str,
-        instance_id: &str,
-        user: &str,
-    ) -> Result<Operation>;
-    async fn get_token_auth_user(
-        &self,
-        location: &str,
-        instance_id: &str,
-        user: &str,
-    ) -> Result<TokenAuthUser>;
-    /// Reads the user's tokens. Needs a role that can see secrets: only the controller calls it.
+    /// Reads the user's tokens. Only a workload holding `memorystore.authTokens.list` on this
+    /// instance's user can call it; the controller never does.
     async fn list_auth_tokens(
         &self,
         location: &str,
@@ -470,46 +453,6 @@ impl MemorystoreApi for MemorystoreClient {
         );
         self.base
             .execute_request(Method::GET, &path, None, Option::<()>::None, instance_id)
-            .await
-    }
-
-    async fn create_token_auth_user(
-        &self,
-        location: &str,
-        instance_id: &str,
-        user: &str,
-    ) -> Result<Operation> {
-        let path = format!(
-            "{}/tokenAuthUsers",
-            self.instance_path(location, instance_id)
-        );
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                Some(vec![("tokenAuthUserId", user.to_string())]),
-                Some(TokenAuthUser {
-                    name: None,
-                    state: None,
-                }),
-                user,
-            )
-            .await
-    }
-
-    async fn get_token_auth_user(
-        &self,
-        location: &str,
-        instance_id: &str,
-        user: &str,
-    ) -> Result<TokenAuthUser> {
-        let path = format!(
-            "{}/tokenAuthUsers/{}",
-            self.instance_path(location, instance_id),
-            user
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, user)
             .await
     }
 
