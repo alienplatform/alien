@@ -709,5 +709,25 @@ mod tests {
             json["resources"]["new-daemon"]["config"]["commandsCapabilityFile"],
             true
         );
+
+        // A stack stored by a build that predates the field reads as an old
+        // receiver, even for a resource that is marked today.
+        let mut stored_by_old_build = json.clone();
+        for id in ["new-container", "new-daemon"] {
+            stored_by_old_build["resources"][id]["config"]
+                .as_object_mut()
+                .unwrap()
+                .remove("commandsCapabilityFile");
+        }
+        let old_stack: Stack = serde_json::from_value(stored_by_old_build).unwrap();
+        assert_eq!(
+            old_stack.command_receivers_without_capability_file(),
+            vec![
+                "new-container".to_string(),
+                "new-daemon".to_string(),
+                "old-container".to_string(),
+                "old-daemon".to_string()
+            ]
+        );
     }
 }
