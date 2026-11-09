@@ -537,6 +537,8 @@ fn env_file_paths_stay_inside_the_project() {
     std::fs::create_dir_all(project.join("config")).unwrap();
     std::fs::write(outer.path().join("outside.env"), "SECRET=1\n").unwrap();
     std::fs::write(project.join("config/app.env"), "INSIDE=yes\n").unwrap();
+    // Symlinks need special privileges on Windows, so that case runs on Unix only.
+    #[cfg(unix)]
     std::os::unix::fs::symlink(outer.path().join("outside.env"), project.join("link.env")).unwrap();
 
     // A path below the alien.toml directory, even one that wanders through `..`, is fine.
@@ -549,18 +551,22 @@ fn env_file_paths_stay_inside_the_project() {
     assert_eq!(daemon.environment["INSIDE"], "yes");
 
     let absolute = outer.path().join("outside.env");
-    for (path, reason) in [
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut cases = vec![
         (absolute.display().to_string(), "is an absolute path"),
         (
             "../outside.env".to_string(),
             "is outside the directory of alien.toml",
         ),
-        (
-            "link.env".to_string(),
-            "is outside the directory of alien.toml",
-        ),
-    ] {
-        let error = reject_in(&project, &format!("{DAEMON}env-file = \"{path}\"\n"));
+    ];
+    #[cfg(unix)]
+    cases.push((
+        "link.env".to_string(),
+        "is outside the directory of alien.toml",
+    ));
+    for (path, reason) in cases {
+        // A literal (single-quoted) string, so Windows backslashes are not escapes.
+        let error = reject_in(&project, &format!("{DAEMON}env-file = '{path}'\n"));
         assert_eq!((error.line, error.column), (5, 12), "{path}");
         assert_eq!(error.file, "alien.toml", "{path}");
         assert!(error.message.contains(reason), "{path}: {}", error.message);
