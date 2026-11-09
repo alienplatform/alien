@@ -643,12 +643,14 @@ mod tests {
             "workloads are in name order"
         );
         let back = signed_stack(&body, Platform::Aws).expect("the release reads back as its stack");
-        assert_eq!(
-            back.resources()
-                .map(|(id, _)| id.as_str())
-                .collect::<Vec<_>>(),
-            ["agent", "web"]
-        );
+        // The order the stack's resources read back in follows serde_json's map order, which a
+        // workspace build can switch to insertion order; only which resources come back matters.
+        let mut ids = back
+            .resources()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, ["agent", "web"]);
     }
 
     #[test]
