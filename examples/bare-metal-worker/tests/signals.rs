@@ -160,3 +160,37 @@ fn a_signal_with_nothing_running_exits_at_once() {
     server.wait_for("drained, exiting");
     assert!(server.wait_for_exit().success());
 }
+
+fn refused_at_startup(variable: &str) -> (std::process::ExitStatus, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_job-worker"))
+        .env("PORT", "0")
+        .env(variable, "0")
+        .output()
+        .expect("run job-worker");
+    (
+        output.status,
+        String::from_utf8(output.stderr).expect("utf-8 stderr"),
+    )
+}
+
+#[test]
+fn zero_concurrency_is_refused_at_startup() {
+    let (status, stderr) = refused_at_startup("WORKER_CONCURRENCY");
+
+    assert_eq!(status.code(), Some(1));
+    assert!(
+        stderr.contains("WORKER_CONCURRENCY must be at least 1"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_zero_queue_is_refused_at_startup() {
+    let (status, stderr) = refused_at_startup("QUEUE_CAPACITY");
+
+    assert_eq!(status.code(), Some(1));
+    assert!(
+        stderr.contains("QUEUE_CAPACITY must be at least 1"),
+        "{stderr}"
+    );
+}

@@ -11,8 +11,9 @@ use std::path::Path;
 
 use alien_core::stack_authoring::{
     authorable_type_by_table, custom_plugin, normalize_inputs, operations_config,
-    stop_grace_period_seconds, AuthorableType, AuthoredEnvMapping, AuthoredInput, AuthoredPool,
-    ResourceBodyError, AUTHORABLE_TYPES,
+    stop_grace_period_seconds, validate_dynamic_container_image_resources,
+    validate_dynamic_container_repositories, validate_resource_id, AuthorableType,
+    AuthoredEnvMapping, AuthoredInput, AuthoredPool, ResourceBodyError, AUTHORABLE_TYPES,
 };
 use alien_core::{
     CapacityGroup, ComputeCluster, ManagementPermissions, OperationsConfig, PermissionProfile,
@@ -212,8 +213,7 @@ impl Resolver<'_> {
         stack.supported_platforms = platforms;
         stack.permissions = permissions;
         stack.inputs = inputs;
-        stack.dynamic_container_repositories =
-            self.string_list(root_table, "dynamic-container-repositories")?;
+        stack.dynamic_container_repositories = self.dynamic_container_repositories(root_table)?;
         stack.dynamic_container_image_resources =
             self.container_ids(root_table, "dynamic-container-image-resources", &declared)?;
         stack.operations = root_table
@@ -319,6 +319,21 @@ impl Resolver<'_> {
         Ok(())
     }
 
+    /// An ID that becomes part of cloud resource names, held to the rule the build preflight
+    /// applies so a bad one fails here, at its location, rather than later without one.
+    fn check_resource_id(&self, id: &str, span: &Range<usize>, what: &str) -> Result<()> {
+        if let Err(reason) = validate_resource_id(id) {
+            return Err(self.error(span.clone(), format!("{what} '{id}' {reason}")));
+        }
+        if id.len() > MAX_RESOURCE_ID_LENGTH {
+            return Err(self.error(
+                span.clone(),
+                format!("{what} '{id}' must be at most {MAX_RESOURCE_ID_LENGTH} characters"),
+            ));
+        }
+        Ok(())
+    }
+
     fn declarations<'n>(&self, root: &'n Table) -> Result<Vec<Declaration<'n>>> {
         let mut declarations = Vec::new();
         for ty in AUTHORABLE_TYPES {
@@ -364,12 +379,7 @@ impl Resolver<'_> {
         declaration: &Declaration<'_>,
     ) -> Result<()> {
         let id = declaration.id;
-        self.check_id(
-            id,
-            &declaration.id_span,
-            "resource ID",
-            MAX_RESOURCE_ID_LENGTH,
-        )?;
+        self.check_resource_id(id, &declaration.id_span, "resource ID")?;
         if let Some((other_type, other_span)) = seen.get(id) {
             if *other_type == ComputeCluster::RESOURCE_TYPE.to_string() {
                 return Err(self.error(
@@ -417,14 +427,16 @@ impl Resolver<'_> {
                 "list at least one platform, or leave `platforms` out to allow every platform",
             ));
         }
+        let items = node.as_array().expect("the walker checked the list");
         for (index, platform) in platforms.iter().enumerate() {
+            let span = items[index].span.clone();
             if platforms[..index].contains(platform) {
-                return Err(self.error(node.span.clone(), format!("'{platform}' is listed twice")));
+                return Err(self.error(span, format!("'{platform}' is listed twice")));
             }
             if let Some(allowed) = allowed.filter(|allowed| !allowed.contains(platform)) {
                 let names: Vec<&str> = allowed.iter().map(Platform::as_str).collect();
                 return Err(self.error(
-                    node.span.clone(),
+                    span,
                     format!(
                         "'{platform}' is not one of the stack's platforms ({})",
                         names.join(", ")
@@ -442,6 +454,35 @@ impl Resolver<'_> {
         let schema = json!({ "type": "array", "items": { "type": "string" } });
         let (value, _) = self.walk(&[], node, Schema::inline(&schema), &Declared::new(), None)?;
         Ok(serde_json::from_value(value).expect("the walker checked the strings"))
+    }
+
+    fn dynamic_container_repositories(&self, root: &Table) -> Result<Vec<String>> {
+        const KEY: &str = "dynamic-container-repositories";
+        let repositories = self.string_list(root, KEY)?;
+        let Some(node) = root.get(KEY) else {
+            return Ok(repositories);
+        };
+        validate_dynamic_container_repositories(&repositories)
+            .map_err(|error| self.list_error(node, error))?;
+        Ok(repositories)
+    }
+
+    /// An authoring error about the list at `node`, at the entry the error names (`field.2`)
+    /// or at the whole list.
+    fn list_error(
+        &self,
+        node: &Node,
+        error: AlienError<alien_core::ErrorData>,
+    ) -> AlienError<ErrorData> {
+        let (field, reason) = definition_error(error);
+        let item = field
+            .rsplit_once('.')
+            .and_then(|(_, index)| index.parse::<usize>().ok())
+            .and_then(|index| node.as_array()?.get(index));
+        self.error(
+            item.map_or(node.span.clone(), |item| item.span.clone()),
+            reason,
+        )
     }
 
     fn container_ids(&self, root: &Table, key: &str, declared: &Declared) -> Result<Vec<String>> {
@@ -479,6 +520,8 @@ impl Resolver<'_> {
             }
             ids.push(id.to_string());
         }
+        validate_dynamic_container_image_resources(&ids)
+            .map_err(|error| self.list_error(node, error))?;
         Ok(ids)
     }
 
@@ -615,7 +658,7 @@ impl Resolver<'_> {
             .map_err(|error| {
                 let mut path = base.to_vec();
                 path.push("stopGracePeriodSeconds".to_string());
-                let span = spans.exact(&path).unwrap_or_else(|| base_span(spans, base));
+                let span = span_at(spans, &path);
                 self.error(span, definition_error(error).1)
             })
     }
@@ -720,7 +763,7 @@ impl Resolver<'_> {
                         format!("expected a string, found {}", id.kind()),
                     ));
                 };
-                self.check_id(text, &id.span, "cluster ID", MAX_RESOURCE_ID_LENGTH)?;
+                self.check_resource_id(text, &id.span, "cluster ID")?;
                 Ok(text.to_string())
             }
         }
@@ -981,7 +1024,8 @@ impl Resolver<'_> {
                 .filter(|_| path.len() > 2)
                 .and_then(|spans| spans.exact(&path))
                 .or_else(|| entry.map(|entry| entry.key_span.clone()))
-                .unwrap_or(0..0);
+                .or_else(|| nodes.first().map(|first| first.key_span.clone()))
+                .expect("inputs are only normalized when the document declares one");
             self.error(span, reason)
         })
     }
@@ -1006,7 +1050,7 @@ impl Resolver<'_> {
                     "targetResources".to_string(),
                 ];
                 path.extend(target.map(|target| target.to_string()));
-                spans.exact(&path).unwrap_or(0..0)
+                span_at(spans, &path)
             };
             if targets.is_empty() {
                 return Err(self.error(
@@ -1237,8 +1281,12 @@ fn is_workload(resource_type: &str) -> bool {
     })
 }
 
-fn base_span(spans: &SpanMap, base: &[String]) -> Range<usize> {
-    spans.exact(base).unwrap_or(0..0)
+/// Where the part of a resource at `path` was written, or the closest enclosing part. The
+/// walker records the span of the node it starts at, so some ancestor always has one.
+fn span_at(spans: &SpanMap, path: &[String]) -> Range<usize> {
+    spans
+        .locate(path, false)
+        .expect("the walker records the span of the node it starts at")
 }
 
 /// The tables under a top-level key such as `pool` or `input`, in file order.

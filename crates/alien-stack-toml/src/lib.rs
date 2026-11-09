@@ -58,7 +58,10 @@ pub fn load(path: &Path) -> Result<Stack> {
             .context(ErrorData::FileUnreadable {
                 file: path.display().to_string(),
             })?;
-    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let base_dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
     parse(&text, &path.display().to_string(), base_dir)
 }
 

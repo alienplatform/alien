@@ -3,6 +3,6 @@ import * as alien from "@alienplatform/core"
 const data = new alien.Storage("data").build()
 
 export default new alien.Stack("acme-every-platform")
-  .platforms(["test", "local", "kubernetes", "machines", "azure", "gcp", "aws"])
+  .platforms(["local", "kubernetes", "machines", "azure", "gcp", "aws"])
   .add(data, "frozen")
   .build()

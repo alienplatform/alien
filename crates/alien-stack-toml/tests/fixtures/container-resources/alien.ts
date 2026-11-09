@@ -30,6 +30,13 @@ const memoryRange = new alien.Container("memory-range")
   .permissions("memory-range")
   .build()
 
+const millicores = new alien.Container("millicores")
+  .code({ type: "image", image: "ghcr.io/acme/small:1.0.0" })
+  .cpu({ min: "500m", desired: "500m" })
+  .memory("256Mi")
+  .permissions("millicores")
+  .build()
+
 const trainer = new alien.Container("trainer")
   .code({ type: "image", image: "ghcr.io/acme/trainer:1.0.0" })
   .cpu(8)
@@ -45,8 +52,16 @@ export default new alien.Stack("acme-resources")
   .add(bothRanges, "live")
   .add(cpuRange, "live")
   .add(memoryRange, "live")
+  .add(millicores, "live")
   .add(trainer, "live")
   .permissions({
-    profiles: { fixed: {}, "both-ranges": {}, "cpu-range": {}, "memory-range": {}, trainer: {} },
+    profiles: {
+      fixed: {},
+      "both-ranges": {},
+      "cpu-range": {},
+      "memory-range": {},
+      millicores: {},
+      trainer: {},
+    },
   })
   .build()

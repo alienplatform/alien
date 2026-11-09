@@ -9,8 +9,9 @@
 //! still points at something the author wrote.
 
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use alien_core::instance_catalog;
 use alien_core::stack_authoring::{memory_resource_spec, AuthorableType};
 use alien_core::DaemonRuntime;
 use serde_json::Value as Json;
@@ -441,11 +442,11 @@ fn check_resource_spec(
             .map(drop)
             .map_err(|error| ctx.error(span.clone(), definition_error(error).1));
     }
-    match text.parse::<f64>() {
-        Ok(cores) if cores.is_finite() && cores > 0.0 => Ok(()),
+    match instance_catalog::parse_cpu(text) {
+        Ok(cores) if text.trim() == text && cores.is_finite() && cores > 0.0 => Ok(()),
         _ => Err(ctx.error(
             span.clone(),
-            format!("'{text}' is not a number of CPU cores; write a number above zero, such as 2 or 0.5"),
+            format!("'{text}' is not an amount of CPU; write a number above zero, such as 2 or 0.5, or millicores such as \"500m\""),
         )),
     }
 }
@@ -898,7 +899,7 @@ fn environment(ctx: &mut Context<'_>, target: &Target<'_>, table: &mut Table) ->
                     format!("expected a path, found {}", path.kind()),
                 ));
             };
-            let full = ctx.base_dir.join(relative);
+            let full = env_file_path(ctx, path.span.clone(), relative)?;
             let text = std::fs::read_to_string(&full).map_err(|error| {
                 ctx.error(
                     path.span.clone(),
@@ -906,7 +907,7 @@ fn environment(ctx: &mut Context<'_>, target: &Target<'_>, table: &mut Table) ->
                 )
             })?;
             let parsed = env_file::parse(&SourceFile {
-                name: full.display().to_string(),
+                name: ctx.base_dir.join(relative).display().to_string(),
                 text: &text,
             })?;
             for (name, value) in parsed {
@@ -982,6 +983,43 @@ fn environment(ctx: &mut Context<'_>, target: &Target<'_>, table: &mut Table) ->
         .map_or(key_span.clone(), |first| first.value.span.clone());
     table.insert("environment", key_span, Node::table(span, variables));
     Ok(())
+}
+
+/// The file `relative` names, which must stay inside the directory of alien.toml: an env file
+/// is read at build time, so a path that leaves the project would read arbitrary files.
+fn env_file_path(ctx: &Context<'_>, span: Range<usize>, relative: &str) -> Result<PathBuf> {
+    let requested = Path::new(relative);
+    if requested.is_absolute() || requested.has_root() {
+        return Err(ctx.error(
+            span,
+            format!(
+                "env-file '{relative}' is an absolute path; use a path relative to the directory of alien.toml"
+            ),
+        ));
+    }
+    let unreadable = |path: &Path, error: std::io::Error| {
+        ctx.error(
+            span.clone(),
+            format!("cannot read env file {}: {error}", path.display()),
+        )
+    };
+    let full = ctx.base_dir.join(requested);
+    let resolved = full
+        .canonicalize()
+        .map_err(|error| unreadable(&full, error))?;
+    let root = ctx
+        .base_dir
+        .canonicalize()
+        .map_err(|error| unreadable(ctx.base_dir, error))?;
+    if !resolved.starts_with(&root) {
+        return Err(ctx.error(
+            span,
+            format!(
+                "env-file '{relative}' is outside the directory of alien.toml; keep env files inside the project"
+            ),
+        ));
+    }
+    Ok(resolved)
 }
 
 fn input_reference(

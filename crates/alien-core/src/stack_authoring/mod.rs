@@ -50,6 +50,11 @@ fn invalid(field: &str, reason: impl Into<String>) -> AlienError<ErrorData> {
 /// a bare number is bytes. Fractions round to the nearest byte. Whitespace, signs and
 /// exponents are rejected, so a typo never turns into a surprising size.
 pub fn parse_quantity_bytes(field: &str, value: &str) -> Result<u64> {
+    quantity_bytes(value).map_err(|reason| invalid(field, reason))
+}
+
+/// [`parse_quantity_bytes`] without a field name; the error is what is wrong with `value`.
+pub fn quantity_bytes(value: &str) -> std::result::Result<u64, String> {
     let (number, multiplier) = [
         ("Ki", 1024_f64),
         ("Mi", 1024_f64.powi(2)),
@@ -70,33 +75,41 @@ pub fn parse_quantity_bytes(field: &str, value: &str) -> Result<u64> {
     };
     let is_digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
     if !is_digits(whole) || fraction.is_some_and(|fraction| !is_digits(fraction)) {
-        return Err(invalid(
-            field,
-            format!(
-                "'{value}' is not a quantity; use a number with an optional unit such as \"512Mi\", \"16Gi\" or \"1Ti\""
-            ),
+        return Err(format!(
+            "'{value}' is not a quantity; use a number with an optional unit such as \"512Mi\", \"16Gi\" or \"1Ti\""
         ));
     }
 
     let amount: f64 = number
         .parse()
-        .map_err(|_| invalid(field, format!("'{value}' is not a quantity")))?;
+        .map_err(|_| format!("'{value}' is not a quantity"))?;
     let bytes = (amount * multiplier).round();
     if bytes >= u64::MAX as f64 {
-        return Err(invalid(field, format!("'{value}' is too large")));
+        return Err(format!("'{value}' is too large"));
     }
     Ok(bytes as u64)
 }
 
-/// Parses a duration such as `"90s"`, `"10m"`, `"24h"` or `"1h30m"` into seconds.
+/// Parses a duration such as `"90s"`, `"10m"`, `"24h"` or `"1h30m"` into whole seconds.
 ///
-/// Units are `s`, `m`, `h` and `d`; each part is a whole number followed by its unit.
+/// Units are `ms`, `s`, `m`, `h` and `d`; each part is a whole number followed by its unit.
+/// A duration that is not a whole number of seconds (`"1500ms"`) is rejected.
 pub fn parse_duration_seconds(field: &str, value: &str) -> Result<u64> {
-    let malformed = || {
-        invalid(
+    let millis = duration_millis(value).map_err(|reason| invalid(field, reason))?;
+    if millis % 1_000 != 0 {
+        return Err(invalid(
             field,
-            format!("'{value}' is not a duration; use whole numbers with units, such as \"30s\", \"10m\" or \"24h\""),
-        )
+            format!("'{value}' is not a whole number of seconds"),
+        ));
+    }
+    Ok(millis / 1_000)
+}
+
+/// A duration such as `"90s"`, `"250ms"` or `"1h30m"` in milliseconds; the error is what is
+/// wrong with `value`.
+pub fn duration_millis(value: &str) -> std::result::Result<u64, String> {
+    let malformed = || {
+        format!("'{value}' is not a duration; use whole numbers with units, such as \"30s\", \"10m\" or \"24h\"")
     };
     if value.is_empty() {
         return Err(malformed());
@@ -110,21 +123,131 @@ pub fn parse_duration_seconds(field: &str, value: &str) -> Result<u64> {
             return Err(malformed());
         }
         let amount: u64 = rest[..digits].parse().map_err(|_| malformed())?;
-        let unit = rest[digits..].chars().next().ok_or_else(malformed)?;
-        let seconds_per_unit = match unit {
-            's' => 1,
-            'm' => 60,
-            'h' => 3_600,
-            'd' => 86_400,
+        let unit_length = rest[digits..]
+            .bytes()
+            .take_while(u8::is_ascii_alphabetic)
+            .count();
+        let millis_per_unit = match &rest[digits..digits + unit_length] {
+            "ms" => 1,
+            "s" => 1_000,
+            "m" => 60_000,
+            "h" => 3_600_000,
+            "d" => 86_400_000,
             _ => return Err(malformed()),
         };
         total = amount
-            .checked_mul(seconds_per_unit)
-            .and_then(|seconds| total.checked_add(seconds))
-            .ok_or_else(|| invalid(field, format!("'{value}' is too long")))?;
-        rest = &rest[digits + 1..];
+            .checked_mul(millis_per_unit)
+            .and_then(|millis| total.checked_add(millis))
+            .ok_or_else(|| format!("'{value}' is too long"))?;
+        rest = &rest[digits + unit_length..];
     }
     Ok(total)
+}
+
+/// Validates a resource ID against the common cloud naming constraints.
+///
+/// Resource IDs become part of cloud resource names, so the strictest common pattern across
+/// GCP, AWS and Azure applies: `[a-z0-9]([a-z0-9-]*[a-z0-9])?` with no consecutive hyphens.
+/// The error says what is wrong.
+pub fn validate_resource_id(id: &str) -> std::result::Result<(), &'static str> {
+    let (Some(&first), Some(&last)) = (id.as_bytes().first(), id.as_bytes().last()) else {
+        return Err("must not be empty");
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return Err("must start with a lowercase letter or digit");
+    }
+    if !last.is_ascii_lowercase() && !last.is_ascii_digit() {
+        return Err("must end with a lowercase letter or digit");
+    }
+    if !id
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err("must only contain lowercase letters, digits, and hyphens");
+    }
+    if id.contains("--") {
+        return Err("must not contain consecutive hyphens");
+    }
+    Ok(())
+}
+
+/// Most repositories a stack may approve for containers created after installation.
+pub const MAX_DYNAMIC_CONTAINER_REPOSITORIES: usize = 16;
+
+/// Whether `repository` is a fully qualified OCI repository such as `ghcr.io/acme/tools`:
+/// a registry host (with an optional port) followed by at least one lowercase path segment.
+pub fn is_repository_name(repository: &str) -> bool {
+    let is_alphanumeric = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    let is_segment = |part: &str, separators: &[u8]| {
+        let bytes = part.as_bytes();
+        matches!((bytes.first(), bytes.last()), (Some(&first), Some(&last))
+            if is_alphanumeric(first) && is_alphanumeric(last))
+            && bytes
+                .iter()
+                .all(|&byte| is_alphanumeric(byte) || separators.contains(&byte))
+    };
+
+    let Some((authority, path)) = repository.split_once('/') else {
+        return false;
+    };
+    if !path.split('/').all(|part| is_segment(part, b"._-")) {
+        return false;
+    }
+    let mut authority = authority.split(':');
+    let host = authority.next().unwrap_or_default();
+    let port = authority.next();
+    authority.next().is_none()
+        && port.is_none_or(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        && host.split('.').all(|label| is_segment(label, b"-"))
+}
+
+/// Checks the OCI repositories a stack approves for containers created after installation:
+/// 1 to 16 distinct, fully qualified names. The error field names the offending entry
+/// (`dynamicContainerRepositories.2`) when one entry is at fault.
+pub fn validate_dynamic_container_repositories(repositories: &[String]) -> Result<()> {
+    const FIELD: &str = "dynamicContainerRepositories";
+    if repositories.is_empty() || repositories.len() > MAX_DYNAMIC_CONTAINER_REPOSITORIES {
+        return Err(invalid(
+            FIELD,
+            format!(
+                "must list 1 to {MAX_DYNAMIC_CONTAINER_REPOSITORIES} repositories, found {}",
+                repositories.len()
+            ),
+        ));
+    }
+    for (index, repository) in repositories.iter().enumerate() {
+        let field = format!("{FIELD}.{index}");
+        if !is_repository_name(repository) {
+            return Err(invalid(
+                &field,
+                format!(
+                    "'{repository}' is not a fully qualified OCI repository; write the registry host and the path, such as \"ghcr.io/acme/tools\""
+                ),
+            ));
+        }
+        if repositories[..index].contains(repository) {
+            return Err(invalid(&field, format!("'{repository}' is listed twice")));
+        }
+    }
+    Ok(())
+}
+
+/// Checks the IDs of the container resources whose images a stack approves: non-empty and
+/// distinct. The error field names the offending entry when one entry is at fault.
+pub fn validate_dynamic_container_image_resources(resource_ids: &[String]) -> Result<()> {
+    const FIELD: &str = "dynamicContainerImageResources";
+    if resource_ids.is_empty() {
+        return Err(invalid(FIELD, "must list at least one container"));
+    }
+    for (index, id) in resource_ids.iter().enumerate() {
+        if resource_ids[..index].contains(id) {
+            return Err(invalid(
+                &format!("{FIELD}.{index}"),
+                format!("'{id}' is listed twice"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Validates a daemon stop grace period: 1 second through 24 hours.
@@ -573,18 +696,111 @@ mod tests {
     }
 
     #[test]
+    fn repository_names_match_the_typescript_sdk() {
+        for good in [
+            "ghcr.io/acme/tools",
+            "localhost:5000/acme",
+            "registry.example.com:443/a/b-c/d.e_f",
+            "alpine/git",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme",
+        ] {
+            assert!(is_repository_name(good), "{good:?} must be accepted");
+        }
+        for bad in [
+            "",
+            "alpine",
+            "ghcr.io/",
+            "ghcr.io//acme",
+            "/acme",
+            "GHCR.io/acme",
+            "ghcr.io/Acme",
+            "ghcr.io/acme:latest",
+            "ghcr.io/acme@sha256:abc",
+            "ghcr.io:/acme",
+            "ghcr.io:80:81/acme",
+            "ghcr..io/acme",
+            "-ghcr.io/acme",
+            "ghcr.io/-acme",
+            "ghcr.io/acme-",
+            "ghcr.io/acme/ tools",
+            "https://ghcr.io/acme",
+        ] {
+            assert!(!is_repository_name(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn dynamic_container_lists_are_bounded_and_distinct() {
+        let names = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        };
+        validate_dynamic_container_repositories(&names(&["ghcr.io/acme/a", "ghcr.io/acme/b"]))
+            .unwrap();
+        assert_eq!(
+            field_of(validate_dynamic_container_repositories(&[]).unwrap_err()),
+            "dynamicContainerRepositories"
+        );
+        let seventeen: Vec<String> = (0..17).map(|i| format!("ghcr.io/acme/r{i}")).collect();
+        assert_eq!(
+            field_of(validate_dynamic_container_repositories(&seventeen).unwrap_err()),
+            "dynamicContainerRepositories"
+        );
+        validate_dynamic_container_repositories(&seventeen[..16]).unwrap();
+        assert_eq!(
+            field_of(
+                validate_dynamic_container_repositories(&names(&["ghcr.io/acme/a", "alpine"]))
+                    .unwrap_err()
+            ),
+            "dynamicContainerRepositories.1"
+        );
+        assert_eq!(
+            field_of(
+                validate_dynamic_container_repositories(&names(&[
+                    "ghcr.io/acme/a",
+                    "ghcr.io/acme/a"
+                ]))
+                .unwrap_err()
+            ),
+            "dynamicContainerRepositories.1"
+        );
+
+        validate_dynamic_container_image_resources(&names(&["api", "web"])).unwrap();
+        assert_eq!(
+            field_of(validate_dynamic_container_image_resources(&[]).unwrap_err()),
+            "dynamicContainerImageResources"
+        );
+        assert_eq!(
+            field_of(
+                validate_dynamic_container_image_resources(&names(&["api", "api"])).unwrap_err()
+            ),
+            "dynamicContainerImageResources.1"
+        );
+    }
+
+    #[test]
     fn durations() {
         assert_eq!(parse_duration_seconds("d", "90s").unwrap(), 90);
         assert_eq!(parse_duration_seconds("d", "10m").unwrap(), 600);
         assert_eq!(parse_duration_seconds("d", "24h").unwrap(), 86_400);
         assert_eq!(parse_duration_seconds("d", "1h30m").unwrap(), 5_400);
         assert_eq!(parse_duration_seconds("d", "1d").unwrap(), 86_400);
-        for bad in ["", "10", "h", "1.5h", "10 m", "10ms", "-1s", "1h30"] {
+        assert_eq!(parse_duration_seconds("d", "2000ms").unwrap(), 2);
+        assert_eq!(duration_millis("250ms").unwrap(), 250);
+        assert_eq!(duration_millis("1h30m").unwrap(), 5_400_000);
+        for bad in ["", "10", "h", "1.5h", "10 m", "-1s", "1h30", "1x", "5mm"] {
             assert!(
                 parse_duration_seconds("d", bad).is_err(),
                 "{bad:?} must be rejected"
             );
         }
+        assert_eq!(
+            field_of(parse_duration_seconds("grace", "1500ms").unwrap_err()),
+            "grace",
+            "a fraction of a second is not a whole number of seconds"
+        );
         assert_eq!(stop_grace_period_seconds("g", 86_400).unwrap(), 86_400);
         assert!(stop_grace_period_seconds("g", 86_401).is_err());
         assert!(stop_grace_period_seconds("g", 0).is_err());

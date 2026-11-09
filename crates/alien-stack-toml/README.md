@@ -61,15 +61,15 @@ Quantities take `Ki`, `Mi`, `Gi`, `Ti` (powers of 1024).
 | `build` | Build from source: `{ toolchain = "rust", binary-name = "<binary>", src = "." }`. `toolchain` is `rust`, `typescript`, `python` or `docker`; `docker` also takes `dockerfile`, `target` and `build-args`, and `python` takes `command`, `python-version` and `package`. Programs in other languages use `docker`. |
 | `image` | Run a prebuilt image instead of `build`. |
 | `pool` | Pool to run on. Omit to run on every pool. |
-| `cpu`, `memory` | Reserved per instance. Default `0.1` and `"128Mi"`. |
+| `cpu`, `memory` | Reserved per instance. Default `0.1` and `"128Mi"`. `cpu` is a number of cores or millicores, such as `0.5` or `"500m"`. |
 | `command` | Command overriding the image's default. |
 | `host-access` | `true` runs the daemon privileged, in the host's PID namespace and network, with the host's `/` at `/host`, as uid 0. |
 | `stop-grace-period` | Seconds, or `"10m"`, `"24h"`, `"1h30m"`. At most 24 hours. |
 | `health-check` | `{ port = 8080, path = "/health", method = "GET", timeout = "2s", failure-threshold = 3 }`. `port` is required. |
 | `env` | Environment variables: a literal, or `{ input = "<id>" }` to take the value of a stack input. |
-| `env-file` | A `KEY=value` file, or a list of them, relative to `alien.toml`, read when the stack loads. Later files win over earlier ones, and `env` wins over all. |
+| `env-file` | A `KEY=value` file, or a list of them, relative to `alien.toml`, read when the stack loads. A file must be inside the directory of `alien.toml`: absolute paths and paths that leave it are rejected. Errors in an env file show the key and the location, never the value. Later files win over earlier ones, and `env` wins over all. |
 | `links` | IDs of resources the daemon uses. |
-| `permissions` | Gives the daemon a cloud identity: a profile name, or the grants in place, `{ files = ["storage/data-read"] }`, which make a profile named after the daemon. Omit for none. On AWS, GCP and Azure it can't be combined with `host-access`. |
+| `permissions` | Gives the daemon a cloud identity: a profile name, or the grants in place, `{ files = ["storage/data-read"] }`, which make a profile named after the daemon. Omit for none: unlike other workloads, a daemon without `permissions` gets no profile. On AWS, GCP and Azure it can't be combined with `host-access`. |
 | `lifecycle` | `"live"` (default) or `"frozen"`. |
 | `enabled-when` | Create the daemon only when this deployer boolean `[input.<id>]` is true. |
 
@@ -114,6 +114,8 @@ A permission profile maps resource IDs, or `"*"` for every resource, to the perm
 [permissions.loader]
 snapshots = ["storage/data-read", "storage/data-write"]
 ```
+
+A container or worker that has no `permissions` key gets an empty profile named after itself (no grants), so its resource ID is also a profile name and a `[permissions.<id>]` table with the same name is rejected as a clash; write `permissions = "<id>"` to use that table. A daemon without `permissions` has no profile at all.
 
 ## Inspecting the resolved stack
 

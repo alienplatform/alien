@@ -48,13 +48,19 @@ const EXTRA_ROOTS: &[&str] = &[
 )))]
 struct Types;
 
-/// All component schemas of the OpenAPI document, with their descriptions.
+/// All component schemas of the OpenAPI document, with their descriptions. `Platform` lists
+/// the platforms an author can target: the test-only platform is not offered.
 pub fn components() -> Map<String, Value> {
     let document = serde_json::to_value(Types::openapi()).expect("the OpenAPI document serializes");
-    document["components"]["schemas"]
+    let mut components = document["components"]["schemas"]
         .as_object()
         .expect("the document has component schemas")
-        .clone()
+        .clone();
+    components["Platform"]["enum"] = Platform::DEPLOYABLE
+        .iter()
+        .map(|platform| Value::from(platform.as_str()))
+        .collect();
+    components
 }
 
 /// The roots plus every schema they reach.

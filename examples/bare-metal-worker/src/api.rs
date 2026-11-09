@@ -91,7 +91,8 @@ mod tests {
         let worker = Worker::start(Config {
             concurrency: 1,
             queue_capacity: 2,
-        });
+        })
+        .expect("a valid config");
         (router(worker.clone()), worker)
     }
 
@@ -239,7 +240,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, json!({ "error": "seconds must be 1 to 86400" }));
+        assert_eq!(body, json!({ "error": "seconds must be 1 to 3600" }));
 
         let (status, body) = call(&app, Method::GET, "/jobs/j-99", "").await;
         assert_eq!(status, StatusCode::NOT_FOUND);

@@ -2118,8 +2118,7 @@
         "azure",
         "kubernetes",
         "machines",
-        "local",
-        "test"
+        "local"
       ],
       "type": "string"
     },

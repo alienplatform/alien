@@ -26,6 +26,12 @@ image = "ghcr.io/acme/ranges:1.0.0"
 cpu = 2
 memory = { default = "8Gi", allowed = ["4Gi", "64Gi"] }
 
+# CPU in millicores, as on a pool.
+[container.millicores]
+image = "ghcr.io/acme/small:1.0.0"
+cpu = "500m"
+memory = "256Mi"
+
 # A GPU with a fixed amount of everything else.
 [container.trainer]
 image = "ghcr.io/acme/trainer:1.0.0"

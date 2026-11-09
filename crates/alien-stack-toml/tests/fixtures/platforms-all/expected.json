@@ -15,7 +15,6 @@
     }
   },
   "supportedPlatforms": [
-    "test",
     "local",
     "kubernetes",
     "machines",

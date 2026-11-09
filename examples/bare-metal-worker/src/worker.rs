@@ -13,7 +13,9 @@ use tracing::{info, warn};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const MAX_WAIT_SECONDS: u64 = 24 * 60 * 60;
+/// The `stop-grace-period` in alien.toml: a job that is running when a release arrives has
+/// this long to finish, so no single job may take longer.
+const MAX_WAIT_SECONDS: u64 = 60 * 60;
 const MAX_PRIMES_LIMIT: u64 = 10_000_000;
 const RETAINED_JOBS: usize = 1_000;
 const LISTED_JOBS: usize = 50;
@@ -99,7 +101,15 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn start(config: Config) -> Arc<Self> {
+    /// Starts the workers. Fails when the config could not run any job: a queue with no
+    /// room accepts nothing, and no workers would leave accepted jobs queued forever.
+    pub fn start(config: Config) -> Result<Arc<Self>, String> {
+        if config.concurrency == 0 {
+            return Err("WORKER_CONCURRENCY must be at least 1".to_string());
+        }
+        if config.queue_capacity == 0 {
+            return Err("QUEUE_CAPACITY must be at least 1".to_string());
+        }
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
         let worker = Arc::new(Worker {
             inner: Mutex::new(Inner {
@@ -114,7 +124,7 @@ impl Worker {
             .map(|_| tokio::spawn(worker.clone().run(receiver.clone())))
             .collect();
         *worker.handles.lock().expect("handles lock") = handles;
-        worker
+        Ok(worker)
     }
 
     pub fn is_draining(&self) -> bool {
@@ -291,6 +301,7 @@ mod tests {
             concurrency,
             queue_capacity,
         })
+        .expect("a valid config")
     }
 
     fn wait(seconds: u64) -> Task {
@@ -417,13 +428,45 @@ mod tests {
 
         assert_eq!(
             worker.submit(wait(0)),
-            Err(SubmitError::Invalid("seconds must be 1 to 86400".into()))
+            Err(SubmitError::Invalid("seconds must be 1 to 3600".into()))
         );
         assert_eq!(
             worker.submit(Task::Primes { limit: 1 }),
             Err(SubmitError::Invalid("limit must be 2 to 10000000".into()))
         );
         assert_eq!(worker.submit(wait(1)).expect("accepted").id, "j-1");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_job_cannot_outlast_the_stop_grace_period() {
+        let worker = worker(1, 4);
+
+        assert_eq!(
+            worker.submit(wait(3601)),
+            Err(SubmitError::Invalid("seconds must be 1 to 3600".into()))
+        );
+        assert_eq!(worker.submit(wait(3600)).expect("accepted").id, "j-1");
+    }
+
+    #[tokio::test]
+    async fn a_config_that_could_not_run_jobs_is_refused() {
+        let refused = |concurrency, queue_capacity| {
+            Worker::start(Config {
+                concurrency,
+                queue_capacity,
+            })
+            .err()
+        };
+
+        assert_eq!(
+            refused(0, 4).as_deref(),
+            Some("WORKER_CONCURRENCY must be at least 1")
+        );
+        assert_eq!(
+            refused(4, 0).as_deref(),
+            Some("QUEUE_CAPACITY must be at least 1")
+        );
+        assert_eq!(refused(1, 1), None);
     }
 
     #[tokio::test]

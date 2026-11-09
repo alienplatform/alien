@@ -7,7 +7,7 @@ mod worker;
 use std::env;
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate()).context("install the SIGTERM handler")?;
     let mut sigint = signal(SignalKind::interrupt()).context("install the SIGINT handler")?;
 
-    let worker = Worker::start(config);
+    let worker = Worker::start(config).map_err(|message| anyhow!(message))?;
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .with_context(|| format!("listen on port {port}"))?;

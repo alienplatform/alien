@@ -87,7 +87,7 @@ fn syntax_and_shape_errors() {
         "name = \"acme\"\nplatforms = [\"mars\"]\n",
         2,
         14,
-        "unknown value 'mars'; expected one of: aws, gcp, azure, kubernetes, machines, local, test",
+        "unknown value 'mars'; expected one of: aws, gcp, azure, kubernetes, machines, local",
     );
     assert_at(
         &format!("{DAEMON}health-check = {{ port = \"web\" }}\n"),
@@ -165,7 +165,7 @@ fn semantic_errors_point_at_the_value() {
         &format!("{DAEMON}stop-grace-period = \"24 hours\"\n"),
         5,
         21,
-        "invalid duration \"24 hours\"; use whole numbers with ms, s, m, h or d",
+        "'24 hours' is not a duration; use whole numbers with units, such as",
     );
     assert_at(
         &format!("{DAEMON}stop-grace-period = \"48h\"\n"),
@@ -528,6 +528,235 @@ fn env_file_lists_read_in_order_and_inline_env_wins() {
     );
     assert_eq!((missing.line, missing.column), (5, 22));
     assert!(missing.message.contains("c.env"), "{}", missing.message);
+}
+
+#[test]
+fn env_file_paths_stay_inside_the_project() {
+    let outer = tempfile::tempdir().unwrap();
+    let project = outer.path().join("project");
+    std::fs::create_dir_all(project.join("config")).unwrap();
+    std::fs::write(outer.path().join("outside.env"), "SECRET=1\n").unwrap();
+    std::fs::write(project.join("config/app.env"), "INSIDE=yes\n").unwrap();
+    std::os::unix::fs::symlink(outer.path().join("outside.env"), project.join("link.env")).unwrap();
+
+    // A path below the alien.toml directory, even one that wanders through `..`, is fine.
+    let text = format!("{DAEMON}env-file = \"config/../config/app.env\"\n");
+    let stack = alien_stack_toml::parse(&text, "alien.toml", &project).expect("stack resolves");
+    let daemon = stack.resources["agent"]
+        .config
+        .downcast_ref::<alien_core::Daemon>()
+        .expect("agent is a daemon");
+    assert_eq!(daemon.environment["INSIDE"], "yes");
+
+    let absolute = outer.path().join("outside.env");
+    for (path, reason) in [
+        (absolute.display().to_string(), "is an absolute path"),
+        (
+            "../outside.env".to_string(),
+            "is outside the directory of alien.toml",
+        ),
+        (
+            "link.env".to_string(),
+            "is outside the directory of alien.toml",
+        ),
+    ] {
+        let error = reject_in(&project, &format!("{DAEMON}env-file = \"{path}\"\n"));
+        assert_eq!((error.line, error.column), (5, 12), "{path}");
+        assert_eq!(error.file, "alien.toml", "{path}");
+        assert!(error.message.contains(reason), "{path}: {}", error.message);
+    }
+    let in_list = reject_in(
+        &project,
+        &format!("{DAEMON}env-file = [\"config/app.env\", \"../outside.env\"]\n"),
+    );
+    assert_eq!((in_list.line, in_list.column), (5, 31));
+}
+
+#[test]
+fn env_file_errors_never_show_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!("{DAEMON}env-file = \"app.env\"\n");
+    let cases = [
+        // (file text, line, column, message part, snippet)
+        (
+            "A=1\nTOKEN = \"sk-live-1234 \\q\"\n",
+            2,
+            9,
+            "unknown escape sequence",
+            "  |\n2 | TOKEN=<value hidden>\n  |       ^^^^^^^^^^^^^^",
+        ),
+        (
+            "A=1\nTOKEN='sk-live-1234\n",
+            2,
+            7,
+            "unterminated single-quoted value",
+            "  |\n2 | TOKEN=<value hidden>\n  |       ^^^^^^^^^^^^^^",
+        ),
+        (
+            "A=1\nsk-live-1234\n",
+            2,
+            1,
+            "expected KEY=value",
+            "  |\n2 | <line hidden>\n  | ^^^^^^^^^^^^^",
+        ),
+        (
+            "A=1\n9TOKEN=sk-live-1234\n",
+            2,
+            1,
+            "'9TOKEN' is not a variable name",
+            "  |\n2 | 9TOKEN=<value hidden>\n  | ^^^^^^",
+        ),
+        (
+            "TOKEN=sk-live-1234\nTOKEN=sk-live-5678\n",
+            2,
+            1,
+            "'TOKEN' is set more than once",
+            "  |\n2 | TOKEN=<value hidden>\n  | ^^^^^",
+        ),
+    ];
+    for (text, line, column, message, snippet) in cases {
+        std::fs::write(dir.path().join("app.env"), text).unwrap();
+        let error = reject_in(dir.path(), &toml);
+        assert_eq!((error.line, error.column), (line, column), "{text:?}");
+        assert!(
+            error.message.contains(message),
+            "{text:?}: {}",
+            error.message
+        );
+        assert_eq!(error.snippet, snippet, "{text:?}");
+        assert!(
+            !error.message.contains("sk-live") && !error.snippet.contains("sk-live"),
+            "{text:?} leaked a value"
+        );
+    }
+}
+
+#[test]
+fn dynamic_container_repositories_are_validated_like_alien_ts() {
+    let toml = |list: &str| format!("name = \"acme\"\ndynamic-container-repositories = {list}\n");
+    assert_at(
+        &toml("[]"),
+        2,
+        34,
+        "must list 1 to 16 repositories, found 0",
+    );
+    assert_at(
+        &toml("[\"ghcr.io/acme/a\", \"alpine\"]"),
+        2,
+        53,
+        "'alpine' is not a fully qualified OCI repository",
+    );
+    assert_at(
+        &toml("[\"ghcr.io/acme/a\", \"ghcr.io/acme/a\"]"),
+        2,
+        53,
+        "'ghcr.io/acme/a' is listed twice",
+    );
+    assert_at(
+        &toml("[\"ghcr.io/Acme/a\"]"),
+        2,
+        35,
+        "is not a fully qualified OCI repository",
+    );
+    let seventeen: Vec<String> = (0..17).map(|i| format!("\"ghcr.io/acme/r{i}\"")).collect();
+    assert_at(
+        &toml(&format!("[{}]", seventeen.join(", "))),
+        2,
+        34,
+        "must list 1 to 16 repositories, found 17",
+    );
+    let sixteen = format!("[{}]", seventeen[..16].join(", "));
+    alien_stack_toml::parse(&toml(&sixteen), "alien.toml", Path::new("."))
+        .expect("sixteen repositories are allowed");
+}
+
+#[test]
+fn dynamic_container_image_resources_are_validated_like_alien_ts() {
+    let toml = |list: &str| {
+        format!(
+            "name = \"acme\"\ndynamic-container-image-resources = {list}\n\n[container.api]\nimage = \"ghcr.io/acme/api:1\"\ncpu = 1\nmemory = \"1Gi\"\n"
+        )
+    };
+    assert_at(&toml("[]"), 2, 37, "must list at least one container");
+    assert_at(&toml("[\"api\", \"api\"]"), 2, 45, "'api' is listed twice");
+    assert_at(
+        &toml("[\"apii\"]"),
+        2,
+        38,
+        "unknown container 'apii' (did you mean 'api'?)",
+    );
+}
+
+#[test]
+fn resource_ids_follow_the_build_rules() {
+    for (id, reason) in [
+        ("Data", "must start with a lowercase letter or digit"),
+        (
+            "my_data",
+            "must only contain lowercase letters, digits, and hyphens",
+        ),
+        ("data-", "must end with a lowercase letter or digit"),
+        ("my--data", "must not contain consecutive hyphens"),
+    ] {
+        let error = reject(&format!("name = \"acme\"\n\n[storage.{id}]\n"));
+        assert_eq!((error.line, error.column), (3, 10), "{id}");
+        assert_eq!(
+            error.message,
+            format!("resource ID '{id}' {reason}"),
+            "{id}"
+        );
+    }
+    let cluster = reject("name = \"acme\"\n\n[cluster]\nid = \"My_Cluster\"\n");
+    assert_eq!((cluster.line, cluster.column), (4, 6));
+    assert!(cluster
+        .message
+        .contains("cluster ID 'My_Cluster' must start"));
+}
+
+#[test]
+fn the_test_platform_is_not_offered() {
+    assert_at(
+        "name = \"acme\"\nplatforms = [\"aws\", \"test\"]\n",
+        2,
+        21,
+        "unknown value 'test'; expected one of: aws, gcp, azure, kubernetes, machines, local",
+    );
+}
+
+#[test]
+fn platform_list_errors_point_at_the_entry() {
+    assert_at(
+        "name = \"acme\"\nplatforms = [\"aws\", \"gcp\", \"aws\"]\n",
+        2,
+        28,
+        "'aws' is listed twice",
+    );
+}
+
+#[test]
+fn cpu_accepts_millicores_on_every_workload() {
+    for table in ["daemon", "container"] {
+        let toml = format!(
+            "name = \"acme\"\n\n[{table}.agent]\nimage = \"ghcr.io/acme/agent:1\"\ncpu = \"500m\"\nmemory = \"256Mi\"\n"
+        );
+        let stack = alien_stack_toml::parse(&toml, "alien.toml", Path::new("."))
+            .unwrap_or_else(|error| panic!("{table}: {error}"));
+        let json = serde_json::to_value(&stack.resources["agent"].config).unwrap();
+        assert_eq!(
+            json["cpu"],
+            serde_json::json!({ "min": "500m", "desired": "500m" }),
+            "{table}"
+        );
+    }
+    for bad in ["\"fast\"", "\"0m\"", "\" 2\"", "0", "-1"] {
+        let error = reject(&format!("{DAEMON}cpu = {bad}\n"));
+        assert_eq!((error.line, error.column), (5, 7), "{bad}");
+        assert!(
+            error.message.contains("is not an amount of CPU"),
+            "{bad}: {}",
+            error.message
+        );
+    }
 }
 
 #[test]

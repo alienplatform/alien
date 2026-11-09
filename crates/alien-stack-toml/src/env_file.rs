@@ -29,14 +29,14 @@ pub fn parse(file: &SourceFile<'_>) -> Result<IndexMap<String, String>> {
         };
 
         let Some((key, value)) = trimmed.split_once('=') else {
-            return Err(file.error(
+            return Err(file.error_hiding_values(
                 span_of(0, trimmed.len()),
                 "expected KEY=value; comments start with #",
             ));
         };
         let key = key.trim_end();
         if !is_variable_name(key) {
-            return Err(file.error(
+            return Err(file.error_hiding_values(
                 span_of(0, key.len()),
                 format!("'{key}' is not a variable name; use letters, digits and underscores, not starting with a digit"),
             ));
@@ -45,10 +45,10 @@ pub fn parse(file: &SourceFile<'_>) -> Result<IndexMap<String, String>> {
         let value_text = value.trim();
         let leading = value.len() - value.trim_start().len();
         let value = unquote(value_text).map_err(|reason| {
-            file.error(span_of(value_start + leading, value_text.len()), reason)
+            file.error_hiding_values(span_of(value_start + leading, value_text.len()), reason)
         })?;
         if variables.insert(key.to_string(), value).is_some() {
-            return Err(file.error(
+            return Err(file.error_hiding_values(
                 span_of(0, key.len()),
                 format!("'{key}' is set more than once"),
             ));
@@ -92,9 +92,7 @@ fn unquote(value: &str) -> std::result::Result<String, String> {
                 Some('"') => result.push('"'),
                 Some('\\') => result.push('\\'),
                 Some('n') => result.push('\n'),
-                Some(other) => {
-                    return Err(format!("unknown escape '\\{other}'; use \\\", \\\\ or \\n"))
-                }
+                Some(_) => return Err("unknown escape sequence; use \\\", \\\\ or \\n".to_string()),
                 None => break,
             },
             c => result.push(c),

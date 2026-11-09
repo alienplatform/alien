@@ -5,6 +5,7 @@
 //! `interval`) and takes a string that says it (`"30s"`, `"512Mi"`, `"24h"`) or a bare number
 //! of the unit the name left out.
 
+use alien_core::stack_authoring::{duration_millis, quantity_bytes};
 use serde_json::Number;
 
 /// A property name suffix that is a unit, and how a value written without it is read.
@@ -50,7 +51,7 @@ pub const UNIT_SUFFIXES: &[UnitSuffix] = &[
     },
 ];
 
-const MIB: u128 = 1 << 20;
+const MIB: u64 = 1 << 20;
 
 impl UnitSuffix {
     /// The number of this unit that `text` stands for, or what is wrong with it.
@@ -85,87 +86,11 @@ impl UnitSuffix {
     }
 }
 
-fn whole(amount: u128, unit: u128, name: &str) -> Result<Number, String> {
+fn whole(amount: u64, unit: u64, name: &str) -> Result<Number, String> {
     if !amount.is_multiple_of(unit) {
         return Err(format!("must be a whole number of {name}"));
     }
-    u64::try_from(amount / unit)
-        .map(Number::from)
-        .map_err(|_| "is too large".to_string())
-}
-
-/// A duration such as `90s`, `10m`, `24h` or `1h30m`, in milliseconds.
-pub fn duration_millis(text: &str) -> Result<u128, String> {
-    let invalid = || {
-        format!(
-            "invalid duration \"{text}\"; use whole numbers with ms, s, m, h or d, such as \"1h30m\""
-        )
-    };
-    let mut rest = text;
-    let mut total: u128 = 0;
-    while !rest.is_empty() {
-        let digits = rest.chars().take_while(char::is_ascii_digit).count();
-        let (number, after) = rest.split_at(digits);
-        let unit_len = after.chars().take_while(char::is_ascii_alphabetic).count();
-        let (unit, after) = after.split_at(unit_len);
-        let millis: u128 = match unit {
-            "ms" => 1,
-            "s" => 1_000,
-            "m" => 60_000,
-            "h" => 3_600_000,
-            "d" => 86_400_000,
-            _ => return Err(invalid()),
-        };
-        let number: u128 = number.parse().map_err(|_| invalid())?;
-        total = number
-            .checked_mul(millis)
-            .and_then(|part| total.checked_add(part))
-            .ok_or_else(invalid)?;
-        rest = after;
-    }
-    if text.is_empty() {
-        return Err(invalid());
-    }
-    Ok(total)
-}
-
-/// A size such as `512Mi` or `1.5Gi`, in bytes. `Ki`, `Mi`, `Gi` and `Ti` are powers of 1024;
-/// `k`, `M`, `G` and `T` powers of 1000.
-pub fn quantity_bytes(text: &str) -> Result<u128, String> {
-    let invalid =
-        || format!("invalid quantity \"{text}\"; use a size such as \"512Mi\" or \"16Gi\"");
-    let number_len = text
-        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .unwrap_or(text.len());
-    let (number, suffix) = text.split_at(number_len);
-    let multiplier: u128 = match suffix {
-        "" => 1,
-        "Ki" => 1 << 10,
-        "Mi" => 1 << 20,
-        "Gi" => 1 << 30,
-        "Ti" => 1 << 40,
-        "k" => 1_000,
-        "M" => 1_000_000,
-        "G" => 1_000_000_000,
-        "T" => 1_000_000_000_000,
-        _ => return Err(invalid()),
-    };
-    let (integer, fraction) = match number.split_once('.') {
-        Some((integer, fraction)) if !integer.is_empty() && !fraction.is_empty() => {
-            (integer, fraction)
-        }
-        Some(_) => return Err(invalid()),
-        None => (number, ""),
-    };
-    if integer.is_empty() || fraction.len() > 12 {
-        return Err(invalid());
-    }
-    let scale = 10u128.pow(fraction.len() as u32);
-    let digits: u128 = format!("{integer}{fraction}")
-        .parse()
-        .map_err(|_| invalid())?;
-    let scaled = digits.checked_mul(multiplier).ok_or_else(invalid)?;
-    Ok((scaled + scale / 2) / scale)
+    Ok(Number::from(amount / unit))
 }
 
 #[cfg(test)]
@@ -177,30 +102,6 @@ mod tests {
             .iter()
             .find(|unit| unit.suffix == name)
             .unwrap()
-    }
-
-    #[test]
-    fn durations_add_their_parts() {
-        assert_eq!(duration_millis("90s"), Ok(90_000));
-        assert_eq!(duration_millis("1h30m"), Ok(5_400_000));
-        assert_eq!(duration_millis("250ms"), Ok(250));
-        assert_eq!(duration_millis("7d"), Ok(604_800_000));
-        for bad in ["", "s", "1x", "1.5h", "1h 30m", "-1s", "10"] {
-            let error = duration_millis(bad).unwrap_err();
-            assert!(error.contains("invalid duration"), "{bad}: {error}");
-        }
-    }
-
-    #[test]
-    fn quantities_use_binary_and_decimal_prefixes() {
-        assert_eq!(quantity_bytes("512Mi"), Ok(512 << 20));
-        assert_eq!(quantity_bytes("1.5Gi"), Ok(3 << 29));
-        assert_eq!(quantity_bytes("2k"), Ok(2_000));
-        assert_eq!(quantity_bytes("16"), Ok(16));
-        for bad in ["", "Gi", "1.Gi", ".5Gi", "1GiB", "-1Gi", "1 Gi"] {
-            let error = quantity_bytes(bad).unwrap_err();
-            assert!(error.contains("invalid quantity"), "{bad}: {error}");
-        }
     }
 
     #[test]
@@ -220,5 +121,13 @@ mod tests {
             suffix("Mb").parse_text("1Ki").unwrap_err(),
             "must be a whole number of MiB"
         );
+    }
+
+    #[test]
+    fn malformed_text_is_reported_by_the_shared_parsers() {
+        let duration = suffix("Seconds").parse_text("1x").unwrap_err();
+        assert!(duration.contains("'1x' is not a duration"), "{duration}");
+        let size = suffix("Mb").parse_text("1GiB").unwrap_err();
+        assert!(size.contains("'1GiB' is not a quantity"), "{size}");
     }
 }

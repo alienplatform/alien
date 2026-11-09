@@ -1,4 +1,4 @@
 name = "acme-every-platform"
-platforms = ["test", "local", "kubernetes", "machines", "azure", "gcp", "aws"]
+platforms = ["local", "kubernetes", "machines", "azure", "gcp", "aws"]
 
 [storage.data]

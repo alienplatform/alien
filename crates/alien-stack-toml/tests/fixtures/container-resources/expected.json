@@ -6,6 +6,7 @@
       "both-ranges": {},
       "cpu-range": {},
       "memory-range": {},
+      "millicores": {},
       "trainer": {}
     }
   },
@@ -145,6 +146,34 @@
             "min": "4Gi"
           }
         },
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "millicores": {
+      "config": {
+        "id": "millicores",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/small:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "500m",
+          "min": "500m"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "256Mi",
+          "min": "256Mi"
+        },
+        "permissions": "millicores",
+        "ports": [],
+        "publicEndpoints": [],
         "stateful": false
       },
       "dependencies": [],

@@ -49,7 +49,7 @@ job j-1 finished in 300s
 drained, exiting
 ```
 
-When the worker is told to stop (Alien sends SIGINT on a release; SIGTERM works the same), it refuses new jobs, finishes every job it already accepted, and exits with status 0. Settings, all optional: `PORT` (8080), `WORKER_CONCURRENCY` (4), `QUEUE_CAPACITY` (100).
+When the worker is told to stop (Alien sends SIGINT on a release; SIGTERM works the same), it refuses new jobs, finishes every job it already accepted, and exits with status 0. Settings, all optional: `PORT` (8080), `WORKER_CONCURRENCY` (4, at least 1), `QUEUE_CAPACITY` (100, at least 1). The worker exits at startup if either is 0. A `wait` job runs for at most 3600 seconds, the `stop-grace-period`.
 
 ## Run it on a server
 
@@ -107,7 +107,7 @@ The server's running worker gets SIGINT. Because the worker listens on the host 
 - `curl localhost:8080/jobs/j-1` still answers, with `"status":"running"` and `"version":"0.1.0"`.
 - `curl localhost:8080/healthz` returns 503 and `POST /jobs` is refused.
 
-When `j-1` finishes, the old worker exits, 0.2.0 starts a few seconds later, and new jobs run on 0.2.0. A job that was running is never cut short, as long as it ends within `stop-grace-period`.
+When `j-1` finishes, the old worker exits, 0.2.0 starts a few seconds later, and new jobs run on 0.2.0. A job that is already running is not cut short: no job runs longer than the `stop-grace-period` of 1h. Jobs still waiting in the queue behind it also run before the old worker exits, so with a deep queue the total can pass the grace period and the remainder is stopped.
 
 Because job state is in memory, 0.2.0 does not know about `j-1`: `curl localhost:8080/jobs/j-1` returns 404 once the new worker is up.
 
