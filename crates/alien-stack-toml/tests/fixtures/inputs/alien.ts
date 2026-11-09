@@ -1,7 +1,7 @@
 import * as alien from "@alienplatform/core"
 
 const inputs = alien.inputs({
-  runnerRegion: alien.string({
+  runner_region: alien.string({
     providedBy: "developer",
     required: true,
     label: "Runner region",
@@ -10,7 +10,7 @@ const inputs = alien.inputs({
     pattern: "^[a-z0-9-]+$",
     env: { name: "RUNNER_REGION", targetResources: ["worker"] },
   }),
-  storeBackend: alien.enum(["sqlite", "cas"], {
+  store_backend: alien.enum(["sqlite", "cas"], {
     providedBy: "developer",
     required: true,
     label: "Store backend",
@@ -18,7 +18,7 @@ const inputs = alien.inputs({
     default: "sqlite",
     env: "STORE_BACKEND",
   }),
-  cacheSizeGb: alien.integer({
+  cache_size_gb: alien.integer({
     providedBy: "developer",
     required: true,
     label: "Cache size",
@@ -28,7 +28,7 @@ const inputs = alien.inputs({
     max: 4096,
     env: ["CACHE_SIZE_GB", { name: "LEGACY_CACHE_GB", targetResources: ["work*"] }],
   }),
-  sampleRate: alien.number({
+  sample_rate: alien.number({
     providedBy: "developer",
     required: false,
     label: "Trace sample rate",
@@ -37,7 +37,7 @@ const inputs = alien.inputs({
     max: 1.0,
     default: 0.25,
   }),
-  dryRun: alien.boolean({
+  dry_run: alien.boolean({
     providedBy: ["developer", "deployer"],
     required: true,
     label: "Dry run",
@@ -45,7 +45,7 @@ const inputs = alien.inputs({
     default: false,
     env: { name: "DRY_RUN", targetResources: ["worker"] },
   }),
-  prewarmImages: alien.stringList({
+  prewarm_images: alien.stringList({
     providedBy: "developer",
     required: false,
     label: "Prewarm images",
@@ -55,7 +55,7 @@ const inputs = alien.inputs({
     platforms: ["machines"],
     env: "PREWARM_IMAGES",
   }),
-  activationToken: alien.secret({
+  activation_token: alien.secret({
     providedBy: "deployer",
     required: true,
     label: "Activation token",
@@ -63,7 +63,7 @@ const inputs = alien.inputs({
     minLength: 32,
     env: "ACTIVATION_TOKEN",
   }),
-  managedBucket: alien.boolean({
+  managed_bucket: alien.boolean({
     providedBy: "deployer",
     required: true,
     platforms: ["aws"],
@@ -71,16 +71,16 @@ const inputs = alien.inputs({
     label: "Create a data bucket",
     description: "Create an Alien-managed bucket for this deployment's data.",
   }),
-  apiToken: alien.secret({
+  api_token: alien.secret({
     providedBy: "developer",
     required: true,
-    label: "API_TOKEN",
-    description: "Sets the API_TOKEN environment variable.",
+    label: "API token",
+    description: "Token the worker uses to call the API.",
     env: { name: "API_TOKEN", targetResources: ["worker"] },
   }),
 })
 
-const data = new alien.Storage("data").enabled(inputs.managedBucket).build()
+const data = new alien.Storage("data").enabled(inputs.managed_bucket).build()
 
 const worker = new alien.Daemon("worker")
   .code({ type: "image", image: "ghcr.io/acme/worker:2.0.0" })

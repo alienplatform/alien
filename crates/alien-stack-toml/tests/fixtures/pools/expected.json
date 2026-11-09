@@ -12,7 +12,7 @@
           ]
         }
       ],
-      "id": "fleetSeed",
+      "id": "fleet_seed",
       "kind": "secret",
       "label": "Fleet seed",
       "providedBy": [
@@ -26,9 +26,9 @@
         "type": "boolean",
         "value": true
       },
-      "description": "Whether this deployment gets the 'worker' daemon.",
+      "description": "Whether this deployment gets the worker daemon.",
       "env": [],
-      "id": "workerEnabled",
+      "id": "worker_enabled",
       "kind": "boolean",
       "label": "Create worker",
       "platforms": [
@@ -50,9 +50,9 @@
           ]
         }
       ],
-      "id": "workerToken",
+      "id": "worker_token",
       "kind": "secret",
-      "label": "WORKER_TOKEN",
+      "label": "Worker token",
       "platforms": [
         "aws"
       ],
@@ -86,7 +86,7 @@
               "architecture": "arm64",
               "cpu": "8",
               "dataDisk": {
-                "sizeBytes": 500000000000
+                "sizeBytes": 536870912000
               },
               "ephemeralStorageBytes": 21474836480,
               "gpu": {
@@ -171,8 +171,8 @@
         ],
         "commandsEnabled": false,
         "cpu": {
-          "desired": "500m",
-          "min": "500m"
+          "desired": "0.5",
+          "min": "0.5"
         },
         "environment": {},
         "healthCheck": {
@@ -235,7 +235,7 @@
         "stopGracePeriodSeconds": 5400
       },
       "dependencies": [],
-      "enabledWhen": "workerEnabled",
+      "enabledWhen": "worker_enabled",
       "lifecycle": "frozen"
     }
   },

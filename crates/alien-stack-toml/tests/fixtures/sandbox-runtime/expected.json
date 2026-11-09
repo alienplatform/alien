@@ -6,9 +6,9 @@
         "type": "boolean",
         "value": true
       },
-      "description": "Whether this deployment gets the 'snapshots' storage bucket.",
+      "description": "Whether this deployment gets the snapshots storage bucket.",
       "env": [],
-      "id": "snapshotsEnabled",
+      "id": "snapshots_enabled",
       "kind": "boolean",
       "label": "Create snapshots",
       "platforms": [
@@ -20,7 +20,7 @@
       "required": true
     },
     {
-      "description": "Sets the AUTH_ACCESS_KEY environment variable.",
+      "description": "Key the loader presents to the auth service.",
       "env": [
         {
           "name": "AUTH_ACCESS_KEY",
@@ -29,7 +29,7 @@
           ]
         }
       ],
-      "id": "authAccessKey",
+      "id": "auth_access_key",
       "kind": "secret",
       "label": "Auth access key",
       "providedBy": [
@@ -39,7 +39,7 @@
       "validation": {}
     },
     {
-      "description": "Sets the TAILNET_AUTH_KEY environment variable.",
+      "description": "",
       "env": [
         {
           "name": "TAILNET_AUTH_KEY",
@@ -48,9 +48,9 @@
           ]
         }
       ],
-      "id": "tailnetAuthKey",
+      "id": "tailnet_auth_key",
       "kind": "secret",
-      "label": "TAILNET_AUTH_KEY",
+      "label": "Tailnet auth key",
       "platforms": [
         "machines"
       ],
@@ -107,7 +107,7 @@
         "versioning": false
       },
       "dependencies": [],
-      "enabledWhen": "snapshotsEnabled",
+      "enabledWhen": "snapshots_enabled",
       "lifecycle": "frozen"
     },
     "loader": {
@@ -130,7 +130,7 @@
         },
         "environment": {
           "LOADER_HOST_ROOT": "/host",
-          "LOADER_STATE_DIR": "/host/var/lib/sandbox-loader",
+          "LOADER_STATE_DIR": "/host/var/lib/sandbox-loader-v2",
           "LOADER_HEALTH_LISTEN": "127.0.0.1:18082",
           "LOADER_GREETING": "hello # not a comment",
           "RUST_LOG": "info"

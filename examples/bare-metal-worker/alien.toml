@@ -1,0 +1,16 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-jobs"
+platforms = ["machines"]
+
+# Servers join this pool with `join --pool workers`.
+[pool.workers]
+cpu = 2
+memory = "4Gi"
+machines = { default = 1, allowed = [1, 20] }
+
+[daemon.job-worker]
+build = { toolchain = "rust", binary-name = "job-worker" }
+pool = "workers"
+runtime = { network-mode = "host" }
+stop-grace-period = "1h"
+health-check = { port = 8080, path = "/healthz" }

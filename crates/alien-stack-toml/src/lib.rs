@@ -10,8 +10,8 @@
 //! platforms = ["machines"]
 //!
 //! [daemon.agent]
-//! build = { rust = "acme-agent" }
-//! health = { port = 8080, path = "/health" }
+//! build = { toolchain = "rust", binary-name = "acme-agent" }
+//! health-check = { port = 8080, path = "/health" }
 //! ```
 //!
 //! Errors point at the line and column of the offending value. Unknown keys are errors.
@@ -21,13 +21,14 @@ mod env_file;
 mod error;
 mod resolve;
 mod source;
+mod suggest;
 
 use std::path::Path;
 
 use alien_core::Stack;
 use alien_error::{Context, IntoAlienError};
 
-pub use document::Document;
+pub use document::{Document, DAEMON_KEYS};
 pub use error::{ErrorData, Result};
 pub use resolve::DEFAULT_CLUSTER_ID;
 use source::SourceFile;
@@ -87,7 +88,26 @@ fn sort_keys(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// The parser's message without its own location prefix; ours replaces it.
+/// The parser's message without its own location prefix, with a "did you mean" hint after
+/// an unknown key or value that is close to a valid one.
 fn toml_message(error: &toml::de::Error) -> String {
-    error.message().trim_end().to_string()
+    let message = error.message().trim_end().to_string();
+    let Some((name_end, unknown, expected)) = unknown_and_expected(&message) else {
+        return message;
+    };
+    let hint = suggest::hint(unknown, expected);
+    format!("{}{hint}{}", &message[..name_end], &message[name_end..])
+}
+
+/// For serde's "unknown field `x`, expected one of `a`, `b`": where the rejected name ends,
+/// the name, and the valid ones.
+fn unknown_and_expected(message: &str) -> Option<(usize, &str, Vec<&str>)> {
+    let prefix = ["unknown field `", "unknown variant `"]
+        .into_iter()
+        .find(|prefix| message.starts_with(prefix))?;
+    let rest = &message[prefix.len()..];
+    let (unknown, expected) = rest.split_once('`')?;
+    let name_end = prefix.len() + unknown.len() + 1;
+    let expected = expected.split('`').skip(1).step_by(2).collect();
+    Some((name_end, unknown, expected))
 }

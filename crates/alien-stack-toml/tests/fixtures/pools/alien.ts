@@ -1,26 +1,26 @@
 import * as alien from "@alienplatform/core"
 
 const inputs = alien.inputs({
-  fleetSeed: alien.secret({
+  fleet_seed: alien.secret({
     providedBy: "developer",
     required: true,
     label: "Fleet seed",
     description: "Shared seed for fleet identities.",
     env: { name: "FLEET_SEED", targetResources: ["server", "worker"] },
   }),
-  workerEnabled: alien.boolean({
+  worker_enabled: alien.boolean({
     providedBy: "deployer",
     required: true,
     label: "Create worker",
-    description: "Whether this deployment gets the 'worker' daemon.",
+    description: "Whether this deployment gets the worker daemon.",
     default: true,
     platforms: ["aws", "gcp"],
   }),
-  workerToken: alien.secret({
+  worker_token: alien.secret({
     providedBy: "developer",
     required: true,
     platforms: ["aws"],
-    label: "WORKER_TOKEN",
+    label: "Worker token",
     description: "Token the worker presents to the scheduler.",
     env: { name: "WORKER_TOKEN", targetResources: ["worker"] },
   }),
@@ -29,10 +29,10 @@ const inputs = alien.inputs({
 const cluster = new alien.ComputeCluster("edge-runtime")
   .pool("servers", {
     requirements: {
-      cpu: "8",
+      cpu: 8,
       memory: "32Gi",
       architecture: "arm64",
-      dataDisk: { size: "500G" },
+      dataDisk: { size: "500Gi" },
       accelerators: [{ type: "nvidia-l4", count: 1 }],
     },
     scale: { type: "fixed", machines: 3 },
@@ -56,7 +56,7 @@ const server = new alien.Daemon("server")
   .cluster("edge-runtime")
   .pool("servers")
   .command(["edge-server", "--role", "server"])
-  .cpu({ min: "500m", desired: "500m" })
+  .cpu(0.5)
   .stopGracePeriod(600)
   .healthCheck({
     port: 9000,
@@ -79,7 +79,7 @@ const worker = new alien.Daemon("worker")
   .cluster("edge-runtime")
   .memory("256Mi")
   .stopGracePeriod(5_400)
-  .enabled(inputs.workerEnabled)
+  .enabled(inputs.worker_enabled)
   .build()
 
 export default new alien.Stack("edge-fleet")

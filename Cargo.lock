@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "alien-stack-toml"
-version = "3.3.50"
+version = "3.3.57"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1391,6 +1391,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "strsim",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
 ]

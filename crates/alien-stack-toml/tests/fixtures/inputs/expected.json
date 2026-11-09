@@ -11,7 +11,7 @@
           ]
         }
       ],
-      "id": "runnerRegion",
+      "id": "runner_region",
       "kind": "string",
       "label": "Runner region",
       "providedBy": [
@@ -34,7 +34,7 @@
           "name": "STORE_BACKEND"
         }
       ],
-      "id": "storeBackend",
+      "id": "store_backend",
       "kind": "enum",
       "label": "Store backend",
       "providedBy": [
@@ -65,7 +65,7 @@
           ]
         }
       ],
-      "id": "cacheSizeGb",
+      "id": "cache_size_gb",
       "kind": "integer",
       "label": "Cache size",
       "providedBy": [
@@ -84,7 +84,7 @@
       },
       "description": "",
       "env": [],
-      "id": "sampleRate",
+      "id": "sample_rate",
       "kind": "number",
       "label": "Trace sample rate",
       "providedBy": [
@@ -110,7 +110,7 @@
           ]
         }
       ],
-      "id": "dryRun",
+      "id": "dry_run",
       "kind": "boolean",
       "label": "Dry run",
       "providedBy": [
@@ -132,7 +132,7 @@
           "name": "PREWARM_IMAGES"
         }
       ],
-      "id": "prewarmImages",
+      "id": "prewarm_images",
       "kind": "stringList",
       "label": "Prewarm images",
       "platforms": [
@@ -153,7 +153,7 @@
           "name": "ACTIVATION_TOKEN"
         }
       ],
-      "id": "activationToken",
+      "id": "activation_token",
       "kind": "secret",
       "label": "Activation token",
       "providedBy": [
@@ -171,7 +171,7 @@
       },
       "description": "Create an Alien-managed bucket for this deployment's data.",
       "env": [],
-      "id": "managedBucket",
+      "id": "managed_bucket",
       "kind": "boolean",
       "label": "Create a data bucket",
       "platforms": [
@@ -183,7 +183,7 @@
       "required": true
     },
     {
-      "description": "Sets the API_TOKEN environment variable.",
+      "description": "Token the worker uses to call the API.",
       "env": [
         {
           "name": "API_TOKEN",
@@ -192,9 +192,9 @@
           ]
         }
       ],
-      "id": "apiToken",
+      "id": "api_token",
       "kind": "secret",
-      "label": "API_TOKEN",
+      "label": "API token",
       "providedBy": [
         "developer"
       ],
@@ -213,7 +213,7 @@
         "versioning": false
       },
       "dependencies": [],
-      "enabledWhen": "managedBucket",
+      "enabledWhen": "managed_bucket",
       "lifecycle": "frozen"
     },
     "worker": {

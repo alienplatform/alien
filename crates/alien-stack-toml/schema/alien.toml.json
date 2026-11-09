@@ -11,7 +11,7 @@
       ],
       "type": "string"
     },
-    "Autoscale": {
+    "Autoscaling": {
       "additionalProperties": false,
       "description": "Autoscaling bounds.",
       "properties": {
@@ -42,9 +42,59 @@
       "additionalProperties": false,
       "description": "How to build a daemon from source.",
       "properties": {
-        "rust": {
-          "description": "Name of the Rust binary to build with Cargo.",
-          "type": "string"
+        "binary-name": {
+          "default": null,
+          "description": "Name of the binary to build (rust, required; typescript, defaults to the package name).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "build-args": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null,
+          "description": "Build arguments (docker).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "command": {
+          "default": null,
+          "description": "Process argv that starts the application (python, required).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dockerfile": {
+          "default": null,
+          "description": "Dockerfile path relative to `src` (docker). Defaults to \"Dockerfile\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "default": null,
+          "description": "Workspace package to install (python). Omit for a single-package project.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "python-version": {
+          "default": null,
+          "description": "Python version of the runtime image (python). Defaults to 3.12.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "src": {
           "default": null,
@@ -53,10 +103,26 @@
             "string",
             "null"
           ]
+        },
+        "target": {
+          "default": null,
+          "description": "Multi-stage build target (docker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toolchain": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Toolchain"
+            }
+          ],
+          "description": "Which build to run: \"rust\", \"typescript\", \"python\" or \"docker\". Go and other languages use \"docker\"."
         }
       },
       "required": [
-        "rust"
+        "toolchain"
       ],
       "type": "object"
     },
@@ -77,26 +143,27 @@
       "additionalProperties": false,
       "description": "A range a deployment picks from; `default` applies when it does not pick.",
       "properties": {
+        "allowed": {
+          "description": "The fewest and the most the deployer may choose, `[min, max]`.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
         "default": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "min": {
+          "description": "Used when the deployer does not choose.",
           "format": "uint32",
           "minimum": 0.0,
           "type": "integer"
         }
       },
       "required": [
-        "default",
-        "max",
-        "min"
+        "allowed",
+        "default"
       ],
       "type": "object"
     },
@@ -129,7 +196,7 @@
               "type": "null"
             }
           ],
-          "description": "Build the daemon from source, for example `{ rust = \"acme-agent\" }`. Set this or `image`."
+          "description": "Build the daemon from source, for example `{ toolchain = \"rust\", binary-name = \"acme-agent\" }`. Set this or `image`."
         },
         "command": {
           "default": null,
@@ -155,39 +222,34 @@
         },
         "enabled-when": {
           "default": null,
-          "description": "Create this daemon only when this deployer-provided boolean `[input.<id>]` is true. Set this or `platforms`.",
+          "description": "Create this daemon only when this deployer-provided boolean `[input.<id>]` is true.",
           "type": [
             "string",
             "null"
           ]
-        },
-        "endpoints": {
-          "additionalProperties": {
-            "$ref": "#/definitions/Endpoint"
-          },
-          "description": "Public HTTP endpoints, by name.",
-          "type": "object"
         },
         "env": {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/definitions/EnvValue"
           },
-          "default": {},
-          "description": "Environment variables. These win over `env-file`.",
+          "description": "Environment variables: literal values, or `{ input = \"<id>\" }` to take the value of a stack input. These win over `env-file`.",
           "type": "object"
         },
         "env-file": {
-          "default": null,
-          "description": "A file of `KEY=value` lines, relative to alien.toml, read when the stack is loaded.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "health": {
           "anyOf": [
             {
-              "$ref": "#/definitions/Health"
+              "$ref": "#/definitions/OneOrMany_for_String"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "One file, or a list of files, of `KEY=value` lines, relative to alien.toml, read when the stack is loaded. Later files win over earlier ones."
+        },
+        "health-check": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HealthCheck"
             },
             {
               "type": "null"
@@ -237,23 +299,15 @@
           ]
         },
         "permissions": {
-          "default": null,
-          "description": "Permission profile that gives the daemon a cloud identity. Omit for none. On AWS, GCP and Azure it cannot be combined with `host-access`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "platforms": {
-          "default": null,
-          "description": "Create this daemon only on these platforms. On them, the deployer may still decline it.",
-          "items": {
-            "$ref": "#/definitions/Platform"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Permissions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Gives the daemon a cloud identity: the name of a `[permissions.<name>]` profile, or the grants themselves, `{ <resource-id> = [\"storage/data-read\"] }`, which make a profile named after the daemon. Omit for none. On AWS, GCP and Azure it cannot be combined with `host-access`."
         },
         "pool": {
           "default": null,
@@ -263,12 +317,23 @@
             "null"
           ]
         },
-        "secrets": {
+        "public-endpoints": {
           "additionalProperties": {
-            "$ref": "#/definitions/Secret"
+            "$ref": "#/definitions/Endpoint"
           },
-          "description": "Secrets the developer provides, by environment variable name.",
+          "description": "Public HTTP endpoints, by name.",
           "type": "object"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Runtime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Container runtime settings for anything between the defaults and `host-access`, for example `{ network-mode = \"host\" }` to bind the daemon's ports on the machine itself. Cannot be combined with `host-access`."
         },
         "stop-grace-period": {
           "anyOf": [
@@ -299,20 +364,23 @@
       "additionalProperties": false,
       "description": "Data disk sizes a deployment picks from, as quantities such as \"50Gi\" or \"1Ti\".",
       "properties": {
+        "allowed": {
+          "description": "The smallest and the largest size the deployer may choose, `[min, max]`.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
         "default": {
-          "type": "string"
-        },
-        "max": {
-          "type": "string"
-        },
-        "min": {
+          "description": "Used when the deployer does not choose.",
           "type": "string"
         }
       },
       "required": [
-        "default",
-        "max",
-        "min"
+        "allowed",
+        "default"
       ],
       "type": "object"
     },
@@ -332,7 +400,7 @@
       "additionalProperties": false,
       "description": "A public HTTP endpoint.",
       "properties": {
-        "host": {
+        "host-label": {
           "default": null,
           "description": "Host label under the deployment's domain. \"@\" is the domain itself. Defaults to the endpoint name.",
           "type": [
@@ -346,7 +414,7 @@
           "minimum": 0.0,
           "type": "integer"
         },
-        "wildcard": {
+        "wildcard-subdomains": {
           "default": false,
           "description": "Also route every subdomain of the host label.",
           "type": "boolean"
@@ -365,7 +433,7 @@
           "description": "The variable name.",
           "type": "string"
         },
-        "targets": {
+        "target-resources": {
           "default": null,
           "description": "IDs of the resources that get it. A trailing `*` matches a prefix.",
           "items": {
@@ -399,6 +467,31 @@
       ],
       "description": "An environment variable that receives an input's value."
     },
+    "EnvValue": {
+      "anyOf": [
+        {
+          "description": "A literal. Numbers and booleans are written as their text.",
+          "type": "string"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/InputReference"
+            }
+          ],
+          "description": "The value of a stack input, set when the deployment is created."
+        }
+      ],
+      "description": "One environment variable of a workload."
+    },
+    "EnvVarType": {
+      "description": "How an input's value reaches the environment.",
+      "enum": [
+        "plain",
+        "secret"
+      ],
+      "type": "string"
+    },
     "Gpu": {
       "additionalProperties": false,
       "description": "A GPU requirement.",
@@ -420,7 +513,7 @@
       ],
       "type": "object"
     },
-    "Health": {
+    "HealthCheck": {
       "additionalProperties": false,
       "description": "An HTTP health check.",
       "properties": {
@@ -505,7 +598,7 @@
               "type": "null"
             }
           ],
-          "description": "Environment variables that receive the value: a name, `{ name, targets }`, or a list. Without `targets` every daemon gets it."
+          "description": "Environment variables that receive the value: a name, `{ name, target-resources }`, or a list. Without `target-resources` every daemon gets it."
         },
         "kind": {
           "allOf": [
@@ -655,6 +748,31 @@
       ],
       "type": "string"
     },
+    "InputReference": {
+      "additionalProperties": false,
+      "description": "`{ input = \"<id>\" }`: the variable takes the value of a stack input.",
+      "properties": {
+        "input": {
+          "description": "ID of an `[input.<id>]` table.",
+          "type": "string"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EnvVarType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether the variable is \"plain\" or a \"secret\". Defaults from the input's kind."
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    },
     "InputValue": {
       "anyOf": [
         {
@@ -679,6 +797,33 @@
         }
       ],
       "description": "A value as written in TOML: string, number, boolean, or list of strings."
+    },
+    "Mount": {
+      "additionalProperties": false,
+      "description": "A host path mounted into a daemon.",
+      "properties": {
+        "options": {
+          "default": null,
+          "description": "Mount options such as \"ro\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Absolute path on the machine.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Absolute path inside the container.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
     },
     "OneOrMany_for_EnvTarget": {
       "anyOf": [
@@ -708,6 +853,39 @@
       ],
       "description": "One value or a list of them."
     },
+    "OneOrMany_for_String": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One value or a list of them."
+    },
+    "Permissions": {
+      "anyOf": [
+        {
+          "description": "The name of a `[permissions.<name>]` profile.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Grants per resource ID; they make a profile named after the workload.",
+          "type": "object"
+        }
+      ],
+      "description": "A workload's permissions: a profile by name, or the grants themselves."
+    },
     "Platform": {
       "description": "Represents the target cloud platform.",
       "enum": [
@@ -724,7 +902,7 @@
       "additionalProperties": false,
       "description": "A machine pool. On machines deployments the pool name is what `join --capacity-group` takes.",
       "properties": {
-        "arch": {
+        "architecture": {
           "anyOf": [
             {
               "$ref": "#/definitions/Architecture"
@@ -736,16 +914,16 @@
           "default": null,
           "description": "CPU architecture of the machines."
         },
-        "autoscale": {
+        "autoscaling": {
           "anyOf": [
             {
-              "$ref": "#/definitions/Autoscale"
+              "$ref": "#/definitions/Autoscaling"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Autoscale between a minimum and a maximum number of machines. Set this or `machines`."
+          "description": "Scale between a minimum and a maximum number of machines. Set this or `machines`."
         },
         "cpu": {
           "allOf": [
@@ -764,9 +942,9 @@
               "type": "null"
             }
           ],
-          "description": "An extra empty block device each machine must provide: one size such as \"1Ti\", or a range each deployment picks from, `{ min = \"0Gi\", default = \"200Gi\", max = \"4Ti\" }`."
+          "description": "An extra empty block device each machine must provide: one size such as \"1Ti\", or a range each deployment picks from, `{ default = \"200Gi\", allowed = [\"0Gi\", \"4Ti\"] }`."
         },
-        "disk": {
+        "ephemeral-storage": {
           "default": null,
           "description": "Size of the disk holding the operating system. Defaults to \"20Gi\".",
           "type": [
@@ -804,7 +982,7 @@
               "type": "null"
             }
           ],
-          "description": "A fixed number of machines: `2`, or a range each deployment picks from, `{ min = 1, max = 5, default = 2 }`. Set this or `autoscale`."
+          "description": "A fixed number of machines: `2`, or a range each deployment picks from, `{ default = 2, allowed = [1, 5] }`. Set this or `autoscaling`."
         },
         "memory": {
           "description": "Memory each machine needs, for example \"16Gi\".",
@@ -863,42 +1041,46 @@
         }
       ]
     },
-    "Secret": {
+    "Runtime": {
       "additionalProperties": false,
-      "description": "A secret the developer provides; it reaches the daemon as an environment variable.",
+      "description": "Container runtime settings of a daemon.",
       "properties": {
-        "description": {
-          "default": null,
-          "description": "What the secret is for.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "label": {
-          "default": null,
-          "description": "Shown where the value is asked for. Defaults to the variable name.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "platforms": {
-          "default": null,
-          "description": "Ask for the secret only on these platforms.",
+        "mounts": {
+          "description": "Host paths mounted into the container.",
           "items": {
-            "$ref": "#/definitions/Platform"
+            "$ref": "#/definitions/Mount"
           },
+          "type": "array"
+        },
+        "network-mode": {
+          "default": null,
+          "description": "\"host\" binds the daemon's ports on the machine itself, so `localhost:<port>` on the server reaches it. \"appnet\" is the default container network.",
           "type": [
-            "array",
+            "string",
             "null"
           ]
         },
-        "required": {
+        "pid-namespace": {
           "default": null,
-          "description": "Whether a deployment needs a value. Defaults to true.",
+          "description": "\"host\" shares the machine's process namespace, \"private\" is the default.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privileged": {
+          "default": null,
+          "description": "Run with elevated host capabilities.",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "user": {
+          "default": null,
+          "description": "Numeric uid, or uid:gid, to run as.",
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -911,7 +1093,7 @@
       "properties": {
         "enabled-when": {
           "default": null,
-          "description": "Create this bucket only when this deployer-provided boolean `[input.<id>]` is true. Set this or `platforms`.",
+          "description": "Create this bucket only when this deployer-provided boolean `[input.<id>]` is true.",
           "type": [
             "string",
             "null"
@@ -929,17 +1111,6 @@
           "default": null,
           "description": "Who owns the bucket. Defaults to \"frozen\" (setup creates it)."
         },
-        "platforms": {
-          "default": null,
-          "description": "Create this bucket only on these platforms. On them, the deployer may still decline it.",
-          "items": {
-            "$ref": "#/definitions/Platform"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "public-read": {
           "default": false,
           "description": "Allow anyone to read objects without credentials.",
@@ -952,6 +1123,39 @@
         }
       },
       "type": "object"
+    },
+    "Toolchain": {
+      "description": "A build toolchain.",
+      "oneOf": [
+        {
+          "description": "Cargo builds a binary, cross-compiled for the target machines.",
+          "enum": [
+            "rust"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Bun compiles the project to a single executable.",
+          "enum": [
+            "typescript"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A locked uv project.",
+          "enum": [
+            "python"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A Dockerfile.",
+          "enum": [
+            "docker"
+          ],
+          "type": "string"
+        }
+      ]
     }
   },
   "description": "A stack written as `alien.toml`.\n\nIt describes the same resources as an `alien.ts` file and resolves to the same stack.",

@@ -85,17 +85,17 @@ pub struct Pool {
     /// Size of the disk holding the operating system. Defaults to "20Gi".
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub disk: Option<Spanned<String>>,
+    pub ephemeral_storage: Option<Spanned<String>>,
 
     /// An extra empty block device each machine must provide: one size such as "1Ti", or
-    /// a range each deployment picks from, `{ min = "0Gi", default = "200Gi", max = "4Ti" }`.
+    /// a range each deployment picks from, `{ default = "200Gi", allowed = ["0Gi", "4Ti"] }`.
     #[serde(default)]
     #[schemars(with = "Option<DataDisk>")]
     pub data_disk: Option<Spanned<DataDisk>>,
 
     /// CPU architecture of the machines.
     #[serde(default)]
-    pub arch: Option<Architecture>,
+    pub architecture: Option<Architecture>,
 
     /// Whether machines must support nested virtualization (to run VMs inside them).
     #[serde(default)]
@@ -106,15 +106,15 @@ pub struct Pool {
     pub gpu: Option<Gpu>,
 
     /// A fixed number of machines: `2`, or a range each deployment picks from,
-    /// `{ min = 1, max = 5, default = 2 }`. Set this or `autoscale`.
+    /// `{ default = 2, allowed = [1, 5] }`. Set this or `autoscaling`.
     #[serde(default)]
     #[schemars(with = "Option<Choice>")]
     pub machines: Option<Spanned<Choice>>,
 
-    /// Autoscale between a minimum and a maximum number of machines. Set this or `machines`.
+    /// Scale between a minimum and a maximum number of machines. Set this or `machines`.
     #[serde(default)]
-    #[schemars(with = "Option<Autoscale>")]
-    pub autoscale: Option<Spanned<Autoscale>>,
+    #[schemars(with = "Option<Autoscaling>")]
+    pub autoscaling: Option<Spanned<Autoscaling>>,
 
     /// How many failure domains (zones) the pool's machines spread across, 1 to 255.
     #[serde(default)]
@@ -136,7 +136,7 @@ pub struct Gpu {
 /// Autoscaling bounds.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct Autoscale {
+pub struct Autoscaling {
     /// Fewest machines: a number, or a range each deployment picks from.
     #[schemars(with = "Choice")]
     pub min: Spanned<Choice>,
@@ -149,7 +149,8 @@ pub struct Autoscale {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Daemon {
-    /// Build the daemon from source, for example `{ rust = "acme-agent" }`. Set this or `image`.
+    /// Build the daemon from source, for example
+    /// `{ toolchain = "rust", binary-name = "acme-agent" }`. Set this or `image`.
     #[serde(default)]
     #[schemars(with = "Option<Build>")]
     pub build: Option<Spanned<Build>>,
@@ -183,6 +184,13 @@ pub struct Daemon {
     #[serde(default)]
     pub host_access: bool,
 
+    /// Container runtime settings for anything between the defaults and `host-access`, for
+    /// example `{ network-mode = "host" }` to bind the daemon's ports on the machine itself.
+    /// Cannot be combined with `host-access`.
+    #[serde(default)]
+    #[schemars(with = "Option<Runtime>")]
+    pub runtime: Option<Spanned<Runtime>>,
+
     /// How long the daemon may take to stop on updates, drains and deletes: seconds, or a
     /// duration such as "10m" or "24h". At most 24 hours.
     #[serde(default)]
@@ -191,71 +199,134 @@ pub struct Daemon {
 
     /// HTTP health check.
     #[serde(default)]
-    #[schemars(with = "Option<Health>")]
-    pub health: Option<Spanned<Health>>,
+    #[schemars(with = "Option<HealthCheck>")]
+    pub health_check: Option<Spanned<HealthCheck>>,
 
-    /// Environment variables. These win over `env-file`.
+    /// Environment variables: literal values, or `{ input = "<id>" }` to take the value of a
+    /// stack input. These win over `env-file`.
     #[serde(default)]
-    #[schemars(with = "BTreeMap<String, String>")]
-    pub env: IndexMap<Spanned<String>, Spanned<String>>,
+    #[schemars(with = "BTreeMap<String, EnvValue>")]
+    pub env: IndexMap<Spanned<String>, Spanned<EnvValue>>,
 
-    /// A file of `KEY=value` lines, relative to alien.toml, read when the stack is loaded.
+    /// One file, or a list of files, of `KEY=value` lines, relative to alien.toml, read when
+    /// the stack is loaded. Later files win over earlier ones.
     #[serde(default)]
-    #[schemars(with = "Option<String>")]
-    pub env_file: Option<Spanned<String>>,
+    #[schemars(with = "Option<OneOrMany<String>>")]
+    pub env_file: Option<Spanned<OneOrMany<String>>>,
 
     /// Resources this daemon uses, by ID.
     #[serde(default)]
     #[schemars(with = "Vec<String>")]
     pub links: Vec<Spanned<String>>,
 
-    /// Permission profile that gives the daemon a cloud identity. Omit for none. On AWS,
-    /// GCP and Azure it cannot be combined with `host-access`.
+    /// Gives the daemon a cloud identity: the name of a `[permissions.<name>]` profile, or
+    /// the grants themselves, `{ <resource-id> = ["storage/data-read"] }`, which make a
+    /// profile named after the daemon. Omit for none. On AWS, GCP and Azure it cannot be
+    /// combined with `host-access`.
     #[serde(default)]
-    #[schemars(with = "Option<String>")]
-    pub permissions: Option<Spanned<String>>,
+    #[schemars(with = "Option<Permissions>")]
+    pub permissions: Option<Spanned<Permissions>>,
 
     /// Public HTTP endpoints, by name.
     #[serde(default)]
     #[schemars(with = "BTreeMap<String, Endpoint>")]
-    pub endpoints: Tables<Endpoint>,
-
-    /// Secrets the developer provides, by environment variable name.
-    #[serde(default)]
-    #[schemars(with = "BTreeMap<String, Secret>")]
-    pub secrets: Tables<Secret>,
+    pub public_endpoints: Tables<Endpoint>,
 
     /// Who owns the daemon after setup. Defaults to "live" (each release updates it).
     #[serde(default)]
     pub lifecycle: Option<ResourceLifecycle>,
 
-    /// Create this daemon only on these platforms. On them, the deployer may still decline it.
-    #[serde(default)]
-    #[schemars(with = "Option<Vec<Platform>>")]
-    pub platforms: Option<Spanned<Vec<Platform>>>,
-
     /// Create this daemon only when this deployer-provided boolean `[input.<id>]` is true.
-    /// Set this or `platforms`.
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub enabled_when: Option<Spanned<String>>,
 }
 
+/// The settings a `[daemon.<id>]` table accepts, as written in the file. A test keeps this
+/// equal to [`Daemon`]'s fields.
+pub const DAEMON_KEYS: &[&str] = &[
+    "build",
+    "image",
+    "pool",
+    "cpu",
+    "memory",
+    "command",
+    "host-access",
+    "runtime",
+    "stop-grace-period",
+    "health-check",
+    "env",
+    "env-file",
+    "links",
+    "permissions",
+    "public-endpoints",
+    "lifecycle",
+    "enabled-when",
+];
+
 /// How to build a daemon from source.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Build {
-    /// Name of the Rust binary to build with Cargo.
-    pub rust: String,
+    /// Which build to run: "rust", "typescript", "python" or "docker". Go and other languages
+    /// use "docker".
+    #[schemars(with = "Toolchain")]
+    pub toolchain: Spanned<Toolchain>,
     /// Source directory, relative to where `alien` runs. Defaults to ".".
     #[serde(default)]
     pub src: Option<String>,
+    /// Name of the binary to build (rust, required; typescript, defaults to the package name).
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub binary_name: Option<Spanned<String>>,
+    /// Dockerfile path relative to `src` (docker). Defaults to "Dockerfile".
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub dockerfile: Option<Spanned<String>>,
+    /// Multi-stage build target (docker).
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub target: Option<Spanned<String>>,
+    /// Build arguments (docker).
+    #[serde(default)]
+    #[schemars(with = "Option<BTreeMap<String, String>>")]
+    pub build_args: Option<Spanned<IndexMap<String, String>>>,
+    /// Python version of the runtime image (python). Defaults to 3.12.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub python_version: Option<Spanned<String>>,
+    /// Workspace package to install (python). Omit for a single-package project.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub package: Option<Spanned<String>>,
+    /// Process argv that starts the application (python, required).
+    #[serde(default)]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub command: Option<Spanned<Vec<String>>>,
+}
+
+/// A build toolchain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Toolchain {
+    /// Cargo builds a binary, cross-compiled for the target machines.
+    Rust,
+    /// Bun compiles the project to a single executable.
+    Typescript,
+    /// A locked uv project.
+    Python,
+    /// A Dockerfile.
+    Docker,
+}
+
+impl Toolchain {
+    pub const NAMES: &'static [&'static str] = &["rust", "typescript", "python", "docker"];
 }
 
 /// An HTTP health check.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct Health {
+pub struct HealthCheck {
     /// Port to check.
     pub port: u16,
     /// Path to check. Defaults to "/health".
@@ -273,6 +344,43 @@ pub struct Health {
     pub failure_threshold: Option<u32>,
 }
 
+/// Container runtime settings of a daemon.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Runtime {
+    /// Run with elevated host capabilities.
+    #[serde(default)]
+    pub privileged: Option<bool>,
+    /// "host" shares the machine's process namespace, "private" is the default.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub pid_namespace: Option<Spanned<String>>,
+    /// "host" binds the daemon's ports on the machine itself, so `localhost:<port>` on the
+    /// server reaches it. "appnet" is the default container network.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub network_mode: Option<Spanned<String>>,
+    /// Host paths mounted into the container.
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
+    /// Numeric uid, or uid:gid, to run as.
+    #[serde(default)]
+    pub user: Option<String>,
+}
+
+/// A host path mounted into a daemon.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Mount {
+    /// Absolute path on the machine.
+    pub source: String,
+    /// Absolute path inside the container.
+    pub target: String,
+    /// Mount options such as "ro".
+    #[serde(default)]
+    pub options: Option<String>,
+}
+
 /// A public HTTP endpoint.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -282,28 +390,97 @@ pub struct Endpoint {
     /// Host label under the deployment's domain. "@" is the domain itself. Defaults to the
     /// endpoint name.
     #[serde(default)]
-    pub host: Option<String>,
+    pub host_label: Option<String>,
     /// Also route every subdomain of the host label.
     #[serde(default)]
-    pub wildcard: bool,
+    pub wildcard_subdomains: bool,
 }
 
-/// A secret the developer provides; it reaches the daemon as an environment variable.
+/// One environment variable of a workload.
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(untagged)]
+pub enum EnvValue {
+    /// A literal. Numbers and booleans are written as their text.
+    Literal(String),
+    /// The value of a stack input, set when the deployment is created.
+    Input(InputReference),
+}
+
+/// `{ input = "<id>" }`: the variable takes the value of a stack input.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct Secret {
-    /// Shown where the value is asked for. Defaults to the variable name.
-    #[serde(default)]
-    pub label: Option<String>,
-    /// What the secret is for.
-    #[serde(default)]
-    pub description: Option<String>,
-    /// Whether a deployment needs a value. Defaults to true.
-    #[serde(default)]
-    pub required: Option<bool>,
-    /// Ask for the secret only on these platforms.
-    #[serde(default)]
-    pub platforms: Option<Vec<Platform>>,
+pub struct InputReference {
+    /// ID of an `[input.<id>]` table.
+    pub input: String,
+    /// Whether the variable is "plain" or a "secret". Defaults from the input's kind.
+    #[serde(default, rename = "type")]
+    pub var_type: Option<EnvVarType>,
+}
+
+/// How an input's value reaches the environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvVarType {
+    Plain,
+    Secret,
+}
+
+impl<'de> Deserialize<'de> for EnvValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EnvValueVisitor;
+        impl<'de> Visitor<'de> for EnvValueVisitor {
+            type Value = EnvValue;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a string, an integer, a boolean, or `{ input = \"<id>\" }` to use a stack input",
+                )
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<EnvValue, E> {
+                Ok(EnvValue::Literal(v.to_string()))
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<EnvValue, E> {
+                Ok(EnvValue::Literal(v.to_string()))
+            }
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<EnvValue, E> {
+                Ok(EnvValue::Literal(v.to_string()))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<EnvValue, A::Error> {
+                InputReference::deserialize(MapAccessDeserializer::new(map)).map(EnvValue::Input)
+            }
+        }
+        deserializer.deserialize_any(EnvValueVisitor)
+    }
+}
+
+/// A workload's permissions: a profile by name, or the grants themselves.
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(untagged)]
+pub enum Permissions {
+    /// The name of a `[permissions.<name>]` profile.
+    Profile(String),
+    /// Grants per resource ID; they make a profile named after the workload.
+    Inline(#[schemars(with = "BTreeMap<String, Vec<String>>")] Profile),
+}
+
+impl<'de> Deserialize<'de> for Permissions {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct PermissionsVisitor;
+        impl<'de> Visitor<'de> for PermissionsVisitor {
+            type Value = Permissions;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a profile name, or grants such as `{ files = [\"storage/data-read\"] }`",
+                )
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Permissions, E> {
+                Ok(Permissions::Profile(v.to_string()))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Permissions, A::Error> {
+                Profile::deserialize(MapAccessDeserializer::new(map)).map(Permissions::Inline)
+            }
+        }
+        deserializer.deserialize_any(PermissionsVisitor)
+    }
 }
 
 /// An object storage bucket.
@@ -319,13 +496,7 @@ pub struct Storage {
     /// Who owns the bucket. Defaults to "frozen" (setup creates it).
     #[serde(default)]
     pub lifecycle: Option<ResourceLifecycle>,
-    /// Create this bucket only on these platforms. On them, the deployer may still decline it.
-    #[serde(default)]
-    #[schemars(with = "Option<Vec<Platform>>")]
-    pub platforms: Option<Spanned<Vec<Platform>>>,
-
     /// Create this bucket only when this deployer-provided boolean `[input.<id>]` is true.
-    /// Set this or `platforms`.
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub enabled_when: Option<Spanned<String>>,
@@ -403,9 +574,10 @@ pub enum Choice {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ChoiceRange {
-    pub min: u32,
-    pub max: u32,
+    /// Used when the deployer does not choose.
     pub default: u32,
+    /// The fewest and the most the deployer may choose, `[min, max]`.
+    pub allowed: [u32; 2],
 }
 
 impl<'de> Deserialize<'de> for Choice {
@@ -414,7 +586,7 @@ impl<'de> Deserialize<'de> for Choice {
         impl<'de> Visitor<'de> for ChoiceVisitor {
             type Value = Choice;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a number, or a range such as { min = 1, max = 5, default = 2 }")
+                f.write_str("a number, or a range such as { default = 2, allowed = [1, 5] }")
             }
             fn visit_i64<E: de::Error>(self, v: i64) -> Result<Choice, E> {
                 u32::try_from(v)
@@ -441,9 +613,10 @@ pub enum DataDisk {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DataDiskRange {
-    pub min: String,
+    /// Used when the deployer does not choose.
     pub default: String,
-    pub max: String,
+    /// The smallest and the largest size the deployer may choose, `[min, max]`.
+    pub allowed: [String; 2],
 }
 
 impl<'de> Deserialize<'de> for DataDisk {
@@ -453,7 +626,7 @@ impl<'de> Deserialize<'de> for DataDisk {
             type Value = DataDisk;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str(
-                    "a size such as \"1Ti\", or a range such as { min = \"0Gi\", default = \"200Gi\", max = \"4Ti\" }",
+                    "a size such as \"1Ti\", or a range such as { default = \"200Gi\", allowed = [\"0Gi\", \"4Ti\"] }",
                 )
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<DataDisk, E> {
@@ -497,8 +670,8 @@ pub struct Input {
     #[serde(default)]
     #[schemars(with = "Option<Vec<Platform>>")]
     pub platforms: Option<Spanned<Vec<Platform>>>,
-    /// Environment variables that receive the value: a name, `{ name, targets }`, or a list.
-    /// Without `targets` every daemon gets it.
+    /// Environment variables that receive the value: a name, `{ name, target-resources }`, or
+    /// a list. Without `target-resources` every daemon gets it.
     #[serde(default)]
     #[schemars(with = "Option<OneOrMany<EnvTarget>>")]
     pub env: Option<Spanned<OneOrMany<EnvTarget>>>,
@@ -617,7 +790,7 @@ pub struct EnvMapping {
     pub name: String,
     /// IDs of the resources that get it. A trailing `*` matches a prefix.
     #[serde(default)]
-    pub targets: Option<Vec<String>>,
+    pub target_resources: Option<Vec<String>>,
 }
 
 /// A value as written in TOML: string, number, boolean, or list of strings.

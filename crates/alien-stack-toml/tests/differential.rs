@@ -35,7 +35,13 @@ fn toml_stacks_match_their_typescript_equivalents() {
         .collect();
     assert_eq!(
         names,
-        ["inputs", "minimal", "pools-and-scopes", "sandbox-runtime"]
+        [
+            "bare-metal-worker",
+            "inputs",
+            "minimal",
+            "pools",
+            "sandbox-runtime"
+        ]
     );
 
     for fixture in fixtures {

@@ -13,22 +13,25 @@ use alien_core::stack_authoring::{
 };
 use alien_core::{
     ComputeChoiceRange, ComputeCluster, Daemon as DaemonConfig, DaemonCode, DaemonRuntime,
-    ExposeProtocol, GpuSpec, HealthCheck, PermissionProfile, PermissionSetReference,
-    PermissionsConfig, Platform, PublicEndpoint, Resource, ResourceEntry, ResourceLifecycle,
-    ResourceRef, ResourceType, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputEnvironmentMapping, StackInputKind, StackInputProvider, StackInputValidation,
-    Storage as StorageConfig, ToolchainConfig, APEX_HOST_LABEL,
+    DaemonRuntimeMount, ExposeProtocol, GpuSpec, HealthCheck, PermissionProfile,
+    PermissionSetReference, PermissionsConfig, Platform, PublicEndpoint, Resource, ResourceEntry,
+    ResourceLifecycle, ResourceRef, ResourceType, Stack, StackInputDefinition,
+    StackInputEnvironmentMapping, StackInputEnvironmentVariableType, StackInputKind,
+    StackInputProvider, StackInputValidation, Storage as StorageConfig, ToolchainConfig,
+    APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
 use toml::Spanned;
 
 use crate::document::{
-    self, Choice, Cpu, DataDisk, Document, Duration, EnvTarget, InputValue, Tables,
+    self, Choice, Cpu, DataDisk, Document, Duration, EnvTarget, EnvValue, EnvVarType, InputValue,
+    Permissions, Tables, Toolchain, DAEMON_KEYS,
 };
 use crate::env_file;
 use crate::error::{ErrorData, Result};
 use crate::source::SourceFile;
+use crate::suggest;
 
 /// ID of the compute cluster holding the pools when the document does not name one. It is
 /// the name Alien gives a cluster it creates for a stack that declares none.
@@ -144,18 +147,12 @@ impl Resolver<'_> {
                 }),
                 storage.lifecycle.unwrap_or(ResourceLifecycle::Frozen),
             );
-            resource.enabled_when = inputs.gate(
-                self,
-                &id,
-                "storage bucket",
-                storage.platforms,
-                storage.enabled_when,
-                platforms.as_deref(),
-            )?;
+            resource.enabled_when = inputs.gate(self, "storage bucket", storage.enabled_when)?;
             resources.insert(id.into_inner(), resource);
         }
 
         let pool_ids: Vec<&str> = pools.iter().map(|(id, _)| id.get_ref().as_str()).collect();
+        let mut permissions = permissions;
         for (id, daemon) in daemons {
             let daemon = self.daemon(
                 &id,
@@ -163,38 +160,26 @@ impl Resolver<'_> {
                 cluster_id.as_deref(),
                 &pool_ids,
                 &declared,
-                &permissions,
+                &mut permissions,
             )?;
             if let Some(span) = daemon.identity_with_host_access {
-                let targets = daemon
-                    .scope
-                    .as_ref()
-                    .map(|scope| scope.get_ref().as_slice())
-                    .or(platforms.as_deref());
                 let cloud = [Platform::Aws, Platform::Gcp, Platform::Azure];
                 if let Some(platform) = cloud
                     .iter()
-                    .find(|cloud| targets.is_none_or(|targets| targets.contains(cloud)))
+                    .find(|cloud| platforms.as_ref().is_none_or(|all| all.contains(cloud)))
                 {
                     return Err(self.error(
                         span,
                         format!(
-                            "on {platform} a daemon with `host-access` could use the machine's credentials, so it cannot also have `permissions`; drop one, or limit the daemon's `platforms`"
+                            "on {platform} a daemon with `host-access` could use the machine's credentials, so it cannot also have `permissions`; drop one, or limit the stack's `platforms`"
                         ),
                     ));
                 }
             }
             let mut resource = entry(Resource::new(daemon.config), daemon.lifecycle);
-            resource.enabled_when = inputs.gate(
-                self,
-                &id,
-                "daemon",
-                daemon.scope,
-                daemon.enabled_when,
-                platforms.as_deref(),
-            )?;
-            for (key, secret) in daemon.secrets {
-                inputs.add_secret(self, id.get_ref(), key, secret, platforms.as_deref())?;
+            resource.enabled_when = inputs.gate(self, "daemon", daemon.enabled_when)?;
+            for reference in daemon.input_references {
+                inputs.reference(self, id.get_ref(), reference)?;
             }
             resources.insert(id.into_inner(), resource);
         }
@@ -301,7 +286,7 @@ impl Resolver<'_> {
         for (id, pool) in pools {
             self.check_id(id, "pool name", MAX_RESOURCE_ID_LENGTH)?;
             let pool = pool.get_ref();
-            let scale = match (&pool.machines, &pool.autoscale) {
+            let scale = match (&pool.machines, &pool.autoscaling) {
                 (Some(machines), None) => PoolScale::Fixed {
                     machines: choice(machines.get_ref()),
                 },
@@ -312,21 +297,24 @@ impl Resolver<'_> {
                 (Some(_), Some(autoscale)) => {
                     return Err(self.error(
                         autoscale.span(),
-                        "set either `machines` (a fixed count) or `autoscale`, not both",
+                        "set either `machines` (a fixed count) or `autoscaling`, not both",
                     ))
                 }
                 (None, None) => {
                     return Err(self.error(
                         id.span(),
-                        "pool needs `machines = <count>` or `autoscale = { min = <count>, max = <count> }`",
+                        "pool needs `machines = <count>` or `autoscaling = { min = <count>, max = <count> }`",
                     ))
                 }
             };
             let requirements = PoolRequirements {
                 cpu: cpu_amount(pool.cpu.get_ref()),
                 memory: pool.memory.get_ref().clone(),
-                ephemeral_storage: pool.disk.as_ref().map(|disk| disk.get_ref().clone()),
-                architecture: pool.arch,
+                ephemeral_storage: pool
+                    .ephemeral_storage
+                    .as_ref()
+                    .map(|disk| disk.get_ref().clone()),
+                architecture: pool.architecture,
                 nested_virtualization: pool.nested_virtualization,
                 gpu: pool.gpu.as_ref().map(|gpu| GpuSpec {
                     gpu_type: gpu.gpu_type.clone(),
@@ -335,9 +323,9 @@ impl Resolver<'_> {
                 data_disk: pool.data_disk.as_ref().map(|disk| match disk.get_ref() {
                     DataDisk::Size(size) => DataDiskSize::Fixed(size.clone()),
                     DataDisk::Range(range) => DataDiskSize::Range {
-                        min: range.min.clone(),
+                        min: range.allowed[0].clone(),
                         default: range.default.clone(),
-                        max: range.max.clone(),
+                        max: range.allowed[1].clone(),
                     },
                 }),
             };
@@ -351,14 +339,14 @@ impl Resolver<'_> {
                 let span = match field.as_str() {
                     "cpu" => Some(pool.cpu.span()),
                     "memory" => Some(pool.memory.span()),
-                    "ephemeralStorage" => pool.disk.as_ref().map(Spanned::span),
+                    "ephemeralStorage" => pool.ephemeral_storage.as_ref().map(Spanned::span),
                     field if field.starts_with("dataDisk") => {
                         pool.data_disk.as_ref().map(Spanned::span)
                     }
                     "scale.machines" => pool.machines.as_ref().map(Spanned::span),
-                    "scale.min" => pool.autoscale.as_ref().map(|a| a.get_ref().min.span()),
-                    "scale.max" => pool.autoscale.as_ref().map(|a| a.get_ref().max.span()),
-                    "scale" => pool.autoscale.as_ref().map(Spanned::span),
+                    "scale.min" => pool.autoscaling.as_ref().map(|a| a.get_ref().min.span()),
+                    "scale.max" => pool.autoscaling.as_ref().map(|a| a.get_ref().max.span()),
+                    "scale" => pool.autoscaling.as_ref().map(Spanned::span),
                     _ => None,
                 };
                 self.error(span.unwrap_or_else(|| id.span()), reason)
@@ -390,19 +378,11 @@ impl Resolver<'_> {
         cluster_id: Option<&str>,
         pool_ids: &[&str],
         declared: &Declared,
-        permissions: &PermissionsConfig,
+        permissions: &mut PermissionsConfig,
     ) -> Result<ResolvedDaemon> {
         let daemon_id = id.get_ref();
         let code = match (daemon.build, daemon.image) {
-            (Some(build), None) => {
-                let build = build.into_inner();
-                DaemonCode::Source {
-                    src: build.src.unwrap_or_else(|| ".".to_string()),
-                    toolchain: ToolchainConfig::Rust {
-                        binary_name: build.rust,
-                    },
-                }
-            }
+            (Some(build), None) => self.build(build)?,
             (None, Some(image)) => DaemonCode::Image {
                 image: image.into_inner(),
             },
@@ -413,7 +393,7 @@ impl Resolver<'_> {
             (None, None) => {
                 return Err(self.error(
                     id.span(),
-                    "daemon needs `build = { rust = \"<binary>\" }` or `image = \"<reference>\"`",
+                    "daemon needs `build = { toolchain = \"rust\", binary-name = \"<binary>\" }` or `image = \"<reference>\"`",
                 ))
             }
         };
@@ -437,8 +417,9 @@ impl Resolver<'_> {
                 return Err(self.error(
                     pool.span(),
                     format!(
-                        "unknown pool '{}'; declared pools: {}",
+                        "unknown pool '{}'{}; declared pools: {}",
                         pool.get_ref(),
+                        suggest::hint(pool.get_ref(), pool_ids.iter().copied()),
                         join(pool_ids.iter().copied())
                     ),
                 ))
@@ -468,11 +449,12 @@ impl Resolver<'_> {
             .transpose()?;
 
         let health_check = daemon
-            .health
+            .health_check
             .map(|health| self.health(health))
             .transpose()?;
 
-        let environment = self.environment(&daemon.env, daemon.env_file.as_ref())?;
+        let (environment, input_references) =
+            self.environment(daemon_id, daemon.env, daemon.env_file)?;
 
         let links = daemon
             .links
@@ -488,8 +470,15 @@ impl Resolver<'_> {
                 None => Err(self.error(
                     link.span(),
                     format!(
-                        "unknown resource '{}'; declared resources: {}",
+                        "unknown resource '{}'{}; declared resources: {}",
                         link.get_ref(),
+                        suggest::hint(
+                            link.get_ref(),
+                            declared
+                                .keys()
+                                .filter(|declared| *declared != daemon_id)
+                                .map(String::as_str)
+                        ),
                         join(
                             declared
                                 .keys()
@@ -501,29 +490,7 @@ impl Resolver<'_> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let public_endpoints = self.endpoints(daemon_id, in_order(daemon.endpoints))?;
-
-        let secrets = in_order(daemon.secrets);
-        for (key, _) in &secrets {
-            if !is_input_env_name(key.get_ref()) {
-                return Err(self.error(
-                    key.span(),
-                    format!(
-                        "secret '{}' must be an environment variable name: uppercase letters, digits and underscores",
-                        key.get_ref()
-                    ),
-                ));
-            }
-            if environment.contains_key(key.get_ref()) {
-                return Err(self.error(
-                    key.span(),
-                    format!(
-                        "'{}' is both a secret and an environment variable of this daemon; keep one",
-                        key.get_ref()
-                    ),
-                ));
-            }
-        }
+        let public_endpoints = self.endpoints(daemon_id, in_order(daemon.public_endpoints))?;
 
         let identity_with_host_access = daemon
             .permissions
@@ -531,20 +498,21 @@ impl Resolver<'_> {
             .filter(|_| daemon.host_access)
             .map(Spanned::span);
         let profile = match daemon.permissions {
-            Some(profile) if permissions.profiles.contains_key(profile.get_ref()) => {
-                Some(profile.into_inner())
+            None => None,
+            Some(permission) => {
+                Some(self.daemon_permissions(id, permission, declared, permissions)?)
             }
-            Some(profile) => {
+        };
+
+        let runtime = match daemon.runtime {
+            Some(runtime) if daemon.host_access => {
                 return Err(self.error(
-                    profile.span(),
-                    format!(
-                        "unknown permission profile '{}'; declare it with a [permissions.{}] table",
-                        profile.get_ref(),
-                        profile.get_ref()
-                    ),
+                    runtime.span(),
+                    "`runtime` cannot be combined with `host-access`, which already sets the runtime; drop one",
                 ))
             }
-            None => None,
+            Some(runtime) => Some(self.runtime(runtime.into_inner())?),
+            None => daemon.host_access.then(DaemonRuntime::host_access),
         };
 
         let config = DaemonConfig {
@@ -560,17 +528,56 @@ impl Resolver<'_> {
             pool,
             command: daemon.command,
             stop_grace_period_seconds,
-            runtime: daemon.host_access.then(DaemonRuntime::host_access),
+            runtime,
             environment,
             commands_enabled: false,
         };
         Ok(ResolvedDaemon {
             config,
             lifecycle: daemon.lifecycle.unwrap_or(ResourceLifecycle::Live),
-            scope: daemon.platforms,
             enabled_when: daemon.enabled_when,
-            secrets,
+            input_references,
             identity_with_host_access,
+        })
+    }
+
+    fn runtime(&self, runtime: document::Runtime) -> Result<DaemonRuntime> {
+        let choice = |field: &Spanned<String>, allowed: &[&str]| -> Result<String> {
+            if allowed.contains(&field.get_ref().as_str()) {
+                return Ok(field.get_ref().clone());
+            }
+            Err(self.error(
+                field.span(),
+                format!(
+                    "unknown value '{}'{}; expected one of: {}",
+                    field.get_ref(),
+                    suggest::hint(field.get_ref(), allowed.iter().copied()),
+                    join(allowed.iter().copied())
+                ),
+            ))
+        };
+        Ok(DaemonRuntime {
+            privileged: runtime.privileged,
+            pid_namespace: runtime
+                .pid_namespace
+                .as_ref()
+                .map(|value| choice(value, &["host", "private"]))
+                .transpose()?,
+            network_mode: runtime
+                .network_mode
+                .as_ref()
+                .map(|value| choice(value, &["host", "appnet"]))
+                .transpose()?,
+            mounts: runtime
+                .mounts
+                .into_iter()
+                .map(|mount| DaemonRuntimeMount {
+                    source: mount.source,
+                    target: mount.target,
+                    options: mount.options,
+                })
+                .collect(),
+            user: runtime.user,
         })
     }
 
@@ -740,7 +747,7 @@ impl Resolver<'_> {
     ) -> Result<StackInputEnvironmentMapping> {
         let (name, targets) = match target {
             EnvTarget::Name(name) => (name, None),
-            EnvTarget::Mapping(mapping) => (mapping.name, mapping.targets),
+            EnvTarget::Mapping(mapping) => (mapping.name, mapping.target_resources),
         };
         if !is_input_env_name(&name) {
             return Err(self.error(
@@ -754,7 +761,7 @@ impl Resolver<'_> {
             if targets.is_empty() {
                 return Err(self.error(
                     span,
-                    "`targets` is empty; leave it out to set the variable on every daemon",
+                    "`target-resources` is empty; leave it out to set the variable on every daemon",
                 ));
             }
             for target in targets.iter().filter(|target| !target.ends_with('*')) {
@@ -769,9 +776,10 @@ impl Resolver<'_> {
                         ))
                     }
                     None => {
-                        return Err(
-                            self.error(span, format!("unknown resource '{target}' in `targets`"))
-                        )
+                        return Err(self.error(
+                            span,
+                            format!("unknown resource '{target}' in `target-resources`"),
+                        ))
                     }
                 }
             }
@@ -791,34 +799,127 @@ impl Resolver<'_> {
         let mut config = PermissionsConfig::new();
         for (name, grants) in profiles {
             self.check_id(&name, "permission profile name", MAX_RESOURCE_ID_LENGTH)?;
-            let mut grants: Vec<_> = grants.into_inner().into_iter().collect();
-            grants.sort_by_key(|(resource, _)| resource.span().start);
-            let mut profile = PermissionProfile::new();
-            for (resource, sets) in grants {
-                if resource.get_ref() != "*" && !declared.contains_key(resource.get_ref()) {
-                    return Err(self.error(
-                        resource.span(),
-                        format!(
-                            "unknown resource '{}'; use a declared resource ID, or \"*\" for every resource",
-                            resource.get_ref()
-                        ),
-                    ));
-                }
-                let sets = sets
-                    .into_iter()
-                    .map(|set| {
-                        if set.get_ref().is_empty() {
-                            Err(self.error(set.span(), "a permission set name cannot be empty"))
-                        } else {
-                            Ok(PermissionSetReference::from_name(set.into_inner()))
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                profile.0.insert(resource.into_inner(), sets);
-            }
+            let profile = self.profile(grants.into_inner(), declared)?;
             config.profiles.insert(name.into_inner(), profile);
         }
         Ok(config)
+    }
+
+    fn profile(&self, grants: document::Profile, declared: &Declared) -> Result<PermissionProfile> {
+        let mut grants: Vec<_> = grants.into_iter().collect();
+        grants.sort_by_key(|(resource, _)| resource.span().start);
+        let mut profile = PermissionProfile::new();
+        for (resource, sets) in grants {
+            if resource.get_ref() != "*" && !declared.contains_key(resource.get_ref()) {
+                return Err(self.error(
+                    resource.span(),
+                    format!(
+                        "unknown resource '{}'{}; use a declared resource ID, or \"*\" for every resource",
+                        resource.get_ref(),
+                        suggest::hint(
+                            resource.get_ref(),
+                            declared.keys().map(String::as_str)
+                        )
+                    ),
+                ));
+            }
+            let sets = sets
+                .into_iter()
+                .map(|set| {
+                    if set.get_ref().is_empty() {
+                        Err(self.error(set.span(), "a permission set name cannot be empty"))
+                    } else {
+                        Ok(PermissionSetReference::from_name(set.into_inner()))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            profile.0.insert(resource.into_inner(), sets);
+        }
+        Ok(profile)
+    }
+
+    fn build(&self, build: Spanned<document::Build>) -> Result<DaemonCode> {
+        let build = build.into_inner();
+        let toolchain = *build.toolchain.get_ref();
+        let only = |field: &Option<Spanned<String>>, name: &str, applies: Toolchain| match field {
+            Some(field) if toolchain != applies => Err(self.error(
+                field.span(),
+                format!(
+                    "`{name}` applies to {} builds only",
+                    toolchain_name(applies)
+                ),
+            )),
+            _ => Ok(()),
+        };
+        only(&build.dockerfile, "dockerfile", Toolchain::Docker)?;
+        only(&build.target, "target", Toolchain::Docker)?;
+        only(&build.python_version, "python-version", Toolchain::Python)?;
+        only(&build.package, "package", Toolchain::Python)?;
+        if let Some(field) = build
+            .build_args
+            .as_ref()
+            .filter(|_| toolchain != Toolchain::Docker)
+        {
+            return Err(self.error(field.span(), "`build-args` applies to docker builds only"));
+        }
+        if let Some(field) = build
+            .command
+            .as_ref()
+            .filter(|_| toolchain != Toolchain::Python)
+        {
+            return Err(self.error(field.span(), "`command` applies to python builds only"));
+        }
+        if let Some(field) = build
+            .binary_name
+            .as_ref()
+            .filter(|_| matches!(toolchain, Toolchain::Docker | Toolchain::Python))
+        {
+            return Err(self.error(
+                field.span(),
+                "`binary-name` applies to rust and typescript builds only",
+            ));
+        }
+
+        let toolchain_config = match toolchain {
+            Toolchain::Rust => ToolchainConfig::Rust {
+                binary_name: build
+                    .binary_name
+                    .ok_or_else(|| {
+                        self.error(
+                            build.toolchain.span(),
+                            "a rust build needs `binary-name`, the name of the binary Cargo builds",
+                        )
+                    })?
+                    .into_inner(),
+            },
+            Toolchain::Typescript => ToolchainConfig::TypeScript {
+                binary_name: build.binary_name.map(Spanned::into_inner),
+            },
+            Toolchain::Python => ToolchainConfig::Python {
+                python_version: build.python_version.map(Spanned::into_inner),
+                package: build.package.map(Spanned::into_inner),
+                command: build
+                    .command
+                    .ok_or_else(|| {
+                        self.error(
+                            build.toolchain.span(),
+                            "a python build needs `command`, the argv that starts the application",
+                        )
+                    })?
+                    .into_inner(),
+            },
+            Toolchain::Docker => ToolchainConfig::Docker {
+                dockerfile: build.dockerfile.map(Spanned::into_inner),
+                build_args: build
+                    .build_args
+                    .map(|args| args.into_inner().into_iter().collect()),
+                target: build.target.map(Spanned::into_inner),
+            },
+        };
+        Ok(DaemonCode::Source {
+            src: build.src.unwrap_or_else(|| ".".to_string()),
+            toolchain: toolchain_config,
+        })
     }
 
     fn seconds(&self, duration: &Spanned<Duration>) -> Result<u64> {
@@ -830,12 +931,12 @@ impl Resolver<'_> {
         }
     }
 
-    fn health(&self, health: Spanned<document::Health>) -> Result<HealthCheck> {
+    fn health(&self, health: Spanned<document::HealthCheck>) -> Result<HealthCheck> {
         let span = health.span();
         let health = health.into_inner();
         let defaults = HealthCheck::default();
         if health.port == 0 {
-            return Err(self.error(span, "health `port` must be 1 to 65535"));
+            return Err(self.error(span, "health-check `port` must be 1 to 65535"));
         }
         let timeout_seconds = match &health.timeout {
             Some(timeout) => {
@@ -844,7 +945,10 @@ impl Resolver<'_> {
                     .ok()
                     .filter(|seconds| *seconds >= 1)
                     .ok_or_else(|| {
-                        self.error(timeout.span(), "health timeout must be at least 1 second")
+                        self.error(
+                            timeout.span(),
+                            "health-check `timeout` must be at least 1 second",
+                        )
                     })?
             }
             None => defaults.timeout_seconds,
@@ -860,27 +964,33 @@ impl Resolver<'_> {
         })
     }
 
-    /// `env-file` first, then `env` on top: inline values win.
+    /// `env-file` entries in order, then `env` on top: later files win, inline values win over
+    /// all. Input references are returned separately; they become input mappings.
     fn environment(
         &self,
-        env: &IndexMap<Spanned<String>, Spanned<String>>,
-        env_file: Option<&Spanned<String>>,
-    ) -> Result<HashMap<String, String>> {
+        daemon_id: &str,
+        env: IndexMap<Spanned<String>, Spanned<EnvValue>>,
+        env_file: Option<Spanned<document::OneOrMany<String>>>,
+    ) -> Result<(HashMap<String, String>, Vec<InputReference>)> {
         let mut environment = HashMap::new();
         if let Some(env_file) = env_file {
-            let path = self.base_dir.join(env_file.get_ref());
-            let text = std::fs::read_to_string(&path).map_err(|error| {
-                self.error(
-                    env_file.span(),
-                    format!("cannot read env file {}: {error}", path.display()),
-                )
-            })?;
-            let variables = env_file::parse(&SourceFile {
-                name: path.display().to_string(),
-                text: &text,
-            })?;
-            environment.extend(variables);
+            let span = env_file.span();
+            for file in env_file.into_inner().into_vec() {
+                let path = self.base_dir.join(&file);
+                let text = std::fs::read_to_string(&path).map_err(|error| {
+                    self.error(
+                        span.clone(),
+                        format!("cannot read env file {}: {error}", path.display()),
+                    )
+                })?;
+                let variables = env_file::parse(&SourceFile {
+                    name: path.display().to_string(),
+                    text: &text,
+                })?;
+                environment.extend(variables);
+            }
         }
+        let mut references = Vec::new();
         for (key, value) in env {
             if !is_env_name(key.get_ref()) {
                 return Err(self.error(
@@ -891,9 +1001,68 @@ impl Resolver<'_> {
                     ),
                 ));
             }
-            environment.insert(key.get_ref().clone(), value.get_ref().clone());
+            if DAEMON_KEYS.contains(&key.get_ref().as_str()) {
+                return Err(self.error(
+                    key.span(),
+                    format!(
+                        "'{0}' is a setting of [daemon.{1}], but it sits under [daemon.{1}.env], so it would be an environment variable; move it above the [daemon.{1}.env] line",
+                        key.get_ref(),
+                        daemon_id
+                    ),
+                ));
+            }
+            match value.into_inner() {
+                EnvValue::Literal(text) => {
+                    environment.remove(key.get_ref());
+                    environment.insert(key.into_inner(), text);
+                }
+                EnvValue::Input(reference) => {
+                    environment.remove(key.get_ref());
+                    references.push(InputReference { key, reference });
+                }
+            }
         }
-        Ok(environment)
+        Ok((environment, references))
+    }
+
+    /// The permission profile a daemon uses; grants written in place make a profile named
+    /// after the daemon.
+    fn daemon_permissions(
+        &self,
+        id: &Spanned<String>,
+        permission: Spanned<Permissions>,
+        declared: &Declared,
+        permissions: &mut PermissionsConfig,
+    ) -> Result<String> {
+        match permission.get_ref() {
+            Permissions::Profile(name) if permissions.profiles.contains_key(name) => {
+                Ok(name.clone())
+            }
+            Permissions::Profile(name) => Err(self.error(
+                permission.span(),
+                format!(
+                    "unknown permission profile '{name}'{}; declare it with a [permissions.{name}] table, or write the grants here: permissions = {{ <resource-id> = [\"storage/data-read\"] }}",
+                    suggest::hint(name, permissions.profiles.keys().map(String::as_str))
+                ),
+            )),
+            Permissions::Inline(_) if permissions.profiles.contains_key(id.get_ref()) => {
+                Err(self.error(
+                    permission.span(),
+                    format!(
+                        "a [permissions.{0}] table already exists, and these grants would also be named '{0}'; use `permissions = \"{0}\"` or rename one",
+                        id.get_ref()
+                    ),
+                ))
+            }
+            Permissions::Inline(_) => {
+                let Permissions::Inline(grants) = permission.into_inner() else {
+                    unreachable!("matched as inline above")
+                };
+                let profile = self.profile(grants, declared)?;
+                permissions.profiles.insert(id.get_ref().clone(), profile);
+                Ok(id.get_ref().clone())
+            }
+        }
     }
 
     fn endpoints(
@@ -909,8 +1078,8 @@ impl Resolver<'_> {
                 name: name.get_ref().clone(),
                 port: endpoint.port,
                 protocol: ExposeProtocol::Http,
-                host_label: endpoint.host,
-                wildcard_subdomains: endpoint.wildcard,
+                host_label: endpoint.host_label,
+                wildcard_subdomains: endpoint.wildcard_subdomains,
             };
             public_endpoint
                 .validate_for_resource(daemon_id)
@@ -948,187 +1117,111 @@ impl Resolver<'_> {
 struct ResolvedDaemon {
     config: DaemonConfig,
     lifecycle: ResourceLifecycle,
-    /// The daemon's own `platforms`, if it is scoped.
-    scope: Option<Spanned<Vec<Platform>>>,
     /// The boolean input gating the daemon, if it names one.
     enabled_when: Option<Spanned<String>>,
-    secrets: Vec<(Spanned<String>, Spanned<document::Secret>)>,
+    /// Environment variables that take their value from a stack input.
+    input_references: Vec<InputReference>,
     /// Where `permissions` is set on a daemon that also has `host-access`.
     identity_with_host_access: Option<Range<usize>>,
 }
 
-/// Stack inputs the document declares through shorthand, in declaration order.
+/// `NAME = { input = "<id>" }` in a daemon's `env`.
+struct InputReference {
+    key: Spanned<String>,
+    reference: document::InputReference,
+}
+
+/// Stack inputs the document declares, in declaration order.
 #[derive(Default)]
 struct Inputs {
     definitions: IndexMap<String, StackInputDefinition>,
-    /// For secrets: the settings and span that first declared each input, to merge or reject
-    /// a second declaration of the same variable.
-    secret_origins: HashMap<String, (document::Secret, Range<usize>)>,
 }
 
 impl Inputs {
-    /// The input that gates a resource: one synthesized from `platforms`, or a declared
-    /// boolean named by `enabled-when`.
+    /// The input that gates a resource: a declared boolean named by `enabled-when`.
     fn gate(
-        &mut self,
+        &self,
         resolver: &Resolver<'_>,
-        resource_id: &Spanned<String>,
         what: &str,
-        scope: Option<Spanned<Vec<Platform>>>,
         enabled_when: Option<Spanned<String>>,
-        stack_platforms: Option<&[Platform]>,
     ) -> Result<Option<String>> {
-        match (scope, enabled_when) {
-            (None, None) => Ok(None),
-            (Some(scope), None) => self
-                .add_platform_gate(resolver, resource_id, what, scope, stack_platforms)
-                .map(Some),
-            (Some(_), Some(enabled_when)) => Err(resolver.error(
-                enabled_when.span(),
-                "set `platforms` or `enabled-when`, not both; scope the gating input with its own `platforms`",
+        let Some(enabled_when) = enabled_when else {
+            return Ok(None);
+        };
+        let id = enabled_when.get_ref();
+        let reason = match self.definitions.get(id) {
+            None => Some(format!(
+                "unknown input '{id}'{}; declare it with an [input.{id}] table",
+                suggest::hint(id, self.definitions.keys().map(String::as_str))
             )),
-            (None, Some(enabled_when)) => {
-                let id = enabled_when.get_ref();
-                let reason = match self.definitions.get(id) {
-                    None => Some(format!("unknown input '{id}'; declare it with an [input.{id}] table")),
-                    Some(input) if input.kind != StackInputKind::Boolean => {
-                        Some(format!("input '{id}' must be a boolean to decide whether the {what} exists"))
-                    }
-                    Some(input) if !input.provided_by.contains(&StackInputProvider::Deployer) => Some(format!(
-                        "input '{id}' must be provided by the deployer (`provided-by = \"deployer\"`); otherwise setup never asks and the {what} is always created"
-                    )),
-                    Some(input) if !input.required && input.default.is_none() => Some(format!(
-                        "input '{id}' must be required or have a `default`, so whether the {what} exists is always decided"
-                    )),
-                    Some(_) => None,
-                };
-                match reason {
-                    Some(reason) => Err(resolver.error(enabled_when.span(), reason)),
-                    None => Ok(Some(enabled_when.into_inner())),
-                }
-            }
+            Some(input) if input.kind != StackInputKind::Boolean => Some(format!(
+                "input '{id}' must be a boolean to decide whether the {what} exists"
+            )),
+            Some(input) if !input.provided_by.contains(&StackInputProvider::Deployer) => Some(format!(
+                "input '{id}' must be provided by the deployer (`provided-by = \"deployer\"`); otherwise setup never asks and the {what} is always created"
+            )),
+            Some(input) if !input.required && input.default.is_none() => Some(format!(
+                "input '{id}' must be required or have a `default`, so whether the {what} exists is always decided"
+            )),
+            Some(_) => None,
+        };
+        match reason {
+            Some(reason) => Err(resolver.error(enabled_when.span(), reason)),
+            None => Ok(Some(enabled_when.into_inner())),
         }
     }
 
-    /// Scopes a resource to platforms with a deployer boolean that only exists there.
-    fn add_platform_gate(
-        &mut self,
-        resolver: &Resolver<'_>,
-        resource_id: &Spanned<String>,
-        what: &str,
-        scope: Spanned<Vec<Platform>>,
-        stack_platforms: Option<&[Platform]>,
-    ) -> Result<String> {
-        let span = scope.span();
-        let platforms = resolver.platform_list(scope, stack_platforms)?;
-        let id = format!("{}Enabled", camel_case_resource_id(resource_id.get_ref()));
-        if !is_input_id(&id) {
-            return Err(resolver.error(
-                span,
-                format!(
-                    "a {what} scoped to platforms needs an ID that starts with a letter; '{}' does not",
-                    resource_id.get_ref()
-                ),
-            ));
-        }
-        self.insert(
-            resolver,
-            span,
-            StackInputDefinition {
-                id: id.clone(),
-                kind: StackInputKind::Boolean,
-                provided_by: vec![StackInputProvider::Deployer],
-                required: true,
-                label: format!("Create {}", resource_id.get_ref()),
-                description: format!(
-                    "Whether this deployment gets the '{}' {what}.",
-                    resource_id.get_ref()
-                ),
-                placeholder: None,
-                default: Some(StackInputDefaultValue::Boolean(true)),
-                platforms: Some(platforms),
-                when: None,
-                validation: stack_authoring::input_validation(
-                    &StackInputKind::Boolean,
-                    StackInputValidation::default(),
-                ),
-                generate: None,
-                env: Vec::new(),
-            },
-        )?;
-        Ok(id)
-    }
-
-    fn add_secret(
+    /// Wires `NAME = { input = "<id>" }` into the input's environment mappings. The same
+    /// variable on several daemons becomes one mapping with all of them as targets.
+    fn reference(
         &mut self,
         resolver: &Resolver<'_>,
         daemon_id: &str,
-        key: Spanned<String>,
-        secret: Spanned<document::Secret>,
-        stack_platforms: Option<&[Platform]>,
+        InputReference { key, reference }: InputReference,
     ) -> Result<()> {
-        let (span, secret) = (secret.span(), secret.into_inner());
         let name = key.get_ref();
-        let id = camel_case_env_name(name);
-
-        if let Some((first, first_span)) = self.secret_origins.get(&id) {
-            if *first != secret {
-                return Err(resolver.error(
-                    span,
-                    format!(
-                        "secret '{name}' is also declared on line {} with different settings; a secret shared by several daemons must be declared the same way on each",
-                        resolver.line_of(first_span.start)
+        if !is_input_env_name(name) {
+            return Err(resolver.error(
+                key.span(),
+                format!(
+                    "'{name}' takes its value from an input, so it must be an environment variable name in uppercase: letters, digits and underscores"
+                ),
+            ));
+        }
+        let Some(definition) = self.definitions.get_mut(&reference.input) else {
+            return Err(resolver.error(
+                key.span(),
+                format!(
+                    "unknown input '{}'{}; declare it with an [input.{}] table",
+                    reference.input,
+                    suggest::hint(
+                        &reference.input,
+                        self.definitions.keys().map(String::as_str)
                     ),
-                ));
-            }
-            let definition = self
-                .definitions
-                .get_mut(&id)
-                .expect("a recorded secret has a definition");
-            definition.env[0]
+                    reference.input
+                ),
+            ));
+        };
+        let var_type = reference.var_type.map(|var_type| match var_type {
+            EnvVarType::Plain => StackInputEnvironmentVariableType::Plain,
+            EnvVarType::Secret => StackInputEnvironmentVariableType::Secret,
+        });
+        let shared = definition.env.iter_mut().find(|mapping| {
+            mapping.name == *name
+                && mapping.var_type == var_type
+                && mapping.target_resources.is_some()
+        });
+        match shared {
+            Some(mapping) => mapping
                 .target_resources
                 .get_or_insert_with(Vec::new)
-                .push(daemon_id.to_string());
-            return Ok(());
+                .push(daemon_id.to_string()),
+            None => definition.env.push(StackInputEnvironmentMapping {
+                name: name.clone(),
+                target_resources: Some(vec![daemon_id.to_string()]),
+                var_type,
+            }),
         }
-
-        let platforms = secret
-            .platforms
-            .clone()
-            .map(|platforms| {
-                resolver.platform_list(Spanned::new(span.clone(), platforms), stack_platforms)
-            })
-            .transpose()?;
-        self.insert(
-            resolver,
-            key.span(),
-            StackInputDefinition {
-                id: id.clone(),
-                kind: StackInputKind::Secret,
-                provided_by: vec![StackInputProvider::Developer],
-                required: secret.required.unwrap_or(true),
-                label: secret.label.clone().unwrap_or_else(|| name.clone()),
-                description: secret
-                    .description
-                    .clone()
-                    .unwrap_or_else(|| format!("Sets the {name} environment variable.")),
-                placeholder: None,
-                default: None,
-                platforms,
-                when: None,
-                validation: stack_authoring::input_validation(
-                    &StackInputKind::Secret,
-                    StackInputValidation::default(),
-                ),
-                generate: None,
-                env: vec![StackInputEnvironmentMapping {
-                    name: name.clone(),
-                    target_resources: Some(vec![daemon_id.to_string()]),
-                    var_type: None,
-                }],
-            },
-        )?;
-        self.secret_origins.insert(id, (secret, key.span()));
         Ok(())
     }
 
@@ -1183,8 +1276,8 @@ fn choice(choice: &Choice) -> ComputeChoice {
     match choice {
         Choice::Exactly(count) => ComputeChoice::Exactly(*count),
         Choice::Range(range) => ComputeChoice::Range(ComputeChoiceRange {
-            min: range.min,
-            max: range.max,
+            min: range.allowed[0],
+            max: range.allowed[1],
             default: range.default,
         }),
     }
@@ -1253,56 +1346,11 @@ fn is_input_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// `AUTH_ACCESS_KEY` → `authAccessKey`.
-fn camel_case_env_name(name: &str) -> String {
-    let mut id = String::with_capacity(name.len());
-    for (index, part) in name.split('_').filter(|part| !part.is_empty()).enumerate() {
-        let part = part.to_ascii_lowercase();
-        if index == 0 {
-            id.push_str(&part);
-        } else {
-            id.push_str(&capitalize(&part));
-        }
-    }
-    id
-}
-
-/// `snapshot-cache` → `snapshotCache`; the first part is kept as written.
-fn camel_case_resource_id(id: &str) -> String {
-    id.split(['-', '_'])
-        .filter(|part| !part.is_empty())
-        .enumerate()
-        .map(|(index, part)| {
-            if index == 0 {
-                part.to_string()
-            } else {
-                capitalize(part)
-            }
-        })
-        .collect()
-}
-
-fn capitalize(part: &str) -> String {
-    let mut chars = part.chars();
-    chars
-        .next()
-        .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn input_ids_from_names() {
-        assert_eq!(camel_case_env_name("AUTH_ACCESS_KEY"), "authAccessKey");
-        assert_eq!(camel_case_env_name("TOKEN"), "token");
-        assert_eq!(camel_case_env_name("_PRIVATE_KEY2"), "privateKey2");
-        assert_eq!(camel_case_resource_id("snapshots"), "snapshots");
-        assert_eq!(
-            camel_case_resource_id("snapshot-cache_v2"),
-            "snapshotCacheV2"
-        );
+fn toolchain_name(toolchain: Toolchain) -> &'static str {
+    match toolchain {
+        Toolchain::Rust => "rust",
+        Toolchain::Typescript => "typescript",
+        Toolchain::Python => "python",
+        Toolchain::Docker => "docker",
     }
 }

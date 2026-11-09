@@ -41,7 +41,7 @@ fn reject(text: &str) -> Located {
 const DAEMON: &str = r#"name = "acme-agent"
 
 [daemon.agent]
-build = { rust = "acme-agent" }
+build = { toolchain = "rust", binary-name = "acme-agent" }
 "#;
 
 #[track_caller]
@@ -85,10 +85,28 @@ fn syntax_and_shape_errors() {
         "unknown variant `mars`",
     );
     assert_at(
-        &format!("{DAEMON}health = {{ path = \"/health\" }}\n"),
+        &format!("{DAEMON}health-check = {{ path = \"/health\" }}\n"),
         5,
-        10,
+        16,
         "missing field `port`",
+    );
+    assert_at(
+        &format!("{DAEMON}health = {{ port = 8080 }}\n"),
+        5,
+        1,
+        "unknown field `health` (did you mean 'health-check'?), expected one of `build`",
+    );
+    assert_at(
+        &format!("{DAEMON}host_access = true\n"),
+        5,
+        1,
+        "unknown field `host_access` (did you mean 'host-access'?), expected one of",
+    );
+    assert_at(
+        &DAEMON.replace("\"rust\"", "\"rusty\""),
+        4,
+        23,
+        "unknown variant `rusty` (did you mean 'rust'?), expected one of `rust`, `typescript`, `python`, `docker`",
     );
 }
 
@@ -118,16 +136,16 @@ fn semantic_errors_point_at_the_value() {
         "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\n",
         3,
         7,
-        "pool needs `machines = <count>` or `autoscale",
+        "pool needs `machines = <count>` or `autoscaling",
     );
     assert_at(
-        "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\nmachines = { min = 3, max = 2, default = 2 }\n",
+        "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\nmachines = { default = 2, allowed = [3, 2] }\n",
         6,
         12,
         "needs min <= default <= max",
     );
     assert_at(
-        "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\nmachines = 1\ndata-disk = { min = \"1Gi\", default = \"1500M\", max = \"2Gi\" }\n",
+        "name = \"acme\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\nmachines = 1\ndata-disk = { default = \"1500M\", allowed = [\"1Gi\", \"2Gi\"] }\n",
         7,
         13,
         "must be a whole number of GiB: 1500M",
@@ -136,7 +154,7 @@ fn semantic_errors_point_at_the_value() {
         "name = \"acme\"\n\n[daemon.agent]\nmemory = \"1Gi\"\n",
         3,
         9,
-        "daemon needs `build = { rust = \"<binary>\" }` or `image = \"<reference>\"`",
+        "daemon needs `build = { toolchain = \"rust\", binary-name = \"<binary>\" }` or `image = \"<reference>\"`",
     );
     assert_at(
         &format!("{DAEMON}stop-grace-period = \"24 hours\"\n"),
@@ -163,6 +181,18 @@ fn semantic_errors_point_at_the_value() {
         "unknown resource 'cache'",
     );
     assert_at(
+        &format!("{DAEMON}pool = \"genral\"\n\n[pool.general]\ncpu = 4\nmemory = \"16Gi\"\nmachines = 1\n"),
+        5,
+        8,
+        "unknown pool 'genral' (did you mean 'general'?); declared pools: general",
+    );
+    assert_at(
+        &format!("{DAEMON}links = [\"snapshot\"]\n\n[storage.snapshots]\n"),
+        5,
+        10,
+        "unknown resource 'snapshot' (did you mean 'snapshots'?)",
+    );
+    assert_at(
         &format!("{DAEMON}\n[storage.agent]\n"),
         6,
         10,
@@ -177,39 +207,133 @@ fn semantic_errors_point_at_the_value() {
 }
 
 #[test]
-fn scope_secret_and_endpoint_errors() {
+fn build_errors() {
     assert_at(
-        &format!("{DAEMON}platforms = [\"aws\"]\n").replace(
-            "name = \"acme-agent\"",
-            "name = \"acme-agent\"\nplatforms = [\"machines\"]",
-        ),
-        6,
-        13,
-        "'aws' is not one of the stack's platforms (machines)",
+        "name = \"acme\"\n\n[daemon.agent]\nbuild = { toolchain = \"rust\" }\n",
+        4,
+        23,
+        "a rust build needs `binary-name`",
     );
     assert_at(
-        &format!("{DAEMON}\n[daemon.agent.secrets]\napi_key = {{}}\n"),
+        &DAEMON.replace(" }", ", dockerfile = \"Dockerfile\" }"),
+        4,
+        72,
+        "`dockerfile` applies to docker builds only",
+    );
+    assert_at(
+        "name = \"acme\"\n\n[daemon.agent]\nbuild = { toolchain = \"python\" }\n",
+        4,
+        23,
+        "a python build needs `command`",
+    );
+    assert_at(
+        &format!("{DAEMON}image = \"ghcr.io/acme/agent:1\"\n"),
+        5,
+        9,
+        "set either `build` (build from source) or `image` (a prebuilt image), not both",
+    );
+}
+
+#[test]
+fn runtime_resolves_and_rejects_bad_values() {
+    let text = format!(
+        "{DAEMON}runtime = {{ privileged = true, pid-namespace = \"private\", network-mode = \"appnet\", user = \"1000:1000\", mounts = [{{ source = \"/var/lib/acme\", target = \"/data\", options = \"ro\" }}] }}\n"
+    );
+    let stack = alien_stack_toml::parse(&text, "alien.toml", Path::new(".")).expect("resolves");
+    let daemon = stack.resources["agent"]
+        .config
+        .downcast_ref::<alien_core::Daemon>()
+        .expect("agent is a daemon");
+    assert_eq!(
+        daemon.runtime,
+        Some(alien_core::DaemonRuntime {
+            privileged: Some(true),
+            pid_namespace: Some("private".to_string()),
+            network_mode: Some("appnet".to_string()),
+            mounts: vec![alien_core::DaemonRuntimeMount {
+                source: "/var/lib/acme".to_string(),
+                target: "/data".to_string(),
+                options: Some("ro".to_string()),
+            }],
+            user: Some("1000:1000".to_string()),
+        })
+    );
+
+    assert_at(
+        &format!("{DAEMON}runtime = {{ network-mode = \"hots\" }}\n"),
+        5,
+        28,
+        "unknown value 'hots' (did you mean 'host'?); expected one of: host, appnet",
+    );
+    assert_at(
+        &format!("{DAEMON}runtime = {{ pid-namespace = \"shared\" }}\n"),
+        5,
+        29,
+        "unknown value 'shared'",
+    );
+    assert_at(
+        &format!("{DAEMON}host-access = true\nruntime = {{ network-mode = \"host\" }}\n"),
+        6,
+        11,
+        "`runtime` cannot be combined with `host-access`",
+    );
+    assert_at(
+        &format!("{DAEMON}runtime = {{ network = \"host\" }}\n"),
+        5,
+        13,
+        "unknown field `network`",
+    );
+}
+
+#[test]
+fn env_errors() {
+    assert_at(
+        &format!("{DAEMON}\n[daemon.agent.env]\nmemory = \"1Gi\"\n"),
         7,
         1,
-        "secret 'api_key' must be an environment variable name",
+        "'memory' is a setting of [daemon.agent], but it sits under [daemon.agent.env], so it would be an environment variable; move it above the [daemon.agent.env] line",
     );
     assert_at(
-        &format!("{DAEMON}env = {{ API_KEY = \"x\" }}\n\n[daemon.agent.secrets]\nAPI_KEY = {{}}\n"),
-        8,
+        &format!("{DAEMON}\n[daemon.agent.env]\nAPI_TOKEN = {{ input = \"token\" }}\n"),
+        7,
         1,
-        "'API_KEY' is both a secret and an environment variable",
+        "unknown input 'token'; declare it with an [input.token] table",
     );
     assert_at(
         &format!(
-            "{DAEMON}\n[daemon.agent.secrets]\nAPI_KEY = {{ label = \"Key\" }}\n\n[daemon.other]\nimage = \"x\"\n\n[daemon.other.secrets]\nAPI_KEY = {{}}\n"
+            "{DAEMON}\n[daemon.agent.env]\nAPI_TOKEN = {{ input = \"api_tokn\" }}\n\n[input.api_token]\nkind = \"secret\"\nlabel = \"Token\"\ndescription = \"Token.\"\n"
         ),
-        13,
-        11,
-        "secret 'API_KEY' is also declared on line 7 with different settings",
+        7,
+        1,
+        "unknown input 'api_tokn' (did you mean 'api_token'?)",
     );
     assert_at(
         &format!(
-            "{DAEMON}\n[daemon.agent.endpoints]\napi = {{ port = 8080, host = \"@\" }}\nweb = {{ port = 8080, host = \"@\" }}\n"
+            "{DAEMON}\n[daemon.agent.env]\napi_token = {{ input = \"api_token\" }}\n\n[input.api_token]\nkind = \"secret\"\nlabel = \"Token\"\ndescription = \"Token.\"\n"
+        ),
+        7,
+        1,
+        "'api_token' takes its value from an input, so it must be an environment variable name in uppercase",
+    );
+    assert_at(
+        &format!("{DAEMON}\n[daemon.agent.env]\n\"BAD-NAME\" = \"x\"\n"),
+        7,
+        1,
+        "'BAD-NAME' is not an environment variable name",
+    );
+    assert_at(
+        &format!("{DAEMON}\n[daemon.agent.env]\nA = {{ input = \"x\", other = 1 }}\n"),
+        7,
+        20,
+        "unknown field `other`",
+    );
+}
+
+#[test]
+fn endpoint_errors() {
+    assert_at(
+        &format!(
+            "{DAEMON}\n[daemon.agent.public-endpoints]\napi = {{ port = 8080, host-label = \"@\" }}\nweb = {{ port = 8080, host-label = \"@\" }}\n"
         ),
         8,
         7,
@@ -217,7 +341,7 @@ fn scope_secret_and_endpoint_errors() {
     );
     assert_at(
         &format!(
-            "{DAEMON}\n[daemon.agent.endpoints]\napi = {{ port = 8080 }}\nweb = {{ port = 9090 }}\n"
+            "{DAEMON}\n[daemon.agent.public-endpoints]\napi = {{ port = 8080 }}\nweb = {{ port = 9090 }}\n"
         ),
         8,
         7,
@@ -260,11 +384,11 @@ fn input_errors() {
     );
     assert_at(
         &input(
-            "kind = \"string\"\nrequired = false\nenv = { name = \"REGION\", targets = [\"api\"] }",
+            "kind = \"string\"\nrequired = false\nenv = { name = \"REGION\", target-resources = [\"api\"] }",
         ),
         9,
         7,
-        "unknown resource 'api' in `targets`",
+        "unknown resource 'api' in `target-resources`",
     );
     assert_at(
         &input("kind = \"string\"\nrequired = false\nenv = \"region\""),
@@ -280,11 +404,11 @@ fn input_errors() {
     );
     assert_at(
         &format!(
-            "{DAEMON}\n[input.apiKey]\nkind = \"string\"\nrequired = false\n\n[daemon.agent.secrets]\nAPI_KEY = {{}}\n"
+            "{DAEMON}\n[input.api_key]\nkind = \"string\"\nrequired = false\n\n[input.Api_Key]\nkind = \"string\"\nrequired = false\n"
         ),
-        11,
-        1,
-        "clashes with the input 'apiKey'",
+        10,
+        8,
+        "clashes with the input 'api_key'",
     );
 }
 
@@ -305,21 +429,47 @@ fn permission_errors() {
 }
 
 #[test]
+fn inline_permission_errors() {
+    assert_at(
+        &format!("{DAEMON}permissions = {{ cache = [\"kv/data-read\"] }}\n"),
+        5,
+        17,
+        "unknown resource 'cache'",
+    );
+    assert_at(
+        &format!(
+            "{DAEMON}permissions = {{ files = [\"storage/data-read\"] }}\n\n[storage.files]\n\n[permissions.agent]\n"
+        ),
+        5,
+        15,
+        "a [permissions.agent] table already exists, and these grants would also be named 'agent'",
+    );
+    assert_at(
+        &format!("{DAEMON}permissions = \"agnt\"\n\n[permissions.agent]\n"),
+        5,
+        15,
+        "unknown permission profile 'agnt' (did you mean 'agent'?)",
+    );
+}
+
+#[test]
 fn host_access_cannot_have_a_cloud_identity() {
     let text =
         format!("{DAEMON}host-access = true\npermissions = \"agent\"\n\n[permissions.agent]\n");
     assert_at(
-        &text.replace(
+        &text.replacen(
             "name = \"acme-agent\"",
             "name = \"acme-agent\"\nplatforms = [\"machines\", \"gcp\"]",
+            1,
         ),
         7,
         15,
         "on gcp a daemon with `host-access` could use the machine's credentials",
     );
-    let machines_only = text.replace(
+    let machines_only = text.replacen(
         "name = \"acme-agent\"",
         "name = \"acme-agent\"\nplatforms = [\"machines\"]",
+        1,
     );
     let stack = alien_stack_toml::parse(&machines_only, "alien.toml", Path::new("."))
         .expect("machines daemons get no cloud identity, so the pair is allowed");
@@ -329,37 +479,37 @@ fn host_access_cannot_have_a_cloud_identity() {
 #[test]
 fn gate_errors() {
     let gate = |input: &str| {
-        format!("{DAEMON}enabled-when = \"withAgent\"\n\n[input.withAgent]\n{input}\n")
+        format!("{DAEMON}enabled-when = \"with_agent\"\n\n[input.with_agent]\n{input}\n")
     };
     assert_at(
-        &format!("{DAEMON}enabled-when = \"withAgent\"\n"),
+        &format!("{DAEMON}enabled-when = \"with_agent\"\n"),
         5,
         16,
-        "unknown input 'withAgent'; declare it with an [input.withAgent] table",
+        "unknown input 'with_agent'; declare it with an [input.with_agent] table",
     );
     assert_at(
         &gate("kind = \"string\"\nprovided-by = \"deployer\"\ndescription = \"x\""),
         5,
         16,
-        "input 'withAgent' must be a boolean",
+        "input 'with_agent' must be a boolean",
     );
     assert_at(
         &gate("kind = \"boolean\"\ndescription = \"x\""),
         5,
         16,
-        "input 'withAgent' must be provided by the deployer",
+        "input 'with_agent' must be provided by the deployer",
     );
     assert_at(
         &gate("kind = \"boolean\"\nprovided-by = \"deployer\"\nrequired = false"),
         5,
         16,
-        "input 'withAgent' must be required or have a `default`",
+        "input 'with_agent' must be required or have a `default`",
     );
     assert_at(
-        &format!("{DAEMON}platforms = [\"aws\"]\nenabled-when = \"withAgent\"\n"),
-        6,
+        &format!("{DAEMON}enabled-when = \"with_agnt\"\n\n[input.with_agent]\nkind = \"boolean\"\nprovided-by = \"deployer\"\ndescription = \"x\"\n"),
+        5,
         16,
-        "set `platforms` or `enabled-when`, not both",
+        "unknown input 'with_agnt' (did you mean 'with_agent'?)",
     );
 }
 
@@ -383,6 +533,33 @@ fn env_file_errors() {
     );
     assert_eq!((malformed.line, malformed.column), (3, 1));
     assert!(malformed.message.contains("expected KEY=value"));
+}
+
+#[test]
+fn env_file_lists_read_in_order_and_inline_env_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.env"), "ONE=a\nTWO=a\nTHREE=a\n").unwrap();
+    std::fs::write(dir.path().join("b.env"), "TWO=b\nTHREE=b\n").unwrap();
+    let text =
+        format!("{DAEMON}env-file = [\"a.env\", \"b.env\"]\nenv = {{ THREE = \"inline\" }}\n");
+    let stack = alien_stack_toml::parse(&text, "alien.toml", dir.path()).expect("stack resolves");
+    let daemon = stack.resources["agent"]
+        .config
+        .downcast_ref::<alien_core::Daemon>()
+        .expect("agent is a daemon");
+    let expected: std::collections::HashMap<String, String> =
+        [("ONE", "a"), ("TWO", "b"), ("THREE", "inline")]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+    assert_eq!(daemon.environment, expected);
+
+    let missing = reject_in(
+        dir.path(),
+        &format!("{DAEMON}env-file = [\"a.env\", \"c.env\"]\n"),
+    );
+    assert_eq!((missing.line, missing.column), (5, 12));
+    assert!(missing.message.contains("c.env"), "{}", missing.message);
 }
 
 #[test]

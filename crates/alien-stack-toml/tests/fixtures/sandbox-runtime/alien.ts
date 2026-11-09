@@ -1,27 +1,27 @@
 import * as alien from "@alienplatform/core"
 
 const inputs = alien.inputs({
-  snapshotsEnabled: alien.boolean({
+  snapshots_enabled: alien.boolean({
     providedBy: "deployer",
     required: true,
     label: "Create snapshots",
-    description: "Whether this deployment gets the 'snapshots' storage bucket.",
+    description: "Whether this deployment gets the snapshots storage bucket.",
     default: true,
     platforms: ["aws"],
   }),
-  authAccessKey: alien.secret({
+  auth_access_key: alien.secret({
     providedBy: "developer",
     required: true,
     label: "Auth access key",
-    description: "Sets the AUTH_ACCESS_KEY environment variable.",
+    description: "Key the loader presents to the auth service.",
     env: { name: "AUTH_ACCESS_KEY", targetResources: ["loader"] },
   }),
-  tailnetAuthKey: alien.secret({
+  tailnet_auth_key: alien.secret({
     providedBy: "developer",
     required: false,
     platforms: ["machines"],
-    label: "TAILNET_AUTH_KEY",
-    description: "Sets the TAILNET_AUTH_KEY environment variable.",
+    label: "Tailnet auth key",
+    description: "",
     env: { name: "TAILNET_AUTH_KEY", targetResources: ["loader"] },
   }),
 })
@@ -39,7 +39,7 @@ const compute = new alien.ComputeCluster("compute")
   })
   .build()
 
-const snapshots = new alien.Storage("snapshots").enabled(inputs.snapshotsEnabled).build()
+const snapshots = new alien.Storage("snapshots").enabled(inputs.snapshots_enabled).build()
 
 const loader = new alien.Daemon("loader")
   .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "loader" } })
@@ -58,7 +58,7 @@ const loader = new alien.Daemon("loader")
   .healthCheck({ port: 18082, path: "/health" })
   .environment({
     LOADER_HOST_ROOT: "/host",
-    LOADER_STATE_DIR: "/host/var/lib/sandbox-loader",
+    LOADER_STATE_DIR: "/host/var/lib/sandbox-loader-v2",
     LOADER_HEALTH_LISTEN: "127.0.0.1:18082",
     LOADER_GREETING: "hello # not a comment",
     RUST_LOG: "info",

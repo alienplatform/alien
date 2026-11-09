@@ -937,8 +937,8 @@ mod tests {
 platforms = ["machines"]
 
 [daemon.agent]
-build = { rust = "agent" }
-health = { port = 8080 }
+build = { toolchain = "rust", binary-name = "agent" }
+health-check = { port = 8080 }
 "#;
 
     #[tokio::test]
@@ -982,7 +982,7 @@ health = { port = 8080 }
         let config_path = temp_dir.path().join("alien.toml");
         fs::write(
             &config_path,
-            TOML_CONFIG.replace("health = { port = 8080 }", "pool = \"gpu\""),
+            TOML_CONFIG.replace("health-check = { port = 8080 }", "pool = \"gpu\""),
         )
         .unwrap();
 
