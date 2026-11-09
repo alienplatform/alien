@@ -2201,6 +2201,12 @@ mod tests {
         /// (`marked`: built with a receiver that reads the capability file) the
         /// deployment's current release.
         async fn run_release_with_receivers(&self, receivers: &[(&str, bool)]) {
+            let release_id = self.create_release_with_receivers(receivers).await;
+            self.stored.lock().unwrap().current_release_id = Some(release_id);
+        }
+
+        /// A release whose command-enabled Containers are `(id, marked)`.
+        async fn create_release_with_receivers(&self, receivers: &[(&str, bool)]) -> String {
             let mut stack = Stack::new("app".to_string());
             for (id, marked) in receivers {
                 let container = alien_core::Container::new((*id).to_string())
@@ -2237,7 +2243,26 @@ mod tests {
                 )
                 .await
                 .expect("release");
-            self.stored.lock().unwrap().current_release_id = Some(release.id);
+            release.id
+        }
+
+        /// A release with no stack for the deployment's platform.
+        async fn create_stackless_release(&self) -> String {
+            self.state
+                .release_store
+                .create_release(
+                    &crate::auth::Subject::system(),
+                    CreateReleaseParams {
+                        project_id: "default".to_string(),
+                        stacks: HashMap::new(),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .expect("release")
+                .id
         }
 
         /// `POST /v1/sync` as `bearer`, reporting the deployment running.
@@ -2252,6 +2277,17 @@ mod tests {
         }
 
         async fn sync_reporting(&self, bearer: &str, pull_secret_refreshed: bool) -> StatusCode {
+            self.sync_reporting_release(bearer, pull_secret_refreshed, None)
+                .await
+        }
+
+        /// The same, with the Operator naming the release it runs.
+        async fn sync_reporting_release(
+            &self,
+            bearer: &str,
+            pull_secret_refreshed: bool,
+            running_release_id: Option<&str>,
+        ) -> StatusCode {
             let mut body = json!({
                 "deploymentId": "dep_test",
                 "maxSupportedDeploymentProtocolVersion":
@@ -2264,6 +2300,12 @@ mod tests {
             });
             if pull_secret_refreshed {
                 body["pullSecretRefreshed"] = json!(true);
+            }
+            if let Some(release_id) = running_release_id {
+                body["currentState"]["currentRelease"] = json!({
+                    "releaseId": release_id,
+                    "stack": Stack::new("app".to_string()).build(),
+                });
             }
             let response = super::router()
                 .with_state(self.state.clone())
@@ -2650,6 +2692,108 @@ mod tests {
         assert_eq!(*manager.revocable_reports.lock().unwrap(), vec![true]);
     }
 
+    /// The Operator names the release it runs, but the manager knows which
+    /// release it assigned. A report of an older, fully marked release, or of a
+    /// release with no stack, does not end the token while the manager's own
+    /// current release has an unmarked receiver.
+    #[tokio::test]
+    async fn a_reported_release_does_not_decide_whether_the_token_is_revoked() {
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+        let operator = manager.operator_capability();
+        let older_marked = manager
+            .create_release_with_receivers(&[("old-api", true)])
+            .await;
+        let stackless = manager.create_stackless_release().await;
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+
+        for reported in [older_marked, stackless] {
+            manager.stored.lock().unwrap().status = "update-pending".into();
+            assert_eq!(
+                manager
+                    .sync_reporting_release(&operator, true, Some(&reported))
+                    .await,
+                StatusCode::OK
+            );
+            assert_eq!(
+                manager.sync(old_token).await,
+                StatusCode::OK,
+                "reported release {reported} must not revoke the token"
+            );
+        }
+        assert_eq!(
+            *manager.revocable_reports.lock().unwrap(),
+            Vec::<bool>::new()
+        );
+    }
+
+    /// Mid-rollout the current release is fully marked, but the release being
+    /// rolled out adds an unmarked receiver. The token stays until neither has one.
+    #[tokio::test]
+    async fn the_token_is_kept_while_the_release_being_rolled_out_has_an_unmarked_receiver() {
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+        let operator = manager.operator_capability();
+        manager
+            .run_release_with_receivers(&[("old-api", true)])
+            .await;
+        let incoming = manager
+            .create_release_with_receivers(&[("old-api", true), ("new-api", false)])
+            .await;
+        manager.stored.lock().unwrap().desired_release_id = Some(incoming);
+        manager.stored.lock().unwrap().status = "update-pending".into();
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
+        assert_eq!(
+            *manager.revocable_reports.lock().unwrap(),
+            Vec::<bool>::new()
+        );
+    }
+
+    /// A release of another project is not one the deployment runs, so the
+    /// token stays even when that release is fully marked.
+    #[tokio::test]
+    async fn the_token_is_kept_when_the_release_belongs_to_another_project() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        let foreign = manager
+            .state
+            .release_store
+            .create_release(
+                &crate::auth::Subject::system(),
+                CreateReleaseParams {
+                    project_id: "other_project".to_string(),
+                    stacks: HashMap::from([(
+                        Platform::Kubernetes,
+                        Stack::new("app".into()).build(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .expect("release")
+            .id;
+        manager.stored.lock().unwrap().current_release_id = Some(foreign);
+        manager.stored.lock().unwrap().status = "update-pending".into();
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
+            StatusCode::OK
+        );
+    }
+
     /// A release the manager cannot read could hold an unmarked receiver, so
     /// the token stays, the store is not told it is revocable, and the warning
     /// names the deployment.
@@ -2691,7 +2835,7 @@ mod tests {
         assert!(manager.revocable_reports.lock().unwrap().is_empty());
         let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         assert!(
-            logs.contains("Current release not found; keeping the deployment token")
+            logs.contains("Release not found; keeping the deployment token")
                 && logs.contains("dep_test"),
             "{logs}"
         );
@@ -4571,15 +4715,7 @@ async fn agent_sync(
                         Err(response) => return response,
                     };
                     let deployment_token_revocable = pull_secret_refreshed
-                        && !command_receivers_need_token(
-                            &state,
-                            &deployment,
-                            agent_state
-                                .current_release
-                                .as_ref()
-                                .and_then(|release| release.release_id.as_deref()),
-                        )
-                        .await;
+                        && !command_receivers_need_token(&state, &deployment).await;
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: req.session.clone(),
@@ -4899,7 +5035,7 @@ async fn agent_sync(
                         Err(response) => return response,
                     };
                     let deployment_token_revocable = pull_secret_refreshed
-                        && !command_receivers_need_token(&state, &deployment, None).await;
+                        && !command_receivers_need_token(&state, &deployment).await;
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: "agent-sync".to_string(),
@@ -5629,52 +5765,64 @@ fn token_hold_key(deployment_id: &str) -> String {
     format!("deployment-token-held:{deployment_id}")
 }
 
-/// Whether the deployment's current release has a command-enabled Container
+/// Whether the releases the manager itself assigned to the deployment, the
+/// current one and the one being rolled out, have a command-enabled Container
 /// or Daemon that `alien build` did not record as reading the capability file.
 /// Such a receiver starts only with `ALIEN_COMMANDS_TOKEN`, so the deployment
-/// token must outlive it. A release that cannot be read counts as needing the
-/// token. A deployment with no current release has no receiver.
+/// token must outlive it.
+///
+/// The gate never reads the release an Operator reports: whoever holds the
+/// Operator's credential could report an older, fully marked release to end
+/// the token early. A release that cannot be read, belongs to another project
+/// or has no stack for the deployment's platform counts as needing the token.
+/// A deployment with no release has no receiver.
 ///
 /// The result is folded into `deployment_token_revocable` (the Operator's
 /// `pull_secret_refreshed` report and no unmarked receiver) before the report
 /// reaches the deployment store, so every store revokes on the one condition
 /// and a deployment that never redeploys keeps its token.
-async fn command_receivers_need_token(
-    state: &AppState,
-    deployment: &DeploymentRecord,
-    reported_release_id: Option<&str>,
-) -> bool {
-    let Some(release_id) = reported_release_id.or(deployment.current_release_id.as_deref()) else {
-        return false;
-    };
+async fn command_receivers_need_token(state: &AppState, deployment: &DeploymentRecord) -> bool {
     let system = crate::auth::Subject::system();
-    let release = match state.release_store.get_release(&system, release_id).await {
-        Ok(Some(release)) => release,
-        Ok(None) => {
-            tracing::warn!(deployment_id = %deployment.id, %release_id, "Current release not found; keeping the deployment token");
+    let current = deployment.current_release_id.as_deref();
+    let desired = deployment
+        .desired_release_id
+        .as_deref()
+        .filter(|desired| Some(*desired) != current);
+    for release_id in current.into_iter().chain(desired) {
+        let release = match state.release_store.get_release(&system, release_id).await {
+            Ok(Some(release)) => release,
+            Ok(None) => {
+                tracing::warn!(deployment_id = %deployment.id, %release_id, "Release not found; keeping the deployment token");
+                return true;
+            }
+            Err(error) => {
+                tracing::warn!(deployment_id = %deployment.id, %release_id, %error, "Cannot read the release; keeping the deployment token");
+                return true;
+            }
+        };
+        if release.project_id != deployment.project_id {
+            tracing::warn!(deployment_id = %deployment.id, %release_id, "Release belongs to another project; keeping the deployment token");
             return true;
         }
-        Err(error) => {
-            tracing::warn!(deployment_id = %deployment.id, %release_id, %error, "Cannot read the current release; keeping the deployment token");
+        let Some(stack) = release
+            .stacks
+            .get(&release_stack_platform(deployment.platform))
+        else {
+            tracing::warn!(deployment_id = %deployment.id, %release_id, "Release has no stack for the deployment's platform; keeping the deployment token");
+            return true;
+        };
+        let unmarked = stack.command_receivers_without_capability_file();
+        if !unmarked.is_empty() {
+            tracing::info!(
+                deployment_id = %deployment.id,
+                %release_id,
+                resources = ?unmarked,
+                "Command receivers built before capability files still need the deployment token"
+            );
             return true;
         }
-    };
-    let Some(stack) = release
-        .stacks
-        .get(&release_stack_platform(deployment.platform))
-    else {
-        return false;
-    };
-    let unmarked = stack.command_receivers_without_capability_file();
-    if !unmarked.is_empty() {
-        tracing::info!(
-            deployment_id = %deployment.id,
-            %release_id,
-            resources = ?unmarked,
-            "Command receivers built before capability files still need the deployment token"
-        );
     }
-    !unmarked.is_empty()
+    false
 }
 
 /// Revoke the deployment token once the enrolled Operator's first rollout is

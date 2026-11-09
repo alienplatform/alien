@@ -207,7 +207,10 @@ impl CommandServer {
         deadline: DateTime<Utc>,
     ) -> (String, i64) {
         let expires = deadline.timestamp();
-        let token = self.response_mac(command_id, lease_id, expires).finalize().into_bytes();
+        let token = self
+            .response_mac(command_id, lease_id, expires)
+            .finalize()
+            .into_bytes();
         (hex::encode(token), expires)
     }
 

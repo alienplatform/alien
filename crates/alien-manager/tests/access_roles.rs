@@ -1750,7 +1750,11 @@ mod runtime_credentials {
                 .await
                 .unwrap()
         }
-        async fn lease(router: &axum::Router, bearer: &str, deployment_id: &str) -> alien_core::LeaseInfo {
+        async fn lease(
+            router: &axum::Router,
+            bearer: &str,
+            deployment_id: &str,
+        ) -> alien_core::LeaseInfo {
             let response = request(
                 router,
                 bearer,
@@ -1768,7 +1772,11 @@ mod runtime_credentials {
             assert_eq!(leases.leases.len(), 1);
             leases.leases.remove(0)
         }
-        async fn submit(router: &axum::Router, lease: &alien_core::LeaseInfo, body: &[u8]) -> StatusCode {
+        async fn submit(
+            router: &axum::Router,
+            lease: &alien_core::LeaseInfo,
+            body: &[u8],
+        ) -> StatusCode {
             let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
             let url = base
                 .join(&lease.envelope.response_handling.submit_response_url)
