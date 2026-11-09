@@ -9,7 +9,9 @@
  *
  * Pure `fetch`; no bindings. The receiver implements these public
  * command-delivery semantics:
- * - required identity plus token-or-token-file env, with fail-fast validation
+ * - required identity plus a token, a token file or (with
+ *   `ALIEN_IDENTITY_PROVIDER=capabilityFile`) a short-lived capability file,
+ *   with fail-fast validation
  * - execution budget = `min(envelope.deadline, leaseExpiresAt − safety margin)`;
  *   on expiry the handler's `signal` fires and a `HANDLER_TIMEOUT` is submitted
  * - error codes `UNKNOWN_COMMAND` / handler `error.code` (falling back to
@@ -34,7 +36,7 @@
  * ```
  */
 
-import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
+import { AlienError, LeaseResponseSchema, ResponseHandlingSchema } from "@alienplatform/core"
 import { requestWithRefreshingConnection } from "./bootstrap.js"
 import {
   CommandReceiverConfigInvalidError,
@@ -98,6 +100,8 @@ const LEASE_SAFETY_MARGIN_MS = 5_000
  * timeout.
  */
 const CONTROL_TIMEOUT_MS = 30_000
+/** Size cap on the refreshed response context, as in the Rust receiver. */
+const MAX_RESPONSE_CONTEXT_BYTES = 64 * 1024
 
 /**
  * Per-command context passed to a {@link CommandHandler}.
@@ -534,7 +538,7 @@ class PullCommandReceiver implements CommandReceiver {
     const handlerStatus = commandResponseStatus(response)
     let submitStatus: SubmitStatus = "submitted"
     try {
-      await this.submitResponse(lease.envelope, response, lease.leaseExpiresAt)
+      await this.submitResponse(lease.envelope, response, lease.leaseExpiresAt, lease.leaseId)
     } catch (error) {
       // No ack: the lease will expire and the command is redelivered.
       submitStatus = "failed"
@@ -625,10 +629,68 @@ class PullCommandReceiver implements CommandReceiver {
     }
   }
 
+  /**
+   * Fetch fresh response authority for a running command (twin of the Rust
+   * `refresh_response_context`). The receiver's current bearer authorizes it.
+   */
+  private async refreshResponseContext(
+    envelope: Envelope,
+    leaseId: string,
+    signal: AbortSignal,
+  ): Promise<Envelope> {
+    let leaseEndpoint = ""
+    const { response, endpoint } = await this.authenticatedFetch(connection => {
+      leaseEndpoint = buildLeaseEndpoint(connection.url)
+      const url = new URL(leaseEndpoint)
+      const segments = url.pathname.split("/")
+      segments.pop()
+      segments.push(encodeURIComponent(envelope.commandId), "response-context")
+      url.pathname = segments.join("/")
+      url.searchParams.append("leaseId", leaseId)
+      return { endpoint: url.toString(), init: { method: "GET", signal } }
+    })
+    if (!response.ok) {
+      const context = {
+        method: "GET",
+        url: redactUrlForError(endpoint),
+        status: response.status,
+        statusText: response.statusText,
+      }
+      const definition = ManagerHttpError.create(context)
+      throw new AlienError({
+        code: definition.metadata.code,
+        message: definition.metadata.message(context),
+        retryable: false,
+        internal: definition.metadata.internal,
+        httpStatusCode: definition.metadata.httpStatusCode,
+        context,
+      })
+    }
+    const text = await response.text()
+    if (text.length > MAX_RESPONSE_CONTEXT_BYTES) {
+      throw new AlienError(
+        InvalidEnvelopeError.create({
+          field: "responseHandling",
+          reason: "Command response context exceeds its size limit",
+        }),
+      )
+    }
+    const responseHandling = parseWireResponse(
+      ResponseHandlingSchema,
+      JSON.parse(text),
+      "GET",
+      redactUrlForError(endpoint),
+    )
+    const refreshed = { ...envelope, responseHandling }
+    resolveEnvelopeUrls(refreshed, leaseEndpoint)
+    return refreshed
+  }
+
   private async submitResponse(
     envelope: Envelope,
     response: CommandResponse,
     leaseExpiresAt: string,
+    leaseId: string,
   ): Promise<void> {
     const remainingLeaseMs = new Date(leaseExpiresAt).getTime() - Date.now()
     if (remainingLeaseMs <= 0) {
@@ -646,6 +708,12 @@ class PullCommandReceiver implements CommandReceiver {
     const submissionTimeoutMs = Math.min(CONTROL_TIMEOUT_MS, remainingLeaseMs)
     const submissionSignal = AbortSignal.timeout(submissionTimeoutMs)
     let finalResponse = response
+
+    // A short-lived credential may have expired while the handler ran, and the
+    // authority to submit was bound to it. Ask the manager for a fresh one.
+    if (this.connectionProvider.refreshesResponseContext === true) {
+      envelope = await this.refreshResponseContext(envelope, leaseId, submissionSignal)
+    }
 
     if (response.status === "success" && response.response.mode === "inline") {
       const bytes = base64ToBytes(response.response.inlineBase64)
