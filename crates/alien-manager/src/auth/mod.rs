@@ -11,6 +11,7 @@
 pub mod authz;
 pub mod aws_identity;
 pub mod command_capability;
+pub mod commands_key;
 pub mod identity_exchange;
 pub mod remote_binding_capability;
 pub mod runtime_capability;

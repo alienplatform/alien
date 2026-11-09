@@ -447,8 +447,9 @@ impl ReconcileInput {
     /// Whether the deployment's static token is safe to revoke. The manager
     /// sets it when the Operator reported that the pull Secret its Deployment
     /// references holds its own registry credential (or that no such Secret
-    /// needs one) and the current release has no command receiver that still
-    /// starts only with the token. Embedders that revoke the token wait for it.
+    /// needs one). Command receivers built before capability files do not hold
+    /// the token; they hold the deployment's commands-only key, which the
+    /// manager revokes itself. Embedders that revoke the token wait for this.
     pub fn deployment_token_revocable(&self) -> bool {
         self.deployment_token_revocable
     }
