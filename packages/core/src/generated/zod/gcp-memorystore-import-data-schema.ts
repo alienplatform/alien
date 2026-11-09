@@ -16,6 +16,7 @@ export const GcpMemorystoreImportDataSchema = z.object({
 "nodeType": z.string().describe("Node type, such as `shared-core-nano`."),
 "persistence": z.optional(z.boolean().describe("Whether RDB persistence is on.")),
 "port": z.int().min(0).describe("Listening port."),
+"projectId": z.string().describe("Project ID (not the number) that owns the instance. The workload's token grant is\nconditioned on the ID form of the instance name."),
 "region": z.string().describe("Region the instance runs in.")
     }).describe("GCP Memorystore for Valkey registration data: the handles by which a setup-created\ninstance is registered as a Frozen Redis resource. Setup owns the instance; Alien refreshes\nand heartbeats it. The auth token is never carried or copied: workloads read it from\nMemorystore.")
 

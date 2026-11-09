@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GcpMemorystoreImportData {
+    /// Project ID (not the number) that owns the instance. The workload's token grant is
+    /// conditioned on the ID form of the instance name.
+    pub project_id: String,
     /// Instance id.
     pub instance_name: String,
     /// Region the instance runs in.
