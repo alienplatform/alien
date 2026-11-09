@@ -384,6 +384,7 @@ impl DailyIdentity {
                 Err(error)
             }
         };
+        let had_pending = state.pending.is_some();
         if let Some(pending) = &state.pending {
             let probe = self.client.post(format!("{}/v1/identity/exchange", state.manager_url.trim_end_matches('/')))
                 .json(&json!({"deploymentId":state.deployment_id,"purpose":{"type":"telemetry"},"proof":{"type":"dailyKey","key":pending}}))
@@ -446,13 +447,50 @@ impl DailyIdentity {
             state.pending_started_at = Some(now);
             self.db.write_daily_identity(&state).await?;
         }
-        let pending = state
+        let mut pending = state
             .pending
-            .as_ref()
+            .clone()
             .ok_or_else(|| failed("Pending key was not saved"))?;
-        let response = match self.post(&state, "rotate", json!({"deploymentId":state.deployment_id,"key":state.current,"successorHash":key_hash(pending)})).await {
-            Ok(response) => response,
+        let rotation = json!({"deploymentId":state.deployment_id,"key":state.current,"successorHash":key_hash(&pending)});
+        let mut outcome = match self.post_outcome(&state, "rotate", rotation).await {
+            Ok(outcome) => outcome,
             Err(error) => return keep_current(&state, error),
+        };
+        if had_pending && matches!(outcome, Err(status) if status.as_u16() == 401) {
+            // The manager refused the current key for good, so it replaced it:
+            // an earlier rotation committed and its answer was lost. The saved
+            // successor is then the latest installed key, and it still rotates
+            // for a week after it ended, though its exchange no longer works.
+            // Make it the current key, save a new successor, and rotate again.
+            // Both keys are on disk before the request is sent.
+            let installed_at = state.pending_started_at.unwrap_or(now);
+            state.current = state
+                .pending
+                .take()
+                .ok_or_else(|| failed("Pending key was not saved"))?;
+            pending = new_key()?;
+            state.pending = Some(pending.clone());
+            state.pending_started_at = Some(now);
+            state.expires_at = installed_at + chrono::Duration::hours(24);
+            self.db.write_daily_identity(&state).await?;
+            warn!("Component key was replaced; rotating with the saved successor");
+            let rotation = json!({"deploymentId":state.deployment_id,"key":state.current,"successorHash":key_hash(&pending)});
+            outcome = match self.post_outcome(&state, "rotate", rotation).await {
+                Ok(outcome) => outcome,
+                Err(error) => return keep_current(&state, error),
+            };
+        }
+        let response = match outcome {
+            Ok(response) => response,
+            Err(status) => {
+                return keep_current(
+                    &state,
+                    failed(&format!(
+                        "Component identity request refused (HTTP {})",
+                        status.as_u16()
+                    )),
+                )
+            }
         };
         state.expires_at = response_expiry(&response)?;
         state.current = pending.clone();
@@ -468,6 +506,23 @@ impl DailyIdentity {
         operation: &str,
         body: Value,
     ) -> Result<Value> {
+        match self.post_outcome(state, operation, body).await? {
+            Ok(value) => Ok(value),
+            Err(status) => Err(failed(&format!(
+                "Component identity request refused (HTTP {})",
+                status.as_u16()
+            ))),
+        }
+    }
+
+    /// Like [`Self::post`], but hands back the refusal status so a caller can
+    /// tell a key the manager no longer accepts (401) from an outage.
+    async fn post_outcome(
+        &self,
+        state: &DailyIdentityState,
+        operation: &str,
+        body: Value,
+    ) -> Result<std::result::Result<Value, reqwest::StatusCode>> {
         let mut response = self
             .client
             .post(format!(
@@ -479,10 +534,7 @@ impl DailyIdentity {
             .await
             .map_err(|_| failed("Component identity request failed"))?;
         if !response.status().is_success() {
-            return Err(failed(&format!(
-                "Component identity request refused (HTTP {})",
-                response.status().as_u16()
-            )));
+            return Ok(Err(response.status()));
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response
@@ -495,7 +547,9 @@ impl DailyIdentity {
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| failed("Invalid component identity response"))
+        serde_json::from_slice(&bytes)
+            .map(Ok)
+            .map_err(|_| failed("Invalid component identity response"))
     }
 }
 
@@ -1648,5 +1702,214 @@ mod persistence_tests {
         }
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// A manager that keeps one key per deployment and follows the real rules:
+/// exchange needs an unexpired current key; rotation takes the current key
+/// until a week after it ended.
+#[cfg(test)]
+mod grace_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[derive(Clone)]
+    struct GraceManager {
+        key: Arc<Mutex<(String, DateTime<Utc>)>>,
+        rotations: Arc<AtomicUsize>,
+        lose_next_answer: Arc<AtomicBool>,
+    }
+
+    async fn grace_rotate(
+        axum::extract::State(manager): axum::extract::State<GraceManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let mut key = manager.key.lock().await;
+        let successor = body["successorHash"].as_str().unwrap().to_owned();
+        if key_hash(body["key"].as_str().unwrap()) != key.0
+            || key.1 <= Utc::now() - ROTATION_GRACE
+            || successor == key.0
+        {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        let expires_at = Utc::now() + chrono::Duration::hours(24);
+        *key = (successor, expires_at);
+        manager.rotations.fetch_add(1, Ordering::SeqCst);
+        if manager.lose_next_answer.swap(false, Ordering::SeqCst) {
+            return http::Response::builder()
+                .status(200)
+                .body(axum::body::Body::from_stream(futures::stream::once(
+                    async {
+                        Err::<axum::body::Bytes, _>(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionReset,
+                            "fixture response lost",
+                        ))
+                    },
+                )))
+                .unwrap();
+        }
+        axum::Json(json!({"expiresAt": expires_at, "revision": 2})).into_response()
+    }
+
+    async fn grace_exchange(
+        axum::extract::State(manager): axum::extract::State<GraceManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let key = manager.key.lock().await;
+        if key_hash(body["proof"]["key"].as_str().unwrap()) != key.0 || key.1 <= Utc::now() {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        axum::Json(json!({
+            "token": "ax_cap_v1_grace",
+            "expiresAt": Utc::now() + chrono::Duration::minutes(5),
+        }))
+        .into_response()
+    }
+
+    async fn fixture(
+        server_key: &str,
+        server_key_expires: DateTime<Utc>,
+    ) -> (Arc<OperatorDb>, String, GraceManager, tempfile::TempDir) {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let manager = GraceManager {
+            key: Arc::new(Mutex::new((key_hash(server_key), server_key_expires))),
+            rotations: Arc::new(AtomicUsize::new(0)),
+            lose_next_answer: Arc::new(AtomicBool::new(false)),
+        };
+        let app = axum::Router::new()
+            .route("/v1/identity/rotate", axum::routing::post(grace_rotate))
+            .route("/v1/identity/exchange", axum::routing::post(grace_exchange))
+            .with_state(manager.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        (db, url, manager, directory)
+    }
+
+    fn saved_state(
+        url: &str,
+        current: &str,
+        pending: Option<&str>,
+        started: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> DailyIdentityState {
+        DailyIdentityState {
+            manager_url: url.into(),
+            audience: "manager-one".into(),
+            deployment_id: "deployment-one".into(),
+            current: current.into(),
+            pending: pending.map(str::to_owned),
+            pending_started_at: pending.map(|_| started),
+            expires_at,
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+        }
+    }
+
+    fn key(digit: &str) -> String {
+        format!("ax_day_v1_{}", digit.repeat(64))
+    }
+
+    /// The manager committed a rotation and the answer was lost. The manager
+    /// was then unreachable for three days, so the saved successor ended and
+    /// its exchange is refused. The old key is replaced. The operator still
+    /// holds the latest key inside the seven days and must rotate with it.
+    #[tokio::test]
+    async fn a_lost_rotation_answer_and_a_long_outage_recover_without_a_code() {
+        let now = Utc::now();
+        let (db, url, manager, _directory) =
+            fixture(&key("1"), now + chrono::Duration::hours(11)).await;
+        db.write_daily_identity(&saved_state(
+            &url,
+            &key("1"),
+            None,
+            now,
+            now + chrono::Duration::hours(11),
+        ))
+        .await
+        .unwrap();
+        manager.lose_next_answer.store(true, Ordering::SeqCst);
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        // The old key still has hours left, so this attempt keeps using it.
+        assert_eq!(identity.current_key("manager-one").await.unwrap(), key("1"));
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        let successor = saved.pending.clone().expect("the successor is saved first");
+        assert_eq!(key_hash(&successor), manager.key.lock().await.0);
+
+        // Three days pass: the successor ended two days ago, and so did the
+        // old key's local deadline.
+        let started = now - chrono::Duration::days(3);
+        manager.key.lock().await.1 = now - chrono::Duration::days(2);
+        db.write_daily_identity(&saved_state(
+            &url,
+            &key("1"),
+            Some(&successor),
+            started,
+            started + chrono::Duration::hours(11),
+        ))
+        .await
+        .unwrap();
+
+        let recovered = identity
+            .current_key("manager-one")
+            .await
+            .expect("the latest key rotates inside the seven days");
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(saved.current, recovered);
+        assert_ne!(recovered, successor);
+        assert_ne!(recovered, key("1"));
+        assert!(saved.pending.is_none());
+        assert_eq!(key_hash(&recovered), manager.key.lock().await.0);
+        assert!(saved.expires_at > Utc::now() + chrono::Duration::hours(23));
+        assert_eq!(manager.rotations.load(Ordering::SeqCst), 2);
+    }
+
+    /// The rotation never reached the manager, so the old key is still the
+    /// latest one. It rotates, and the saved successor is installed by it.
+    #[tokio::test]
+    async fn an_uninstalled_successor_is_installed_by_the_old_key_within_the_grace() {
+        let now = Utc::now();
+        let ended = now - chrono::Duration::days(2);
+        let (db, url, manager, _directory) = fixture(&key("1"), ended).await;
+        db.write_daily_identity(&saved_state(&url, &key("1"), Some(&key("2")), ended, ended))
+            .await
+            .unwrap();
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        assert_eq!(identity.current_key("manager-one").await.unwrap(), key("2"));
+        assert_eq!(manager.key.lock().await.0, key_hash(&key("2")));
+        assert_eq!(manager.rotations.load(Ordering::SeqCst), 1);
+    }
+
+    /// Past the seven days no saved key rotates. The operator reports it and
+    /// keeps the saved keys, so a new enrollment code can still replace them.
+    #[tokio::test]
+    async fn no_saved_key_rotates_after_the_seven_days() {
+        let now = Utc::now();
+        let (db, url, manager, _directory) =
+            fixture(&key("2"), now - chrono::Duration::days(9)).await;
+        let started = now - chrono::Duration::days(10);
+        db.write_daily_identity(&saved_state(
+            &url,
+            &key("1"),
+            Some(&key("2")),
+            started,
+            started + chrono::Duration::hours(11),
+        ))
+        .await
+        .unwrap();
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .current_key("manager-one")
+            .await
+            .expect_err("both keys are past the grace");
+        assert_eq!(manager.rotations.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.key.lock().await.0, key_hash(&key("2")));
     }
 }
