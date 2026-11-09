@@ -29,6 +29,12 @@ the installation with the signed chart. The container must be removed.
 `--only protection-turned-on` runs just that step. (It runs last because the
 manager decides whether a deployment is protected when it registers.)
 
+Before that, protected mode runs one case for deployer inputs: an optional input
+left unset, an input with a signed default, and a deployer secret the installer
+puts in the cluster. The workload must start with the default, without the unset
+variable, and with the secret's value. `--only deployer-inputs` runs just that
+case.
+
 The CLI refuses to sign a developer's input against a standalone manager, so the
 suite signs `config/v1` statements itself with the CI key and keeps the CLI's
 refusal as evidence.
@@ -964,6 +970,8 @@ esac
         self.results.append({"attack": "rollback-by-re-release",
                              "summary": "re-releasing release-1's code rolls it back",
                              "passed": True, "took_effect": True, "changed": []})
+        if self.protected:
+            self.run_deployer_inputs()
         self.save("operator-full.log", self.operator_logs("2000-01-01T00:00:00Z"))
         if self.protected:
             # A second customer turns protected mode on for an installation they
@@ -1267,6 +1275,70 @@ esac
             raise RuntimeError(f"expected one new release, found {new}")
         log(f"released an unsigned stack as stranger as {new[0]}: {code['image']}")
 
+    def app_pod_env(self):
+        """The variables the running app pod printed at start, or None."""
+        workload = self.app_workload()
+        selector = ",".join(f"{k}={v}" for k, v in workload["spec"]["selector"]["matchLabels"].items())
+        pods = json.loads(kubectl("-n", NAMESPACE, "get", "pods", "-l", selector, "-o", "json").stdout)["items"]
+        running = [p for p in pods if p["status"].get("phase") == "Running" and not p["metadata"].get("deletionTimestamp")]
+        if len(running) != 1:
+            return None
+        logs = kubectl("-n", NAMESPACE, "logs", running[0]["metadata"]["name"], check=False).stdout
+        if not re.search(r"^started: ", logs, re.M):
+            return None
+        return dict(line.split("=", 1) for line in logs.splitlines() if re.match(r"^[A-Z_][A-Z0-9_]*=", line))
+
+    def deployer_secret_location(self, input_id):
+        """Where the installer writes the secret input `input_id`: the Secret's
+        name and namespace, as the Operator reports them to the manager, or None."""
+        for deployment in self.deployments(self.install_name):
+            full = self.manager_get(f"/v1/deployments/{deployment['id']}")
+            metadata = full.get("runtimeMetadata") or full.get("runtime_metadata") or {}
+            for report in metadata.get("deployerSecrets", []):
+                if report["inputId"] == input_id:
+                    location = report["location"]
+                    namespace = re.search(r"--namespace (\S+)", location["cliCommand"])
+                    return {"name": location["name"], "namespace": namespace and namespace.group(1).strip("'")}
+        return None
+
+    def run_deployer_inputs(self):
+        """What a protected workload gets from the installer's inputs, resolved
+        from the signed release alone: an optional input nobody set is left out
+        of the workload, an input with a signed default takes the default, and
+        a deployer secret reaches the container with its value."""
+        name = "deployer-inputs"
+        log(f"{name}: optional input unset, input with a signed default, deployer secret")
+        wait_until("the deployment to settle", self.settled, timeout=300)
+        self.release("release-inputs-1")
+        self.wait_for_message("release-inputs-1")
+        location = wait_until("the Operator to report where the secret goes",
+                              lambda: self.deployer_secret_location("apiToken"), timeout=240)
+        if not location["namespace"]:
+            raise RuntimeError(f"no namespace in the reported secret location: {location}")
+        token = "fake-token-" + secrets.token_hex(8)
+        run(["kubectl", "--context", CONTEXT, "-n", location["namespace"], "create", "secret", "generic",
+             location["name"], f"--from-literal=value={token}"])
+        self.release("release-inputs-2")
+        self.wait_for_message("release-inputs-2")
+        env = wait_until("the app pod's environment", self.app_pod_env, timeout=120)
+        spec = self.app_env()
+        checks = {
+            "the signed default is used": env.get("MODE") == "fast",
+            "the unset optional input is left out of the pod": "REGION" not in env,
+            "the unset optional input is left out of the workload": "REGION" not in spec,
+            "the deployer secret has its value": env.get("API_TOKEN") == token,
+            "the installer's value is used": env.get("DATABASE_URL") == CUSTOMER_DATABASE_URL,
+        }
+        passed = all(checks.values())
+        result = {"attack": name, "took_effect": passed, "changed": [], "passed": passed,
+                  "summary": "unset optional input left out, signed default used, deployer secret delivered",
+                  "checks": checks, "secret": location}
+        self.save(f"attacks/{name}/result.json", result)
+        self.save(f"attacks/{name}/pod-env.json", {k: ("<redacted>" if k == "API_TOKEN" else v) for k, v in env.items()})
+        log(f"{name}: {'PASS' if passed else 'FAIL'} {checks}")
+        self.results.append(result)
+        return result
+
     def run_unsigned_release(self):
         name = "unsigned-release"
         log(f"attack {name}: anyone with manager access publishes an unsigned release")
@@ -1312,7 +1384,7 @@ def main():
     parser.add_argument("--alien", help="alien CLI built with the Operator pin and the test-device-env "
                                         "feature (default: build it)")
     parser.add_argument("--binaries", help="directory with the debug binaries (default: target/debug)")
-    parser.add_argument("--only", choices=["protection-turned-on", "setup"],
+    parser.add_argument("--only", choices=["protection-turned-on", "deployer-inputs", "setup"],
                         help="run one step instead of the whole suite")
     parser.add_argument("--down", action="store_true", help="remove everything the suite created")
     args = parser.parse_args()
@@ -1326,7 +1398,13 @@ def main():
         suite.release("release-1")
         log(f"signed chart in {suite.signed_chart()}")
         return
-    if args.only == "protection-turned-on":
+    if args.only == "deployer-inputs":
+        suite.protected = True
+        suite.release("release-1")
+        suite.install()
+        suite.wait_for_message("release-1")
+        passed = suite.run_deployer_inputs()["passed"]
+    elif args.only == "protection-turned-on":
         suite.protected = True
         suite.release("release-1")
         suite.install(protected=False)
