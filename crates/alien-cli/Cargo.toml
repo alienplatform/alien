@@ -99,6 +99,7 @@ flate2 = "1"
 tar = "0.4"
 toml = { workspace = true }
 crossterm = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
