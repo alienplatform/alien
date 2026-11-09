@@ -22,7 +22,9 @@ use axum::Router;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::commands::deploy::create_deployment_with_answers;
+use crate::commands::deploy::{
+    create_deployment_with_answers, create_first_party_deployment_for_test,
+};
 use crate::commands::deployment_actions::{
     save_environment_variables, set_environment_variables_task, set_inputs_task, InputChanges,
 };
@@ -192,6 +194,8 @@ struct FakePlatformState {
     create_requires_input: Option<String>,
     create_refusal_code: &'static str,
     environment_names: Arc<Mutex<Vec<String>>>,
+    session_inputs: Arc<Mutex<serde_json::Map<String, Value>>>,
+    refuse_always: Arc<std::sync::atomic::AtomicBool>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
 }
 
@@ -246,6 +250,14 @@ async fn platform_handler(
             "runtimeUpdateRequested": false,
         }))
         .into_response(),
+        ("PUT", "first-party-inputs") => {
+            let request: Value = serde_json::from_str(&body).unwrap();
+            *platform.session_inputs.lock().unwrap() = request["inputValues"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            StatusCode::NO_CONTENT.into_response()
+        }
         ("POST", "deployments") => create_deployment(&platform, &body),
         _ => old_platform_not_found(),
     }
@@ -303,7 +315,11 @@ fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
         }
     }
     if let Some(input) = &platform.create_requires_input {
-        if request["inputValues"].get(input).is_none() {
+        let in_session = platform.session_inputs.lock().unwrap().contains_key(input);
+        let refuse = platform
+            .refuse_always
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if refuse || (request["inputValues"].get(input).is_none() && !in_session) {
             return (
                 StatusCode::BAD_REQUEST,
                 axum::Json(json!({
@@ -342,6 +358,8 @@ fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
 }
 
 struct FakePlatform {
+    url: String,
+    refuse_always: Arc<std::sync::atomic::AtomicBool>,
     client: alien_platform_api::Client,
     environment_names: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
@@ -380,6 +398,7 @@ async fn start_platform_refusing_create(
 ) -> FakePlatform {
     let requests = Arc::default();
     let environment_names = Arc::<Mutex<Vec<String>>>::default();
+    let refuse_always = Arc::<std::sync::atomic::AtomicBool>::default();
     let app = Router::new()
         .fallback(any(platform_handler))
         .with_state(FakePlatformState {
@@ -389,6 +408,8 @@ async fn start_platform_refusing_create(
             create_requires_input: create_requires_input.map(str::to_string),
             create_refusal_code: refusal_code,
             environment_names: Arc::clone(&environment_names),
+            session_inputs: Arc::default(),
+            refuse_always: Arc::clone(&refuse_always),
             requests: Arc::clone(&requests),
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -396,6 +417,8 @@ async fn start_platform_refusing_create(
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     FakePlatform {
         client: alien_platform_api::Client::new(&url),
+        refuse_always,
+        url,
         environment_names,
         requests,
     }
@@ -983,14 +1006,11 @@ async fn a_failed_value_write_keeps_the_deployment_and_names_the_retry() {
     }
 }
 
-fn secret_answers() -> (HashMap<String, Value>, HashSet<String>) {
-    (
-        HashMap::from([
-            ("api_key".to_string(), json!(CANARY)),
-            ("region".to_string(), json!("eu")),
-        ]),
-        HashSet::from(["api_key".to_string()]),
-    )
+fn secret_answers() -> HashMap<String, Value> {
+    HashMap::from([
+        ("api_key".to_string(), json!(CANARY)),
+        ("region".to_string(), json!("eu")),
+    ])
 }
 
 fn deploy_request(
@@ -1021,18 +1041,12 @@ async fn a_created_deployment_gets_its_secret_answers_through_the_manager() {
         None,
     )
     .await;
-    let (answers, secrets) = secret_answers();
+    let answers = secret_answers();
     let mut request = deploy_request(&answers);
 
-    create_deployment_with_answers(
-        &platform.client,
-        WORKSPACE,
-        &mut request,
-        &answers,
-        &secrets,
-    )
-    .await
-    .expect("the deployment is created");
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect("the deployment is created");
 
     for (method, path, body) in platform.requests() {
         assert!(
@@ -1041,7 +1055,10 @@ async fn a_created_deployment_gets_its_secret_answers_through_the_manager() {
         );
     }
     let created = platform.body_of("POST", "/v1/deployments");
-    assert_eq!(created["inputValues"], json!({"region": "eu"}));
+    assert!(
+        created["inputValues"].is_null() || created["inputValues"] == json!({}),
+        "the create carried answers: {created}"
+    );
     assert_eq!(
         platform.body_of("POST", "value-access"),
         json!({"slots": ["input:api_key"], "access": "write"})
@@ -1065,18 +1082,12 @@ async fn a_platform_that_needs_the_secret_answer_in_the_create_gets_it_there() {
         Some("api_key"),
     )
     .await;
-    let (answers, secrets) = secret_answers();
+    let answers = secret_answers();
     let mut request = deploy_request(&answers);
 
-    create_deployment_with_answers(
-        &platform.client,
-        WORKSPACE,
-        &mut request,
-        &answers,
-        &secrets,
-    )
-    .await
-    .expect("the retry with the answer succeeds");
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect("the retry with the answer succeeds");
 
     let creates: Vec<Value> = platform
         .requests()
@@ -1111,18 +1122,12 @@ async fn a_refusal_that_only_names_the_secret_input_does_not_send_the_answer() {
         "VALIDATION_ERROR",
     )
     .await;
-    let (answers, secrets) = secret_answers();
+    let answers = secret_answers();
     let mut request = deploy_request(&answers);
 
-    create_deployment_with_answers(
-        &platform.client,
-        WORKSPACE,
-        &mut request,
-        &answers,
-        &secrets,
-    )
-    .await
-    .expect_err("a refusal that is not the missing-input error fails the create");
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect_err("a refusal that is not the missing-input error fails the create");
 
     let requests = platform.requests();
     assert!(
@@ -1158,18 +1163,12 @@ async fn a_failed_answer_write_keeps_the_deployment_and_names_the_retry() {
         None,
     )
     .await;
-    let (answers, secrets) = secret_answers();
+    let answers = secret_answers();
     let mut request = deploy_request(&answers);
 
-    let error = create_deployment_with_answers(
-        &platform.client,
-        WORKSPACE,
-        &mut request,
-        &answers,
-        &secrets,
-    )
-    .await
-    .expect_err("the answer write is refused");
+    let error = create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect_err("the answer write is refused");
 
     let message = error.to_string();
     assert!(
@@ -1342,4 +1341,155 @@ async fn a_failed_removal_is_a_warning_and_the_command_still_succeeds() {
         platform.body_of("PATCH", "inputs")["clearInputIds"],
         json!(["api_key"])
     );
+}
+
+fn create_count(platform: &FakePlatform) -> usize {
+    platform
+        .requests()
+        .iter()
+        .filter(|(method, path, _)| method == "POST" && path == "/v1/deployments")
+        .count()
+}
+
+#[tokio::test]
+async fn an_answer_is_put_back_at_most_once_and_a_second_refusal_fails_the_create() {
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::NoRoute,
+        inputs,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        Some("api_key"),
+    )
+    .await;
+    platform
+        .refuse_always
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let answers = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect_err("a platform that refuses again after the put-back fails the create");
+
+    assert_eq!(create_count(&platform), 2);
+}
+
+#[tokio::test]
+async fn an_answer_the_stack_did_not_mark_secret_is_still_kept_out_of_the_first_create() {
+    let manager = start_manager().await;
+    let inputs = json!({
+        "inputs": [{"id": "db_password", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "heldInputIds": ["db_password"],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: manager.admin.clone(),
+        },
+        inputs,
+        &manager.deployment_id,
+        None,
+    )
+    .await;
+    let answers = HashMap::from([("db_password".to_string(), json!(CANARY))]);
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect("the deployment is created");
+
+    assert_eq!(create_count(&platform), 1);
+    for (method, path, body) in platform.requests() {
+        assert!(!body.contains(CANARY), "{method} {path} carried it: {body}");
+    }
+    assert_eq!(
+        manager.slots().await["slots"][0]["slot"],
+        "input:db_password"
+    );
+}
+
+#[tokio::test]
+async fn a_first_party_deploy_keeps_secret_answers_out_of_the_hosted_inputs() {
+    let manager = start_manager().await;
+    let inputs = json!({
+        "inputs": [
+            {"id": "api_key", "kind": "secret", "required": true},
+            {"id": "region", "kind": "string", "required": false},
+        ],
+        "providedInputIds": [],
+        "heldInputIds": ["api_key"],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: manager.admin.clone(),
+        },
+        inputs,
+        &manager.deployment_id,
+        None,
+    )
+    .await;
+
+    create_first_party_deployment_for_test(
+        &platform.client,
+        WORKSPACE,
+        &platform.url,
+        secret_answers(),
+        HashSet::from(["api_key".to_string()]),
+    )
+    .await
+    .expect("the deployment is created");
+
+    for (method, path, body) in platform.requests() {
+        assert!(!body.contains(CANARY), "{method} {path} carried it: {body}");
+    }
+    assert_eq!(
+        platform.body_of("PUT", "first-party-inputs")["inputValues"],
+        json!({"region": "eu"})
+    );
+    assert_eq!(manager.slots().await["slots"][0]["slot"], "input:api_key");
+}
+
+#[tokio::test]
+async fn a_first_party_deploy_on_an_older_platform_sends_a_required_secret_once() {
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::NoRoute,
+        inputs,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        Some("api_key"),
+    )
+    .await;
+
+    create_first_party_deployment_for_test(
+        &platform.client,
+        WORKSPACE,
+        &platform.url,
+        secret_answers(),
+        HashSet::from(["api_key".to_string()]),
+    )
+    .await
+    .expect("the retry with the answer succeeds");
+
+    let puts: Vec<Value> = platform
+        .requests()
+        .iter()
+        .filter(|(method, path, _)| method == "PUT" && path.ends_with("first-party-inputs"))
+        .map(|(_, _, body)| serde_json::from_str(body).unwrap())
+        .collect();
+    assert_eq!(puts.len(), 2, "{puts:?}");
+    assert!(puts[0]["inputValues"].get("api_key").is_none());
+    assert_eq!(puts[1]["inputValues"]["api_key"], CANARY);
+    assert_eq!(create_count(&platform), 2);
 }
