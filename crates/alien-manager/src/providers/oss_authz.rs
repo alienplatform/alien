@@ -71,6 +71,7 @@ impl OssAuthz {
                 | Role::VerifiedSetupImporter
                 | Role::SandboxImagePusher
                 | Role::TunnelCaller
+                | Role::CommandsReceiver
         ) && !crate::auth::runtime_capability::is_runtime_capability(&s.bearer_token)
     }
 
@@ -306,7 +307,19 @@ impl Authz for OssAuthz {
         {
             return allowed;
         }
+        if !crate::auth::command_capability::commands_key_may_use_target(s, target) {
+            return false;
+        }
         self.can_execute_command(s, deployment)
+    }
+
+    fn can_execute_command(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        if let Some(allowed) =
+            crate::auth::command_capability::commands_key_deployment_decision(s, deployment)
+        {
+            return allowed;
+        }
+        self.can_act_on_deployment(s, deployment)
     }
 
     fn can_execute_command_context(

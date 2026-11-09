@@ -371,6 +371,12 @@ pub enum Role {
     /// [`Scope::DeploymentGroup`] (one customer's deployments). Grants no
     /// other read or write access.
     TunnelCaller,
+    /// Lease commands and answer them for one deployment, and nothing else.
+    ///
+    /// Paired with [`Scope::Deployment`]. It is the long-lived credential of a
+    /// command receiver built before capability files, which can only read its
+    /// credential from `ALIEN_COMMANDS_TOKEN`. Refused on every other route.
+    CommandsReceiver,
 }
 
 #[cfg(test)]

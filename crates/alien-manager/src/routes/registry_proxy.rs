@@ -1476,7 +1476,10 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), RegistryRefusal> {
     }
     if matches!(
         subject.role,
-        Role::VerifiedSetupImporter | Role::OperatorSync | Role::OperatorTunnel
+        Role::VerifiedSetupImporter
+            | Role::OperatorSync
+            | Role::OperatorTunnel
+            | Role::CommandsReceiver
     ) {
         return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,

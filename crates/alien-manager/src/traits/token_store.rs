@@ -14,6 +14,10 @@ pub enum TokenType {
     /// Sends requests through deployment tunnels and nothing else. Scoped
     /// to one deployment group when `deployment_group_id` is set.
     Tunnel,
+    /// Leases and answers commands for one deployment and nothing else. Held by
+    /// command receivers built before capability files; see
+    /// `Role::CommandsReceiver`.
+    CommandsReceiver,
 }
 
 impl std::fmt::Display for TokenType {
@@ -23,6 +27,7 @@ impl std::fmt::Display for TokenType {
             TokenType::DeploymentGroup => write!(f, "deployment-group"),
             TokenType::Deployment => write!(f, "deployment"),
             TokenType::Tunnel => write!(f, "tunnel"),
+            TokenType::CommandsReceiver => write!(f, "commands-receiver"),
         }
     }
 }
@@ -35,6 +40,7 @@ impl TokenType {
             TokenType::DeploymentGroup => "ax_dg_",
             TokenType::Deployment => "ax_deploy_",
             TokenType::Tunnel => "ax_tunnel_",
+            TokenType::CommandsReceiver => "ax_cmds_",
         }
     }
 }

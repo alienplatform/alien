@@ -256,6 +256,9 @@ async fn require_command_execution_context(
         };
     }
 
+    if !crate::auth::command_capability::commands_key_may_use_target(subject, &command.target) {
+        return Err(ErrorData::forbidden("Access denied").into_response());
+    }
     require_command_execution_access(state, subject, &command.deployment_id).await
 }
 
