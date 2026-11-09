@@ -45,8 +45,10 @@ fn two_runs_of_the_command_line_compute_the_same_digests() {
         run(elsewhere.path().to_str().unwrap()),
         "another user has another key"
     );
-    assert!(std::path::Path::new(config)
-        .join("alien")
-        .join("secrets-digest-key")
-        .exists());
+    let config_dir = if cfg!(target_os = "macos") {
+        std::path::Path::new(config).join("Library/Application Support")
+    } else {
+        std::path::Path::new(config).to_path_buf()
+    };
+    assert!(config_dir.join("alien").join("secrets-digest-key").exists());
 }
