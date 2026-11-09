@@ -82,13 +82,17 @@ pub(super) fn decide(
     }
 
     // Only the release the deployment is waiting for can complete its update.
-    if let Some(waiting) = deployment.desired_release_id.as_deref() {
-        if waiting != report.release_id {
-            return ReportDecision::Refuse(format!(
-                "This chart is for release {}; the deployment is waiting for release {waiting}. Upgrade to the chart for release {waiting}.",
-                report.release_id
-            ));
-        }
+    // With no release waiting there is no update to authorize: a chart that
+    // differs then is an older chart (after a rollback) or a newer one the
+    // deployment has not been pointed at yet.
+    let Some(waiting) = deployment.desired_release_id.as_deref() else {
+        return ReportDecision::NoOp;
+    };
+    if waiting != report.release_id {
+        return ReportDecision::Refuse(format!(
+            "This chart is for release {}; the deployment is waiting for release {waiting}. Upgrade to the chart for release {waiting}.",
+            report.release_id
+        ));
     }
 
     // The first report on an existing Helm deployment records its lane; later
@@ -550,6 +554,19 @@ mod tests {
                 "status {status}"
             );
         }
+    }
+
+    #[test]
+    fn a_chart_that_differs_while_no_release_waits_mints_nothing() {
+        let installed = baseline();
+        let target = with_service_account(&installed);
+        let mut record = deployment(installed);
+        record.desired_release_id = None;
+        record.status = "running".to_string();
+        assert_eq!(
+            decide(&record, &report("rel_1"), &target),
+            ReportDecision::NoOp
+        );
     }
 
     #[test]

@@ -3288,6 +3288,30 @@ mod tests {
     }
 
     #[test]
+    fn a_report_from_the_operator_does_not_erase_the_recorded_setup_refusal() {
+        let mut stored = deployment_record_with_state("update-failed", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            setup_report_refusal: Some(alien_core::SetupReportRefusal {
+                reason: "stale chart".into(),
+                reported_release_id: "rel_1".into(),
+                at: chrono::Utc::now(),
+            }),
+            ..RuntimeMetadata::default()
+        });
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(RuntimeMetadata::default());
+        preserve_setup_update_authorization(&mut incoming, &stored);
+        assert_eq!(
+            incoming
+                .runtime_metadata
+                .unwrap()
+                .setup_report_refusal
+                .map(|refusal| refusal.reason),
+            Some("stale chart".to_string())
+        );
+    }
+
+    #[test]
     fn a_report_without_the_minted_authorization_does_not_erase_it_until_the_update_ran() {
         let authorization = alien_core::SetupUpdateAuthorization {
             nonce: "n".into(),
@@ -4435,6 +4459,19 @@ fn gate_resources(stack: &alien_core::Stack) -> std::collections::HashMap<String
 /// reported current release is the authorized one, the update has run and the
 /// grant is dropped.
 fn preserve_setup_update_authorization(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+    // The reason a setup report was declined is the manager's own record; the
+    // Operator's copy of the metadata never carries it.
+    if let (Some(refusal), Some(metadata)) = (
+        stored
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.setup_report_refusal.as_ref()),
+        incoming.runtime_metadata.as_mut(),
+    ) {
+        if metadata.setup_report_refusal.is_none() {
+            metadata.setup_report_refusal = Some(refusal.clone());
+        }
+    }
     let Some(authorization) = stored
         .runtime_metadata
         .as_ref()
