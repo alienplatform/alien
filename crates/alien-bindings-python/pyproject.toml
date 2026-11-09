@@ -35,6 +35,7 @@ test = [
   "mypy>=1.18,<2",
   "pytest>=8,<10",
   "pytest-asyncio>=1,<2",
+  "redis>=5,<8",
   "ruff>=0.13,<1",
   "types-grpcio",
   "types-protobuf",
