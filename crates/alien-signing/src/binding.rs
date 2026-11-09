@@ -42,6 +42,9 @@ pub fn binding_env_name(id: &str) -> String {
     format!("ALIEN_{}_BINDING", id.replace('-', "_").to_uppercase())
 }
 
+/// Id of the vault a deployer writes its own secrets into.
+pub const DEPLOYER_SECRETS_VAULT: &str = "deployer-secrets";
+
 /// What an enforcer knows about the resource a workload runs as, to check the workload's own
 /// binding against. The binding tells the workload's code where to reach itself, so every field
 /// that picks a destination has to come from the install, not from the control plane.
@@ -276,7 +279,11 @@ pub fn binding_env(
             ("aws", "vault") => json!({ "service": "parameter-store", "vaultPrefix": name }),
             ("gcp", "storage") => json!({ "service": "gcs", "bucketName": name }),
             ("gcp", "vault") => json!({ "service": "secret-manager", "vaultPrefix": name }),
-            ("azure", "vault") => json!({ "service": "key-vault", "vaultName": name }),
+            // Azure names the deployer secrets vault with a random suffix, so the enforcer
+            // finds it in its own group instead of deriving it.
+            ("azure", "vault") if id != DEPLOYER_SECRETS_VAULT => {
+                json!({ "service": "key-vault", "vaultName": name })
+            }
             _ => {
                 derived.unresolved.insert(id.clone(), resource_type.clone());
                 continue;

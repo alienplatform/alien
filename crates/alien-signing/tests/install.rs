@@ -508,7 +508,7 @@ fn bindings_come_from_the_install_not_the_control_plane() {
     )
     .unwrap();
     let local = LocalValues {
-        deployer_inputs: BTreeMap::from([("databaseUrl".to_string(), "postgres://db".to_string())]),
+        deployer_env: BTreeMap::from([("DATABASE_URL".to_string(), "postgres://db".to_string())]),
         bindings,
         own_binding: OwnBindingFacts::default(),
     };

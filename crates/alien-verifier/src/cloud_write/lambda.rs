@@ -1807,34 +1807,124 @@ mod tests {
         assert!(error.contains("is not the signed secrets list"), "{error}");
     }
 
-    /// A deployer input's value is what the verifier read from the customer's store.
+    /// A deployer input's value is what the verifier read from the customer's store, else the
+    /// signed default. An optional input with neither is not set at all, and an input whose
+    /// signed `when` is off is not set whatever the store or the control plane holds.
     #[tokio::test]
     async fn deployer_inputs_come_from_the_install() {
-        let mut workload = function_workload();
-        workload
-            .deployer_env
-            .insert("REGION_LABEL".into(), "region".into());
-        let reads = || Reads {
-            deployer_inputs: BTreeMap::from([("region".into(), "eu".into())]),
+        let release = || {
+            crate::plan::tests::release_with_inputs(json!([
+                {"id": "region", "kind": "string", "providedBy": ["deployer"], "required": false,
+                 "label": "Region", "description": "d",
+                 "default": {"type": "string", "value": "us"},
+                 "env": [{"name": "REGION_LABEL", "targetResources": ["api"]}]},
+                {"id": "proxy", "kind": "string", "providedBy": ["deployer"], "required": false,
+                 "label": "Proxy", "description": "d",
+                 "env": [{"name": "PROXY_URL", "targetResources": ["api"]}]},
+                {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+                 "label": "Audit", "description": "d",
+                 "default": {"type": "boolean", "value": false}},
+                {"id": "auditSink", "kind": "string", "providedBy": ["deployer"], "required": true,
+                 "label": "Sink", "description": "d",
+                 "when": {"input": "audit", "equals": true},
+                 "env": [{"name": "AUDIT_SINK", "targetResources": ["api"]}]},
+            ]))
+        };
+        let stored = |values: &[(&str, &str)]| Reads {
+            deployer_inputs: values
+                .iter()
+                .map(|(id, value)| (id.to_string(), value.to_string()))
+                .collect(),
             ..Reads::default()
         };
+        let create = |env: &[(&str, &str)]| {
+            let mut request = create();
+            let mut variables = json!({"ALIEN_DEPLOYMENT_ID": "dep_1"});
+            for (name, value) in env {
+                variables[*name] = json!(value);
+            }
+            request["Environment"]["Variables"] = variables;
+            CloudWrite::CreateFunction(request)
+        };
+
+        // The stored value wins, the signed default fills an unset input, and an optional
+        // input with neither is absent: the customer never has to set the optional ones.
         checked_reading(
-            release(10, workload.clone()),
+            release(),
             None,
-            reads(),
-            create_with_env(&[("REGION_LABEL", "eu")]),
+            stored(&[("region", "eu")]),
+            create(&[("REGION_LABEL", "eu")]),
+        )
+        .await
+        .unwrap();
+        checked_reading(
+            release(),
+            None,
+            stored(&[]),
+            create(&[("REGION_LABEL", "us")]),
+        )
+        .await
+        .unwrap();
+        checked_reading(
+            release(),
+            None,
+            stored(&[("proxy", "http://p")]),
+            create(&[("REGION_LABEL", "us"), ("PROXY_URL", "http://p")]),
+        )
+        .await
+        .unwrap();
+
+        // The control plane can't set what the install doesn't, or change what it does.
+        for (env, expect) in [
+            (&[("REGION_LABEL", "attacker")][..], "REGION_LABEL"),
+            (
+                &[("REGION_LABEL", "us"), ("PROXY_URL", "http://evil")][..],
+                "PROXY_URL",
+            ),
+            (
+                &[
+                    ("REGION_LABEL", "us"),
+                    ("AUDIT_SINK", "https://evil.example"),
+                ][..],
+                "AUDIT_SINK",
+            ),
+        ] {
+            let error = checked_reading(release(), None, stored(&[]), create(env))
+                .await
+                .unwrap_err();
+            assert!(error.contains(&format!("[\"{expect}\"]")), "{error}");
+        }
+
+        // An inactive input's stored value is ignored; once the gate is on, the required input
+        // needs its value.
+        checked_reading(
+            release(),
+            None,
+            stored(&[("auditSink", "https://stale.example")]),
+            create(&[("REGION_LABEL", "us")]),
+        )
+        .await
+        .unwrap();
+        checked_reading(
+            release(),
+            None,
+            stored(&[("audit", "true"), ("auditSink", "https://audit.example")]),
+            create(&[
+                ("REGION_LABEL", "us"),
+                ("AUDIT_SINK", "https://audit.example"),
+            ]),
         )
         .await
         .unwrap();
         let error = checked_reading(
-            release(10, workload),
+            release(),
             None,
-            reads(),
-            create_with_env(&[("REGION_LABEL", "attacker")]),
+            stored(&[("audit", "true")]),
+            create(&[("REGION_LABEL", "us")]),
         )
         .await
         .unwrap_err();
-        assert!(error.contains("[\"REGION_LABEL\"]"), "{error}");
+        assert!(error.contains("auditSink"), "{error}");
     }
 
     /// A developer input that is conditional on a deployer input follows what the install's

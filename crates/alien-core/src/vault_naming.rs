@@ -34,6 +34,18 @@ pub fn azure_deployer_vault_name(resource_prefix: &str, suffix: &str) -> String 
     format!("{prefix}-{suffix}")
 }
 
+/// Whether `name` is the name [`azure_deployer_vault_name`] gives an installation's deployer
+/// vault for `resource_prefix`, with any suffix.
+pub fn is_azure_deployer_vault_name(resource_prefix: &str, name: &str) -> bool {
+    let stem = azure_deployer_vault_name(resource_prefix, "");
+    name.strip_prefix(&stem).is_some_and(|suffix| {
+        suffix.len() == 6
+            && suffix
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    })
+}
+
 /// Kubernetes Secret name: `{vault_prefix}-{secret_name}`, lowercased, with
 /// underscores turned into hyphens and other characters dropped, cut to the
 /// 253-character object name limit. The value lives under the `value` key.
@@ -64,6 +76,25 @@ mod tests {
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
             assert_ne!(first, azure_deployer_vault_name(prefix, "d4e5f6"));
         }
+    }
+
+    #[test]
+    fn only_this_installations_deployer_vault_name_matches() {
+        let name = azure_deployer_vault_name("acme-prod", "a1b2c3");
+        assert!(is_azure_deployer_vault_name("acme-prod", &name));
+        assert!(!is_azure_deployer_vault_name("acme-stage", &name));
+        assert!(!is_azure_deployer_vault_name(
+            "acme-prod",
+            "acme-prod-deployer-secrets-a1b2c3d4"
+        ));
+        assert!(!is_azure_deployer_vault_name(
+            "acme-prod",
+            "acme-prod-signing-a1b2c3"
+        ));
+        assert!(!is_azure_deployer_vault_name(
+            "acme-prod",
+            "acme-prod-deployer-secrets-A1B2C3"
+        ));
     }
 
     #[test]

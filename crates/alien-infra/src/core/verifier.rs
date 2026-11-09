@@ -58,15 +58,15 @@ pub fn is_protected(ctx: &ResourceControllerContext<'_>) -> bool {
 }
 
 /// Env var with the secrets a protected function loads at start: the signed workload's secret
-/// names and the release digest. Unprotected functions keep `ALIEN_SECRETS`, which the
+/// names, the deployer secrets its signed stack gives it, and the release digest. Unprotected functions keep `ALIEN_SECRETS`, which the
 /// deployment writes from its own variables; the verifier refuses that one on a protected
 /// install, since it would let management pick which vault keys load.
 pub const WORKLOAD_SECRETS: &str = "WORKLOAD_SECRETS";
 
 /// Render into `env`, the environment a controller built for `workload`, what the signed
 /// statements decide on a protected install: the signed values, the secrets list it loads at
-/// start (`WORKLOAD_SECRETS` from the signed workload, in place of the deployment's
-/// `ALIEN_SECRETS`) and the values the signed `config` sets for the names the release makes
+/// start (`WORKLOAD_SECRETS` built from the signed workload and signed stack, in place of the
+/// deployment's `ALIEN_SECRETS`) and the values the signed `config` sets for the names the release makes
 /// configurable. The deployment's telemetry goes to the signed config's endpoint, or nowhere.
 /// Anything else the deployment holds (such as variables set in the dashboard before the
 /// install was protected) is left out: only names the release lets the deployment provide,
@@ -99,19 +99,6 @@ pub fn apply_signed_values(
         .find(|candidate| candidate.name == workload)
         .ok_or_else(|| refuse(format!("The signed release has no workload '{workload}'")))?;
 
-    env.remove(alien_core::ENV_ALIEN_SECRETS);
-    if !signed.secrets.is_empty() {
-        let keys: Vec<&str> = signed
-            .secrets
-            .iter()
-            .map(|secret| secret.name.as_str())
-            .collect();
-        env.insert(
-            WORKLOAD_SECRETS.to_string(),
-            serde_json::json!({ "keys": keys, "hash": opened.digest }).to_string(),
-        );
-    }
-
     let config = config
         .map(|config| {
             config
@@ -121,6 +108,29 @@ pub fn apply_signed_values(
         })
         .transpose()?
         .unwrap_or_default();
+
+    env.remove(alien_core::ENV_ALIEN_SECRETS);
+    env.remove(WORKLOAD_SECRETS);
+    let secrets = alien_core::release_statement::signed_workload_secrets(
+        &body,
+        workload,
+        &opened.digest,
+        &config.inputs,
+        deployer_values,
+    )
+    .map_err(|error| refuse(format!("The signed secrets list can't be built: {error}")))?;
+    let loads_deployer_secrets = !alien_core::release_statement::signed_deployer_secrets(
+        &body,
+        workload,
+        &config.inputs,
+        deployer_values,
+    )
+    .map_err(|error| refuse(format!("The signed secrets list can't be built: {error}")))?
+    .is_empty();
+    if let Some(list) = secrets {
+        env.insert(WORKLOAD_SECRETS.to_string(), list);
+    }
+
     let configured =
         alien_core::release_statement::signed_config_env(&body, workload, &config, deployer_values)
             .map_err(|error| refuse(format!("The signed config can't be applied: {error}")))?;
@@ -160,6 +170,9 @@ pub fn apply_signed_values(
         .keys()
         .map(|id| binding_env_name(id))
         .chain([binding_env_name(workload), binding_env_name(SECRETS_VAULT)])
+        .chain(
+            loads_deployer_secrets.then(|| binding_env_name(alien_core::DEPLOYER_SECRETS_VAULT_ID)),
+        )
         .collect();
     let mut left_out: Vec<String> = env
         .keys()
@@ -800,8 +813,8 @@ pub struct HttpVerifier {
     http: reqwest::Client,
     name: String,
     url: String,
-    /// GCP: management's ID token for the Cloud Run service. Azure: none; the Container App's
-    /// ingress takes any caller, who can only hand it statements the vendor signed.
+    /// GCP: management's ID token for the Cloud Run service. Azure: management's token for
+    /// Azure Resource Manager, which the Container App's authentication requires.
     token: Option<Arc<dyn VerifierToken>>,
 }
 
@@ -874,7 +887,9 @@ impl Verifier for HttpVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::verifier_test_support::{signed_config, signed_release_configuring};
+    use crate::core::verifier_test_support::{
+        signed_config, signed_release, signed_release_configuring,
+    };
     use alien_core::{Platform, ResourceLifecycle, Stack, Worker, WorkerCode};
 
     /// The deployment's own secrets list never reaches a protected function, and the signed
@@ -925,5 +940,75 @@ mod tests {
             error.to_string().contains("has no workload 'jobs'"),
             "{error}"
         );
+    }
+
+    /// A deployer secret reaches a protected worker on every cloud: the secrets list is rebuilt
+    /// from the signed stack (a secret the deployment lists itself is ignored), and the
+    /// `deployer-secrets` vault binding stays only for a worker that has one.
+    #[test]
+    fn a_protected_worker_loads_the_signed_deployer_secrets() {
+        let inputs: Vec<alien_core::StackInputDefinition> = serde_json::from_value(serde_json::json!([
+            {"id": "databasePassword", "kind": "secret", "providedBy": ["deployer"], "required": true,
+             "label": "Database password", "description": "d",
+             "env": [{"name": "DATABASE_PASSWORD", "targetResources": ["api"]}]},
+        ]))
+        .unwrap();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut stack = Stack::new("shop".to_string());
+            for name in ["api", "jobs"] {
+                stack = stack.add(
+                    Worker::new(name.to_string())
+                        .code(WorkerCode::Image {
+                            image: format!("ghcr.io/shop/{name}@sha256:{}", "1".repeat(64)),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                );
+            }
+            let mut stack = stack.build();
+            stack.inputs = inputs.clone();
+            let statements = signed_release(platform, &stack, 1);
+            let vault = alien_signing::binding_env_name(alien_core::DEPLOYER_SECRETS_VAULT_ID);
+            let sent = |extra: &str| {
+                HashMap::from([
+                    (
+                        alien_core::ENV_ALIEN_SECRETS.to_string(),
+                        r#"{"keys":["LD_PRELOAD"],"hash":"x"}"#.to_string(),
+                    ),
+                    (vault.clone(), r#"{"service":"vault"}"#.to_string()),
+                    (extra.to_string(), "x".to_string()),
+                ])
+            };
+
+            let mut api = sent("UNSIGNED");
+            apply_signed_values(&statements, None, "api", &HashMap::new(), &mut api).unwrap();
+            assert!(
+                !api.contains_key(alien_core::ENV_ALIEN_SECRETS),
+                "{platform}"
+            );
+            assert!(!api.contains_key("UNSIGNED"), "{platform}");
+            assert_eq!(api[&vault], r#"{"service":"vault"}"#, "{platform}");
+            let list: serde_json::Value = serde_json::from_str(&api[WORKLOAD_SECRETS]).unwrap();
+            assert_eq!(list["keys"], serde_json::json!([]), "{platform}");
+            assert_eq!(
+                list["deployerSecrets"],
+                serde_json::json!([{
+                    "name": "DATABASE_PASSWORD",
+                    "vaultKey": "database-password",
+                    "secretName": "database-password",
+                    "label": "Database password",
+                    "required": true,
+                }]),
+                "{platform}"
+            );
+
+            let mut jobs = sent("UNSIGNED");
+            apply_signed_values(&statements, None, "jobs", &HashMap::new(), &mut jobs).unwrap();
+            assert!(
+                !jobs.contains_key(&vault) && !jobs.contains_key(WORKLOAD_SECRETS),
+                "a worker with no deployer secret gets no list and no vault: {jobs:?} ({platform})"
+            );
+        }
     }
 }

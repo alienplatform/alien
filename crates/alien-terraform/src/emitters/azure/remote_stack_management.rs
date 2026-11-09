@@ -427,6 +427,9 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
     "Microsoft.Network/virtualNetworks/subnets/join/action",
     "Microsoft.Network/networkSecurityGroups/join/action",
     "Microsoft.Resources/subscriptions/resourceGroups/read",
+    // The deployer secrets vault's name ends in a random suffix, so it finds the vault in the
+    // group to check the binding a worker is given for it.
+    "Microsoft.KeyVault/vaults/read",
 ];
 
 /// What the verifier reads outside the group: the publisher's community gallery images its

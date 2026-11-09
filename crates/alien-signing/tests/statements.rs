@@ -23,8 +23,8 @@ const UPLOADS_BINDING: &str = r#"{"bucketName":"acme-prod-uploads","service":"s3
 
 fn local() -> LocalValues {
     LocalValues {
-        deployer_inputs: BTreeMap::from([(
-            "databaseUrl".to_string(),
+        deployer_env: BTreeMap::from([(
+            "DATABASE_URL".to_string(),
             "postgres://db.internal/app".to_string(),
         )]),
         bindings: BTreeMap::from([(
@@ -742,22 +742,21 @@ fn deployer_inputs_come_from_the_customers_store_only() {
         built.env["DATABASE_URL"], "postgres://db.internal/app",
         "the control plane's value is ignored"
     );
-    let without_inputs = LocalValues {
-        deployer_inputs: BTreeMap::new(),
+    let without_value = LocalValues {
+        deployer_env: BTreeMap::new(),
         ..local()
     };
-    let error = build_workload(
+    let built = build_workload(
         &release,
         "web",
         &BTreeMap::new(),
-        &without_inputs,
+        &without_value,
         &request("postgres://x"),
     )
-    .expect_err("an input the customer never set is refused, not taken from the control plane");
+    .unwrap();
     assert!(
-        error.message.contains("not set in this deployment's store"),
-        "{}",
-        error.message
+        !built.env.contains_key("DATABASE_URL"),
+        "a variable the install resolves to nothing is left out, not taken from the control plane"
     );
 
     let mut loader = release_body();

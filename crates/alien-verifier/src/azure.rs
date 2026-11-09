@@ -23,6 +23,7 @@ use crate::verifier::Backend;
 
 const ARM: &str = "https://management.azure.com";
 const KEY_VAULT_API: &str = "7.4";
+const KEY_VAULT_ARM_API: &str = "2023-07-01";
 
 fn failed(operation: impl Into<String>) -> ErrorData {
     ErrorData::CloudCallFailed {
@@ -165,6 +166,29 @@ impl Azure {
             "{ARM}{}/providers/Microsoft.App/containerApps/{name}?api-version={CONTAINER_APPS_API_VERSION}",
             self.resource_group
         )
+    }
+
+    /// The install's deployer secrets vault: the one Key Vault in the group named the way setup
+    /// names it. Its name ends in a random suffix, so it is read from the group, which only the
+    /// customer's own principals write to. `None` unless exactly one vault matches.
+    async fn deployer_vault(&self, prefix: &str) -> Result<Option<String>> {
+        let what = "keyVault vaults list";
+        let url = format!(
+            "{ARM}{}/providers/Microsoft.KeyVault/vaults?api-version={KEY_VAULT_ARM_API}",
+            self.resource_group
+        );
+        let list = self
+            .call(reqwest::Method::GET, &url, ARM, None, what)
+            .await?;
+        let mut names = list
+            .iter()
+            .flat_map(|list| list["value"].as_array().into_iter().flatten())
+            .filter_map(|vault| vault["name"].as_str())
+            .filter(|name| alien_core::vault_naming::is_azure_deployer_vault_name(prefix, name));
+        Ok(match (names.next(), names.next()) {
+            (Some(name), None) => Some(name.to_string()),
+            _ => None,
+        })
     }
 
     /// The value of a Key Vault secret, or `None` if it doesn't exist.
@@ -394,10 +418,29 @@ pub struct AzureBackend(pub Azure, pub crate::machines::ImagePins);
 impl Backend for AzureBackend {
     async fn binding_reads(
         &self,
-        _place: &Place,
+        place: &Place,
         _workload: &Workload,
     ) -> Result<BTreeMap<String, String>> {
-        Ok(BTreeMap::new())
+        // A group without the vault, or a verifier that may not list vaults yet, only leaves
+        // the binding unread: a workload that loads deployer secrets is refused for it.
+        let vault = self
+            .0
+            .deployer_vault(&place.prefix)
+            .await
+            .map_err(
+                |error| tracing::warn!(error = %error, "the deployer secrets vault was not read"),
+            )
+            .ok()
+            .flatten();
+        Ok(vault
+            .map(|name| {
+                (
+                    alien_signing::binding::DEPLOYER_SECRETS_VAULT.to_string(),
+                    json!({ "service": "key-vault", "vaultName": name }).to_string(),
+                )
+            })
+            .into_iter()
+            .collect())
     }
 
     async fn own_resource(&self, _place: &Place, own_name: &str) -> Result<OwnResource> {

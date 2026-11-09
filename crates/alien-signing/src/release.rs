@@ -489,8 +489,10 @@ pub struct WorkloadRequest {
 /// plane.
 #[derive(Debug, Clone, Default)]
 pub struct LocalValues {
-    /// Deployer input values, by input id, from the customer's own store.
-    pub deployer_inputs: BTreeMap<String, String>,
+    /// The env the release's deployer inputs resolve to for this workload, by env name: the
+    /// customer's stored value or the signed default. A name left out here is a variable the
+    /// install does not set (an optional input with neither, or one whose `when` is off).
+    pub deployer_env: BTreeMap<String, String>,
     /// Binding values, by environment name, from [`crate::resolve_bindings`].
     pub bindings: BTreeMap<String, String>,
     /// What the workload's own binding is checked against.
@@ -559,13 +561,10 @@ pub fn build_workload(
         })?;
         env.insert(key, value.clone());
     }
-    for (key, input) in &workload.deployer_env {
-        let value = local.deployer_inputs.get(input).ok_or_else(|| {
-            refuse(format!(
-                "deployer input '{input}' for env {key} is not set in this deployment's store"
-            ))
-        })?;
-        env.insert(key.clone(), value.clone());
+    for key in workload.deployer_env.keys() {
+        if let Some(value) = local.deployer_env.get(key) {
+            env.insert(key.clone(), value.clone());
+        }
     }
     let own_binding = crate::binding::binding_env_name(name);
     for (key, value) in &request.env {

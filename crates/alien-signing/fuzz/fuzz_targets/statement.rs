@@ -96,10 +96,10 @@ fuzz_target!(|data: &[u8]| {
                 ..WorkloadRequest::default()
             };
             let local = LocalValues {
-                deployer_inputs: workload
+                deployer_env: workload
                     .deployer_env
-                    .values()
-                    .map(|input| (input.clone(), String::new()))
+                    .keys()
+                    .map(|name| (name.clone(), String::new()))
                     .collect(),
                 bindings: workload
                     .bindings

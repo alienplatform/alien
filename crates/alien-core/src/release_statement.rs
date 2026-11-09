@@ -134,7 +134,7 @@ pub fn release_body(
         if !configurable_inputs.contains(&input.id) {
             configurable_inputs.push(input.id.clone());
         }
-        for mapping in input.env.iter().filter(|mapping| plain(mapping)) {
+        for mapping in input.env.iter().filter(|mapping| plain(input, mapping)) {
             if !configurable_env.contains(&mapping.name) {
                 configurable_env.push(mapping.name.clone());
             }
@@ -237,9 +237,9 @@ pub fn signed_input_variables(
     )
 }
 
-/// The deployer inputs whose value decides whether a developer input applies (its `when`
-/// names them). The install's own store holds them, so whoever builds a signed config's env
-/// reads these and passes them to [`signed_config_env`].
+/// The deployer inputs whose value decides whether another input applies (its `when` names
+/// them). The install's own store holds them, so whoever builds a signed config's env reads
+/// these and passes them to [`signed_config_env`] and [`signed_deployer_env`].
 pub fn gating_deployer_inputs(body: &ReleaseBody) -> Result<Vec<String>> {
     if body.stack.is_none() {
         return Ok(Vec::new());
@@ -252,7 +252,7 @@ pub fn gating_deployer_inputs(body: &ReleaseBody) -> Result<Vec<String>> {
     for input in stack
         .inputs
         .iter()
-        .filter(|input| developer_input(input, platform))
+        .filter(|input| input.applies_to(platform))
     {
         let Some(condition) = &input.when else {
             continue;
@@ -300,8 +300,169 @@ pub fn signed_config_env(
     Ok(env)
 }
 
-/// Env names a workload takes from deployer inputs: the enforcer fills them
-/// from the customer's store. (Developer inputs become configurable names,
+/// The env a workload takes from the release's deployer inputs, resolved the way the cloud
+/// controllers resolve it: the install's stored value, else the input's signed default; left
+/// out when the input is optional, has neither, or does not apply (its signed `when` is off
+/// for the install's gate values). A required input that applies and has neither is refused.
+/// Only values come from the install's store (`deployer_values`); which inputs exist, apply,
+/// are required or have defaults is all signed. `config_inputs` are the signed config's
+/// developer input values, which decide `when` for inputs that name a developer input.
+/// Secret mappings are not here: their values are never signed or sent.
+pub fn signed_deployer_env(
+    body: &ReleaseBody,
+    workload: &str,
+    config_inputs: &BTreeMap<String, serde_json::Value>,
+    deployer_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<BTreeMap<String, String>> {
+    if body.stack.is_none() {
+        return Ok(BTreeMap::new());
+    }
+    let platform: Platform = body.platform.parse().map_err(|_| {
+        statement_invalid(format!("the release names no platform '{}'", body.platform))
+    })?;
+    let stack = signed_stack(body, platform)?;
+    let values = input_values(&stack, platform, config_inputs, deployer_values);
+    let inputs: Vec<crate::StackInputDefinition> = stack
+        .inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            if developer_input(&input, platform) {
+                input.env.clear();
+            } else {
+                let mappings = std::mem::take(&mut input.env);
+                input.env = mappings
+                    .into_iter()
+                    .filter(|mapping| plain(&input, mapping))
+                    .collect();
+            }
+            input
+        })
+        .collect();
+    for input in inputs
+        .iter()
+        .filter(|input| input.env.iter().any(|mapping| mapping.targets(workload)))
+    {
+        let unset = values.get(&input.id).is_none_or(serde_json::Value::is_null);
+        if unset
+            && input.default.is_none()
+            && input.required
+            && !input.is_generated()
+            && input.applies(&inputs, &values, platform)
+        {
+            return Err(statement_invalid(format!(
+                "deployer input '{}' is required and has no value in this deployment's store",
+                input.id
+            )));
+        }
+    }
+    Ok(
+        crate::resolve_stack_input_environment_variables(&inputs, &values, platform)?
+            .into_iter()
+            .filter(|variable| crate::targets_resource(&variable.target_resources, workload))
+            .map(|variable| (variable.name, variable.value))
+            .collect(),
+    )
+}
+
+/// The value of each input the signed stack names: a developer input's from the signed config,
+/// any other's from the install's store.
+fn input_values(
+    stack: &Stack,
+    platform: Platform,
+    config_inputs: &BTreeMap<String, serde_json::Value>,
+    deployer_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    stack
+        .inputs
+        .iter()
+        .filter_map(|input| {
+            let value = if developer_input(input, platform) {
+                config_inputs.get(&input.id)
+            } else {
+                deployer_values.get(&input.id)
+            };
+            value.map(|value| (input.id.clone(), value.clone()))
+        })
+        .collect()
+}
+
+/// The deployer secrets `workload` reads from the install's own `deployer-secrets` vault when
+/// it starts, from the signed stack alone: every secret input the deployer provides that
+/// applies and maps to the workload, in signed order. Whether a value exists is the vault's
+/// answer when the workload starts (a required one that is missing stops it, an optional one
+/// is left unset), so nothing here reads the store. The control plane's own list adds the
+/// secret store's version of each value, which only restarts a workload on a rotation; this
+/// one has none, so a rotated value is read by the next start. A secret input only the
+/// developer provides has no value on a protected install and is not here.
+pub fn signed_deployer_secrets(
+    body: &ReleaseBody,
+    workload: &str,
+    config_inputs: &BTreeMap<String, serde_json::Value>,
+    deployer_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<Vec<crate::DeployerSecretEnv>> {
+    if body.stack.is_none() {
+        return Ok(Vec::new());
+    }
+    let platform: Platform = body.platform.parse().map_err(|_| {
+        statement_invalid(format!("the release names no platform '{}'", body.platform))
+    })?;
+    let stack = signed_stack(body, platform)?;
+    let values = input_values(&stack, platform, config_inputs, deployer_values);
+    Ok(
+        crate::deployer_secret_slots(&stack.inputs, &values, Some(&[]), &[], platform)
+            .into_iter()
+            .flat_map(|slot| {
+                slot.input
+                    .env
+                    .iter()
+                    .filter(|mapping| mapping.targets(workload))
+                    .map(move |mapping| crate::DeployerSecretEnv {
+                        name: mapping.name.clone(),
+                        secret_name: slot.vault_key.clone(),
+                        vault_key: slot.vault_key.clone(),
+                        vault_name: None,
+                        label: slot.input.label.clone(),
+                        required: slot.input.required,
+                        version: None,
+                    })
+            })
+            .collect(),
+    )
+}
+
+/// The secrets list a protected worker loads at start (`WORKLOAD_SECRETS`): the signed
+/// workload's `secrets` names and its deployer secrets, with the release `digest` as the list's
+/// hash. A controller writes it and the verifier checks what the controller wrote against it,
+/// so management never decides which vault keys load. `None` when the worker loads none.
+pub fn signed_workload_secrets(
+    body: &ReleaseBody,
+    workload: &str,
+    digest: &str,
+    config_inputs: &BTreeMap<String, serde_json::Value>,
+    deployer_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<Option<String>> {
+    let keys: Vec<&str> = body
+        .workload(workload)
+        .map_err(|error| statement_invalid(error.to_string()))?
+        .secrets
+        .iter()
+        .map(|secret| secret.name.as_str())
+        .collect();
+    let deployer = signed_deployer_secrets(body, workload, config_inputs, deployer_values)?;
+    if keys.is_empty() && deployer.is_empty() {
+        return Ok(None);
+    }
+    let mut list = serde_json::json!({ "keys": keys, "hash": digest });
+    if !deployer.is_empty() {
+        list["deployerSecrets"] = serde_json::to_value(&deployer)
+            .map_err(|error| statement_invalid(error.to_string()))?;
+    }
+    Ok(Some(list.to_string()))
+}
+
+/// Env names a workload takes from deployer inputs: the enforcer resolves them from the
+/// customer's store and the input's signed default (see [`signed_deployer_env`]). (Developer inputs become configurable names,
 /// set by signed config. Secret inputs keep their own path: the value is
 /// never signed, and the stack binds the name.)
 fn add_input_env(workload: &mut Workload, stack: &Stack, platform: Platform) {
@@ -313,7 +474,7 @@ fn add_input_env(workload: &mut Workload, stack: &Stack, platform: Platform) {
         for mapping in input
             .env
             .iter()
-            .filter(|mapping| plain(mapping) && mapping.targets(&workload.name))
+            .filter(|mapping| plain(input, mapping) && mapping.targets(&workload.name))
         {
             if input
                 .provided_by
@@ -334,11 +495,16 @@ fn developer_input(input: &crate::StackInputDefinition, platform: Platform) -> b
             .contains(&crate::StackInputProvider::Deployer)
 }
 
-fn plain(mapping: &crate::StackInputEnvironmentMapping) -> bool {
-    !matches!(
-        mapping.var_type,
-        Some(crate::StackInputEnvironmentVariableType::Secret)
-    )
+/// Whether the mapping carries a plain value: the same rule the controllers resolve env with.
+fn plain(
+    input: &crate::StackInputDefinition,
+    mapping: &crate::StackInputEnvironmentMapping,
+) -> bool {
+    match mapping.var_type {
+        Some(crate::StackInputEnvironmentVariableType::Secret) => false,
+        Some(crate::StackInputEnvironmentVariableType::Plain) => true,
+        None => input.kind != crate::StackInputKind::Secret,
+    }
 }
 
 fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Option<Workload>> {
@@ -811,6 +977,175 @@ mod tests {
         assert!(
             !with(Some("false")).contains_key("AUDIT_SINK"),
             "the customer turned it off"
+        );
+    }
+
+    fn deployer_env_stack(inputs: serde_json::Value) -> ReleaseBody {
+        let mut stack = stack(&pinned());
+        stack.inputs = serde_json::from_value(inputs).unwrap();
+        let mut api = container(&pinned());
+        api.environment.clear();
+        stack.resources.get_mut("api").unwrap().config = alien_core_resource(api);
+        release_body(Platform::Aws, &stack, &production()).unwrap()
+    }
+
+    fn stored(values: &[(&str, &str)]) -> std::collections::HashMap<String, serde_json::Value> {
+        values
+            .iter()
+            .map(|(id, value)| (id.to_string(), serde_json::Value::String(value.to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn deployer_env_resolves_defaults_and_leaves_out_unset_optional_inputs() {
+        let body = deployer_env_stack(serde_json::json!([
+            {"id": "region", "kind": "string", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d", "default": {"type": "string", "value": "eu"},
+             "env": [{"name": "REGION", "targetResources": ["api"]}]},
+            {"id": "proxy", "kind": "string", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d",
+             "env": [{"name": "PROXY_URL", "targetResources": ["api"]}]},
+            {"id": "databaseUrl", "kind": "string", "providedBy": ["deployer"], "required": true,
+             "label": "l", "description": "d",
+             "env": [{"name": "DATABASE_URL", "targetResources": ["api"]}]},
+        ]));
+        let none = BTreeMap::new();
+        let env = signed_deployer_env(&body, "api", &none, &stored(&[("databaseUrl", "pg://a")]))
+            .unwrap();
+        assert_eq!(
+            env,
+            BTreeMap::from([
+                ("REGION".to_string(), "eu".to_string()),
+                ("DATABASE_URL".to_string(), "pg://a".to_string()),
+            ]),
+            "the default fills an unset input and an optional input with neither is left out"
+        );
+        let env = signed_deployer_env(
+            &body,
+            "api",
+            &none,
+            &stored(&[
+                ("databaseUrl", "pg://a"),
+                ("region", "us"),
+                ("proxy", "http://p"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(env["REGION"], "us");
+        assert_eq!(env["PROXY_URL"], "http://p");
+        let error = signed_deployer_env(&body, "api", &none, &stored(&[]))
+            .expect_err("a required input with no value is refused");
+        assert!(error.message.contains("databaseUrl"), "{}", error.message);
+    }
+
+    #[test]
+    fn deployer_env_follows_the_signed_when_not_the_stored_values() {
+        let body = deployer_env_stack(serde_json::json!([
+            {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d", "default": {"type": "boolean", "value": false}},
+            {"id": "auditSink", "kind": "string", "providedBy": ["deployer"], "required": true,
+             "label": "l", "description": "d", "when": {"input": "audit", "equals": true},
+             "env": [{"name": "AUDIT_SINK", "targetResources": ["api"]}]},
+        ]));
+        assert_eq!(
+            gating_deployer_inputs(&body).unwrap(),
+            vec!["audit".to_string()],
+            "a deployer input's own gate is read from the store too"
+        );
+        let none = BTreeMap::new();
+        let off = signed_deployer_env(&body, "api", &none, &stored(&[])).unwrap();
+        assert!(
+            off.is_empty(),
+            "an inactive required input demands nothing: {off:?}"
+        );
+        let off = signed_deployer_env(
+            &body,
+            "api",
+            &none,
+            &stored(&[("auditSink", "https://stale.example")]),
+        )
+        .unwrap();
+        assert!(
+            off.is_empty(),
+            "a stored value of an inactive input is ignored"
+        );
+        let on = signed_deployer_env(
+            &body,
+            "api",
+            &none,
+            &stored(&[("audit", "true"), ("auditSink", "https://audit.example")]),
+        )
+        .unwrap();
+        assert_eq!(on["AUDIT_SINK"], "https://audit.example");
+        signed_deployer_env(&body, "api", &none, &stored(&[("audit", "true")]))
+            .expect_err("active and required, so a value is needed");
+    }
+
+    #[test]
+    fn a_secret_input_never_becomes_plain_deployer_env() {
+        let body = deployer_env_stack(serde_json::json!([
+            {"id": "apiKey", "kind": "secret", "providedBy": ["deployer"], "required": true,
+             "label": "l", "description": "d",
+             "env": [{"name": "API_KEY", "targetResources": ["api"]}]},
+        ]));
+        assert!(
+            body.workloads[0].deployer_env.is_empty(),
+            "a secret input is delivered through the secrets vault, never as plain env"
+        );
+        let env = signed_deployer_env(&body, "api", &BTreeMap::new(), &stored(&[("apiKey", "x")]))
+            .unwrap();
+        assert!(env.is_empty(), "{env:?}");
+    }
+
+    #[test]
+    fn deployer_secrets_come_from_the_signed_stack_and_follow_its_gates() {
+        let body = deployer_env_stack(serde_json::json!([
+            {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d", "default": {"type": "boolean", "value": false}},
+            {"id": "databasePassword", "kind": "secret", "providedBy": ["deployer"], "required": true,
+             "label": "Database password", "description": "d",
+             "env": [{"name": "DATABASE_PASSWORD", "targetResources": ["api"]},
+                     {"name": "ELSEWHERE", "targetResources": ["other"]}]},
+            {"id": "auditToken", "kind": "secret", "providedBy": ["deployer"], "required": false,
+             "label": "Audit token", "description": "d", "when": {"input": "audit", "equals": true},
+             "env": [{"name": "AUDIT_TOKEN"}]},
+            {"id": "vendorKey", "kind": "secret", "providedBy": ["developer"], "required": true,
+             "label": "Vendor key", "description": "d",
+             "env": [{"name": "VENDOR_KEY"}]},
+        ]));
+        let none = BTreeMap::new();
+        let secrets = signed_deployer_secrets(&body, "api", &none, &stored(&[])).unwrap();
+        assert_eq!(
+            secrets,
+            vec![crate::DeployerSecretEnv {
+                name: "DATABASE_PASSWORD".into(),
+                vault_key: "database-password".into(),
+                secret_name: "database-password".into(),
+                vault_name: None,
+                label: "Database password".into(),
+                required: true,
+                version: None,
+            }],
+            "only the deployer's secret that applies and targets the worker; the gated one is off, \
+             the developer's has no value on a protected install"
+        );
+        let on =
+            signed_deployer_secrets(&body, "api", &none, &stored(&[("audit", "true")])).unwrap();
+        let names: Vec<&str> = on.iter().map(|secret| secret.name.as_str()).collect();
+        assert_eq!(names, ["DATABASE_PASSWORD", "AUDIT_TOKEN"]);
+        assert!(!on[1].required);
+
+        let list = signed_workload_secrets(&body, "api", "sha256:abc", &none, &stored(&[]))
+            .unwrap()
+            .expect("a worker with a deployer secret loads a list");
+        let list: serde_json::Value = serde_json::from_str(&list).unwrap();
+        assert_eq!(list["keys"], serde_json::json!([]));
+        assert_eq!(list["hash"], "sha256:abc");
+        assert_eq!(list["deployerSecrets"][0]["vaultKey"], "database-password");
+        assert_eq!(list["deployerSecrets"][0]["required"], true);
+        assert!(
+            signed_workload_secrets(&body, "worker-without-any", "d", &none, &stored(&[])).is_err(),
+            "a workload the release doesn't name has no list"
         );
     }
 

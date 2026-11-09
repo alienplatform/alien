@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use alien_core::{
-    worker_runtime_environment_plan, Platform, RuntimeEnvironmentValue,
+    worker_runtime_environment_plan, Platform, RuntimeEnvironmentValue, DEPLOYER_SECRETS_VAULT_ID,
     ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
 };
 use alien_error::{AlienError, Context};
@@ -183,6 +183,54 @@ pub fn check_env(
         .iter()
         .map(|(id, value)| (id.clone(), serde_json::Value::String(value.clone())))
         .collect();
+    let deployer_secrets = alien_core::release_statement::signed_deployer_secrets(
+        &accepted.release.body,
+        name,
+        &config.inputs,
+        &deployer_values,
+    )
+    .context(ErrorData::Refused {
+        reason: format!("the deployer secrets of workload '{name}' can't be resolved"),
+    })?;
+
+    // The deployer secrets vault is the install's own, and only a worker the release gives a
+    // deployer secret reads it.
+    let deployer_vault = binding_env_name(DEPLOYER_SECRETS_VAULT_ID);
+    match (rest.remove(&deployer_vault), deployer_secrets.is_empty()) {
+        (None, true) => {}
+        (None, false) => {
+            return Err(refused(format!(
+                "workload '{name}' loads deployer secrets, and the request carries no {deployer_vault}"
+            )))
+        }
+        (Some(_), true) => {
+            return Err(refused(format!(
+                "env {deployer_vault} of workload '{name}' is the deployer secrets vault, and the signed release gives the workload no deployer secret"
+            )))
+        }
+        (Some(sent), false) => {
+            let derived = binding_env(
+                &BTreeMap::from([(DEPLOYER_SECRETS_VAULT_ID.to_string(), "vault".to_string())]),
+                &place.binding_context(),
+            )
+            .context(ErrorData::Refused {
+                reason: "the install's deployer secrets vault binding can't be derived".to_string(),
+            })?;
+            let expected = resolve_bindings(derived, &reads.bindings, &config.bindings)
+                .context(ErrorData::Refused {
+                    reason: "the install's deployer secrets vault has no value".to_string(),
+                })?;
+            if !expected
+                .get(&deployer_vault)
+                .is_some_and(|expected| same_json(expected, &sent))
+            {
+                return Err(refused(format!(
+                    "env {deployer_vault} of workload '{name}' is not the install's deployer secrets vault"
+                )));
+            }
+        }
+    }
+
     let configured = alien_core::release_statement::signed_config_env(
         &accepted.release.body,
         name,
@@ -192,12 +240,21 @@ pub fn check_env(
     .context(ErrorData::Refused {
         reason: format!("the signed config can't be applied to workload '{name}'"),
     })?;
+    let deployer_env = alien_core::release_statement::signed_deployer_env(
+        &accepted.release.body,
+        name,
+        &config.inputs,
+        &deployer_values,
+    )
+    .context(ErrorData::Refused {
+        reason: format!("the deployer inputs of workload '{name}' can't be resolved"),
+    })?;
     let built = build_workload(
         &accepted.release.body,
         name,
         &configured,
         &LocalValues {
-            deployer_inputs: reads.deployer_inputs.clone(),
+            deployer_env,
             bindings,
             own_binding: own_facts,
         },
@@ -222,14 +279,16 @@ pub fn check_env(
         )));
     }
 
-    let signed_secrets = (!workload.secrets.is_empty()).then(|| {
-        let keys: Vec<&str> = workload
-            .secrets
-            .iter()
-            .map(|secret| secret.name.as_str())
-            .collect();
-        serde_json::json!({ "keys": keys, "hash": accepted.release.digest }).to_string()
-    });
+    let signed_secrets = alien_core::release_statement::signed_workload_secrets(
+        &accepted.release.body,
+        name,
+        &accepted.release.digest,
+        &config.inputs,
+        &deployer_values,
+    )
+    .context(ErrorData::Refused {
+        reason: format!("the secrets list of workload '{name}' can't be built"),
+    })?;
     match (&signed_secrets, &secrets_list) {
         (None, None) => Ok(()),
         (Some(signed), Some(sent)) if same_json(signed, sent) => Ok(()),
@@ -287,5 +346,257 @@ fn own_binding_facts(place: &Place, reads: &Reads, own_name: &str) -> OwnBinding
         },
         location: reads.own.location.clone(),
         urls: reads.own.urls.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::*;
+    use crate::trust::tests::{found, MemoryStore};
+    use crate::trust::{accept, Accepted};
+    use alien_core::Platform;
+    use serde_json::json;
+
+    const AZURE_VAULT: &str = "acmeprod-deployer-s-a1b2c3";
+
+    fn place(platform: Platform) -> Place {
+        let install = match platform {
+            Platform::Aws => InstallId::Aws {
+                account: ACCOUNT.to_string(),
+                region: REGION.to_string(),
+                prefix: PREFIX.to_string(),
+            },
+            Platform::Gcp => InstallId::Gcp {
+                project: "acme-project".to_string(),
+                prefix: PREFIX.to_string(),
+            },
+            _ => InstallId::Azure {
+                subscription: "0000".to_string(),
+                resource_group: "acme-rg".to_string(),
+            },
+        };
+        Place {
+            install,
+            prefix: PREFIX.to_string(),
+            vpc: None,
+            machine_network: None,
+        }
+    }
+
+    /// Release 1 of the workloads `api` and `jobs` on `platform`; only `api` gets the
+    /// deployer's database password.
+    async fn accepted(platform: Platform) -> Accepted {
+        let worker = |name: &str| {
+            alien_core::Worker::new(name.to_string())
+                .code(alien_core::WorkerCode::Image {
+                    image: format!("ghcr.io/shop/{name}@{DIGEST}"),
+                })
+                .permissions("execution".to_string())
+                .build()
+        };
+        let mut stack = alien_core::Stack::new("shop".to_string())
+            .add(worker("api"), alien_core::ResourceLifecycle::Live)
+            .add(worker("jobs"), alien_core::ResourceLifecycle::Live)
+            .build();
+        stack.inputs = serde_json::from_value(json!([
+            {"id": "databasePassword", "kind": "secret", "providedBy": ["deployer"],
+             "required": true, "label": "Database password", "description": "d",
+             "env": [{"name": "DATABASE_PASSWORD", "targetResources": ["api"]}]},
+        ]))
+        .unwrap();
+        let body = alien_core::release_statement::release_body(
+            platform,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let install = found(&MemoryStore::protected(&settings())).await.unwrap();
+        accept(
+            &install,
+            &[signer_list()],
+            &signed_release(1, &body),
+            None,
+            &platform.to_string(),
+            now(),
+        )
+        .unwrap()
+    }
+
+    fn vault_binding(platform: Platform) -> String {
+        match platform {
+            Platform::Aws => {
+                json!({"service": "parameter-store", "vaultPrefix": "acme-prod-deployer-secrets"})
+            }
+            Platform::Gcp => {
+                json!({"service": "secret-manager", "vaultPrefix": "acme-prod-deployer-secrets"})
+            }
+            _ => json!({"service": "key-vault", "vaultName": AZURE_VAULT}),
+        }
+        .to_string()
+    }
+
+    /// What the verifier reads on its own: on Azure, the vault whose name ends in a random
+    /// suffix.
+    fn reads(platform: Platform) -> Reads {
+        let mut reads = Reads::default();
+        if platform == Platform::Azure {
+            reads.bindings.insert(
+                "deployer-secrets".to_string(),
+                vault_binding(Platform::Azure),
+            );
+        }
+        reads
+    }
+
+    fn signed_list(accepted: &Accepted, vault_key: &str) -> String {
+        json!({
+            "keys": [],
+            "hash": accepted.release.digest,
+            "deployerSecrets": [{
+                "name": "DATABASE_PASSWORD",
+                "vaultKey": vault_key,
+                "secretName": vault_key,
+                "label": "Database password",
+                "required": true,
+            }],
+        })
+        .to_string()
+    }
+
+    fn env(entries: &[(&str, String)]) -> BTreeMap<String, String> {
+        std::iter::once(("ALIEN_DEPLOYMENT_ID".to_string(), "dep_1".to_string()))
+            .chain(entries.iter().map(|(k, v)| (k.to_string(), v.clone())))
+            .collect()
+    }
+
+    fn check(
+        platform: Platform,
+        accepted: &Accepted,
+        reads: &Reads,
+        workload: &str,
+        env: &BTreeMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        let workload = accepted.release.body.workload(workload).unwrap();
+        check_env(
+            &place(platform),
+            accepted,
+            workload,
+            reads,
+            &format!("{PREFIX}-{}", workload.name),
+            env,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// A deployer secret reaches the worker the release names it for, on every cloud, through
+    /// the signed list and the install's own `deployer-secrets` vault, and nothing else does.
+    #[tokio::test]
+    async fn a_worker_loads_the_deployer_secrets_the_release_gives_it() {
+        let binding_name = "ALIEN_DEPLOYER_SECRETS_BINDING";
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let accepted = accepted(platform).await;
+            let reads = reads(platform);
+            let list = signed_list(&accepted, "database-password");
+            let sent = env(&[
+                ("WORKLOAD_SECRETS", list.clone()),
+                (binding_name, vault_binding(platform)),
+            ]);
+            check(platform, &accepted, &reads, "api", &sent)
+                .unwrap_or_else(|error| panic!("{platform}: {error}"));
+
+            let refuse =
+                |what: &str, workload: &str, sent: BTreeMap<String, String>, reads: &Reads| {
+                    let error = check(platform, &accepted, reads, workload, &sent)
+                        .expect_err(&format!("{platform}: {what}"));
+                    error
+                };
+            let error = refuse(
+                "management points the worker at another vault key",
+                "api",
+                env(&[
+                    ("WORKLOAD_SECRETS", signed_list(&accepted, "other-secret")),
+                    (binding_name, vault_binding(platform)),
+                ]),
+                &reads,
+            );
+            assert!(
+                error.contains("is not the signed secrets list"),
+                "{platform}: {error}"
+            );
+            let error = refuse(
+                "the list is left out",
+                "api",
+                env(&[(binding_name, vault_binding(platform))]),
+                &reads,
+            );
+            assert!(
+                error.contains("is not the signed secrets list"),
+                "{platform}: {error}"
+            );
+            let error = refuse(
+                "the binding names another vault",
+                "api",
+                env(&[
+                    ("WORKLOAD_SECRETS", list.clone()),
+                    (
+                        binding_name,
+                        json!({"service": "parameter-store", "vaultPrefix": "attacker-vault", "vaultName": "attacker"}).to_string(),
+                    ),
+                ]),
+                &reads,
+            );
+            assert!(
+                error.contains("is not the install's deployer secrets vault"),
+                "{platform}: {error}"
+            );
+            let error = refuse(
+                "the workload loads the secret and has no vault",
+                "api",
+                env(&[("WORKLOAD_SECRETS", list.clone())]),
+                &reads,
+            );
+            assert!(error.contains(binding_name), "{platform}: {error}");
+            let error = refuse(
+                "a worker the release gives no deployer secret",
+                "jobs",
+                env(&[
+                    ("WORKLOAD_SECRETS", list.clone()),
+                    (binding_name, vault_binding(platform)),
+                ]),
+                &reads,
+            );
+            assert!(
+                error.contains("gives the workload no deployer secret"),
+                "{platform}: {error}"
+            );
+            check(platform, &accepted, &reads, "jobs", &env(&[])).unwrap();
+        }
+    }
+
+    /// The deployer secrets vault on Azure is found in the install's group; a verifier that
+    /// found none refuses the worker rather than trust the vault name it was sent.
+    #[tokio::test]
+    async fn an_azure_worker_needs_the_vault_the_verifier_read() {
+        let accepted = accepted(Platform::Azure).await;
+        let sent = env(&[
+            (
+                "WORKLOAD_SECRETS",
+                signed_list(&accepted, "database-password"),
+            ),
+            (
+                "ALIEN_DEPLOYER_SECRETS_BINDING",
+                vault_binding(Platform::Azure),
+            ),
+        ]);
+        let error = check(Platform::Azure, &accepted, &Reads::default(), "api", &sent)
+            .expect_err("no vault was read");
+        assert!(
+            error.contains("deployer secrets vault has no value"),
+            "{error}"
+        );
     }
 }
