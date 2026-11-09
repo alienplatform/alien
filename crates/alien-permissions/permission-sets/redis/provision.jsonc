@@ -461,6 +461,40 @@
           }
         }
       },
+      // A same-named secret or security group that is not ours must be found and refused, never
+      // overwritten or adopted, so these reads have no ownership condition. They return metadata
+      // (tags, names), not secret values.
+      {
+        "label": "read-auth-secret-metadata",
+        "description": "Read the AUTH-token secret's tags to tell a secret this deployment owns from a same-named foreign one. Never reads a secret value.",
+        "grant": {
+          "actions": ["secretsmanager:DescribeSecret"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        // EC2 describe calls do not support resource-level scoping.
+        "label": "read-redis-security-groups",
+        "description": "Find the Redis security group by name, to recover it after a lost create response.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
       // ElastiCache creates this account-level role on the first replication group. The role is
       // shared across stacks, so restrict both its exact ARN and service.
       {
