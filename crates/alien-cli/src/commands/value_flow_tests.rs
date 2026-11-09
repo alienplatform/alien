@@ -29,7 +29,7 @@ use crate::commands::deployment_actions::{
     save_environment_variables, set_environment_variables_task, set_inputs_task, InputChanges,
 };
 use crate::commands::deployments::create_deployment_with_values;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 const CANARY: &str = "canary-3b9e61d0-not-a-real-secret";
 const WORKSPACE: &str = "acme";
@@ -198,6 +198,7 @@ struct FakePlatformState {
     environment_names: Arc<Mutex<Vec<String>>>,
     session_inputs: Arc<Mutex<serde_json::Map<String, Value>>>,
     refuse_always: Arc<std::sync::atomic::AtomicBool>,
+    refuse_held_when_present: Arc<std::sync::atomic::AtomicBool>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
 }
 
@@ -324,6 +325,23 @@ fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
     }
     if let Some(input) = &platform.create_requires_input {
         let in_session = platform.session_inputs.lock().unwrap().contains_key(input);
+        if platform
+            .refuse_held_when_present
+            .load(std::sync::atomic::Ordering::SeqCst)
+            && request["inputValues"].get(input).is_some()
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({
+                    "code": "ALIEN_CLI_UPGRADE_REQUIRED",
+                    "message": "This input is held by the manager",
+                    "context": { "input": input },
+                    "retryable": false,
+                    "internal": false,
+                })),
+            )
+                .into_response();
+        }
         let refuse = platform
             .refuse_always
             .load(std::sync::atomic::Ordering::SeqCst);
@@ -368,6 +386,7 @@ fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
 struct FakePlatform {
     url: String,
     refuse_always: Arc<std::sync::atomic::AtomicBool>,
+    refuse_held_when_present: Arc<std::sync::atomic::AtomicBool>,
     client: alien_platform_api::Client,
     environment_names: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
@@ -407,6 +426,7 @@ async fn start_platform_refusing_create(
     let requests = Arc::default();
     let environment_names = Arc::<Mutex<Vec<String>>>::default();
     let refuse_always = Arc::<std::sync::atomic::AtomicBool>::default();
+    let refuse_held_when_present = Arc::<std::sync::atomic::AtomicBool>::default();
     let app = Router::new()
         .fallback(any(platform_handler))
         .with_state(FakePlatformState {
@@ -418,6 +438,7 @@ async fn start_platform_refusing_create(
             environment_names: Arc::clone(&environment_names),
             session_inputs: Arc::default(),
             refuse_always: Arc::clone(&refuse_always),
+            refuse_held_when_present: Arc::clone(&refuse_held_when_present),
             requests: Arc::clone(&requests),
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -426,6 +447,7 @@ async fn start_platform_refusing_create(
     FakePlatform {
         client: alien_platform_api::Client::new(&url),
         refuse_always,
+        refuse_held_when_present,
         url,
         environment_names,
         requests,
@@ -1387,6 +1409,41 @@ async fn an_answer_is_put_back_at_most_once_and_a_second_refusal_fails_the_creat
 }
 
 #[tokio::test]
+async fn a_refusal_alternating_with_a_missing_input_error_ends_after_one_resend() {
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::NoRoute,
+        inputs,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        Some("api_key"),
+    )
+    .await;
+    platform
+        .refuse_held_when_present
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let answers = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(&platform.client, WORKSPACE, &mut request, &answers)
+        .await
+        .expect_err("a platform that asks for the answer and then refuses it fails the create");
+
+    let sent_with_the_answer = platform
+        .requests()
+        .iter()
+        .filter(|(method, path, body)| {
+            method == "POST" && path == "/v1/deployments" && body.contains(CANARY)
+        })
+        .count();
+    assert_eq!(sent_with_the_answer, 1, "the answer is sent at most once");
+    assert!(create_count(&platform) <= 3, "{}", create_count(&platform));
+}
+
+#[tokio::test]
 async fn an_answer_the_stack_did_not_mark_secret_is_still_kept_out_of_the_first_create() {
     let manager = start_manager().await;
     let inputs = json!({
@@ -1423,7 +1480,7 @@ async fn an_answer_the_stack_did_not_mark_secret_is_still_kept_out_of_the_first_
 }
 
 #[tokio::test]
-async fn a_first_party_deploy_keeps_secret_answers_out_of_the_hosted_inputs() {
+async fn a_first_party_deploy_keeps_every_answer_out_of_the_hosted_inputs() {
     let manager = start_manager().await;
     let inputs = json!({
         "inputs": [
@@ -1450,7 +1507,6 @@ async fn a_first_party_deploy_keeps_secret_answers_out_of_the_hosted_inputs() {
         WORKSPACE,
         &platform.url,
         secret_answers(),
-        HashSet::from(["api_key".to_string()]),
     )
     .await
     .expect("the deployment is created");
@@ -1460,7 +1516,8 @@ async fn a_first_party_deploy_keeps_secret_answers_out_of_the_hosted_inputs() {
     }
     assert_eq!(
         platform.body_of("PUT", "first-party-inputs")["inputValues"],
-        json!({"region": "eu"})
+        json!({}),
+        "a secret answer given as a plain --input is withheld too"
     );
     assert_eq!(manager.slots().await["slots"][0]["slot"], "input:api_key");
 }
@@ -1485,7 +1542,6 @@ async fn a_first_party_deploy_on_an_older_platform_sends_a_required_secret_once(
         WORKSPACE,
         &platform.url,
         secret_answers(),
-        HashSet::from(["api_key".to_string()]),
     )
     .await
     .expect("the retry with the answer succeeds");

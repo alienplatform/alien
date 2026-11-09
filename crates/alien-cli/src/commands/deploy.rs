@@ -47,7 +47,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -211,8 +211,6 @@ struct ResolvedDeployArgs {
     compute_settings: Option<ComputeSettings>,
     domain_settings: Option<alien_core::DomainSettings>,
     input_values: HashMap<String, serde_json::Value>,
-    /// Inputs the user gave as secrets (`--secret-input`, `secretInputs`).
-    secret_input_ids: HashSet<String>,
     public_subdomain: Option<String>,
 }
 
@@ -389,7 +387,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
     }
     let compute_settings = config.as_ref().and_then(|config| config.compute.clone());
     validate_compute_settings(compute_settings.as_ref())?;
-    let (input_values, secret_input_ids) = collect_raw_input_values(
+    let input_values = collect_raw_input_values(
         config.as_ref(),
         &args.input_values,
         &args.secret_input_values,
@@ -412,7 +410,6 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         compute_settings,
         domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
         input_values,
-        secret_input_ids,
         public_subdomain: args.public_subdomain.clone(),
     })
 }
@@ -489,9 +486,8 @@ fn collect_raw_input_values(
     config: Option<&DeployConfigFile>,
     input_values: &[String],
     secret_input_values: &[String],
-) -> Result<(HashMap<String, serde_json::Value>, HashSet<String>)> {
+) -> Result<HashMap<String, serde_json::Value>> {
     let mut values = HashMap::new();
-    let mut secret_ids = HashSet::new();
 
     if let Some(config_inputs) = config.and_then(|config| config.inputs.as_ref()) {
         for (id, value) in config_inputs {
@@ -501,21 +497,18 @@ fn collect_raw_input_values(
     if let Some(config_inputs) = config.and_then(|config| config.secret_inputs.as_ref()) {
         for (id, value) in config_inputs {
             values.insert(id.clone(), serde_json::Value::String(value.clone()));
-            secret_ids.insert(id.clone());
         }
     }
     for input in input_values {
         let (id, value) = parse_stack_input_arg(input, "--input")?;
-        secret_ids.remove(&id);
         values.insert(id, parse_raw_stack_input_value(&value));
     }
     for input in secret_input_values {
         let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
-        secret_ids.insert(id.clone());
         values.insert(id, serde_json::Value::String(value));
     }
 
-    Ok((values, secret_ids))
+    Ok(values)
 }
 
 pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
@@ -1050,9 +1043,11 @@ fn first_party_inputs_request_body(
     })
 }
 
-/// Creates a deployment from a first-party session. Answers the user gave as
-/// secrets never go to the hosted inputs endpoint: a deployment manager that
-/// holds values must be the only one to see them, so they are written after
+/// Creates a deployment from a first-party session. No answer goes to the
+/// hosted inputs endpoint, whether the user gave it as a secret or as an
+/// ordinary input: whether an input is a secret is the stack's to say, and a
+/// deployment manager that holds values must be the only one to see them, so
+/// they are written after
 /// the create, to the manager for the inputs it holds and to the platform for
 /// the rest. An older platform that validates and stores inputs itself and
 /// refuses the create for a missing required input gets that one answer back
@@ -1068,10 +1063,8 @@ async fn create_first_party_deployment(
 ) -> Result<CreateDeploymentApiResponse> {
     let mut inputs = resolved_args.input_values.clone();
     let mut withheld = serde_json::Map::new();
-    for id in &resolved_args.secret_input_ids {
-        if let Some(value) = inputs.remove(id) {
-            withheld.insert(id.clone(), value);
-        }
+    for (id, value) in inputs.drain() {
+        withheld.insert(id, value);
     }
     loop {
         // Bind the preparation request to this exact channel even without inputs.
@@ -1109,7 +1102,6 @@ pub(crate) async fn create_first_party_deployment_for_test(
     workspace: &str,
     base_url: &str,
     input_values: HashMap<String, serde_json::Value>,
-    secret_input_ids: HashSet<String>,
 ) -> Result<serde_json::Value> {
     let resolved = ResolvedDeployArgs {
         name: "customer".to_string(),
@@ -1120,7 +1112,6 @@ pub(crate) async fn create_first_party_deployment_for_test(
         compute_settings: None,
         domain_settings: None,
         input_values,
-        secret_input_ids,
         public_subdomain: None,
     };
     let args = DeployArgs::try_parse_from(["deploy", "--name", "customer", "--platform", "local"])
@@ -1497,9 +1488,9 @@ where
 /// platform for the rest. When the platform rejects the create for a missing
 /// required input (an older platform that validates and stores inputs
 /// itself), that one answer is put back and the create is sent again. An
-/// answer is put back at most once: a platform that refuses the create again
-/// fails it. A failure to store the answers leaves the deployment in place
-/// and says how to retry.
+/// answer is put back at most once over the whole create: any refusal or
+/// missing-input error for an input already put back fails it. A failure to
+/// store the answers leaves the deployment in place and says how to retry.
 pub(crate) async fn create_deployment_with_answers(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -1518,6 +1509,7 @@ pub(crate) async fn create_deployment_with_answers(
             }
         }
     }
+    let mut put_back = std::collections::HashSet::new();
     let response = loop {
         match client
             .create_deployment()
@@ -1536,6 +1528,11 @@ pub(crate) async fn create_deployment_with_answers(
                         "Failed to create deployment with deployment group token",
                     ));
                 };
+                if put_back.contains(&input) {
+                    return Err(error).context(failed(&format!(
+                        "The platform refused the answer for '{input}' again after it was put back"
+                    )));
+                }
                 request.input_values.remove(&input);
                 if let Some(value) = answers.get(&input) {
                     withheld.insert(input, value.clone());
@@ -1547,6 +1544,11 @@ pub(crate) async fn create_deployment_with_answers(
                         "Failed to create deployment with deployment group token",
                     ));
                 };
+                if !put_back.insert(input.clone()) {
+                    return Err(error).context(failed(&format!(
+                        "The platform asked for the answer for '{input}' again after it was put back"
+                    )));
+                }
                 if let Some(value) = withheld
                     .remove(&input)
                     .and_then(|value| serde_json::from_value(value).ok())
@@ -3718,8 +3720,8 @@ async fn request_deployment_retry(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn inputs_given_as_secrets_are_listed_so_the_create_request_can_withhold_them() {
-        let (values, secrets) = collect_raw_input_values(
+    fn a_later_flag_wins_for_the_same_input() {
+        let values = collect_raw_input_values(
             None,
             &["region=eu".to_string(), "token=plain-now".to_string()],
             &[
@@ -3730,9 +3732,7 @@ mod tests {
         .expect("inputs parse");
         assert_eq!(values["region"], serde_json::json!("eu"));
         assert_eq!(values["api_key"], serde_json::json!("s3cret"));
-        let mut secrets: Vec<_> = secrets.into_iter().collect();
-        secrets.sort();
-        assert_eq!(secrets, vec!["api_key", "token"]);
+        assert_eq!(values["token"], serde_json::json!("s3cret-later"));
     }
 
     #[test]
@@ -5271,7 +5271,6 @@ mod tests {
                 then.status(409).json_body(serde_json::json!({"code":"CONFLICT", "message":"Synthetic creation rejection"}));
             }).await;
             let resolved = ResolvedDeployArgs {
-                secret_input_ids: Default::default(),
                 name: "test".to_string(),
                 platform: "aws".to_string(),
                 platform_enum: Platform::Aws,
@@ -5328,7 +5327,6 @@ machine = "m8i.2xlarge"
         validate_compute_settings(config.compute.as_ref()).expect("selection should be valid");
 
         let resolved = ResolvedDeployArgs {
-            secret_input_ids: Default::default(),
             name: config.name.expect("name"),
             platform: config.platform.expect("platform"),
             platform_enum: Platform::Aws,
@@ -5432,7 +5430,6 @@ max = 1
             })
             .await;
         let resolved = ResolvedDeployArgs {
-            secret_input_ids: Default::default(),
             name: "test".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
@@ -5460,7 +5457,6 @@ max = 1
 
     fn standalone_resolved(input_values: HashMap<String, serde_json::Value>) -> ResolvedDeployArgs {
         ResolvedDeployArgs {
-            secret_input_ids: Default::default(),
             name: "test".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
@@ -5554,7 +5550,6 @@ max = 1
             })
             .await;
         let resolved = ResolvedDeployArgs {
-            secret_input_ids: Default::default(),
             name: "test".to_string(),
             platform: "machines".to_string(),
             platform_enum: Platform::Machines,
@@ -5671,7 +5666,6 @@ max = 1
     #[test]
     fn first_party_creation_preserves_requested_release_channel() {
         let resolved_args = ResolvedDeployArgs {
-            secret_input_ids: Default::default(),
             name: "preview".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
