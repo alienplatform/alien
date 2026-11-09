@@ -388,8 +388,9 @@ fn merge_into(
     })
 }
 
-/// The release a request is applying, which must still be the install's newest when each of
-/// its functions is written.
+/// The release and config a request is applying, which must still be the install's newest when
+/// each of its functions is written. A config is checked too: a function's env follows it, so
+/// an older config applied after a newer one would roll the env back.
 pub struct Floor<'a> {
     /// Where the ledger lives.
     pub store: &'a dyn InstallStore,
@@ -397,6 +398,8 @@ pub struct Floor<'a> {
     pub prefix: &'a str,
     /// The release, as the ledger records it.
     pub release: Entry,
+    /// The config, as the ledger records it; none when the install has accepted none.
+    pub config: Option<Entry>,
 }
 
 #[async_trait]
@@ -409,17 +412,29 @@ impl crate::function::StillNewest for Floor<'_> {
         )
         .await?;
         match &ledger.release {
-            Some(newest) if *newest == self.release => Ok(()),
-            Some(newest) => Err(refused(format!(
-                "release {} was accepted while release {} was being applied",
-                newest.sequence, self.release.sequence
-            ))),
-            None => Err(refused(format!(
-                "the ledger at {} no longer records release {}",
-                self.store.ledger_name(self.prefix),
-                self.release.sequence
-            ))),
+            Some(newest) if *newest == self.release => {}
+            Some(newest) => {
+                return Err(refused(format!(
+                    "release {} was accepted while release {} was being applied",
+                    newest.sequence, self.release.sequence
+                )))
+            }
+            None => {
+                return Err(refused(format!(
+                    "the ledger at {} no longer records release {}",
+                    self.store.ledger_name(self.prefix),
+                    self.release.sequence
+                )))
+            }
         }
+        if ledger.config != self.config {
+            return Err(refused(format!(
+                "config {} was accepted while config {} was being applied",
+                ledger.config.as_ref().map_or(0, |entry| entry.sequence),
+                self.config.as_ref().map_or(0, |entry| entry.sequence)
+            )));
+        }
+        Ok(())
     }
 }
 

@@ -178,10 +178,15 @@ pub fn check_env(
             reason: format!("the bindings of workload '{name}' have no value"),
         },
     )?;
+    let configured =
+        alien_core::release_statement::signed_config_env(&accepted.release.body, name, &config)
+            .context(ErrorData::Refused {
+                reason: format!("the signed config can't be applied to workload '{name}'"),
+            })?;
     let built = build_workload(
         &accepted.release.body,
         name,
-        &config.env,
+        &configured,
         &LocalValues {
             deployer_inputs: reads.deployer_inputs.clone(),
             bindings,

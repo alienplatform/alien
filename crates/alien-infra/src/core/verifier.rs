@@ -118,7 +118,9 @@ pub fn apply_signed_values(
         })
         .transpose()?
         .unwrap_or_default();
-    for (name, value) in &config.env {
+    let configured = alien_core::release_statement::signed_config_env(&body, workload, &config)
+        .map_err(|error| refuse(format!("The signed config can't be applied: {error}")))?;
+    for (name, value) in &configured {
         if signed.configurable_env.contains(name) {
             env.insert(name.clone(), value.clone());
         }
@@ -164,7 +166,7 @@ pub fn apply_signed_values(
                     .configurable_env
                     .iter()
                     .any(|configurable| configurable == name)
-                    && config.env.contains_key(name))
+                    && configured.contains_key(name))
                 || signed.provided_env.iter().any(|provided| provided == name)
                 || signed.deployer_env.contains_key(name)
                 || bindings.iter().any(|binding| binding == name)

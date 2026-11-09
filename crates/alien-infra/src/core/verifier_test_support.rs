@@ -131,6 +131,26 @@ pub fn signed_config(install: &InstallId, env: &[(&str, &str)], sequence: u64) -
     )
 }
 
+/// The signed config of `install` with developer input values `inputs`, at `sequence`.
+pub fn signed_config_inputs(
+    install: &InstallId,
+    inputs: &[(&str, serde_json::Value)],
+    sequence: u64,
+) -> SignedStatement {
+    statement_for(
+        Some(install),
+        Kind::Config,
+        sequence,
+        alien_signing::ConfigBody {
+            inputs: inputs
+                .iter()
+                .map(|(id, value)| (id.to_string(), value.clone()))
+                .collect(),
+            ..Default::default()
+        },
+    )
+}
+
 /// The signed config of `install` that sends telemetry to `endpoint`, at `sequence`.
 pub fn signed_telemetry_config(
     install: &InstallId,

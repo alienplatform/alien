@@ -10049,6 +10049,68 @@ mod tests {
         );
     }
 
+    /// A developer input signed by `set-inputs` reaches the protected worker as the env the
+    /// signed stack maps it to: the controller renders it and the verifier, which rebuilds the
+    /// env from the release and the config, accepts it.
+    #[tokio::test]
+    async fn a_signed_developer_input_reaches_a_protected_worker_as_its_mapped_env() {
+        let worker = pinned_worker('2', 512);
+        let mut stack = Stack::new("test".to_string())
+            .add(worker.clone(), ResourceLifecycle::Live)
+            .build();
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "logLevel", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "Log level", "description": "How much the worker logs",
+             "env": [{"name": "LOG_LEVEL", "targetResources": [PROTECTED_WORKER]}]},
+        ]))
+        .unwrap();
+        let release = signed_release(Platform::Gcp, &stack, 2);
+        let config = crate::core::verifier_test_support::signed_config_inputs(
+            &gcp_install(),
+            &[("logLevel", serde_json::json!("debug"))],
+            1,
+        );
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(protected_controller())
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy()))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .signed_release(release, Some(config))
+            .build()
+            .await
+            .unwrap();
+
+        executor.update(worker).unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the update completes through the verifier");
+
+        let requests = requests.lock().unwrap().clone();
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService"]);
+        assert!(
+            writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!({"name": "LOG_LEVEL", "value": "debug"})),
+            "{}",
+            writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
+        );
+    }
+
     /// On a protected install management may not write the Cloud Run service, so an update
     /// goes to the install's verifier with the signed release, as management, and the verifier
     /// accepts what it is sent.

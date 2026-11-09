@@ -1644,6 +1644,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
             &install,
             &manifest,
             request.plan.arch,
+            &extracted_dir,
             &executable_path,
         )?;
         write_signing_settings(&request.install_root, settings, &install)?;
@@ -1747,6 +1748,7 @@ async fn reconcile_existing_join(
             &install,
             manifest,
             request.plan.arch,
+            &bundle_root,
             &state.executable_path,
         )?;
         write_signing_settings(&request.install_root, settings, &install)?;
@@ -2836,6 +2838,31 @@ fn render_systemd_machine_service(
         }));
     }
 
+    // Systemd reads a unit line by line: a line break in a value would add a directive of the
+    // bundle's choosing, such as `ExecStartPre=`.
+    let working = working_directory.map(|path| path.display().to_string());
+    let fields = [service.label.as_str()]
+        .into_iter()
+        .chain(systemd.pid_file.as_deref())
+        .chain(working.as_deref())
+        .chain(service.args.iter().map(String::as_str))
+        .chain(
+            service
+                .environment
+                .iter()
+                .flat_map(|(key, value)| [key.as_str(), value.as_str()]),
+        );
+    for field in fields {
+        if field.chars().any(char::is_control) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "bundle.service".to_string(),
+                message: format!(
+                    "a machine service setting contains a control character: {field:?}"
+                ),
+            }));
+        }
+    }
+
     let rendered_args = service
         .args
         .iter()
@@ -3427,6 +3454,7 @@ fn verify_machine_agent(
     install: &InstallId,
     manifest: &MachineBundleManifest,
     arch: MachineArch,
+    bundle_root: &Path,
     executable: &Path,
 ) -> Result<()> {
     let refused = |message: String| {
@@ -3468,22 +3496,53 @@ fn verify_machine_agent(
             release.sequence
         ))
     })?;
-    let bytes =
-        std::fs::read(executable)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: executable.display().to_string(),
-                reason: "Failed to read the bundle's machine agent".to_string(),
-            })?;
-    let actual = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
+    let actual = file_digest(executable, "the bundle's machine agent")?;
     if &actual != pinned {
         return Err(refused(format!(
             "the bundle's machine agent is {actual}, but signed release {} names {pinned} for {component}; nothing was installed",
             release.sequence
         )));
     }
+    // Join runs the config validator as the installer, and the unit's
+    // environment loads code into the agent. Neither is signed, so only the
+    // signed agent may validate, and the environment may not redirect loading.
+    if let Some(validator) = &manifest.config.validator {
+        let validator_path = safe_join(bundle_root, &validator.executable)?;
+        let validator_digest = file_digest(&validator_path, "the bundle's config validator")?;
+        if &validator_digest != pinned {
+            return Err(refused(format!(
+                "the bundle's config validator '{}' is {validator_digest}, not the signed machine agent {pinned}; a protected join runs no other program",
+                validator.executable
+            )));
+        }
+    }
+    if let Some(name) = manifest
+        .service
+        .environment
+        .keys()
+        .find(|name| redirects_program_loading(name))
+    {
+        return Err(refused(format!(
+            "the bundle sets '{name}' for the machine agent, which changes what code the agent loads; a protected join refuses it"
+        )));
+    }
     Ok(())
+}
+
+fn file_digest(path: &Path, what: &str) -> Result<String> {
+    let bytes = std::fs::read(path)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "read".to_string(),
+            file_path: path.display().to_string(),
+            reason: format!("Failed to read {what}"),
+        })?;
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(&bytes))))
+}
+
+fn redirects_program_loading(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    alien_signing::release::is_loader_env(&name) || matches!(name.as_str(), "IFS" | "SHELLOPTS")
 }
 
 fn install_paths(root: &Path) -> InstallPaths {
@@ -5873,6 +5932,51 @@ mod tests {
     }
 
     #[test]
+    fn a_line_break_in_a_service_setting_cannot_add_a_unit_directive() {
+        let systemd = MachineBundleSystemdService {
+            service_type: MachineBundleSystemdServiceType::Simple,
+            notify_access: None,
+            pid_file: None,
+            timeout_start_seconds: None,
+        };
+        let render = |edit: &dyn Fn(&mut MachineBundleService)| {
+            let mut service = test_manifest().service;
+            edit(&mut service);
+            render_systemd_machine_service(
+                &service,
+                &systemd,
+                Path::new("/opt/alien/machine-bundle/bin/agent"),
+                Path::new("/etc/agent.toml"),
+                None,
+            )
+        };
+        let injected = "x\nExecStartPre=/opt/alien/machine-bundle/evil";
+
+        render(&|_| {}).expect("the unchanged service renders");
+        for (what, error) in [
+            (
+                "an environment value",
+                render(&|service| {
+                    service
+                        .environment
+                        .insert("MODE".to_string(), injected.to_string());
+                }),
+            ),
+            (
+                "an argument",
+                render(&|service| service.args.push(injected.to_string())),
+            ),
+            (
+                "the label",
+                render(&|service| service.label = injected.to_string()),
+            ),
+        ] {
+            let error = error.expect_err(what);
+            assert_eq!(error.code, "VALIDATION_ERROR", "{what}");
+        }
+    }
+
+    #[test]
     fn notify_machine_service_rejects_main_only_notifications() {
         let mut manifest = test_manifest();
         manifest.service.restart_policy = MachineBundleRestartPolicy::Always;
@@ -6072,6 +6176,57 @@ mod tests {
         }
 
         #[test]
+        fn a_protected_join_runs_no_validator_or_loader_setting_the_release_does_not_name() {
+            let dir = tempfile::tempdir().unwrap();
+            let (list, fingerprint) = genesis();
+            let settings = signing_settings(&fingerprint);
+            let signed = signed_manifest(release("production", AGENT, &key(2)), list);
+            let agent = agent_file(dir.path(), AGENT);
+            std::fs::write(dir.path().join("other"), b"not the agent").unwrap();
+            std::fs::write(dir.path().join("same-build"), AGENT).unwrap();
+            let validator = |executable: &str| MachineBundleConfigValidator {
+                executable: executable.to_string(),
+                args: vec!["{candidate_path}".to_string()],
+            };
+            let verify = |manifest: &MachineBundleManifest| {
+                verify_machine_agent(
+                    &settings,
+                    &machine(),
+                    manifest,
+                    MachineArch::X64,
+                    dir.path(),
+                    &agent,
+                )
+            };
+
+            let mut manifest = MachineBundleManifest {
+                config: MachineBundleConfig {
+                    validator: Some(validator("same-build")),
+                    ..signed.config
+                },
+                ..signed
+            };
+            verify(&manifest).expect("a validator that is the signed build is accepted");
+
+            manifest.config.validator = Some(validator("other"));
+            let error = verify(&manifest).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("a protected join runs no other program"),
+                "{error}"
+            );
+
+            manifest.config.validator = None;
+            manifest
+                .service
+                .environment
+                .insert("LD_PRELOAD".to_string(), "./evil.so".to_string());
+            let error = verify(&manifest).unwrap_err();
+            assert!(error.to_string().contains("'LD_PRELOAD'"), "{error}");
+        }
+
+        #[test]
         fn join_installs_only_the_machine_agent_the_signed_release_names() {
             let dir = tempfile::tempdir().unwrap();
             let (list, fingerprint) = genesis();
@@ -6083,6 +6238,7 @@ mod tests {
                 &machine(),
                 &manifest,
                 MachineArch::X64,
+                dir.path(),
                 &agent_file(dir.path(), AGENT),
             )
             .expect("the signed build is accepted");
@@ -6093,6 +6249,7 @@ mod tests {
                 &machine(),
                 &manifest,
                 MachineArch::X64,
+                dir.path(),
                 &agent_file(dir.path(), b"unsigned build"),
             )
             .unwrap_err();
@@ -6108,6 +6265,7 @@ mod tests {
                 &machine(),
                 &manifest,
                 MachineArch::Arm64,
+                dir.path(),
                 &agent_file(dir.path(), AGENT),
             )
             .unwrap_err();
@@ -6123,6 +6281,7 @@ mod tests {
                 &machine(),
                 &test_manifest(),
                 MachineArch::X64,
+                dir.path(),
                 &agent_file(dir.path(), AGENT),
             )
             .unwrap_err();
@@ -6140,6 +6299,7 @@ mod tests {
                     &machine(),
                     &manifest,
                     MachineArch::X64,
+                    dir.path(),
                     &agent_file(dir.path(), AGENT),
                 )
                 .unwrap_err();
@@ -6157,6 +6317,7 @@ mod tests {
                 &machine(),
                 &manifest,
                 MachineArch::X64,
+                dir.path(),
                 &agent_file(dir.path(), AGENT),
             )
             .unwrap_err();

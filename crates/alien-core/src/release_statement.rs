@@ -15,7 +15,7 @@ use alien_error::AlienError;
 use alien_signing::release::{
     Bounds, Configurable, FunctionSettings, Mount, Runtime, Security, WorkloadKind,
 };
-use alien_signing::{ReleaseBody, SetupTemplate, Workload};
+use alien_signing::{ConfigBody, ReleaseBody, SetupTemplate, Workload};
 
 use crate::error::{ErrorData, Result};
 use crate::runtime_environment::*;
@@ -198,6 +198,53 @@ pub fn signed_stack(body: &ReleaseBody, platform: Platform) -> Result<Stack> {
         ));
     }
     Ok(stack)
+}
+
+/// The env a signed config sets on `workload`: the values of the release's developer inputs,
+/// resolved through the signed stack's env mappings (with each input's default), then the
+/// config's own `env`, which wins. A controller and the verifier that checks it both build
+/// the configured env with this, so an input signed by `set-inputs` reaches the worker the
+/// same way it does on an unprotected install. Deployer inputs and secret mappings are not
+/// here: they never travel in a signed config.
+pub fn signed_config_env(
+    body: &ReleaseBody,
+    workload: &str,
+    config: &ConfigBody,
+) -> Result<BTreeMap<String, String>> {
+    let mut env = BTreeMap::new();
+    if body.stack.is_some() {
+        let platform: Platform = body.platform.parse().map_err(|_| {
+            statement_invalid(format!("the release names no platform '{}'", body.platform))
+        })?;
+        let stack = signed_stack(body, platform)?;
+        let developer_inputs: Vec<crate::StackInputDefinition> = stack
+            .inputs
+            .iter()
+            .map(|input| {
+                let mut input = input.clone();
+                if !developer_input(&input, platform) {
+                    input.env.clear();
+                }
+                input
+            })
+            .collect();
+        let values: std::collections::HashMap<String, serde_json::Value> = config
+            .inputs
+            .iter()
+            .map(|(id, value)| (id.clone(), value.clone()))
+            .collect();
+        for variable in
+            crate::resolve_stack_input_environment_variables(&developer_inputs, &values, platform)?
+        {
+            if variable.var_type == crate::EnvironmentVariableType::Plain
+                && crate::targets_resource(&variable.target_resources, workload)
+            {
+                env.insert(variable.name, variable.value);
+            }
+        }
+    }
+    env.extend(config.env.clone());
+    Ok(env)
 }
 
 /// Env names a workload takes from deployer inputs: the enforcer fills them
@@ -595,6 +642,67 @@ mod tests {
         assert!(api.configurable_env.contains(&"LOG_LEVEL".to_string()));
         assert_eq!(body.configurable.inputs, vec!["logLevel".to_string()]);
         assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
+    }
+
+    /// `set-inputs` signs developer input values, not env: the env a signed config sets is
+    /// what the stack's mappings make of them (defaults included), for the workloads the
+    /// mapping targets, with the config's own `env` winning.
+    #[test]
+    fn a_signed_config_sets_the_env_its_inputs_map_to() {
+        let mut stack = stack(&pinned());
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "logLevel", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "l", "description": "d", "default": {"type": "string", "value": "info"},
+             "env": [{"name": "LOG_LEVEL", "targetResources": ["api"]}]},
+            {"id": "region", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "l", "description": "d",
+             "env": [{"name": "REGION", "targetResources": ["api"]}, {"name": "ELSEWHERE", "targetResources": ["other"]}]},
+            {"id": "token", "kind": "secret", "providedBy": ["developer"], "required": false,
+             "label": "l", "description": "d", "env": [{"name": "TOKEN", "targetResources": ["api"]}]},
+            {"id": "databaseUrl", "kind": "string", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d", "default": {"type": "string", "value": "postgres://default"},
+             "env": [{"name": "DATABASE_URL", "targetResources": ["api"]}]},
+        ]))
+        .unwrap();
+        let mut api = container(&pinned());
+        api.environment.clear();
+        stack.resources.get_mut("api").unwrap().config = alien_core_resource(api);
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
+        let config = |inputs: serde_json::Value, env: &[(&str, &str)]| ConfigBody {
+            inputs: serde_json::from_value(inputs).unwrap(),
+            env: env
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            ..Default::default()
+        };
+
+        let env = signed_config_env(
+            &body,
+            "api",
+            &config(serde_json::json!({"region": "eu", "token": "s3cret"}), &[]),
+        )
+        .unwrap();
+        assert_eq!(
+            env,
+            BTreeMap::from([
+                ("LOG_LEVEL".to_string(), "info".to_string()),
+                ("REGION".to_string(), "eu".to_string()),
+            ]),
+            "the default applies, secrets and deployer inputs never travel in a signed config, \
+             and a mapping aimed at another resource isn't this workload's"
+        );
+
+        let env = signed_config_env(
+            &body,
+            "api",
+            &config(
+                serde_json::json!({"logLevel": "debug"}),
+                &[("LOG_LEVEL", "trace")],
+            ),
+        )
+        .unwrap();
+        assert_eq!(env["LOG_LEVEL"], "trace", "the config's own env wins");
     }
 
     fn alien_core_resource(container: Container) -> Resource {

@@ -257,6 +257,7 @@ impl Verifier {
                 sequence: accepted.release.sequence,
                 digest: accepted.release.digest.clone(),
             },
+            config: accepted.ledger.config.clone(),
         };
         let mut answers = Vec::with_capacity(request.writes.len());
         for write in &request.writes {
@@ -864,6 +865,7 @@ mod tests {
     /// settle.
     struct Paused {
         slow_image: String,
+        slow_config: Option<u64>,
         read: tokio::sync::Notify,
         resume: tokio::sync::Notify,
         written: Mutex<Vec<String>>,
@@ -883,7 +885,7 @@ mod tests {
         }
         async fn forward(
             &self,
-            _facts: &Facts<'_>,
+            facts: &Facts<'_>,
             write: &CloudWrite,
             newest: &dyn StillNewest,
         ) -> Result<Value> {
@@ -891,7 +893,8 @@ mod tests {
                 unreachable!("the test sends only UpdateFunctionCode")
             };
             let image = request["ImageUri"].as_str().unwrap().to_string();
-            if image == self.slow_image {
+            let config = facts.accepted.config.as_ref().map(|config| config.sequence);
+            if image == self.slow_image || (config.is_some() && config == self.slow_config) {
                 self.read.notify_one();
                 self.resume.notified().await;
             }
@@ -924,6 +927,7 @@ mod tests {
         };
         let backend = Arc::new(Paused {
             slow_image: image('a'),
+            slow_config: None,
             read: tokio::sync::Notify::new(),
             resume: tokio::sync::Notify::new(),
             written: Mutex::new(Vec::new()),
@@ -963,6 +967,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_older_config_applied_concurrently_never_lands_over_a_newer_one() {
+        // Config 5 is accepted and starts writing; config 6 for the same release is accepted
+        // and written while 5's write waits; then 5's write goes on. It must not land over 6.
+        let image = format!("ghcr.io/shop/api@sha256:{}", "a".repeat(64));
+        let workload = alien_signing::Workload {
+            image: image.clone(),
+            ..function_workload()
+        };
+        let release = signed_release(10, &crate::fixtures::release_body(vec![workload]));
+        let request = |config_sequence: u64| {
+            json!({"applyWrite": {
+                "release": release,
+                "signerLists": [signer_list()],
+                "config": config(config_sequence, alien_signing::ConfigBody::default()),
+                "workload": "api",
+                "writes": [{"updateFunctionCode": {
+                    "functionName": format!("{PREFIX}-api"),
+                    "request": {"ImageUri": image, "Publish": false},
+                }}],
+            }})
+        };
+        let backend = Arc::new(Paused {
+            slow_image: String::new(),
+            slow_config: Some(5),
+            read: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+            written: Mutex::new(Vec::new()),
+        });
+        let store = Arc::new(MemoryStore::protected(&settings()));
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store: store.clone(),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        let older = verifier.handle(request(5));
+        let newer = async {
+            backend.read.notified().await;
+            let answer = verifier.handle(request(6)).await;
+            backend.resume.notify_one();
+            answer
+        };
+        let (older, newer) = tokio::join!(older, newer);
+
+        newer.unwrap();
+        let reason = refusal(older);
+        assert!(
+            reason.contains("config 6 was accepted while config 5 was being applied"),
+            "{reason}"
+        );
+        assert_eq!(*backend.written.lock().unwrap(), vec![image]);
+        let ledger = match store.ledger(PREFIX).await.unwrap() {
+            alien_signing::Lookup::Found(bytes) => {
+                alien_signing::Ledger::parse(&bytes, PREFIX).unwrap()
+            }
+            other => panic!("the ledger is gone: {other:?}"),
+        };
+        assert_eq!(ledger.config.unwrap().sequence, 6);
+    }
+
+    #[tokio::test]
     async fn an_older_release_is_refused_while_a_newer_one_is_being_applied() {
         // Release 11 is accepted and starts writing; release 10 arrives while 11's write waits.
         // 10 must not land in the middle of 11's apply: the install already records 11.
@@ -985,6 +1052,7 @@ mod tests {
         };
         let backend = Arc::new(Paused {
             slow_image: image('b'),
+            slow_config: None,
             read: tokio::sync::Notify::new(),
             resume: tokio::sync::Notify::new(),
             written: Mutex::new(Vec::new()),
