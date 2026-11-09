@@ -751,12 +751,56 @@ fn protect_config(
             value.map(|value| (input.id.clone(), value.clone()))
         })
         .collect();
-    let mut variables = alien_core::resolve_stack_input_environment_variables(
-        &stack.inputs,
+    let deployer_values: HashMap<String, serde_json::Value> = input_values
+        .iter()
+        .filter(|(id, _)| {
+            stack
+                .inputs
+                .iter()
+                .any(|input| input.id == **id && deployer_supplied(input))
+        })
+        .map(|(id, value)| (id.clone(), value.clone()))
+        .collect();
+    // Developer inputs resolve the way the cloud controllers and verifiers resolve them.
+    let mut variables = alien_core::release_statement::signed_input_variables(
+        stack,
+        platform,
+        &signed_config.inputs,
+        &deployer_values,
+    )
+    .map_err(|error| Refusal::Inputs(error.message))?;
+    // Deployer inputs have their own mappings, which this installation's values fill.
+    let deployer_inputs: Vec<alien_core::StackInputDefinition> = stack
+        .inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            if !deployer_supplied(&input) {
+                input.env.clear();
+            }
+            input
+        })
+        .collect();
+    let deployer_variables = alien_core::resolve_stack_input_environment_variables(
+        &deployer_inputs,
         &input_values,
         platform,
     )
     .map_err(|error| Refusal::Inputs(error.message))?;
+    if let Some(name) = deployer_variables
+        .iter()
+        .find(|deployer| {
+            variables
+                .iter()
+                .any(|developer| developer.name == deployer.name)
+        })
+        .map(|variable| variable.name.clone())
+    {
+        return Err(Refusal::Inputs(format!(
+            "Stack inputs map more than one value to environment variable '{name}'"
+        )));
+    }
+    variables.extend(deployer_variables);
     // Configurable env the signed config sets, which the release already
     // limited to names it lists.
     let configured: BTreeMap<&String, &String> = signed_config.env.iter().collect();
@@ -1437,6 +1481,76 @@ pub(crate) mod tests {
             serde_json::json!({"inputs": {"databaseUrl": "postgres://attacker.example/db"}}),
         ));
         assert!(accept(&fresh(), &target).is_err());
+    }
+
+    fn gated_stack() -> Stack {
+        let mut stack = stack(&pinned());
+        stack.inputs.extend(
+            serde_json::from_value::<Vec<StackInputDefinition>>(serde_json::json!([
+                {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+                 "label": "audit", "description": "audit"},
+                {"id": "auditSink", "kind": "string", "providedBy": ["developer"], "required": false,
+                 "label": "sink", "description": "sink",
+                 "when": {"input": "audit", "equals": true},
+                 "env": [{"name": "AUDIT_SINK", "targetResources": ["api"]}]},
+            ]))
+            .unwrap(),
+        );
+        stack
+    }
+
+    fn with_audit(audit: bool) -> serde_json::Map<String, serde_json::Value> {
+        let mut inputs = local_inputs();
+        inputs.insert("audit".to_string(), serde_json::json!(audit));
+        inputs
+    }
+
+    #[test]
+    fn a_signed_developer_input_follows_the_installations_own_condition_values() {
+        let stack = gated_stack();
+        let mut target = target(signed_release(5, &stack), vec![]);
+        target.signed_config = Some(signed_config(
+            3,
+            &this_install(),
+            serde_json::json!({"inputs": {"auditSink": "https://audit.example/hook"}}),
+        ));
+        let run = |inputs| {
+            signing()
+                .protect_target(Platform::Kubernetes, &inputs, &fresh(), &target)
+                .map(|(protected, _, _)| values(&protected))
+        };
+        assert_eq!(
+            run(with_audit(true)).unwrap()["AUDIT_SINK"],
+            "https://audit.example/hook",
+            "the signed value runs where the installation switched its condition on"
+        );
+        assert!(
+            !run(with_audit(false)).unwrap().contains_key("AUDIT_SINK"),
+            "and not where it is off"
+        );
+    }
+
+    #[test]
+    fn two_inputs_mapping_one_env_name_are_refused() {
+        let mut stack = stack(&pinned());
+        stack
+            .inputs
+            .push(input("otherLevel", "deployer", "LOG_LEVEL"));
+        let mut target = target(signed_release(5, &stack), vec![]);
+        target.signed_config = Some(signed_config(
+            3,
+            &this_install(),
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        ));
+        let mut inputs = local_inputs();
+        inputs.insert("otherLevel".to_string(), serde_json::json!("trace"));
+        let refusal = signing()
+            .protect_target(Platform::Kubernetes, &inputs, &fresh(), &target)
+            .unwrap_err();
+        assert!(
+            matches!(&refusal, Refusal::Inputs(message) if message.contains("LOG_LEVEL")),
+            "{refusal}"
+        );
     }
 
     #[test]

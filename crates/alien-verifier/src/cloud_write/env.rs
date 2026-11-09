@@ -178,11 +178,20 @@ pub fn check_env(
             reason: format!("the bindings of workload '{name}' have no value"),
         },
     )?;
-    let configured =
-        alien_core::release_statement::signed_config_env(&accepted.release.body, name, &config)
-            .context(ErrorData::Refused {
-                reason: format!("the signed config can't be applied to workload '{name}'"),
-            })?;
+    let deployer_values = reads
+        .deployer_inputs
+        .iter()
+        .map(|(id, value)| (id.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    let configured = alien_core::release_statement::signed_config_env(
+        &accepted.release.body,
+        name,
+        &config,
+        &deployer_values,
+    )
+    .context(ErrorData::Refused {
+        reason: format!("the signed config can't be applied to workload '{name}'"),
+    })?;
     let built = build_workload(
         &accepted.release.body,
         name,

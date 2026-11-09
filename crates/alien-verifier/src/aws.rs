@@ -86,26 +86,8 @@ impl<S: SsmApi> InstallStore for SsmInstall<S> {
     }
 
     async fn store_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<()> {
-        self.store_numbered_ledger(prefix, ledger).await.map(|_| ())
-    }
-
-    /// SSM numbers every write of a parameter, so a write that landed between a read and a
-    /// write shows as a skipped version.
-    async fn numbered_ledger(&self, prefix: &str) -> Result<Option<(Lookup, u64)>> {
         let name = names::aws_ledger(prefix);
-        match self.read_numbered(&name).await? {
-            (Lookup::Found(bytes), Some(version)) => Ok(Some((Lookup::Found(bytes), version))),
-            (Lookup::Found(_), None) => Err(AlienError::new(ErrorData::CloudCallFailed {
-                operation: format!("ssm:GetParameter {name} returned no version"),
-            })),
-            (lookup, _) => Ok(Some((lookup, 0))),
-        }
-    }
-
-    async fn store_numbered_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<u64> {
-        let name = names::aws_ledger(prefix);
-        let written = self
-            .ssm
+        self.ssm
             .put_parameter(
                 PutParameterRequest::builder()
                     .name(name.clone())
@@ -118,14 +100,20 @@ impl<S: SsmApi> InstallStore for SsmInstall<S> {
             .context(ErrorData::CloudCallFailed {
                 operation: format!("ssm:PutParameter {name}"),
             })?;
-        written
-            .version
-            .and_then(|version| u64::try_from(version).ok())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::CloudCallFailed {
-                    operation: format!("ssm:PutParameter {name} returned no version"),
-                })
-            })
+        Ok(())
+    }
+
+    /// SSM numbers every write of a parameter, and each write of the ledger records the
+    /// version it was merged onto, so a reader can merge in the writes made since.
+    async fn numbered_ledger(&self, prefix: &str) -> Result<Option<(Lookup, u64)>> {
+        let name = names::aws_ledger(prefix);
+        match self.read_numbered(&name).await? {
+            (Lookup::Found(bytes), Some(version)) => Ok(Some((Lookup::Found(bytes), version))),
+            (Lookup::Found(_), None) => Err(AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("ssm:GetParameter {name} returned no version"),
+            })),
+            (lookup, _) => Ok(Some((lookup, 0))),
+        }
     }
 
     async fn ledger_version(&self, prefix: &str, version: u64) -> Result<Lookup> {

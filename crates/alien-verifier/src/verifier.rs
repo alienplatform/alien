@@ -214,7 +214,14 @@ impl Verifier {
             own: self.backend.own_resource(&place, &own_name).await?,
             ..Reads::default()
         };
-        for input in workload.deployer_env.values() {
+        let gating = alien_core::release_statement::gating_deployer_inputs(&accepted.release.body)
+            .context(ErrorData::Refused {
+                reason: "the signed release's inputs can't be read".to_string(),
+            })?;
+        for input in workload.deployer_env.values().chain(&gating) {
+            if reads.deployer_inputs.contains_key(input) {
+                continue;
+            }
             if let Some(value) = self.store.input(&place.prefix, input).await? {
                 reads.deployer_inputs.insert(input.clone(), value);
             }
@@ -665,6 +672,62 @@ mod tests {
         empty["applyWrite"]["writes"] = json!([]);
         let reason = refusal(verifier.handle(empty).await);
         assert!(reason.contains("carries no write"), "{reason}");
+    }
+
+    /// A developer input conditional on a deployer input is read against the value the
+    /// install's own store holds, so the verifier reads that input too, though no workload env
+    /// names it: a customer who turned the feature off gets a workload without its env.
+    #[tokio::test]
+    async fn a_gating_deployer_input_is_read_from_the_install() {
+        let role = crate::plan::tests::place().run_as("execution");
+        let config = config(
+            1,
+            alien_signing::ConfigBody {
+                inputs: serde_json::from_value(json!({"auditSink": "https://audit.example"}))
+                    .unwrap(),
+                ..Default::default()
+            },
+        );
+        let request = |sink: bool| {
+            let mut env = json!({"ALIEN_DEPLOYMENT_ID": "dep_1"});
+            if sink {
+                env["AUDIT_SINK"] = json!("https://audit.example");
+            }
+            json!({"applyWrite": {
+                "release": crate::plan::tests::release_with_gated_input(),
+                "config": config,
+                "signerLists": [signer_list()],
+                "workload": "api",
+                "writes": [{"createFunction": {
+                    "FunctionName": format!("{PREFIX}-api"),
+                    "Role": role,
+                    "Code": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}")},
+                    "PackageType": "Image",
+                    "Environment": {"Variables": env},
+                    "Architectures": ["arm64"],
+                }}],
+            }})
+        };
+        for (audit, sink_expected) in [("false", false), ("true", true)] {
+            let mut store = MemoryStore::protected(&settings());
+            store.inputs.insert("audit".to_string(), audit.to_string());
+            let store = Arc::new(store);
+            let verifier = Verifier {
+                own_name: format!("{PREFIX}-verifier"),
+                install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+                store: store.clone(),
+                backend: Arc::new(Forwards {
+                    store: store.clone(),
+                    forwarded: Mutex::new(Vec::new()),
+                    fail_once: Mutex::new(None),
+                }),
+                vpc: None,
+                machine_network: None,
+            };
+            let reason = refusal(verifier.handle(request(!sink_expected)).await);
+            assert!(reason.contains("AUDIT_SINK"), "audit={audit}: {reason}");
+            verifier.handle(request(sink_expected)).await.unwrap();
+        }
     }
 
     /// The Lambda backend over a mocked Lambda that reads back `function`, recording what it

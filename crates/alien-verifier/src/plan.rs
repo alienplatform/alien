@@ -346,6 +346,40 @@ pub(crate) mod tests {
         }
     }
 
+    /// The release of the `api` worker whose stack has a deployer input `audit` (on by
+    /// default) and a developer input `auditSink` that applies only while `audit` is on.
+    pub(crate) fn release_with_gated_input() -> SignedStatement {
+        let worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: format!("ghcr.io/shop/api@{DIGEST}"),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let mut stack = alien_core::Stack::new("shop".to_string())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+             "label": "Audit", "description": "Send audit events",
+             "default": {"type": "boolean", "value": true}},
+            {"id": "auditSink", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "Sink", "description": "Where audit events go",
+             "when": {"input": "audit", "equals": true},
+             "env": [{"name": "AUDIT_SINK", "targetResources": ["api"]}]},
+        ]))
+        .unwrap();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Aws,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
     pub(crate) fn release_with_access(public: bool) -> SignedStatement {
         release_on(alien_core::Platform::Aws, public)
     }

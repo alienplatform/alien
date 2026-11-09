@@ -200,16 +200,89 @@ pub fn signed_stack(body: &ReleaseBody, platform: Platform) -> Result<Stack> {
     Ok(stack)
 }
 
+/// The plain env mappings of the stack's developer inputs, resolved from the values a signed
+/// config carries (defaults included). Each variable keeps its mapping's `target_resources`.
+/// Deployer inputs never travel in a signed config: `deployer_values` only decides which
+/// inputs apply, when a developer input is conditional on one, and no deployer mapping is
+/// returned. Secret mappings are left out: their values are never signed.
+pub fn signed_input_variables(
+    stack: &Stack,
+    platform: Platform,
+    developer_values: &BTreeMap<String, serde_json::Value>,
+    deployer_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<Vec<crate::EnvironmentVariable>> {
+    let mut values = std::collections::HashMap::new();
+    let mut inputs = Vec::with_capacity(stack.inputs.len());
+    for input in &stack.inputs {
+        let developer = developer_input(input, platform);
+        let value = if developer {
+            developer_values.get(&input.id)
+        } else {
+            deployer_values.get(&input.id)
+        };
+        if let Some(value) = value {
+            values.insert(input.id.clone(), value.clone());
+        }
+        let mut input = input.clone();
+        if !developer {
+            input.env.clear();
+        }
+        inputs.push(input);
+    }
+    Ok(
+        crate::resolve_stack_input_environment_variables(&inputs, &values, platform)?
+            .into_iter()
+            .filter(|variable| variable.var_type == crate::EnvironmentVariableType::Plain)
+            .collect(),
+    )
+}
+
+/// The deployer inputs whose value decides whether a developer input applies (its `when`
+/// names them). The install's own store holds them, so whoever builds a signed config's env
+/// reads these and passes them to [`signed_config_env`].
+pub fn gating_deployer_inputs(body: &ReleaseBody) -> Result<Vec<String>> {
+    if body.stack.is_none() {
+        return Ok(Vec::new());
+    }
+    let platform: Platform = body.platform.parse().map_err(|_| {
+        statement_invalid(format!("the release names no platform '{}'", body.platform))
+    })?;
+    let stack = signed_stack(body, platform)?;
+    let mut gating = std::collections::BTreeSet::new();
+    for input in stack
+        .inputs
+        .iter()
+        .filter(|input| developer_input(input, platform))
+    {
+        let Some(condition) = &input.when else {
+            continue;
+        };
+        if stack
+            .inputs
+            .iter()
+            .any(|other| other.id == condition.input && !developer_input(other, platform))
+        {
+            gating.insert(condition.input.clone());
+        }
+    }
+    Ok(gating.into_iter().collect())
+}
+
 /// The env a signed config sets on `workload`: the values of the release's developer inputs,
 /// resolved through the signed stack's env mappings (with each input's default), then the
-/// config's own `env`, which wins. A controller and the verifier that checks it both build
-/// the configured env with this, so an input signed by `set-inputs` reaches the worker the
-/// same way it does on an unprotected install. Deployer inputs and secret mappings are not
-/// here: they never travel in a signed config.
+/// config's own `env`, which wins. A controller and the verifier that checks it, the machine
+/// agent and the Kubernetes operator all build the configured env with this, so an input signed
+/// by `set-inputs` reaches the worker the same way it does on an unprotected install. Deployer
+/// inputs and secret mappings are not here: they never travel in a signed config.
+/// `deployer_values` holds the install's own values of [`gating_deployer_inputs`]: a developer
+/// input that is conditional on a deployer input applies as the customer set that input. A
+/// verifier reads them from the install's store; a controller uses the deployment's input
+/// values. A value that differs between the two only makes the verifier refuse the write.
 pub fn signed_config_env(
     body: &ReleaseBody,
     workload: &str,
     config: &ConfigBody,
+    deployer_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<BTreeMap<String, String>> {
     let mut env = BTreeMap::new();
     if body.stack.is_some() {
@@ -217,28 +290,8 @@ pub fn signed_config_env(
             statement_invalid(format!("the release names no platform '{}'", body.platform))
         })?;
         let stack = signed_stack(body, platform)?;
-        let developer_inputs: Vec<crate::StackInputDefinition> = stack
-            .inputs
-            .iter()
-            .map(|input| {
-                let mut input = input.clone();
-                if !developer_input(&input, platform) {
-                    input.env.clear();
-                }
-                input
-            })
-            .collect();
-        let values: std::collections::HashMap<String, serde_json::Value> = config
-            .inputs
-            .iter()
-            .map(|(id, value)| (id.clone(), value.clone()))
-            .collect();
-        for variable in
-            crate::resolve_stack_input_environment_variables(&developer_inputs, &values, platform)?
-        {
-            if variable.var_type == crate::EnvironmentVariableType::Plain
-                && crate::targets_resource(&variable.target_resources, workload)
-            {
+        for variable in signed_input_variables(&stack, platform, &config.inputs, deployer_values)? {
+            if crate::targets_resource(&variable.target_resources, workload) {
                 env.insert(variable.name, variable.value);
             }
         }
@@ -681,6 +734,7 @@ mod tests {
             &body,
             "api",
             &config(serde_json::json!({"region": "eu", "token": "s3cret"}), &[]),
+            &Default::default(),
         )
         .unwrap();
         assert_eq!(
@@ -700,9 +754,64 @@ mod tests {
                 serde_json::json!({"logLevel": "debug"}),
                 &[("LOG_LEVEL", "trace")],
             ),
+            &Default::default(),
         )
         .unwrap();
         assert_eq!(env["LOG_LEVEL"], "trace", "the config's own env wins");
+    }
+
+    /// A developer input gated on a deployer input applies as the customer set that input,
+    /// whatever its default, wherever the env is built from the install's own values.
+    #[test]
+    fn a_developer_input_gated_on_a_deployer_input_follows_the_installs_value() {
+        let mut stack = stack(&pinned());
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d", "default": {"type": "boolean", "value": true}},
+            {"id": "auditSink", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "l", "description": "d", "when": {"input": "audit", "equals": true},
+             "env": [{"name": "AUDIT_SINK", "targetResources": ["api"]}]},
+            {"id": "logLevel", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "l", "description": "d", "env": [{"name": "LOG_LEVEL", "targetResources": ["api"]}]},
+        ]))
+        .unwrap();
+        let mut api = container(&pinned());
+        api.environment.clear();
+        stack.resources.get_mut("api").unwrap().config = alien_core_resource(api);
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
+        assert_eq!(
+            gating_deployer_inputs(&body).unwrap(),
+            vec!["audit".to_string()]
+        );
+
+        let config = ConfigBody {
+            inputs: serde_json::from_value(
+                serde_json::json!({"auditSink": "https://audit.example"}),
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let with = |audit: Option<&str>| {
+            let values = audit
+                .map(|audit| {
+                    std::collections::HashMap::from([(
+                        "audit".to_string(),
+                        serde_json::Value::String(audit.to_string()),
+                    )])
+                })
+                .unwrap_or_default();
+            signed_config_env(&body, "api", &config, &values).unwrap()
+        };
+        assert_eq!(with(Some("true"))["AUDIT_SINK"], "https://audit.example");
+        assert_eq!(
+            with(None)["AUDIT_SINK"],
+            "https://audit.example",
+            "the default is on"
+        );
+        assert!(
+            !with(Some("false")).contains_key("AUDIT_SINK"),
+            "the customer turned it off"
+        );
     }
 
     fn alien_core_resource(container: Container) -> Resource {

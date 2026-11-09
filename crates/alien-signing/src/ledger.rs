@@ -53,6 +53,15 @@ pub struct Ledger {
     /// Config floor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<Entry>,
+    /// Where a store that numbers its writes keeps the ledger: the version this write was
+    /// merged onto. The value holds everything those versions held; versions written after
+    /// it may hold more, and a reader merges them in. [`Ledger::merge`] ignores it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub based_on: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Ledger {
@@ -66,6 +75,7 @@ impl Ledger {
             signer_list: None,
             release: None,
             config: None,
+            based_on: 0,
         }
     }
 
@@ -99,6 +109,28 @@ impl Ledger {
             }
         }
         Ok(ledger)
+    }
+
+    /// The versions a reader of this ledger, read at `version`, merges in before it uses it:
+    /// the ones written after the version this write was merged onto, up to the one before
+    /// this. Merge each with [`Ledger::merge`], then call [`Ledger::resolved_at`].
+    ///
+    /// A write can only be merged onto a version before its own, so a ledger that claims to be
+    /// based on its own version or a later one is refused: it would skip the merge.
+    pub fn unmerged_versions(&self, version: u64) -> Result<std::ops::Range<u64>> {
+        if self.based_on >= version {
+            return Err(refused(format!(
+                "the ledger at version {version} claims to be merged onto version {}",
+                self.based_on
+            )));
+        }
+        Ok(self.based_on + 1..version)
+    }
+
+    /// Record that this ledger now holds everything up to `version`, so a write of it is
+    /// merged onto that version.
+    pub fn resolved_at(&mut self, version: u64) {
+        self.based_on = version;
     }
 
     /// The JSON form enforcers write back.

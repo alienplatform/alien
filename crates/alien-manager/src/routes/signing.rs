@@ -635,7 +635,11 @@ async fn add_config_statement(
         return ErrorData::bad_request("signing is not available on this manager").into_response();
     };
     let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
-        Ok(Some(deployment)) if state.authz.can_update_deployment(&subject, &deployment) => {
+        Ok(Some(deployment))
+            if state
+                .authz
+                .can_create_release(&subject, &deployment.project_id) =>
+        {
             deployment
         }
         Ok(Some(_)) => {

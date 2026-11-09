@@ -611,3 +611,22 @@ fn config_sets_only_bindings_the_release_has() {
     };
     assert_eq!(code(other.check(&release)), "SIGNING_BODY_REFUSED");
 }
+
+#[test]
+fn the_version_a_write_was_merged_onto_is_kept_but_never_decides_a_merge() {
+    let mut ours = Ledger::new(PREFIX);
+    assert!(
+        !ours.to_json().contains("basedOn"),
+        "a store that doesn't number its writes never sees the field"
+    );
+    ours.raise(Kind::Release, 10, &format!("sha256:{}", "a".repeat(64)))
+        .unwrap();
+    ours.based_on = 7;
+    let parsed = Ledger::parse(ours.to_json().as_bytes(), PREFIX).unwrap();
+    assert_eq!(parsed.based_on, 7);
+
+    let mut theirs = Ledger::new(PREFIX);
+    theirs.based_on = 40;
+    ours.merge(&theirs).unwrap();
+    assert_eq!(ours.based_on, 7, "a merge leaves the version to the writer");
+}

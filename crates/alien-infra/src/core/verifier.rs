@@ -70,11 +70,14 @@ pub const WORKLOAD_SECRETS: &str = "WORKLOAD_SECRETS";
 /// configurable. The deployment's telemetry goes to the signed config's endpoint, or nowhere.
 /// Anything else the deployment holds (such as variables set in the dashboard before the
 /// install was protected) is left out: only names the release lets the deployment provide,
-/// and the bindings the verifier derives, stay.
+/// and the bindings the verifier derives, stay. `deployer_values` are the deployment's input
+/// values: the signed config's developer inputs that are conditional on a deployer input apply
+/// as that input is set, and the verifier checks the result against its own read of them.
 pub fn apply_signed_values(
     statements: &ReleaseStatements,
     config: Option<&SignedStatement>,
     workload: &str,
+    deployer_values: &HashMap<String, serde_json::Value>,
     env: &mut HashMap<String, String>,
 ) -> Result<()> {
     let refuse = |message: String| {
@@ -118,8 +121,9 @@ pub fn apply_signed_values(
         })
         .transpose()?
         .unwrap_or_default();
-    let configured = alien_core::release_statement::signed_config_env(&body, workload, &config)
-        .map_err(|error| refuse(format!("The signed config can't be applied: {error}")))?;
+    let configured =
+        alien_core::release_statement::signed_config_env(&body, workload, &config, deployer_values)
+            .map_err(|error| refuse(format!("The signed config can't be applied: {error}")))?;
     for (name, value) in &configured {
         if signed.configurable_env.contains(name) {
             env.insert(name.clone(), value.clone());
@@ -906,7 +910,7 @@ mod tests {
             ("ALIEN_DEPLOYMENT_ID".to_string(), "dep_1".to_string()),
         ]);
 
-        apply_signed_values(&statements, Some(&config), "api", &mut env).unwrap();
+        apply_signed_values(&statements, Some(&config), "api", &HashMap::new(), &mut env).unwrap();
 
         assert_eq!(
             env,
@@ -915,7 +919,8 @@ mod tests {
                 ("ALIEN_DEPLOYMENT_ID".to_string(), "dep_1".to_string()),
             ])
         );
-        let error = apply_signed_values(&statements, None, "jobs", &mut env).unwrap_err();
+        let error =
+            apply_signed_values(&statements, None, "jobs", &HashMap::new(), &mut env).unwrap_err();
         assert!(
             error.to_string().contains("has no workload 'jobs'"),
             "{error}"

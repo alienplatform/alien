@@ -168,9 +168,8 @@ pub async fn read_install(install: &ModuleInstall) -> Result<Signed> {
             let id = parse_install(&format!("aws:{account}:{region}:{prefix}"))?;
             let ssm = super::verify::ssm_client_for(&aws, account, region).await?;
             let settings = super::verify::parameter(&ssm, &names::aws_settings(&prefix)).await?;
-            let ledger = super::verify::parameter(&ssm, &names::aws_ledger(&prefix))
-                .await?
-                .map(|(bytes, _)| bytes);
+            let ledger =
+                super::verify::ledger_parameter(&ssm, &names::aws_ledger(&prefix), &prefix).await?;
             Ok(signed(
                 id,
                 install,

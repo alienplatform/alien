@@ -9695,11 +9695,27 @@ mod tests {
     /// The `applyWrite` requests the verifier got, by operation, each accepted by the
     /// verifier's own tables.
     async fn checked_writes(requests: &[(Option<String>, Vec<u8>)]) -> Vec<serde_json::Value> {
+        checked_writes_with_inputs(requests, &[]).await
+    }
+
+    /// [`checked_writes`] for an install whose store holds the deployer inputs `inputs`.
+    async fn checked_writes_with_inputs(
+        requests: &[(Option<String>, Vec<u8>)],
+        inputs: &[(&str, &str)],
+    ) -> Vec<serde_json::Value> {
         let mut writes = Vec::new();
         for (bearer, payload) in requests {
             assert_eq!(bearer.as_deref(), Some("Bearer management-id-token"));
             let (answer, forwarded) =
-                run_write_over(gcp_install(), "test", None, protected_service(), payload).await;
+                crate::core::verifier_test_support::run_write_over_with_inputs(
+                    gcp_install(),
+                    "test",
+                    None,
+                    protected_service(),
+                    payload,
+                    inputs,
+                )
+                .await;
             answer.expect("the verifier's tables accept the controller's request");
             assert_eq!(forwarded.len(), 1);
             let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
@@ -10109,6 +10125,80 @@ mod tests {
             "{}",
             writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
         );
+    }
+
+    /// A developer input that applies only while a deployer input is on follows the value the
+    /// customer gave that input: the controller leaves the env out when the customer turned the
+    /// feature off, and the verifier, which reads the same value from the install's store,
+    /// agrees.
+    #[tokio::test]
+    async fn a_signed_developer_input_gated_on_a_deployer_input_follows_the_customers_choice() {
+        for (audit, expected) in [("false", false), ("true", true)] {
+            let worker = pinned_worker('2', 512);
+            let mut stack = Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build();
+            stack.inputs = serde_json::from_value(serde_json::json!([
+                {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+                 "label": "Audit", "description": "Send audit events",
+                 "default": {"type": "boolean", "value": true}},
+                {"id": "auditSink", "kind": "string", "providedBy": ["developer"],
+                 "required": false, "label": "Sink", "description": "Where audit events go",
+                 "when": {"input": "audit", "equals": true},
+                 "env": [{"name": "AUDIT_SINK", "targetResources": [PROTECTED_WORKER]}]},
+            ]))
+            .unwrap();
+            let release = signed_release(Platform::Gcp, &stack, 2);
+            let config = crate::core::verifier_test_support::signed_config_inputs(
+                &gcp_install(),
+                &[("auditSink", serde_json::json!("https://audit.example"))],
+                1,
+            );
+            let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(protected_controller())
+                .platform(Platform::Gcp)
+                .client_config(management_client_config(&url))
+                .service_provider(protected_provider(&url, setup_policy()))
+                .with_test_dependencies()
+                .with_dependency(setup_account(), setup_account_controller())
+                .with_dependency(setup_vault(), setup_vault_controller())
+                .stack_settings(protected_settings())
+                .management_config(alien_core::ManagementConfig::Gcp(
+                    alien_core::GcpManagementConfig {
+                        service_account_email: MANAGEMENT_SA.to_string(),
+                        federation_trust: None,
+                    },
+                ))
+                .input_values(std::collections::HashMap::from([(
+                    "audit".to_string(),
+                    serde_json::Value::String(audit.to_string()),
+                )]))
+                .signed_release(release, Some(config))
+                .build()
+                .await
+                .unwrap();
+
+            executor.update(worker).unwrap();
+            executor
+                .run_until_terminal()
+                .await
+                .expect("the update completes through the verifier");
+
+            let requests = requests.lock().unwrap().clone();
+            let writes = checked_writes_with_inputs(&requests, &[("audit", audit)]).await;
+            let env = writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
+                .as_array()
+                .unwrap();
+            assert_eq!(
+                env.contains(
+                    &serde_json::json!({"name": "AUDIT_SINK", "value": "https://audit.example"})
+                ),
+                expected,
+                "audit={audit}: {env:?}"
+            );
+        }
     }
 
     /// On a protected install management may not write the Cloud Run service, so an update

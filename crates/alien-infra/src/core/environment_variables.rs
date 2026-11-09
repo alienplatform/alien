@@ -796,6 +796,7 @@ impl EnvironmentVariableBuilder {
                 statements,
                 ctx.deployment_config.signed_config.as_ref(),
                 workload,
+                &ctx.deployment_config.input_values,
                 &mut self.env_vars,
             )?;
         }

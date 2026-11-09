@@ -1087,9 +1087,7 @@ async fn observe(
     let ssm = &ssm_client(aws, &stack_id).await?;
     let installed = Signing {
         settings: parameter(ssm, &names::aws_settings(&stack_name)).await?,
-        ledger: parameter(ssm, &names::aws_ledger(&stack_name))
-            .await?
-            .map(|(bytes, _)| bytes),
+        ledger: ledger_parameter(ssm, &names::aws_ledger(&stack_name), &stack_name).await?,
         from_change_set: false,
     };
     let Signing {
@@ -1138,6 +1136,55 @@ pub(crate) async fn parameter(
     ssm: &SsmClient,
     name: &str,
 ) -> Result<Option<(Vec<u8>, Option<DateTime<Utc>>)>> {
+    Ok(read_parameter(ssm, name)
+        .await?
+        .map(|(value, set_at, _)| (value, set_at)))
+}
+
+/// The install's ledger as the verifier and the machines read it: SSM has no compare-and-swap,
+/// so the newest value may lack a raise written meanwhile. Each write records the version it was
+/// merged onto; the versions after that are merged in.
+pub(crate) async fn ledger_parameter(
+    ssm: &SsmClient,
+    name: &str,
+    prefix: &str,
+) -> Result<Option<Vec<u8>>> {
+    let Some((bytes, _, version)) = read_parameter(ssm, name).await? else {
+        return Ok(None);
+    };
+    let version = version
+        .and_then(|version| u64::try_from(version).ok())
+        .ok_or_else(|| failed(format!("{name} returned no version")))?;
+    let mut ledger = Ledger::parse(&bytes, prefix).context(ErrorData::VerifyFailed {
+        message: format!("{name} is not a valid ledger"),
+    })?;
+    let unmerged_versions = ledger
+        .unmerged_versions(version)
+        .context(ErrorData::VerifyFailed {
+            message: format!("{name} is not a write of the version it was read at"),
+        })?;
+    for unmerged in unmerged_versions {
+        let versioned = format!("{name}:{unmerged}");
+        let (bytes, _) = parameter(ssm, &versioned).await?.ok_or_else(|| {
+            failed(format!(
+                "version {unmerged} of {name} could not be read, so the install's floor can't be known"
+            ))
+        })?;
+        let other = Ledger::parse(&bytes, prefix).context(ErrorData::VerifyFailed {
+            message: format!("{versioned} is not a valid ledger"),
+        })?;
+        ledger.merge(&other).context(ErrorData::VerifyFailed {
+            message: format!("{versioned} forks from the install's ledger"),
+        })?;
+    }
+    ledger.resolved_at(version);
+    Ok(Some(ledger.to_json().into_bytes()))
+}
+
+async fn read_parameter(
+    ssm: &SsmClient,
+    name: &str,
+) -> Result<Option<(Vec<u8>, Option<DateTime<Utc>>, Option<i64>)>> {
     match ssm
         .get_parameter(GetParameterRequest {
             name: name.to_string(),
@@ -1155,7 +1202,7 @@ pub(crate) async fn parameter(
             let value = parameter
                 .value
                 .ok_or_else(|| failed(format!("{name} returned no value")))?;
-            Ok(Some((value.into_bytes(), set_at)))
+            Ok(Some((value.into_bytes(), set_at, parameter.version)))
         }
         Err(error)
             if matches!(

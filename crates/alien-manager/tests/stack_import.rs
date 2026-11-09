@@ -4664,3 +4664,77 @@ async fn an_unprotected_setup_without_a_release_still_installs_the_latest() {
     assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
     assert_eq!(desired_release(&fixture, json).await, Some(latest));
 }
+
+async fn post_config_statement(
+    fixture: &Fixture,
+    token: &str,
+    deployment_id: &str,
+    statement: &alien_signing::SignedStatement,
+) -> StatusCode {
+    let router = alien_manager::routes::signing::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/deployments/{deployment_id}/config-statements"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({ "statement": statement })).unwrap(),
+        ))
+        .unwrap();
+    router.oneshot(request).await.unwrap().status()
+}
+
+/// Config decides what runs in the install, so only a caller who can publish
+/// releases for the project may store it. The deployment's own token and its
+/// group token must not.
+#[tokio::test]
+async fn only_a_project_publisher_stores_a_config_statement() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    with_signing_store(&mut fixture);
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    let statement = alien_signing::SignedStatement::new(
+        &alien_signing::Envelope {
+            kind: alien_signing::Kind::Config.as_str().to_string(),
+            project: deployment.project_id.clone(),
+            install: Some("inst_0123456789abcdef".to_string()),
+            sequence: 1,
+            not_after: None,
+            signer_list_version: 1,
+            body: alien_signing::ConfigBody::default(),
+        }
+        .to_payload()
+        .unwrap(),
+    );
+
+    let deployment_token = deployment
+        .deployment_token
+        .clone()
+        .expect("deployment token");
+    for (who, token) in [
+        ("deployment token", deployment_token.as_str()),
+        ("group token", fixture.dg_token.as_str()),
+    ] {
+        assert_eq!(
+            post_config_statement(&fixture, token, &deployment.id, &statement).await,
+            StatusCode::FORBIDDEN,
+            "{who}"
+        );
+    }
+    assert_eq!(
+        post_config_statement(&fixture, &fixture.admin_token, &deployment.id, &statement).await,
+        StatusCode::CREATED
+    );
+}

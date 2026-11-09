@@ -181,6 +181,7 @@ pub fn settings(prefix: &str) -> SigningSettings {
 struct MemoryInstall {
     settings: SigningSettings,
     ledger: Mutex<Ledger>,
+    inputs: std::collections::BTreeMap<String, String>,
 }
 
 #[async_trait]
@@ -206,8 +207,8 @@ impl InstallStore for MemoryInstall {
         Ok(())
     }
 
-    async fn input(&self, _prefix: &str, _name: &str) -> alien_verifier::Result<Option<String>> {
-        Ok(None)
+    async fn input(&self, _prefix: &str, name: &str) -> alien_verifier::Result<Option<String>> {
+        Ok(self.inputs.get(name).cloned())
     }
 }
 
@@ -294,6 +295,18 @@ pub async fn run_write_over(
     own: OwnResource,
     payload: &[u8],
 ) -> (Result<serde_json::Value, String>, Vec<CloudWrite>) {
+    run_write_over_with_inputs(install, prefix, environment, own, payload, &[]).await
+}
+
+/// [`run_write_over`] for an install whose store holds deployer inputs `inputs`.
+pub async fn run_write_over_with_inputs(
+    install: InstallId,
+    prefix: &str,
+    environment: Option<&str>,
+    own: OwnResource,
+    payload: &[u8],
+    inputs: &[(&str, &str)],
+) -> (Result<serde_json::Value, String>, Vec<CloudWrite>) {
     let backend = Arc::new(Forwarded {
         own,
         install: install.clone(),
@@ -306,6 +319,10 @@ pub async fn run_write_over(
         store: Arc::new(MemoryInstall {
             settings: settings(prefix),
             ledger: Mutex::new(Ledger::new(prefix)),
+            inputs: inputs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
         }),
         backend: backend.clone(),
         vpc: None,

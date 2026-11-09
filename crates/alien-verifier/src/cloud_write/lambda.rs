@@ -1836,4 +1836,71 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("[\"REGION_LABEL\"]"), "{error}");
     }
+
+    /// A developer input that is conditional on a deployer input follows what the install's
+    /// store holds for it: the customer turning the feature off removes the env, and a control
+    /// plane that sets it anyway is refused.
+    #[tokio::test]
+    async fn a_developer_input_gated_on_a_deployer_input_follows_the_installs_value() {
+        let config = || {
+            Some(config(
+                1,
+                ConfigBody {
+                    inputs: serde_json::from_value(json!({"auditSink": "https://audit.example"}))
+                        .unwrap(),
+                    ..ConfigBody::default()
+                },
+            ))
+        };
+        let audit = |value: Option<&str>| Reads {
+            deployer_inputs: value
+                .map(|value| BTreeMap::from([("audit".to_string(), value.to_string())]))
+                .unwrap_or_default(),
+            ..Reads::default()
+        };
+        let create = |sink: bool| {
+            let mut request = create();
+            request["Environment"]["Variables"] = json!({"ALIEN_DEPLOYMENT_ID": "dep_1"});
+            if sink {
+                request["Environment"]["Variables"]["AUDIT_SINK"] = json!("https://audit.example");
+            }
+            CloudWrite::CreateFunction(request)
+        };
+        for on in [Some("true"), None] {
+            checked_reading(
+                crate::plan::tests::release_with_gated_input(),
+                config(),
+                audit(on),
+                create(true),
+            )
+            .await
+            .unwrap();
+        }
+        let error = checked_reading(
+            crate::plan::tests::release_with_gated_input(),
+            config(),
+            audit(Some("true")),
+            create(false),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("AUDIT_SINK"), "{error}");
+        checked_reading(
+            crate::plan::tests::release_with_gated_input(),
+            config(),
+            audit(Some("false")),
+            create(false),
+        )
+        .await
+        .unwrap();
+        let error = checked_reading(
+            crate::plan::tests::release_with_gated_input(),
+            config(),
+            audit(Some("false")),
+            create(true),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("AUDIT_SINK"), "{error}");
+    }
 }
