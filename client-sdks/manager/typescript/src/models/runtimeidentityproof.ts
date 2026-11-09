@@ -3,7 +3,6 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../lib/primitives.js";
 
 /**
  * The explicit daily-key exception for enrolled components.
@@ -19,14 +18,6 @@ export type RuntimeIdentityProofDailyKey = {
 export type RuntimeIdentityProofSession = {
   token: string;
   type: "session";
-};
-
-/**
- * A managed-identity token for this manager's audience.
- */
-export type RuntimeIdentityProofAzure = {
-  accessToken: string;
-  type: "azure";
 };
 
 /**
@@ -51,7 +42,6 @@ export type RuntimeIdentityProofAws = {
 export type RuntimeIdentityProof =
   | RuntimeIdentityProofAws
   | RuntimeIdentityProofGcp
-  | RuntimeIdentityProofAzure
   | RuntimeIdentityProofSession
   | RuntimeIdentityProofDailyKey;
 
@@ -106,35 +96,8 @@ export function runtimeIdentityProofSessionToJSON(
 }
 
 /** @internal */
-export type RuntimeIdentityProofAzure$Outbound = {
-  access_token: string;
-  type: "azure";
-};
-
-/** @internal */
-export const RuntimeIdentityProofAzure$outboundSchema: z.ZodType<
-  RuntimeIdentityProofAzure$Outbound,
-  RuntimeIdentityProofAzure
-> = z.object({
-  accessToken: z.string(),
-  type: z.literal("azure"),
-}).transform((v) => {
-  return remap$(v, {
-    accessToken: "access_token",
-  });
-});
-
-export function runtimeIdentityProofAzureToJSON(
-  runtimeIdentityProofAzure: RuntimeIdentityProofAzure,
-): string {
-  return JSON.stringify(
-    RuntimeIdentityProofAzure$outboundSchema.parse(runtimeIdentityProofAzure),
-  );
-}
-
-/** @internal */
 export type RuntimeIdentityProofGcp$Outbound = {
-  id_token: string;
+  idToken: string;
   type: "gcp";
 };
 
@@ -145,10 +108,6 @@ export const RuntimeIdentityProofGcp$outboundSchema: z.ZodType<
 > = z.object({
   idToken: z.string(),
   type: z.literal("gcp"),
-}).transform((v) => {
-  return remap$(v, {
-    idToken: "id_token",
-  });
 });
 
 export function runtimeIdentityProofGcpToJSON(
@@ -161,7 +120,7 @@ export function runtimeIdentityProofGcpToJSON(
 
 /** @internal */
 export type RuntimeIdentityProofAws$Outbound = {
-  presigned_url: string;
+  presignedUrl: string;
   type: "aws";
 };
 
@@ -172,10 +131,6 @@ export const RuntimeIdentityProofAws$outboundSchema: z.ZodType<
 > = z.object({
   presignedUrl: z.string(),
   type: z.literal("aws"),
-}).transform((v) => {
-  return remap$(v, {
-    presignedUrl: "presigned_url",
-  });
 });
 
 export function runtimeIdentityProofAwsToJSON(
@@ -190,7 +145,6 @@ export function runtimeIdentityProofAwsToJSON(
 export type RuntimeIdentityProof$Outbound =
   | RuntimeIdentityProofAws$Outbound
   | RuntimeIdentityProofGcp$Outbound
-  | RuntimeIdentityProofAzure$Outbound
   | RuntimeIdentityProofSession$Outbound
   | RuntimeIdentityProofDailyKey$Outbound;
 
@@ -201,7 +155,6 @@ export const RuntimeIdentityProof$outboundSchema: z.ZodType<
 > = z.union([
   z.lazy(() => RuntimeIdentityProofAws$outboundSchema),
   z.lazy(() => RuntimeIdentityProofGcp$outboundSchema),
-  z.lazy(() => RuntimeIdentityProofAzure$outboundSchema),
   z.lazy(() => RuntimeIdentityProofSession$outboundSchema),
   z.lazy(() => RuntimeIdentityProofDailyKey$outboundSchema),
 ]);

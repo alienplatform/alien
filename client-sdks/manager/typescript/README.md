@@ -192,7 +192,10 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 
 ### [Identity](docs/sdks/identity/README.md)
 
+* [issueEnrollmentCode](docs/sdks/identity/README.md#issueenrollmentcode) - Issue the code that `management.enrollmentCode` carries into a Helm install.
+* [enrollRuntimeIdentity](docs/sdks/identity/README.md#enrollruntimeidentity)
 * [exchangeRuntimeIdentity](docs/sdks/identity/README.md#exchangeruntimeidentity) - Exchange a verified component proof for one bounded runtime purpose.
+* [rotateRuntimeIdentity](docs/sdks/identity/README.md#rotateruntimeidentity)
 
 ### [Leases](docs/sdks/leases/README.md)
 
@@ -244,6 +247,13 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 * [listTokens](docs/sdks/tokens/README.md#listtokens)
 * [createToken](docs/sdks/tokens/README.md#createtoken) - `POST /v1/tokens` — create a scoped token (admin only).
 * [deleteToken](docs/sdks/tokens/README.md#deletetoken)
+
+### [Values](docs/sdks/values/README.md)
+
+* [listValues](docs/sdks/values/README.md#listvalues)
+* [putValues](docs/sdks/values/README.md#putvalues) - Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.
+* [verifyValues](docs/sdks/values/README.md#verifyvalues)
+* [deleteValue](docs/sdks/values/README.md#deletevalue)
 
 ### [Vault](docs/sdks/vault/README.md)
 
@@ -307,7 +317,10 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`deploymentsSetQuotaWarningOverrides`](docs/sdks/deployments/README.md#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 - [`deploymentsSignDeploymentBundle`](docs/sdks/deployments/README.md#signdeploymentbundle)
 - [`healthHealth`](docs/sdks/health/README.md#health)
+- [`identityEnrollRuntimeIdentity`](docs/sdks/identity/README.md#enrollruntimeidentity)
 - [`identityExchangeRuntimeIdentity`](docs/sdks/identity/README.md#exchangeruntimeidentity) - Exchange a verified component proof for one bounded runtime purpose.
+- [`identityIssueEnrollmentCode`](docs/sdks/identity/README.md#issueenrollmentcode) - Issue the code that `management.enrollmentCode` carries into a Helm install.
+- [`identityRotateRuntimeIdentity`](docs/sdks/identity/README.md#rotateruntimeidentity)
 - [`leasesAcquireLeases`](docs/sdks/leases/README.md#acquireleases) - Acquire leases for polling deployments
 - [`leasesReleaseLease`](docs/sdks/leases/README.md#releaselease) - Release a lease
 - [`managerManagerInfo`](docs/sdks/manager/README.md#managerinfo)
@@ -341,6 +354,10 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 - [`tokensCreateToken`](docs/sdks/tokens/README.md#createtoken) - `POST /v1/tokens` — create a scoped token (admin only).
 - [`tokensDeleteToken`](docs/sdks/tokens/README.md#deletetoken)
 - [`tokensListTokens`](docs/sdks/tokens/README.md#listtokens)
+- [`valuesDeleteValue`](docs/sdks/values/README.md#deletevalue)
+- [`valuesListValues`](docs/sdks/values/README.md#listvalues)
+- [`valuesPutValues`](docs/sdks/values/README.md#putvalues) - Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.
+- [`valuesVerifyValues`](docs/sdks/values/README.md#verifyvalues)
 - [`vaultDeleteSecret`](docs/sdks/vault/README.md#deletesecret)
 - [`vaultGetSecret`](docs/sdks/vault/README.md#getsecret)
 - [`vaultSetSecret`](docs/sdks/vault/README.md#setsecret)
@@ -486,8 +503,8 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 54 methods.*
-* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 54 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 61 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 61 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

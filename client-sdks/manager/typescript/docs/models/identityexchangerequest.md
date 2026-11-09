@@ -12,11 +12,7 @@ let value: IdentityExchangeRequest = {
     type: "session",
   },
   purpose: {
-    target: {
-      resourceId: "<id>",
-      resourceType: "daemon",
-    },
-    type: "receiveCommands",
+    type: "operatorOperations",
   },
 };
 ```

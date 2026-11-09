@@ -23,15 +23,6 @@ const value: models.RuntimeIdentityProofGcp = {
 };
 ```
 
-### `models.RuntimeIdentityProofAzure`
-
-```typescript
-const value: models.RuntimeIdentityProofAzure = {
-  accessToken: "<value>",
-  type: "azure",
-};
-```
-
 ### `models.RuntimeIdentityProofSession`
 
 ```typescript

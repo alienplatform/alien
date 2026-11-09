@@ -15,6 +15,7 @@ import { Releases } from "./releases.js";
 import { StackImport } from "./stackimport.js";
 import { Sync } from "./sync.js";
 import { Tokens } from "./tokens.js";
+import { Values } from "./values.js";
 import { Vault } from "./vault.js";
 import { Whoami } from "./whoami.js";
 
@@ -49,14 +50,14 @@ export class AlienManager extends ClientSDK {
     return (this._deployments ??= new Deployments(this._options));
   }
 
-  private _vault?: Vault;
-  get vault(): Vault {
-    return (this._vault ??= new Vault(this._options));
-  }
-
   private _identity?: Identity;
   get identity(): Identity {
     return (this._identity ??= new Identity(this._options));
+  }
+
+  private _vault?: Vault;
+  get vault(): Vault {
+    return (this._vault ??= new Vault(this._options));
   }
 
   private _sync?: Sync;
@@ -82,6 +83,11 @@ export class AlienManager extends ClientSDK {
   private _tokens?: Tokens;
   get tokens(): Tokens {
     return (this._tokens ??= new Tokens(this._options));
+  }
+
+  private _values?: Values;
+  get values(): Values {
+    return (this._values ??= new Values(this._options));
   }
 
   private _whoami?: Whoami;

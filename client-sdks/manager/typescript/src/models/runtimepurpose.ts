@@ -21,6 +21,45 @@ export type RuntimePurposeReceiveCommands = {
 };
 
 /**
+ * Relay commands to one app worker, without dispatch or administrative rights.
+ */
+export type RuntimePurposeOperationRelay = {
+  /**
+   * Identifies the specific resource a command is addressed to.
+   */
+  target: CommandTarget;
+  type: "operationRelay";
+};
+
+/**
+ * Receive the operator's fixed operations queue.
+ */
+export type RuntimePurposeOperatorOperations = {
+  type: "operatorOperations";
+};
+
+/**
+ * Connect the recorded operator tunnel.
+ */
+export type RuntimePurposeOperatorTunnel = {
+  type: "operatorTunnel";
+};
+
+/**
+ * Pull deployment images through the registry receiver.
+ */
+export type RuntimePurposeRegistryPull = {
+  type: "registryPull";
+};
+
+/**
+ * Reconcile the recorded operator deployment.
+ */
+export type RuntimePurposeOperatorSync = {
+  type: "operatorSync";
+};
+
+/**
  * Ingest telemetry for the recorded deployment.
  */
 export type RuntimePurposeTelemetry = {
@@ -32,6 +71,11 @@ export type RuntimePurposeTelemetry = {
  */
 export type RuntimePurpose =
   | RuntimePurposeTelemetry
+  | RuntimePurposeOperatorSync
+  | RuntimePurposeRegistryPull
+  | RuntimePurposeOperatorTunnel
+  | RuntimePurposeOperatorOperations
+  | RuntimePurposeOperationRelay
   | RuntimePurposeReceiveCommands;
 
 /** @internal */
@@ -60,6 +104,119 @@ export function runtimePurposeReceiveCommandsToJSON(
 }
 
 /** @internal */
+export type RuntimePurposeOperationRelay$Outbound = {
+  target: CommandTarget$Outbound;
+  type: "operationRelay";
+};
+
+/** @internal */
+export const RuntimePurposeOperationRelay$outboundSchema: z.ZodType<
+  RuntimePurposeOperationRelay$Outbound,
+  RuntimePurposeOperationRelay
+> = z.object({
+  target: CommandTarget$outboundSchema,
+  type: z.literal("operationRelay"),
+});
+
+export function runtimePurposeOperationRelayToJSON(
+  runtimePurposeOperationRelay: RuntimePurposeOperationRelay,
+): string {
+  return JSON.stringify(
+    RuntimePurposeOperationRelay$outboundSchema.parse(
+      runtimePurposeOperationRelay,
+    ),
+  );
+}
+
+/** @internal */
+export type RuntimePurposeOperatorOperations$Outbound = {
+  type: "operatorOperations";
+};
+
+/** @internal */
+export const RuntimePurposeOperatorOperations$outboundSchema: z.ZodType<
+  RuntimePurposeOperatorOperations$Outbound,
+  RuntimePurposeOperatorOperations
+> = z.object({
+  type: z.literal("operatorOperations"),
+});
+
+export function runtimePurposeOperatorOperationsToJSON(
+  runtimePurposeOperatorOperations: RuntimePurposeOperatorOperations,
+): string {
+  return JSON.stringify(
+    RuntimePurposeOperatorOperations$outboundSchema.parse(
+      runtimePurposeOperatorOperations,
+    ),
+  );
+}
+
+/** @internal */
+export type RuntimePurposeOperatorTunnel$Outbound = {
+  type: "operatorTunnel";
+};
+
+/** @internal */
+export const RuntimePurposeOperatorTunnel$outboundSchema: z.ZodType<
+  RuntimePurposeOperatorTunnel$Outbound,
+  RuntimePurposeOperatorTunnel
+> = z.object({
+  type: z.literal("operatorTunnel"),
+});
+
+export function runtimePurposeOperatorTunnelToJSON(
+  runtimePurposeOperatorTunnel: RuntimePurposeOperatorTunnel,
+): string {
+  return JSON.stringify(
+    RuntimePurposeOperatorTunnel$outboundSchema.parse(
+      runtimePurposeOperatorTunnel,
+    ),
+  );
+}
+
+/** @internal */
+export type RuntimePurposeRegistryPull$Outbound = {
+  type: "registryPull";
+};
+
+/** @internal */
+export const RuntimePurposeRegistryPull$outboundSchema: z.ZodType<
+  RuntimePurposeRegistryPull$Outbound,
+  RuntimePurposeRegistryPull
+> = z.object({
+  type: z.literal("registryPull"),
+});
+
+export function runtimePurposeRegistryPullToJSON(
+  runtimePurposeRegistryPull: RuntimePurposeRegistryPull,
+): string {
+  return JSON.stringify(
+    RuntimePurposeRegistryPull$outboundSchema.parse(runtimePurposeRegistryPull),
+  );
+}
+
+/** @internal */
+export type RuntimePurposeOperatorSync$Outbound = {
+  type: "operatorSync";
+};
+
+/** @internal */
+export const RuntimePurposeOperatorSync$outboundSchema: z.ZodType<
+  RuntimePurposeOperatorSync$Outbound,
+  RuntimePurposeOperatorSync
+> = z.object({
+  type: z.literal("operatorSync"),
+});
+
+export function runtimePurposeOperatorSyncToJSON(
+  runtimePurposeOperatorSync: RuntimePurposeOperatorSync,
+): string {
+  return JSON.stringify(
+    RuntimePurposeOperatorSync$outboundSchema.parse(runtimePurposeOperatorSync),
+  );
+}
+
+/** @internal */
 export type RuntimePurposeTelemetry$Outbound = {
   type: "telemetry";
 };
@@ -83,6 +240,11 @@ export function runtimePurposeTelemetryToJSON(
 /** @internal */
 export type RuntimePurpose$Outbound =
   | RuntimePurposeTelemetry$Outbound
+  | RuntimePurposeOperatorSync$Outbound
+  | RuntimePurposeRegistryPull$Outbound
+  | RuntimePurposeOperatorTunnel$Outbound
+  | RuntimePurposeOperatorOperations$Outbound
+  | RuntimePurposeOperationRelay$Outbound
   | RuntimePurposeReceiveCommands$Outbound;
 
 /** @internal */
@@ -91,6 +253,11 @@ export const RuntimePurpose$outboundSchema: z.ZodType<
   RuntimePurpose
 > = z.union([
   z.lazy(() => RuntimePurposeTelemetry$outboundSchema),
+  z.lazy(() => RuntimePurposeOperatorSync$outboundSchema),
+  z.lazy(() => RuntimePurposeRegistryPull$outboundSchema),
+  z.lazy(() => RuntimePurposeOperatorTunnel$outboundSchema),
+  z.lazy(() => RuntimePurposeOperatorOperations$outboundSchema),
+  z.lazy(() => RuntimePurposeOperationRelay$outboundSchema),
   z.lazy(() => RuntimePurposeReceiveCommands$outboundSchema),
 ]);
 
