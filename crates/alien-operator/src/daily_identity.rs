@@ -1718,6 +1718,8 @@ mod grace_tests {
         key: Arc<Mutex<(String, DateTime<Utc>)>>,
         rotations: Arc<AtomicUsize>,
         lose_next_answer: Arc<AtomicBool>,
+        /// While set, the manager refuses every key, as for a revoked row.
+        revoked: Arc<AtomicBool>,
     }
 
     async fn grace_rotate(
@@ -1727,7 +1729,8 @@ mod grace_tests {
         use axum::response::IntoResponse;
         let mut key = manager.key.lock().await;
         let successor = body["successorHash"].as_str().unwrap().to_owned();
-        if key_hash(body["key"].as_str().unwrap()) != key.0
+        if manager.revoked.load(Ordering::SeqCst)
+            || key_hash(body["key"].as_str().unwrap()) != key.0
             || key.1 <= Utc::now() - ROTATION_GRACE
             || successor == key.0
         {
@@ -1758,7 +1761,10 @@ mod grace_tests {
     ) -> axum::response::Response {
         use axum::response::IntoResponse;
         let key = manager.key.lock().await;
-        if key_hash(body["proof"]["key"].as_str().unwrap()) != key.0 || key.1 <= Utc::now() {
+        if manager.revoked.load(Ordering::SeqCst)
+            || key_hash(body["proof"]["key"].as_str().unwrap()) != key.0
+            || key.1 <= Utc::now()
+        {
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
         }
         axum::Json(json!({
@@ -1779,6 +1785,7 @@ mod grace_tests {
             key: Arc::new(Mutex::new((key_hash(server_key), server_key_expires))),
             rotations: Arc::new(AtomicUsize::new(0)),
             lose_next_answer: Arc::new(AtomicBool::new(false)),
+            revoked: Arc::new(AtomicBool::new(false)),
         };
         let app = axum::Router::new()
             .route("/v1/identity/rotate", axum::routing::post(grace_rotate))
@@ -1869,6 +1876,48 @@ mod grace_tests {
         assert_eq!(key_hash(&recovered), manager.key.lock().await.0);
         assert!(saved.expires_at > Utc::now() + chrono::Duration::hours(23));
         assert_eq!(manager.rotations.load(Ordering::SeqCst), 2);
+    }
+
+    /// The manager refuses every key for a while (a revoked row), then accepts
+    /// the old key again. Two refusals must not make the operator throw the old
+    /// key away: nothing proved the keys it made since, and the old key is the
+    /// only one the manager knows.
+    #[tokio::test]
+    async fn a_refusal_does_not_discard_the_old_key_before_a_new_one_works() {
+        let now = Utc::now();
+        let (db, url, manager, _directory) =
+            fixture(&key("1"), now + chrono::Duration::hours(11)).await;
+        db.write_daily_identity(&saved_state(
+            &url,
+            &key("1"),
+            Some(&key("2")),
+            now,
+            now + chrono::Duration::hours(11),
+        ))
+        .await
+        .unwrap();
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+
+        manager.revoked.store(true, Ordering::SeqCst);
+        for _ in 0..2 {
+            // The manager answers 401 to every key; the operator keeps working
+            // with what it has until its own deadline.
+            let _ = identity.current_key("manager-one").await;
+        }
+        assert_eq!(manager.rotations.load(Ordering::SeqCst), 0);
+
+        manager.revoked.store(false, Ordering::SeqCst);
+        identity
+            .current_key("manager-one")
+            .await
+            .expect("the old key is accepted again and rotates");
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(
+            manager.key.lock().await.0,
+            key_hash(&saved.current),
+            "the saved current key is the one the manager holds"
+        );
+        assert_eq!(manager.rotations.load(Ordering::SeqCst), 1);
     }
 
     /// The rotation never reached the manager, so the old key is still the
