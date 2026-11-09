@@ -14,7 +14,7 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackRedisSecretWrite",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && (resource.name.endsWith(\"-auth\") || resource.name.contains(\"-auth/versions/\")) && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
             }
           },
           "resource": {
@@ -29,7 +29,9 @@
       // Memorystore generates the auth token and the API is the only place to read it: the
       // controller reads it once and adds it as a new Secret Manager version (the write grant
       // above), never into controller state or logs. The grant is project-wide because Memorystore
-      // supports no IAM conditions. It belongs here and in redis/management because both the live
+      // does not appear among the resource types that accept IAM conditions
+      // (https://cloud.google.com/iam/docs/resource-types-with-conditional-roles), so it cannot
+      // be limited to one instance. It belongs here and in redis/management because both the live
       // create and the import of a setup-created instance run the copy; neither the workload nor the
       // heartbeat identity gets it.
       {

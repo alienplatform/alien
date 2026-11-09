@@ -397,6 +397,12 @@ fn gcp_condition_allows(expression: &str, secret_resource_name: &str) -> bool {
         if atom.starts_with("resource.name.startsWith(") {
             return secret_resource_name.starts_with(quoted());
         }
+        if atom.starts_with("resource.name.endsWith(") {
+            return secret_resource_name.ends_with(quoted());
+        }
+        if atom.starts_with("resource.name.contains(") {
+            return secret_resource_name.contains(quoted());
+        }
         panic!("unknown clause {atom}");
     };
     expression.split("&&").all(|clause| {
@@ -421,6 +427,7 @@ fn gcp_secret_writes_stay_on_the_resources_own_secrets() {
     let sibling = "projects/123456789012/secrets/my-stack-sessions-auth";
     let other_stack = "projects/123456789012/secrets/other-stack-cache-auth";
     let deployer = "projects/123456789012/secrets/my-stack-deployer-secrets-x";
+    let app_secret = "projects/123456789012/secrets/my-stack-app-token";
     for id in ["redis/provision", "redis/management"] {
         for (target, covers_sibling) in [
             (BindingTarget::Stack, true),
@@ -453,6 +460,20 @@ fn gcp_secret_writes_stay_on_the_resources_own_secrets() {
             );
             assert!(!gcp_condition_allows(expression, other_stack), "{id}");
             assert!(!gcp_condition_allows(expression, deployer), "{id}");
+            // Another resource's secret in the same stack is not a Redis auth secret, even at
+            // the stack level.
+            assert!(
+                !gcp_condition_allows(expression, &format!("{app_secret}")),
+                "{id}: {expression}"
+            );
+            assert!(
+                !gcp_condition_allows(expression, &format!("{app_secret}/versions/1")),
+                "{id}"
+            );
+            assert!(
+                gcp_condition_allows(expression, &format!("{own}/versions/1")),
+                "{id}"
+            );
         }
     }
 }
