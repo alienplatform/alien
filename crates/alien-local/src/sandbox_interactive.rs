@@ -208,7 +208,7 @@ impl SignalShells {
         let mut shells = self.by_container.lock().await;
         // Forget shells that have ended, so removed containers do not pile up. One in use is
         // kept: its request ends within `SIGNAL_ANSWER_WAIT` either way.
-        shells.retain(|_, shell| shell.io.try_lock().map_or(true, |io| io.is_some()));
+        shells.retain(|_, shell| !matches!(shell.io.try_lock(), Ok(io) if io.is_none()));
         if let Some(shell) = shells.get(container_id) {
             return Ok(Arc::clone(shell));
         }
