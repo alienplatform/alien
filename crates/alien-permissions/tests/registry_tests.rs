@@ -38,6 +38,40 @@ fn test_ai_heartbeat_can_resolve_gcp_project_number() {
 }
 
 #[test]
+fn test_ai_invoke_lists_the_mantle_models_it_can_invoke() {
+    let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
+    let aws = invoke.platforms.aws.as_ref().expect("ai/invoke must have an AWS grant");
+
+    // The bedrock-mantle endpoint's model list (GET /models) is authorized as
+    // ListModels on the project, so the grant that may invoke a project's models
+    // must also be able to list them, on the same project and nothing wider.
+    let mantle = aws
+        .iter()
+        .find(|entry| {
+            entry
+                .grant
+                .actions
+                .as_ref()
+                .is_some_and(|actions| actions.iter().any(|action| action == "bedrock-mantle:CreateInference"))
+        })
+        .expect("ai/invoke must grant bedrock-mantle:CreateInference");
+    let actions = mantle.grant.actions.as_ref().expect("checked above");
+    assert!(
+        actions.iter().any(|action| action == "bedrock-mantle:ListModels"),
+        "ai/invoke grants bedrock-mantle:CreateInference but not bedrock-mantle:ListModels, so an app can't list the models it may invoke; found {actions:?}"
+    );
+    for binding in [&mantle.binding.stack, &mantle.binding.resource] {
+        let resources = &binding.as_ref().expect("ai/invoke AWS bindings").resources;
+        let mantle_resources: Vec<_> = resources.iter().filter(|resource| resource.contains(":bedrock-mantle:")).collect();
+        assert_eq!(
+            mantle_resources,
+            ["arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"],
+            "bedrock-mantle stays scoped to the default project"
+        );
+    }
+}
+
+#[test]
 fn test_ai_invoke_is_inference_only() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
 
@@ -48,10 +82,12 @@ fn test_ai_invoke_is_inference_only() {
     // control-plane action whose name happens to lack those words. Adding an entry
     // here is deliberate: it must be a data-plane inference call, never a
     // deployment or other control-plane write, which belong in ai/provision.
+    // The one exception is read-only discovery of the models those calls can use.
     const AWS_INFERENCE_ACTIONS: &[&str] = &[
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream",
         "bedrock-mantle:CreateInference",
+        "bedrock-mantle:ListModels",
     ];
     if let Some(aws) = &invoke.platforms.aws {
         for entry in aws {

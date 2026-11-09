@@ -111,6 +111,7 @@ Resources:
         Statement:
         - Action:
           - bedrock-mantle:CreateInference
+          - bedrock-mantle:ListModels
           - bedrock:InvokeModel
           - bedrock:InvokeModelWithResponseStream
           Effect: Allow
