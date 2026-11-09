@@ -2147,6 +2147,7 @@ mod tests {
             expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
             enrolled_code_hash: None,
             pending_enrollment: None,
+            previous: None,
         })
         .await
         .unwrap();
@@ -2393,6 +2394,7 @@ mod tests {
                 expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
                 enrolled_code_hash: None,
                 pending_enrollment: None,
+                previous: None,
             })
             .await
             .unwrap();

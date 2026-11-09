@@ -39,6 +39,12 @@ pub(crate) struct DailyIdentityState {
     pub enrolled_code_hash: Option<String>,
     #[serde(default)]
     pub pending_enrollment: Option<PendingEnrollment>,
+    /// The key the manager last accepted, kept while the manager refuses the
+    /// keys made after it. The refusal may be a revoked row or an outage that
+    /// answers 401, so nothing proves the newer keys yet. Cleared once a
+    /// newer key works.
+    #[serde(default)]
+    pub previous: Option<String>,
 }
 
 /// A re-enrollment whose response may have been lost. A retry with the same
@@ -135,6 +141,7 @@ impl DailyIdentity {
                     expires_at: Utc::now(),
                     enrolled_code_hash: None,
                     pending_enrollment: None,
+                    previous: None,
                 };
                 self.db.write_daily_identity(&state).await?;
                 state
@@ -222,6 +229,7 @@ impl DailyIdentity {
         state.expires_at = expires_at;
         state.enrolled_code_hash = Some(key_hash(code));
         state.pending_enrollment = None;
+        state.previous = None;
         state.pending = None;
         state.pending_started_at = None;
         #[cfg(test)]
@@ -422,6 +430,7 @@ impl DailyIdentity {
                     .pending_started_at
                     .ok_or_else(|| failed("Pending key has no durable start time"))?;
                 state.current = pending.clone();
+                state.previous = None;
                 state.pending = None;
                 state.pending_started_at = None;
                 // A lost rotation response cannot extend the locally remembered
@@ -457,13 +466,18 @@ impl DailyIdentity {
             Err(error) => return keep_current(&state, error),
         };
         if had_pending && matches!(outcome, Err(status) if status.as_u16() == 401) {
-            // The manager refused the current key for good, so it replaced it:
+            // The manager refused the current key, so it may have replaced it:
             // an earlier rotation committed and its answer was lost. The saved
             // successor is then the latest installed key, and it still rotates
             // for a week after it ended, though its exchange no longer works.
             // Make it the current key, save a new successor, and rotate again.
-            // Both keys are on disk before the request is sent.
+            // The refused key stays saved as `previous`: a revoked row refuses
+            // it too, and nothing proves the successor until it rotates.
+            // All keys are on disk before the request is sent.
             let installed_at = state.pending_started_at.unwrap_or(now);
+            if state.previous.is_none() {
+                state.previous = Some(state.current.clone());
+            }
             state.current = state
                 .pending
                 .take()
@@ -473,12 +487,23 @@ impl DailyIdentity {
             state.pending_started_at = Some(now);
             state.expires_at = installed_at + chrono::Duration::hours(24);
             self.db.write_daily_identity(&state).await?;
-            warn!("Component key was replaced; rotating with the saved successor");
+            warn!("Component key was refused; rotating with the saved successor");
             let rotation = json!({"deploymentId":state.deployment_id,"key":state.current,"successorHash":key_hash(&pending)});
             outcome = match self.post_outcome(&state, "rotate", rotation).await {
                 Ok(outcome) => outcome,
                 Err(error) => return keep_current(&state, error),
             };
+        }
+        if matches!(outcome, Err(status) if status.as_u16() == 401) {
+            // No newer key works. Try the last key the manager accepted: it
+            // rotates again if the refusal was lifted.
+            if let Some(previous) = state.previous.clone() {
+                let rotation = json!({"deploymentId":state.deployment_id,"key":previous,"successorHash":key_hash(&pending)});
+                outcome = match self.post_outcome(&state, "rotate", rotation).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => return keep_current(&state, error),
+                };
+            }
         }
         let response = match outcome {
             Ok(response) => response,
@@ -494,6 +519,7 @@ impl DailyIdentity {
         };
         state.expires_at = response_expiry(&response)?;
         state.current = pending.clone();
+        state.previous = None;
         state.pending = None;
         state.pending_started_at = None;
         self.db.write_daily_identity(&state).await?;
@@ -947,6 +973,7 @@ mod persistence_tests {
             pending_started_at: Some(Utc::now()),
             enrolled_code_hash: None,
             pending_enrollment: None,
+            previous: None,
             expires_at: Utc::now() + chrono::Duration::hours(12),
         };
         db.write_daily_identity(&state).await.unwrap();
@@ -1115,6 +1142,7 @@ mod persistence_tests {
             pending_started_at: None,
             enrolled_code_hash: Some(key_hash("ax_enroll_original")),
             pending_enrollment: None,
+            previous: None,
             expires_at,
         };
         db.write_daily_identity(&state).await.unwrap();
@@ -1500,6 +1528,7 @@ mod persistence_tests {
                 pending_started_at: None,
                 enrolled_code_hash: None,
                 pending_enrollment: None,
+                previous: None,
                 expires_at: Utc::now() + chrono::Duration::hours(11),
             })
             .await
@@ -1629,6 +1658,7 @@ mod persistence_tests {
                 expires_at: Utc::now() - chrono::Duration::seconds(1),
                 enrolled_code_hash: None,
                 pending_enrollment: None,
+                previous: None,
             })
             .await
             .unwrap();
@@ -1678,6 +1708,7 @@ mod persistence_tests {
             expires_at: Utc::now() + chrono::Duration::hours(1),
             enrolled_code_hash: None,
             pending_enrollment: None,
+            previous: None,
         };
         db.write_daily_identity(&original).await.unwrap();
         let identity = DailyIdentity::new(db.clone()).unwrap();
@@ -1817,6 +1848,7 @@ mod grace_tests {
             expires_at,
             enrolled_code_hash: None,
             pending_enrollment: None,
+            previous: None,
         }
     }
 
@@ -1873,6 +1905,10 @@ mod grace_tests {
         assert_ne!(recovered, successor);
         assert_ne!(recovered, key("1"));
         assert!(saved.pending.is_none());
+        assert!(
+            saved.previous.is_none(),
+            "the new key worked, so the old one is dropped"
+        );
         assert_eq!(key_hash(&recovered), manager.key.lock().await.0);
         assert!(saved.expires_at > Utc::now() + chrono::Duration::hours(23));
         assert_eq!(manager.rotations.load(Ordering::SeqCst), 2);
@@ -1918,6 +1954,7 @@ mod grace_tests {
             "the saved current key is the one the manager holds"
         );
         assert_eq!(manager.rotations.load(Ordering::SeqCst), 1);
+        assert!(saved.previous.is_none() && saved.pending.is_none());
     }
 
     /// The rotation never reached the manager, so the old key is still the
