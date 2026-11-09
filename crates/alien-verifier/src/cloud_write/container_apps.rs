@@ -59,6 +59,9 @@ fn check_secrets(operation: &str, app: &Value) -> Result<()> {
     Ok(())
 }
 
+/// The port the worker's app listens on, which the controller exposes.
+const APP_PORT: u64 = 8080;
+
 fn is_public(facts: &Facts<'_>) -> std::result::Result<bool, String> {
     crate::plan::signed_worker(
         &facts.accepted.release.body,
@@ -138,6 +141,29 @@ fn app_rows<'a>(facts: &'a Facts<'a>, environment: Option<&'a str>) -> Vec<Row<'
             {
                 return Err(
                     "its ingress has restrictions or ports the release didn't sign".to_string(),
+                );
+            }
+            // The runtime's worker-protocol server has no authentication; only the app's port
+            // may face the internet.
+            if value["targetPort"].as_u64() != Some(APP_PORT) {
+                return Err(format!(
+                    "its ingress targetPort is {}, not the app's port {APP_PORT}",
+                    value["targetPort"]
+                ));
+            }
+            if !is_empty(&value["transport"])
+                && !matches!(value["transport"].as_str(), Some("auto" | "http"))
+            {
+                return Err(format!("its ingress transport is {}", value["transport"]));
+            }
+            if value["allowInsecure"].as_bool().unwrap_or(false)
+                || !is_empty(&value["corsPolicy"])
+                || !is_empty(&value["clientCertificateMode"])
+                    && value["clientCertificateMode"].as_str() != Some("ignore")
+            {
+                return Err(
+                    "its ingress allows plain HTTP, CORS or client certificates the release didn't sign"
+                        .to_string(),
                 );
             }
             Ok(())
@@ -335,9 +361,11 @@ pub fn check_written(facts: &Facts<'_>, sent: &Value, read: &Value) -> Result<()
 mod tests {
     use super::*;
     use crate::fixtures::*;
+    use crate::plan::tests::release_on;
     use crate::plan::{functions, Place, Reads};
     use crate::trust::tests::{found, MemoryStore};
     use crate::trust::{accept, Accepted};
+    use alien_core::Platform;
     use alien_signing::{InstallId, SignedStatement};
     use serde_json::json;
 
@@ -413,7 +441,15 @@ mod tests {
     }
 
     async fn checked_reading(write: CloudWrite, reads: Reads) -> std::result::Result<(), String> {
-        let accepted = accepted(azure_release()).await;
+        checked_against(azure_release(), write, reads).await
+    }
+
+    async fn checked_against(
+        release: SignedStatement,
+        write: CloudWrite,
+        reads: Reads,
+    ) -> std::result::Result<(), String> {
+        let accepted = accepted(release).await;
         let place = place();
         let workload = functions(&accepted.release.body).next().unwrap();
         let facts = Facts {
@@ -774,5 +810,107 @@ mod tests {
             error.contains("names function acme-prod-verifier"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_public_workers_ingress_serves_the_runtime_port_and_nothing_else() {
+        let public_app = |change: &dyn Fn(&mut Value)| {
+            let mut app = app();
+            app["properties"]["configuration"]["registries"][0]["server"] = json!("ghcr.io");
+            app["properties"]["template"]["containers"][0]["image"] =
+                json!(format!("ghcr.io/shop/api@{DIGEST}"));
+            app["properties"]["template"]["containers"][0]["env"] =
+                json!([{"name": "ALIEN_DEPLOYMENT_ID", "value": "dep_1"}]);
+            app["properties"]["configuration"]["ingress"] = json!({
+                "external": true,
+                "targetPort": 8080,
+                "transport": "auto",
+                "traffic": [{"latestRevision": true, "weight": 100}],
+            });
+            change(&mut app);
+            app
+        };
+        let release = || release_on(Platform::Azure, true);
+
+        checked_against(release(), create(public_app(&|_| ())), Reads::default())
+            .await
+            .expect("the controller's own ingress passes");
+        let mut http = public_app(&|_| ());
+        http["properties"]["configuration"]["ingress"]["transport"] = json!("http");
+        checked_against(release(), create(http), Reads::default())
+            .await
+            .expect("http is as good as auto");
+
+        let cases: Vec<(&str, Change)> = vec![
+            (
+                "the worker-protocol port over http2",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["targetPort"] = json!(51351);
+                    a["properties"]["configuration"]["ingress"]["transport"] = json!("http2");
+                }),
+            ),
+            (
+                "the worker-protocol port",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["targetPort"] = json!(51351)
+                }),
+            ),
+            (
+                "no target port",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("targetPort");
+                }),
+            ),
+            (
+                "http2",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["transport"] = json!("http2")
+                }),
+            ),
+            (
+                "tcp",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["transport"] = json!("tcp")
+                }),
+            ),
+            (
+                "plain http allowed",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["allowInsecure"] = json!(true)
+                }),
+            ),
+            (
+                "a CORS policy",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["corsPolicy"] = json!({
+                        "allowedOrigins": ["https://attacker.example"],
+                        "allowCredentials": true,
+                    })
+                }),
+            ),
+            (
+                "client certificates required",
+                Box::new(|a| {
+                    a["properties"]["configuration"]["ingress"]["clientCertificateMode"] =
+                        json!("require")
+                }),
+            ),
+        ];
+        for (what, change) in cases {
+            let error = checked_against(
+                release(),
+                create(public_app(change.as_ref())),
+                Reads::default(),
+            )
+            .await
+            .expect_err(what);
+            assert!(
+                error.contains("field /properties/configuration/ingress must match"),
+                "{what}: {error}"
+            );
+        }
     }
 }

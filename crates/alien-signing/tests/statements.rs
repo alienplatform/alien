@@ -865,6 +865,7 @@ fn config_statements_set_only_configurable_names() {
         inputs: BTreeMap::from([("region-label".to_string(), serde_json::json!("eu"))]),
         bindings: BTreeMap::new(),
         telemetry_endpoint: Some("https://otel.acme.example".to_string()),
+        base: None,
     };
     ok.check(&release).unwrap();
     for bad in [

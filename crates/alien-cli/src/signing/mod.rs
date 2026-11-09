@@ -658,7 +658,8 @@ pub fn check_statement(
 /// The body of the newest config statement the server holds for `install`,
 /// checked here: a config statement of this project for this install, not
 /// deny-listed, signed with the release role by the list version it names.
-/// `None` when there is none. A newest statement that doesn't check out is
+/// `None` when there is none. The body names that statement as its base, so
+/// the install can refuse a change made on an older config. A newest statement that doesn't check out is
 /// refused, so a change never drops what the last signed config set.
 pub fn latest_config(
     chain: &SignerChain,
@@ -683,10 +684,14 @@ pub fn latest_config(
         return Ok(None);
     };
     check_statement(chain, &newest, Kind::Config, Some(install), now).map_err(refused)?;
-    newest
+    let mut body: alien_signing::ConfigBody = newest
         .body()
-        .map(Some)
-        .map_err(|error| refused(format!("its body doesn't parse ({error})")))
+        .map_err(|error| refused(format!("its body doesn't parse ({error})")))?;
+    body.base = Some(alien_signing::ConfigBase {
+        sequence: newest.sequence,
+        digest: newest.digest.clone(),
+    });
+    Ok(Some(body))
 }
 
 /// Refuse `config` unless the release it will be applied with accepts it.
@@ -805,7 +810,19 @@ mod tests {
         let mut next = latest_config(&chain, &install, &[first.clone()], now)
             .unwrap()
             .unwrap();
-        assert_eq!(next, env);
+        let first_opened = first.open().unwrap();
+        assert_eq!(
+            next.base,
+            Some(alien_signing::ConfigBase {
+                sequence: 10,
+                digest: first_opened.digest.clone(),
+            }),
+            "the change names the config it was made from"
+        );
+        assert_eq!(
+            alien_signing::ConfigBody { base: None, ..next.clone() },
+            env
+        );
         next.inputs
             .insert("region".to_string(), serde_json::json!("eu"));
         let second = config(&chain, &install, 11, next, 1);
@@ -814,6 +831,7 @@ mod tests {
             .unwrap();
         assert_eq!(latest.env["LOG_LEVEL"], "debug");
         assert_eq!(latest.inputs["region"], "eu");
+        assert_eq!(latest.base.as_ref().map(|base| base.sequence), Some(11));
 
         // A newer statement the server made up, or one for another install,
         // is refused rather than built on.

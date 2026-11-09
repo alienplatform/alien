@@ -323,10 +323,7 @@ fn check_grant(facts: &Facts<'_>, request: &AddPermissionRequest) -> Result<()> 
         grant.statement_id == request.statement_id
             && grant.principal == request.principal
             && request.source_arn.as_deref() == Some(grant.source_arn.as_str())
-            && request
-                .source_account
-                .as_ref()
-                .is_none_or(|account| grant.source_account.as_ref() == Some(account))
+            && request.source_account == grant.source_account
     });
     if !allowed {
         return Err(refused(format!(
@@ -1024,6 +1021,7 @@ mod tests {
             "Action": "lambda:InvokeFunction",
             "Principal": "s3.amazonaws.com",
             "SourceArn": format!("arn:aws:s3:::{PREFIX}-uploads"),
+            "SourceAccount": ACCOUNT,
         });
         let rule = json!({
             "StatementId": format!("{PREFIX}-api-eb-2"),
@@ -1085,6 +1083,17 @@ mod tests {
                 {
                     let mut r = s3.clone();
                     r["SourceAccount"] = json!("999999999999");
+                    r
+                },
+                "which the signed stack doesn't imply",
+            ),
+            // Without the account, a bucket of the same name in another account could invoke the
+            // function once the install's bucket is gone.
+            (
+                public(),
+                {
+                    let mut r = s3.clone();
+                    r.as_object_mut().unwrap().remove("SourceAccount");
                     r
                 },
                 "which the signed stack doesn't imply",

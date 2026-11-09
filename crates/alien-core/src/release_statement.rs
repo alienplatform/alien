@@ -67,7 +67,6 @@ const PROVIDED_ENV_NAMES: &[&str] = &[
     ENV_GCP_PROJECT_ID,
     ENV_GCP_REGION,
     ENV_GOOGLE_CLOUD_PROJECT,
-    ENV_ALIEN_WORKER_GRPC_ADDRESS,
     ENV_ALIEN_QUEUE_BATCH_CONFIG,
     ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
     ENV_ALIEN_COMMANDS_TOKEN,
@@ -86,7 +85,6 @@ const PROVIDED_ENV_NAMES: &[&str] = &[
     ENV_ALIEN_DEPLOYMENT_TOKEN,
     ENV_ALIEN_MANAGER_URL,
     ENV_ALIEN_RESOURCE_ID,
-    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
     ENV_ALIEN_SECRET_ENV_REVISION,
 ];
 
@@ -1278,5 +1276,41 @@ mod tests {
             code_image(&relocated.resources["api"].config),
             Some(pinned().as_str())
         );
+    }
+
+    #[test]
+    fn the_control_plane_cannot_set_the_runtime_address_or_public_endpoints() {
+        use alien_signing::release::{build_workload, LocalValues, WorkloadRequest};
+
+        let body = release_body(Platform::Aws, &stack(&pinned()), &production()).unwrap();
+        let build = |name: &str, value: &str| {
+            build_workload(
+                &body,
+                "api",
+                &BTreeMap::new(),
+                &LocalValues::default(),
+                &WorkloadRequest {
+                    env: BTreeMap::from([(name.to_string(), value.to_string())]),
+                    ..WorkloadRequest::default()
+                },
+            )
+        };
+
+        build(ENV_ALIEN_DEPLOYMENT_ID, "dep_123").expect("a provided name is accepted");
+        for (name, value) in [
+            (ENV_ALIEN_WORKER_GRPC_ADDRESS, "0.0.0.0:51351"),
+            (
+                ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
+                r#"{"api":{"url":"https://evil.example.com","host":"evil.example.com"}}"#,
+            ),
+        ] {
+            let error = build(name, value).expect_err(name);
+            assert_eq!(error.code, "SIGNING_WORKLOAD_REFUSED", "{name}");
+            assert!(
+                error.message.contains("not in the signed release"),
+                "{name}: {}",
+                error.message
+            );
+        }
     }
 }

@@ -110,6 +110,37 @@ const POLICY_WRITES: &[&str] = &[
     "iam:UntagPolicy",
 ];
 
+/// Writes that open a bucket, topic or queue to another account. Management makes none of them
+/// (there is no client for them), so the limits take them away. Bucket policies, queue
+/// attributes and event source mappings are not here: the controllers write them for the
+/// install's Live resources as management.
+const AWS_SHARING_WRITES: &[&str] = &[
+    "s3:PutBucketAcl",
+    "s3:PutBucketOwnershipControls",
+    "sns:AddPermission",
+    "sns:CreateTopic",
+    "sns:SetTopicAttributes",
+    "sqs:AddPermission",
+];
+
+/// Changing the value of an SSM parameter, which is where vault values live.
+const AWS_PARAMETER_WRITES: &[&str] = &[
+    "ssm:PutParameter",
+    "ssm:DeleteParameter",
+    "ssm:DeleteParameters",
+    "ssm:LabelParameterVersion",
+    "ssm:UnlabelParameterVersion",
+];
+
+/// The keys of the `secrets` vault the deployment sync writes or removes: the telemetry auth
+/// headers and the command token. Each `?????` stands for the five-letter product prefix of
+/// the key, which setup artifacts don't spell out.
+const SECRETS_VAULT_KEYS: &[&str] = &[
+    "__?????_runtime_otlp_logs_auth_header",
+    "__?????_runtime_otlp_metrics_auth_header",
+    "?????_COMMANDS_TOKEN",
+];
+
 /// Name of the managed policy holding the limits.
 pub fn aws_management_limits_name(prefix: &str) -> String {
     format!("{prefix}-management-limits")
@@ -162,6 +193,22 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
                 "Effect": "Deny",
                 "Action": AWS_BUILD_RUNS,
                 "Resource": "*"
+            },
+            {
+                "Sid": "NoSharingInstallDataWithOutsiders",
+                "Effect": "Deny",
+                "Action": AWS_SHARING_WRITES,
+                "Resource": "*"
+            },
+            {
+                // Apps read their vault values, so management writes only the keys above.
+                "Sid": "OnlyTheDeploymentSyncWritesVaultValues",
+                "Effect": "Deny",
+                "Action": AWS_PARAMETER_WRITES,
+                "NotResource": SECRETS_VAULT_KEYS
+                    .iter()
+                    .map(|key| format!("arn:aws:ssm:{region}:{account}:parameter/{prefix}-secrets-{key}"))
+                    .collect::<Vec<_>>()
             },
             {
                 "Sid": "OnlySetupChangesWhatRolesMayDo",
@@ -352,18 +399,31 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 ]
             },
             {
-                "Sid": "ChangeThisInstallsMachineGroups",
+                "Sid": "CreateThisInstallsMachineGroups",
                 "Effect": "Allow",
                 "Action": [
                     "autoscaling:CreateAutoScalingGroup",
+                    "autoscaling:CreateOrUpdateTags"
+                ],
+                "Resource": format!(
+                    "arn:aws:autoscaling:{region}:{account}:autoScalingGroup:*:autoScalingGroupName/{prefix}-*"
+                ),
+                "Condition": { "StringEquals": own_tag }
+            },
+            {
+                // Only groups tagged for this install, so the name prefix alone cannot reach
+                // another install's group (`acme` against `acme-prod-compute-general`).
+                "Sid": "ChangeThisInstallsMachineGroups",
+                "Effect": "Allow",
+                "Action": [
                     "autoscaling:UpdateAutoScalingGroup",
-                    "autoscaling:CreateOrUpdateTags",
                     // Uninstall deletes a group with its machines through the verifier.
                     "autoscaling:DeleteAutoScalingGroup"
                 ],
                 "Resource": format!(
                     "arn:aws:autoscaling:{region}:{account}:autoScalingGroup:*:autoScalingGroupName/{prefix}-*"
-                )
+                ),
+                "Condition": { "StringEquals": { "aws:ResourceTag/deployment": prefix } }
             },
             {
                 "Sid": "WriteOwnLogs",
@@ -383,14 +443,20 @@ mod tests {
 
     /// Whether IAM pattern `pattern` (with `*` wildcards) matches `value`.
     fn matches(pattern: &str, value: &str) -> bool {
-        match pattern.split_once('*') {
-            None => pattern.eq_ignore_ascii_case(value),
-            Some((head, rest)) => {
-                value.len() >= head.len()
-                    && value[..head.len()].eq_ignore_ascii_case(head)
-                    && (0..=value.len() - head.len())
-                        .any(|start| matches(rest, &value[head.len() + start..]))
-            }
+        let (pattern, value): (Vec<char>, Vec<char>) = (
+            pattern.to_ascii_lowercase().chars().collect(),
+            value.to_ascii_lowercase().chars().collect(),
+        );
+        glob(&pattern, &value)
+    }
+
+    /// IAM wildcards: `*` is any run of characters, `?` exactly one.
+    fn glob(pattern: &[char], value: &[char]) -> bool {
+        match pattern.split_first() {
+            None => value.is_empty(),
+            Some(('*', rest)) => (0..=value.len()).any(|skip| glob(rest, &value[skip..])),
+            Some(('?', rest)) => !value.is_empty() && glob(rest, &value[1..]),
+            Some((ch, rest)) => value.first() == Some(ch) && glob(rest, &value[1..]),
         }
     }
 
@@ -414,10 +480,20 @@ mod tests {
                     && strings(&statement["Action"])
                         .iter()
                         .any(|pattern| matches(pattern, action))
-                    && strings(&statement["Resource"])
-                        .iter()
-                        .any(|pattern| matches(pattern, resource))
+                    && covers(statement, resource)
             })
+    }
+
+    /// Whether the statement's `Resource` matches `resource`, or its `NotResource` does not.
+    fn covers(statement: &Value, resource: &str) -> bool {
+        if statement.get("NotResource").is_some() {
+            return !strings(&statement["NotResource"])
+                .iter()
+                .any(|pattern| matches(pattern, resource));
+        }
+        strings(&statement["Resource"])
+            .iter()
+            .any(|pattern| matches(pattern, resource))
     }
 
     /// Whether an unconditional Allow in `policy` covers `action` on `resource` and no Deny does.
@@ -483,26 +559,6 @@ mod tests {
         ));
     }
 
-    /// Uninstall deletes the install's machine groups through the verifier, and no other
-    /// install's. (Their launch templates it already deletes by the install's tag.)
-    #[test]
-    fn the_verifier_deletes_the_installs_machine_groups_only() {
-        let policy = aws_verifier_policy("orders", "111122223333", "us-east-1", "444455556666");
-        let group = |name: &str| {
-            format!("arn:aws:autoscaling:us-east-1:111122223333:autoScalingGroup:0f1e2d3c-aaaa-bbbb-cccc-111122223333:autoScalingGroupName/{name}")
-        };
-        assert!(allows(
-            &policy,
-            "autoscaling:DeleteAutoScalingGroup",
-            &group("orders-compute-general")
-        ));
-        assert!(!allows(
-            &policy,
-            "autoscaling:DeleteAutoScalingGroup",
-            &group("billing-compute-general")
-        ));
-    }
-
     #[test]
     fn management_can_neither_change_nor_strip_nor_delete_an_install_role() {
         let limits = aws_management_limits("orders", "111122223333", "us-east-1");
@@ -525,6 +581,88 @@ mod tests {
             "iam:DeleteRole",
             "arn:aws:iam::111122223333:role/billing-machine"
         ));
+    }
+
+    /// Management never makes these calls (there is no client for them), so the limits take
+    /// them away: each opens a bucket, a topic or a queue to another account.
+    #[test]
+    fn management_cannot_open_the_installs_data_to_outsiders() {
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        for (action, resource) in [
+            ("s3:PutBucketAcl", "arn:aws:s3:::acme-uploads"),
+            ("s3:PutBucketOwnershipControls", "arn:aws:s3:::acme-uploads"),
+            (
+                "sns:SetTopicAttributes",
+                "arn:aws:sns:us-east-1:111122223333:acme-events",
+            ),
+            (
+                "sns:AddPermission",
+                "arn:aws:sns:us-east-1:111122223333:acme-events",
+            ),
+            (
+                "sqs:AddPermission",
+                "arn:aws:sqs:us-east-1:111122223333:acme-jobs",
+            ),
+        ] {
+            assert!(denies(&limits, action, resource), "{action} on {resource}");
+        }
+    }
+
+    /// The controllers write these for the install's Live buckets, queues and workers as the
+    /// management role, so the limits cannot deny them without breaking those resources.
+    #[test]
+    fn management_keeps_the_writes_its_controllers_make_for_live_resources() {
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        for (action, resource) in [
+            ("s3:PutBucketPolicy", "arn:aws:s3:::acme-uploads"),
+            (
+                "sqs:SetQueueAttributes",
+                "arn:aws:sqs:us-east-1:111122223333:acme-jobs",
+            ),
+            ("lambda:CreateEventSourceMapping", "*"),
+            ("lambda:UpdateEventSourceMapping", "*"),
+            ("lambda:DeleteEventSourceMapping", "*"),
+        ] {
+            assert!(!denies(&limits, action, resource), "{action} on {resource}");
+        }
+    }
+
+    #[test]
+    fn management_cannot_overwrite_what_an_app_reads_from_its_vaults() {
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        let parameter = |name: &str| format!("arn:aws:ssm:us-east-1:111122223333:parameter/{name}");
+        for action in [
+            "ssm:PutParameter",
+            "ssm:DeleteParameter",
+            "ssm:DeleteParameters",
+            "ssm:LabelParameterVersion",
+            "ssm:UnlabelParameterVersion",
+        ] {
+            for name in [
+                "acme-config-API_URL",
+                "acme-deployer-secrets-WEBHOOK_URL",
+                "acme-secrets-DATABASE_URL",
+            ] {
+                assert!(denies(&limits, action, &parameter(name)), "{action} {name}");
+            }
+        }
+    }
+
+    /// What the deployment sync writes to the `secrets` vault: the telemetry headers, and the
+    /// command token it removes.
+    #[test]
+    fn management_still_syncs_the_runtime_credentials_to_the_secrets_vault() {
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        for name in [
+            "acme-secrets-__alien_runtime_otlp_logs_auth_header",
+            "acme-secrets-__alien_runtime_otlp_metrics_auth_header",
+            "acme-secrets-ALIEN_COMMANDS_TOKEN",
+        ] {
+            let arn = format!("arn:aws:ssm:us-east-1:111122223333:parameter/{name}");
+            for action in ["ssm:PutParameter", "ssm:DeleteParameter"] {
+                assert!(!denies(&limits, action, &arn), "{action} {name}");
+            }
+        }
     }
 
     #[test]

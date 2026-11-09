@@ -431,8 +431,11 @@ mod tests {
     }
 
     async fn checked(write: CloudWrite) -> std::result::Result<(), String> {
+        checked_in(place(), write).await
+    }
+
+    async fn checked_in(place: Place, write: CloudWrite) -> std::result::Result<(), String> {
         let accepted = accepted(gcp_release()).await;
-        let place = place();
         let reads = Reads::default();
         let workload = functions(&accepted.release.body).next().unwrap();
         let facts = Facts {
@@ -598,6 +601,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_network_is_the_one_setup_gives_functions() {
+        let setup = Place {
+            vpc: Some(crate::plan::SetupNetwork {
+                subnet_ids: vec![
+                    "https://www.googleapis.com/compute/v1/projects/acme-project/regions/us-central1/subnetworks/acme-workload".to_string(),
+                ],
+                security_group_ids: Vec::new(),
+                identity: None,
+                egress: Some("ALL_TRAFFIC".to_string()),
+            }),
+            ..place()
+        };
+        let with_vpc = |change: &dyn Fn(&mut Value)| {
+            let mut service = service();
+            service["template"]["vpcAccess"] = json!({
+                "networkInterfaces": [{"network": "acme-net", "subnetwork": "acme-workload"}],
+                "egress": "ALL_TRAFFIC",
+            });
+            change(&mut service);
+            create(service)
+        };
+        checked_in(setup.clone(), with_vpc(&|_| ()))
+            .await
+            .expect("the controller names setup's subnet by its short name");
+        checked_in(
+            setup.clone(),
+            with_vpc(&|s| {
+                s["template"]["vpcAccess"]["networkInterfaces"][0]["subnetwork"] =
+                    json!("projects/acme-project/regions/us-central1/subnetworks/acme-workload")
+            }),
+        )
+        .await
+        .expect("setup's subnet by its full path");
+        for (what, change) in [
+            (
+                "another project's subnet of the same name",
+                Box::new(|s: &mut Value| {
+                    s["template"]["vpcAccess"]["networkInterfaces"][0]["subnetwork"] = json!(
+                        "projects/other-project/regions/us-central1/subnetworks/acme-workload"
+                    )
+                }) as Change,
+            ),
+            (
+                "a connector beside setup's subnet",
+                Box::new(|s: &mut Value| {
+                    s["template"]["vpcAccess"]["connector"] =
+                        json!("projects/acme-project/locations/us-central1/connectors/relay")
+                }),
+            ),
+        ] {
+            let error = checked_in(setup.clone(), with_vpc(change.as_ref()))
+                .await
+                .expect_err(what);
+            assert!(
+                error.contains("field /template/vpcAccess must match"),
+                "{what}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn each_service_row_refuses_what_breaks_it() {
         let cases: Vec<(Change, &str)> = vec![
             (
@@ -624,6 +688,12 @@ mod tests {
             (
                 Box::new(
                     |s| s["template"]["vpcAccess"] = json!({"networkInterfaces": [{"subnetwork": "projects/x/regions/r/subnetworks/evil"}], "egress": "ALL_TRAFFIC"}),
+                ),
+                "field /template/vpcAccess must match",
+            ),
+            (
+                Box::new(
+                    |s| s["template"]["vpcAccess"] = json!({"connector": "projects/x/locations/r/connectors/relay", "egress": "ALL_TRAFFIC"}),
                 ),
                 "field /template/vpcAccess must match",
             ),

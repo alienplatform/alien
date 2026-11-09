@@ -105,6 +105,7 @@ fn verifier_only(permission: &str) -> bool {
             "compute.instances.create",
             "compute.instances.setMetadata",
             "compute.instances.setServiceAccount",
+            "compute.instances.setTags",
             "compute.instanceTemplates.create",
             "compute.projects.setCommonInstanceMetadata",
             "iam.serviceAccounts.actAs",
@@ -118,6 +119,7 @@ fn verifier_only(permission: &str) -> bool {
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
             "aiplatform.reasoningEngines.create",
+            "storage.hmacKeys.create",
         ]
         .contains(&permission)
 }
@@ -175,6 +177,7 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             "compute.instanceTemplates.useReadOnly",
             "compute.instances.create",
             "compute.instances.setMetadata",
+            "compute.instances.setTags",
             "iam.roles.create",
             "iam.roles.undelete",
             "iam.roles.update",
@@ -196,6 +199,7 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             "run.services.setIamPolicy",
             "run.services.update",
             "storage.buckets.setIamPolicy",
+            "storage.hmacKeys.create",
             "storage.managedFolders.setIamPolicy",
             "artifactregistry.repositories.setIamPolicy",
         ]

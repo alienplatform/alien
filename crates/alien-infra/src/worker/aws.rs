@@ -2662,6 +2662,7 @@ impl AwsWorkerController {
                     .action("lambda:InvokeFunction".to_string())
                     .principal("s3.amazonaws.com".to_string())
                     .source_arn(format!("arn:aws:s3:::{}", bucket_name))
+                    .source_account(ctx.get_aws_config()?.account_id.clone())
                     .build();
                 // On a protected install the verifier checks this grant against the signed stack
                 // and adds it.
@@ -4382,6 +4383,7 @@ impl AwsWorkerController {
                         .action("lambda:InvokeFunction".to_string())
                         .principal("s3.amazonaws.com".to_string())
                         .source_arn(format!("arn:aws:s3:::{}", bucket_name))
+                        .source_account(ctx.get_aws_config()?.account_id.clone())
                         .build();
                     // On a protected install the verifier checks this grant against the signed stack
                     // and adds it.

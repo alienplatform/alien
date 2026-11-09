@@ -1030,11 +1030,22 @@ mod tests {
             ..function_workload()
         };
         let release = signed_release(10, &crate::fixtures::release_body(vec![workload]));
+        let fifth = config(5, alien_signing::ConfigBody::default());
+        let sixth = config(
+            6,
+            alien_signing::ConfigBody {
+                base: Some(alien_signing::ConfigBase {
+                    sequence: 5,
+                    digest: fifth.open().unwrap().digest,
+                }),
+                ..Default::default()
+            },
+        );
         let request = |config_sequence: u64| {
             json!({"applyWrite": {
                 "release": release,
                 "signerLists": [signer_list()],
-                "config": config(config_sequence, alien_signing::ConfigBody::default()),
+                "config": if config_sequence == 5 { &fifth } else { &sixth },
                 "workload": "api",
                 "writes": [{"updateFunctionCode": {
                     "functionName": format!("{PREFIX}-api"),

@@ -108,6 +108,10 @@ const GCP_VERIFIER_OWNED: &[&str] = &[
     "compute.instances.setMetadata",
     "compute.instances.setServiceAccount",
     "compute.projects.setCommonInstanceMetadata",
+    // Network tags decide which firewall rules apply to a machine.
+    "compute.instances.setTags",
+    // An HMAC key reads the install's buckets as the service account it belongs to.
+    "storage.hmacKeys.create",
     // Running as, or as good as, another service account.
     "iam.serviceAccounts.actAs",
     "iam.serviceAccounts.getAccessToken",

@@ -46,30 +46,78 @@ pub(crate) fn vpc_access(vpc: &SetupNetwork) -> Value {
     })
 }
 
-/// The subnets (by name), network tags and egress of a template's `vpcAccess`, as setup's
-/// network and what Cloud Run reads back compare.
-pub(crate) fn network_of(vpc_access: &Value) -> Option<(Vec<String>, Vec<String>, String)> {
-    let interfaces = vpc_access["networkInterfaces"].as_array()?;
-    if interfaces.is_empty() {
+/// The network a template's `vpcAccess` puts a service on: its subnets, network tags, egress and
+/// any serverless VPC connector.
+#[derive(Debug)]
+pub(crate) struct Network {
+    subnets: Vec<String>,
+    tags: Vec<String>,
+    egress: String,
+    connector: String,
+}
+
+impl PartialEq for Network {
+    /// Cloud Run reads a subnet back by its bare name, so a bare name is the service's own
+    /// project and region's subnet of that name, and matches a full path ending in it. Two full
+    /// paths must be identical: the same name in another project or region is another network.
+    fn eq(&self, other: &Self) -> bool {
+        let mut rest: Vec<&String> = other.subnets.iter().collect();
+        let all_found = self.subnets.iter().all(|mine| {
+            rest.iter()
+                .position(|theirs| same_subnet(mine, theirs))
+                .map(|at| rest.remove(at))
+                .is_some()
+        });
+        all_found
+            && rest.is_empty()
+            && self.tags == other.tags
+            && self.egress == other.egress
+            && self.connector == other.connector
+    }
+}
+
+fn same_subnet(a: &str, b: &str) -> bool {
+    let name = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
+    match (a.contains('/'), b.contains('/')) {
+        (true, true) => a == b,
+        (false, false) => a == b,
+        _ => name(a) == name(b),
+    }
+}
+
+pub(crate) fn network_of(vpc_access: &Value) -> Option<Network> {
+    let connector = vpc_access["connector"].as_str().unwrap_or_default();
+    let interfaces = vpc_access["networkInterfaces"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if interfaces.is_empty() && connector.is_empty() {
         return None;
     }
-    let name = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
     let mut subnets = Vec::new();
     let mut tags = Vec::new();
     for interface in interfaces {
-        subnets.push(name(interface["subnetwork"].as_str().unwrap_or_default()));
+        subnets.push(
+            interface["subnetwork"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        );
         for tag in interface["tags"].as_array().into_iter().flatten() {
             tags.push(tag.as_str().unwrap_or_default().to_string());
         }
     }
-    subnets.sort();
     tags.sort();
     tags.dedup();
-    let egress = vpc_access["egress"]
-        .as_str()
-        .unwrap_or("PRIVATE_RANGES_ONLY")
-        .to_string();
-    Some((subnets, tags, egress))
+    Some(Network {
+        subnets,
+        tags,
+        egress: vpc_access["egress"]
+            .as_str()
+            .unwrap_or("PRIVATE_RANGES_ONLY")
+            .to_string(),
+        connector: connector.to_string(),
+    })
 }
 
 /// The last path segment of a revision name.
@@ -239,5 +287,22 @@ mod tests {
         narrowed["egress"] = json!("PRIVATE_RANGES_ONLY");
         assert_ne!(network_of(&narrowed), network_of(&sent));
         assert_eq!(network_of(&json!({})), None);
+
+        // The same subnet name in another project is another network.
+        let mut other_project = sent.clone();
+        other_project["networkInterfaces"][0]["subnetwork"] =
+            json!("projects/other/regions/us-central1/subnetworks/acme-workload");
+        assert_ne!(network_of(&other_project), network_of(&sent));
+        let mut other_region = sent.clone();
+        other_region["networkInterfaces"][0]["subnetwork"] =
+            json!("projects/p/regions/europe-west1/subnetworks/acme-workload");
+        assert_ne!(network_of(&other_region), network_of(&sent));
+
+        // A serverless VPC connector is a network setup did not give.
+        let connector = "projects/p/locations/us-central1/connectors/relay";
+        let mut with_connector = sent.clone();
+        with_connector["connector"] = json!(connector);
+        assert_ne!(network_of(&with_connector), network_of(&sent));
+        assert!(network_of(&json!({"connector": connector, "egress": "ALL_TRAFFIC"})).is_some());
     }
 }

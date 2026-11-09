@@ -1200,9 +1200,11 @@ fn apply_manager_control_state(
 }
 
 /// The manager's control signals, without its copy of releases or resource
-/// state: a retry request, a delete command, the deletion policy, the protocol
-/// version and terminal setup statuses. Each can stop or remove the
-/// deployment, none can change what it runs.
+/// state: a retry request, a delete command, the protocol version and terminal
+/// setup statuses. Each can stop or remove the deployment, none can change
+/// what it runs. The deletion policy is not one of them: a protected
+/// installation always retains its data, so a manager cannot turn a delete
+/// into an erase.
 fn apply_manager_control_signals(
     local_state: &mut alien_core::DeploymentState,
     manager_state: &alien_core::DeploymentState,
@@ -1216,7 +1218,6 @@ fn apply_manager_control_signals(
         local_state.protocol_version = manager_state.protocol_version;
         changed = true;
     }
-    changed |= apply_manager_deletion_policy(local_state, manager_state);
     let terminal = accepts_protocol
         && matches!(
             manager_state.status,
@@ -1312,10 +1313,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        accept_target_release, apply_manager_control_state, create_authenticated_client,
-        dynamic_containers_capability, is_uninitialized_deployment_state,
-        operation_command_address_capability, report_operator_capabilities,
-        reported_operations_config, sync_with_manager,
+        accept_target_release, apply_manager_control_signals, apply_manager_control_state,
+        create_authenticated_client, dynamic_containers_capability,
+        is_uninitialized_deployment_state, operation_command_address_capability,
+        report_operator_capabilities, reported_operations_config, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
@@ -3025,6 +3026,40 @@ mod tests {
     }
 
     #[test]
+    fn a_protected_install_deletes_on_the_managers_say_but_keeps_its_retain_policy() {
+        let mut local_state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                ..Default::default()
+            }),
+            ..local_state.clone()
+        };
+
+        assert!(apply_manager_control_signals(
+            &mut local_state,
+            &manager_state
+        ));
+        assert_eq!(local_state.status, DeploymentStatus::DeletePending);
+        assert_eq!(
+            local_state.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Retain
+        );
+    }
+
+    #[test]
     fn ignores_manager_retry_request_for_active_local_state() {
         let mut local_state = DeploymentState {
             platform: Platform::Local,
@@ -3322,7 +3357,16 @@ mod tests {
 
         // The next config drops the variable. The applied configuration
         // still carries it, which must not refuse the new config.
-        let dropped = fixtures::signed_config(4, &fixtures::this_install(), serde_json::json!({}));
+        let floor = db
+            .get_signing_trust()
+            .await
+            .unwrap()
+            .unwrap()
+            .ledger
+            .config
+            .expect("config 3 is the floor");
+        let dropped =
+            fixtures::signed_config_on(4, &fixtures::this_install(), serde_json::json!({}), &floor);
         assert!(super::reapply_with_signed_config(&state, Some(dropped))
             .await
             .unwrap());

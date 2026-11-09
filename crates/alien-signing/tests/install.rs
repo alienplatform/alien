@@ -174,7 +174,7 @@ fn a_withheld_config_stops_new_workloads_once_one_was_accepted() {
     .sign_with("alice-laptop", &keys.admin)
     .unwrap();
     let verified = trust
-        .verify_config(&config, &release_body(), now())
+        .verify_config(&config, &release_body(), &ledger, now())
         .unwrap();
     ledger
         .raise(Kind::Config, verified.sequence, &verified.digest)
@@ -184,6 +184,53 @@ fn a_withheld_config_stops_new_workloads_once_one_was_accepted() {
         "SIGNING_LEDGER_REFUSED"
     );
     ledger.require(Kind::Config, true).unwrap();
+}
+
+#[test]
+fn a_config_made_from_an_older_config_is_refused() {
+    let keys = keys();
+    let mut ledger = Ledger::new(PREFIX);
+    let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
+    let signed = |sequence: u64, base: Option<(u64, &str)>| {
+        let mut body = alien_signing::ConfigBody::default();
+        body.env.insert("LOG_LEVEL".to_string(), format!("level-{sequence}"));
+        body.base = base.map(|(sequence, digest)| alien_signing::ConfigBase {
+            sequence,
+            digest: digest.to_string(),
+        });
+        statement("config/v1", PROJECT, Some(INSTALL), sequence, 1, body)
+            .sign_with("alice-laptop", &keys.admin)
+            .unwrap()
+    };
+    let mut release = release_body();
+    release.configurable.env.push("LOG_LEVEL".to_string());
+    let take = |statement: &alien_signing::SignedStatement, ledger: &mut Ledger| {
+        let verified = trust.verify_config(statement, &release, ledger, now())?;
+        ledger.raise(Kind::Config, verified.sequence, &verified.digest)?;
+        Ok::<_, alien_error::AlienError<alien_signing::ErrorData>>(verified)
+    };
+
+    let first = take(&signed(1, None), &mut ledger).expect("the first config names no base");
+    let first_at = (first.sequence, first.digest.as_str());
+    let second = take(&signed(2, Some(first_at)), &mut ledger).expect("it builds on the first");
+    let second_at = (second.sequence, second.digest.as_str());
+    assert_eq!(
+        code(take(&signed(3, Some(first_at)), &mut ledger)),
+        "SIGNING_BODY_REFUSED",
+        "a change made on the first config would undo the second"
+    );
+    assert_eq!(
+        code(take(&signed(3, None), &mut ledger)),
+        "SIGNING_BODY_REFUSED",
+        "a change that names no base is refused once a config was accepted"
+    );
+    let other = format!("sha256:{}", "0".repeat(64));
+    assert_eq!(
+        code(take(&signed(3, Some((second.sequence, other.as_str()))), &mut ledger)),
+        "SIGNING_BODY_REFUSED",
+        "a base with another digest at the accepted sequence is a different config"
+    );
+    take(&signed(3, Some(second_at)), &mut ledger).expect("it builds on the second");
 }
 
 #[test]
@@ -217,7 +264,7 @@ fn config_for_another_customers_install_is_refused() {
     .sign_with("alice-laptop", &keys.admin)
     .unwrap();
     assert_eq!(
-        code(trust.verify_config(&other, &release_body(), now())),
+        code(trust.verify_config(&other, &release_body(), &Ledger::new(PREFIX), now())),
         "SIGNING_WRONG_INSTALL"
     );
 }

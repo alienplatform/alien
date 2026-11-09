@@ -226,7 +226,7 @@ fn verify_or_keep_config(
             kept.body.check(release)?;
             Ok(kept)
         }
-        None => trust.verify_config(config, release, now),
+        None => trust.verify_config(config, release, ledger, now),
     }
 }
 

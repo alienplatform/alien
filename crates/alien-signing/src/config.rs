@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::envelope::Kind;
 use crate::error::{ErrorData, Result};
+use crate::ledger::Entry;
 use crate::release::{is_loader_env, ReleaseBody};
 
 /// `config/v1`: developer config for one install.
@@ -28,9 +29,57 @@ pub struct ConfigBody {
     /// point it elsewhere: it is part of the signed config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry_endpoint: Option<String>,
+    /// The config this one was made from. Whoever signs a change starts from
+    /// the newest config the server shows them; naming it here lets the
+    /// install refuse a change made on an older one the control plane
+    /// served instead, which would silently undo what newer configs set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<ConfigBase>,
+}
+
+/// A config statement, by sequence and digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfigBase {
+    /// Its sequence.
+    pub sequence: u64,
+    /// `sha256:<hex>` of its payload.
+    pub digest: String,
 }
 
 impl ConfigBody {
+    /// Refuse a config that doesn't build on the install's current config.
+    /// It must name a base once the install accepted a config, and the base
+    /// can't be older than that config or a different statement at its
+    /// sequence. A newer base is fine: the install may have missed the
+    /// configs in between.
+    pub fn check_base(&self, floor: Option<&Entry>) -> Result<()> {
+        let Some(floor) = floor else {
+            return Ok(());
+        };
+        let Some(base) = &self.base else {
+            return Err(refused(
+                Kind::Config,
+                format!(
+                    "this install accepted config sequence {} and this one doesn't say which config it was made from",
+                    floor.sequence
+                ),
+            ));
+        };
+        if base.sequence < floor.sequence
+            || (base.sequence == floor.sequence && base.digest != floor.digest)
+        {
+            return Err(refused(
+                Kind::Config,
+                format!(
+                    "it was made from config sequence {}, but this install runs config sequence {}",
+                    base.sequence, floor.sequence
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Refuse any name the release doesn't make configurable.
     pub fn check(&self, release: &ReleaseBody) -> Result<()> {
         for name in self.env.keys() {

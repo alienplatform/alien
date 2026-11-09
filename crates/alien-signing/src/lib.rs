@@ -38,7 +38,7 @@ pub use binding::{
     binding_env, binding_env_name, check_own_binding, resolve_bindings, BindingContext, Bindings,
     OwnBindingFacts,
 };
-pub use config::ConfigBody;
+pub use config::{ConfigBase, ConfigBody};
 pub use envelope::{Envelope, Kind, Opened, Role, Signature, SignedStatement};
 pub use error::{ErrorData, Result};
 pub use key::{PublicKey, SecretKey, PUBLIC_KEY_PREFIX};

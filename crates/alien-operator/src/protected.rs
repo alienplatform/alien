@@ -40,9 +40,9 @@ use std::sync::Arc;
 use alien_core::release_statement::{relocate_images, signed_stack};
 use alien_core::sync::TargetDeployment;
 use alien_core::{
-    DeploymentConfig, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-    ExternalBindings, OtlpConfig, Platform, ReleaseInfo, SignedStatement, Stack,
-    StackInputProvider, StackSettings,
+    DeletionPolicy, DeploymentConfig, EnvironmentVariable, EnvironmentVariableType,
+    EnvironmentVariablesSnapshot, ExternalBindings, OtlpConfig, Platform, ReleaseInfo,
+    SignedStatement, Stack, StackInputProvider, StackSettings,
 };
 use alien_error::{AlienError, Context};
 use alien_signing::settings::names;
@@ -669,7 +669,7 @@ fn verify_or_keep_config(
             .as_ref()
             .is_some_and(|floor| floor.digest == opened.digest);
     if !at_floor {
-        return Ok(trust.verify_config(config, release, Utc::now())?);
+        return Ok(trust.verify_config(config, release, ledger, Utc::now())?);
     }
     trust.keeps(&opened.digest)?;
     let body: ConfigBody = opened.body()?;
@@ -828,8 +828,9 @@ fn protect_config(
         // Values the manager holds never reach a protected install: its
         // variables and inputs come from the signed config above.
         value_slots: Vec::new(),
-        // Secret inputs are resolved from the deployment's own vault.
-        stored_secret_input_ids: manager.stored_secret_input_ids.clone(),
+        // Secret inputs are resolved from the deployment's own vault, and
+        // what the manager lists as stored changes nothing in the signed list.
+        stored_secret_input_ids: Some(Vec::new()),
         // Logs can carry customer data, so they go only where the signed
         // config says, with no headers the manager chose.
         monitoring: signed_config
@@ -837,11 +838,13 @@ fn protect_config(
             .as_deref()
             .map(signed_telemetry),
         volume_restores: Vec::new(),
-        // Timing, pull credentials and deletion: an outage at worst.
+        // Timing and pull credentials: an outage at worst.
         allow_frozen_changes: manager.allow_frozen_changes,
         manager_url: manager.manager_url.clone(),
         deployment_token: manager.deployment_token.clone(),
-        deletion_policy: manager.deletion_policy,
+        // A manager's delete keeps the install's data; erasing it is the
+        // customer's own act on their cluster.
+        deletion_policy: DeletionPolicy::Retain,
         // Where data goes and what the deployment is called come from this
         // installation; the deployment loop fills these from its settings.
         deployment_name: None,
@@ -1392,6 +1395,17 @@ pub(crate) mod tests {
             .unwrap()
     }
 
+    /// `signed_config` built on the config `base` (sequence and digest).
+    pub(crate) fn signed_config_on(
+        sequence: u64,
+        install: &str,
+        mut body: serde_json::Value,
+        base: &alien_signing::Entry,
+    ) -> SignedStatement {
+        body["base"] = serde_json::json!({"sequence": base.sequence, "digest": base.digest});
+        signed_config(sequence, install, body)
+    }
+
     pub(crate) fn this_install() -> String {
         signing().install.to_string()
     }
@@ -1448,10 +1462,12 @@ pub(crate) mod tests {
 
         // An older config can't come back once a newer one was applied, and
         // withholding the config is refused too.
-        target.signed_config = Some(signed_config(
+        let floor = stored.ledger.config.clone().expect("config 3 is the floor");
+        target.signed_config = Some(signed_config_on(
             2,
             &this_install(),
             serde_json::json!({"inputs": {"logLevel": "trace"}}),
+            &floor,
         ));
         assert_eq!(
             accept(&stored, &target).unwrap_err(),
@@ -1570,6 +1586,23 @@ pub(crate) mod tests {
         assert_eq!(protected.config.native_image_host, None);
         assert_eq!(protected.config.observe_label_selector, None);
         assert!(protected.config.external_bindings.0.is_empty());
+    }
+
+    #[test]
+    fn the_manager_cannot_choose_erase_or_stored_secret_inputs() {
+        let release = signed_release(5, &stack(&pinned()));
+        let mut target = target(release, vec![]);
+        target.config.deletion_policy = alien_core::DeletionPolicy::Erase;
+        target.config.stored_secret_input_ids = Some(vec!["databasePassword".to_string()]);
+
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
+            .unwrap();
+        assert_eq!(
+            protected.config.deletion_policy,
+            alien_core::DeletionPolicy::Retain
+        );
+        assert_eq!(protected.config.stored_secret_input_ids, Some(Vec::new()));
     }
 
     #[test]
