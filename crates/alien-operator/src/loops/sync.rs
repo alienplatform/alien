@@ -847,24 +847,41 @@ fn logs_capability(
 fn reported_installed_setup(
     config: &crate::OperatorConfig,
 ) -> Option<alien_core::sync::InstalledSetup> {
+    reported_installed_setup_with(config, |path| std::fs::read_to_string(path))
+}
+
+/// The fingerprint and release live in separate files, so a chart upgrade can
+/// land between reading the two. The fingerprint is checked again after the
+/// release is read: a swap before the second read changes it and the report is
+/// skipped, and a swap after it means the release was read from the old chart.
+fn reported_installed_setup_with(
+    config: &crate::OperatorConfig,
+    mut read: impl FnMut(&std::path::Path) -> std::io::Result<String>,
+) -> Option<alien_core::sync::InstalledSetup> {
     let mut setup = config.installed_setup.clone()?;
-    if let Some(path) = config.setup_fingerprint_file.as_ref() {
-        match std::fs::read_to_string(path) {
-            Ok(fingerprint) if fingerprint.trim() == setup.setup_fingerprint => {}
-            Ok(_) => {
-                // The mounted chart was upgraded to a different setup while this
-                // pod still runs the old one: the release would name the new
-                // chart next to the old fingerprint.
-                return None;
-            }
+    let mut fingerprint_matches = |read: &mut dyn FnMut(
+        &std::path::Path,
+    ) -> std::io::Result<String>| {
+        let Some(path) = config.setup_fingerprint_file.as_ref() else {
+            return true;
+        };
+        match read(path) {
+            Ok(fingerprint) if fingerprint.trim() == setup.setup_fingerprint => true,
+            // The mounted chart was upgraded to a different setup while this
+            // pod still runs the old one: the release would name the new
+            // chart next to the old fingerprint.
+            Ok(_) => false,
             Err(error) => {
                 warn!(path = %path.display(), %error, "Cannot read the installed setup fingerprint; not reporting the installed setup");
-                return None;
+                false
             }
         }
+    };
+    if !fingerprint_matches(&mut read) {
+        return None;
     }
     if let Some(path) = config.setup_release_file.as_ref() {
-        match std::fs::read_to_string(path) {
+        match read(path) {
             Ok(release) if !release.trim().is_empty() => {
                 setup.release_id = release.trim().to_string()
             }
@@ -873,6 +890,9 @@ fn reported_installed_setup(
                 warn!(path = %path.display(), %error, "Cannot read the installed release; not reporting the installed setup");
                 return None;
             }
+        }
+        if !fingerprint_matches(&mut read) {
+            return None;
         }
     }
     Some(setup)
@@ -1108,6 +1128,50 @@ mod tests {
         std::fs::write(&fp_file, "fp").unwrap();
         std::fs::remove_file(&file).unwrap();
         assert!(super::reported_installed_setup(&config).is_none());
+    }
+
+    /// The two files are read one after the other. An upgrade that lands
+    /// between the reads must not produce a report that names the new release
+    /// next to this pod's fingerprint.
+    #[test]
+    fn an_upgrade_between_the_two_file_reads_skips_the_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let release_file = dir.path().join("setup-release-id");
+        let fp_file = dir.path().join("setup-fingerprint");
+        let config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .sync(SyncConfig {
+                url: "http://localhost:1".parse().unwrap(),
+                token: "t".into(),
+            })
+            .data_dir(dir.path().to_str().unwrap())
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .installed_setup(alien_core::sync::InstalledSetup {
+                release_id: "rel_1".into(),
+                setup_target: "helm".into(),
+                setup_fingerprint: "fp".into(),
+                setup_fingerprint_version: 1,
+                release_name: None,
+                namespace: None,
+            })
+            .setup_release_file(release_file.clone())
+            .setup_fingerprint_file(fp_file.clone())
+            .build();
+        // The chart is swapped right after the release file is read.
+        let mut swapped = false;
+        let report = super::reported_installed_setup_with(&config, |path| {
+            if path == release_file {
+                swapped = true;
+                return Ok("rel_new".to_string());
+            }
+            Ok(if swapped { "fp_new" } else { "fp" }.to_string())
+        });
+        assert!(report.is_none());
+        // Without a swap the same reads produce the report.
+        let report = super::reported_installed_setup_with(&config, |path| {
+            Ok(if path == release_file { "rel_1" } else { "fp" }.to_string())
+        });
+        assert_eq!(report.unwrap().release_id, "rel_1");
     }
 
     use std::{
