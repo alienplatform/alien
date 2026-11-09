@@ -764,3 +764,157 @@ fn errors_show_the_source_line() {
     let error = reject(&format!("{DAEMON}pool = \"gpu\"\n"));
     assert_eq!(error.snippet, "  |\n5 | pool = \"gpu\"\n  |        ^^^^^");
 }
+
+fn source_of(stack: &alien_core::Stack, id: &str) -> String {
+    let json = serde_json::to_value(&stack.resources[id].config).unwrap();
+    json["code"]["src"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{id} has no source directory: {json}"))
+        .to_string()
+}
+
+#[test]
+fn src_is_relative_to_the_file() {
+    let text = r#"name = "acme"
+
+[daemon.default]
+build = { toolchain = "rust", binary-name = "a" }
+
+[daemon.nested]
+build = { toolchain = "rust", binary-name = "b", src = "./agent/../worker" }
+
+[daemon.parent]
+build = { toolchain = "rust", binary-name = "c", src = "../shared" }
+
+[daemon.absolute]
+build = { toolchain = "rust", binary-name = "d", src = "/opt/agent" }
+"#;
+    let load = |dir: &str| alien_stack_toml::parse(text, "alien.toml", Path::new(dir)).unwrap();
+
+    let here = load(".");
+    assert_eq!(source_of(&here, "default"), ".");
+    assert_eq!(source_of(&here, "nested"), "worker");
+    assert_eq!(source_of(&here, "parent"), "../shared");
+
+    let subdir = load("services/agent");
+    assert_eq!(source_of(&subdir, "default"), "services/agent");
+    assert_eq!(source_of(&subdir, "nested"), "services/agent/worker");
+    assert_eq!(source_of(&subdir, "parent"), "services/shared");
+    assert_eq!(source_of(&subdir, "absolute"), "/opt/agent");
+}
+
+#[test]
+fn load_names_src_from_the_working_directory() {
+    // The tests run in the crate directory, so a path inside it is written relative to it.
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture = "tests/fixtures/toolchains";
+    for config in [
+        Path::new(fixture).join("alien.toml"),
+        manifest.join(fixture).join("alien.toml"),
+    ] {
+        let stack = alien_stack_toml::load(&config).unwrap();
+        assert_eq!(source_of(&stack, "rust-default"), fixture, "{config:?}");
+        assert_eq!(
+            source_of(&stack, "rust-nested"),
+            format!("{fixture}/services/nested"),
+            "{config:?}"
+        );
+    }
+
+    // Outside the working directory the path stays as given.
+    let outside = tempfile::tempdir().unwrap();
+    let dir = outside.path().join("services/agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("alien.toml"), DAEMON).unwrap();
+    let stack = alien_stack_toml::load(&dir.join("alien.toml")).unwrap();
+    assert_eq!(source_of(&stack, "agent"), dir.display().to_string());
+}
+
+#[test]
+fn an_explicit_id_is_rejected_because_the_table_name_is_the_id() {
+    let error = reject(&format!("{DAEMON}id = \"other\"\n"));
+    assert_eq!((error.line, error.column), (5, 1));
+    assert_eq!(
+        error.message,
+        "`id` is not written in a resource table: the table name is the ID, so this is 'agent'; to use another ID, rename the table to [daemon.<id>]"
+    );
+
+    let error = reject("name = \"acme\"\n\n[storage.data]\nid = \"files\"\n");
+    assert_eq!((error.line, error.column), (4, 1));
+    assert!(error
+        .message
+        .contains("the table name is the ID, so this is 'data'"));
+}
+
+#[test]
+fn permission_keys_that_are_resource_ids_are_not_settings() {
+    for id in ["image", "memory", "cpu"] {
+        let text = format!(
+            "{DAEMON}permissions = {{ {id} = [\"storage/data-read\"] }}\n\n[storage.{id}]\n"
+        );
+        let stack = alien_stack_toml::parse(&text, "alien.toml", Path::new("."))
+            .unwrap_or_else(|error| panic!("{id}: {error}"));
+        let profile = &stack.permissions.profiles["agent"];
+        assert_eq!(
+            serde_json::to_value(profile).unwrap(),
+            serde_json::json!({ id: ["storage/data-read"] }),
+            "{id}"
+        );
+    }
+
+    let error = reject(&format!(
+        "{DAEMON}permissions = {{ memory = [\"storage/data-read\"] }}\n"
+    ));
+    assert_eq!((error.line, error.column), (5, 17));
+    assert!(
+        error
+            .message
+            .contains("'memory' is a setting of [daemon.agent]")
+            && error.message.contains("no resource has that ID"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_variable_set_by_the_input_is_not_mapped_twice() {
+    let text = |daemon_env: &str, type_line: &str| {
+        format!(
+            r#"name = "acme"
+
+[daemon.agent]
+build = {{ toolchain = "rust", binary-name = "acme-agent" }}
+env = {{ {daemon_env} }}
+
+[input.token]
+kind = "secret"
+label = "Token"
+description = "Token for the agent."
+env = "TOKEN"
+{type_line}
+"#
+        )
+    };
+    let mappings = |text: &str| {
+        let stack = alien_stack_toml::parse(text, "alien.toml", Path::new(".")).unwrap();
+        serde_json::to_value(&stack.inputs[0].env).unwrap()
+    };
+    let global = serde_json::json!([{ "name": "TOKEN" }]);
+
+    assert_eq!(mappings(&text("TOKEN = { input = \"token\" }", "")), global);
+    // `secret` is what a secret input defaults to.
+    assert_eq!(
+        mappings(&text(
+            "TOKEN = { input = \"token\", type = \"secret\" }",
+            ""
+        )),
+        global
+    );
+
+    let error = reject(&text("TOKEN = { input = \"token\", type = \"plain\" }", ""));
+    assert_eq!((error.line, error.column), (5, 17));
+    assert_eq!(
+        error.message,
+        "'TOKEN' is already set from input 'token' as a secret value; this reference asks for a plain one"
+    );
+}

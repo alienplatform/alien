@@ -1,0 +1,22 @@
+name = "acme-token"
+platforms = ["aws"]
+
+# The input sets TOKEN on every workload. Saying so again in a workload's `env` is the same
+# mapping, not a second one, and an explicit `type` equal to the default changes nothing.
+[container.api]
+image = "ghcr.io/acme/api:1.0.0"
+cpu = 1
+memory = "1Gi"
+env = { TOKEN = { input = "token", type = "secret" } }
+
+[container.worker]
+image = "ghcr.io/acme/worker:1.0.0"
+cpu = 1
+memory = "1Gi"
+env = { TOKEN = { input = "token" } }
+
+[input.token]
+kind = "secret"
+label = "Token"
+description = "Token the workloads present to the control plane."
+env = "TOKEN"

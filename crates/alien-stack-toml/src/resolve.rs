@@ -18,7 +18,7 @@ use alien_core::stack_authoring::{
 use alien_core::{
     CapacityGroup, ComputeCluster, ManagementPermissions, OperationsConfig, PermissionProfile,
     PermissionsConfig, Platform, PluginOperationsConfig, Resource, ResourceEntry,
-    ResourceLifecycle, Stack, StackInputEnvironmentVariableType,
+    ResourceLifecycle, Stack, StackInputEnvironmentVariableType, StackInputKind,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -153,6 +153,7 @@ impl Resolver<'_> {
             pools: &pool_names,
             profiles: &profile_names,
             inputs: &input_ids,
+            resources: &declared,
             env_refs: Vec::new(),
             inline_profiles: Vec::new(),
         };
@@ -596,6 +597,15 @@ impl Resolver<'_> {
         };
         let mut node = sugar::rewrite(context, &target, declaration.node.clone())?;
         let table = node.as_table_mut().expect("sugar keeps a table");
+        if let Some(entry) = table.entry("id") {
+            return Err(self.error(
+                entry.key_span.clone(),
+                format!(
+                    "`id` is not written in a resource table: the table name is the ID, so this is '{id}'; to use another ID, rename the table to [{}.<id>]",
+                    ty.table
+                ),
+            ));
+        }
         let keys = self.entry_keys(table, input_ids)?;
         if ty.table == "sandbox" {
             sugar::sandbox_session(table);
@@ -993,12 +1003,33 @@ impl Resolver<'_> {
                 .map(|text| serde_json::from_value(Json::String(text)))
                 .transpose()
                 .expect("sugar checked the type");
-            let shared = input.env.iter_mut().find(|mapping| {
-                mapping.name == reference.name
-                    && mapping.var_type == var_type
-                    && mapping.target_resources.is_some()
-            });
-            match shared {
+            let secret = |var_type: Option<StackInputEnvironmentVariableType>| match var_type {
+                Some(var_type) => var_type == StackInputEnvironmentVariableType::Secret,
+                None => input.kind == StackInputKind::Secret,
+            };
+            let wanted = secret(var_type);
+            let existing = input
+                .env
+                .iter_mut()
+                .find(|mapping| mapping.name == reference.name);
+            match existing {
+                Some(mapping) if secret(mapping.var_type) != wanted => {
+                    return Err(self.error(
+                        reference.span,
+                        format!(
+                            "'{}' is already set from input '{}' as a {} value; this reference asks for a {} one",
+                            reference.name,
+                            reference.input,
+                            if wanted { "plain" } else { "secret" },
+                            if wanted { "secret" } else { "plain" },
+                        ),
+                    ))
+                }
+                // The input already sets the variable on every workload.
+                Some(AuthoredEnvMapping {
+                    target_resources: None,
+                    ..
+                }) => {}
                 Some(mapping) => mapping
                     .target_resources
                     .get_or_insert_with(Vec::new)

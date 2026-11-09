@@ -48,7 +48,14 @@ fn toml_stacks_match_their_typescript_equivalents() {
             .unwrap_or_else(|error| panic!("{}: {error}", fixture.display()));
         let ts_stack = typescript_stack(&fixture);
 
-        let toml_json = serde_json::to_value(&toml_stack).unwrap();
+        let mut toml_json = serde_json::to_value(&toml_stack).unwrap();
+        // The loader writes `src` as a path from the working directory and alien.ts writes it
+        // from the fixture directory; `src_is_relative_to_the_file` in errors.rs covers the former.
+        let from_working_dir = fixture
+            .strip_prefix(std::env::current_dir().unwrap())
+            .expect("fixtures are inside the crate, which is the test's working directory");
+        sources_from(&mut toml_json, from_working_dir);
+        let toml_stack: Stack = serde_json::from_value(toml_json.clone()).unwrap();
         let ts_json = serde_json::to_value(&ts_stack).unwrap();
         let mut differences = Vec::new();
         diff("", &toml_json, &ts_json, &mut differences);
@@ -60,6 +67,32 @@ fn toml_stacks_match_their_typescript_equivalents() {
         );
         // Order matters where the stack keeps lists (inputs, endpoints, capacity groups).
         assert_eq!(toml_stack, ts_stack, "{}", fixture.display());
+    }
+}
+
+/// Rewrites every `src` under `dir` to be relative to `dir`.
+fn sources_from(value: &mut serde_json::Value, dir: &Path) {
+    use serde_json::Value;
+    match value {
+        Value::Object(fields) => {
+            for (key, field) in fields.iter_mut() {
+                match field {
+                    Value::String(path) if key == "src" => {
+                        let relative = Path::new(path.as_str())
+                            .strip_prefix(dir)
+                            .expect("a fixture's source directory is inside the fixture");
+                        *path = if relative.as_os_str().is_empty() {
+                            ".".to_string()
+                        } else {
+                            relative.display().to_string()
+                        };
+                    }
+                    other => sources_from(other, dir),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| sources_from(item, dir)),
+        _ => {}
     }
 }
 

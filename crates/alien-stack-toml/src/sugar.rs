@@ -9,14 +9,14 @@
 //! still points at something the author wrote.
 
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use alien_core::instance_catalog;
 use alien_core::stack_authoring::{memory_resource_spec, AuthorableType};
 use alien_core::DaemonRuntime;
 use serde_json::Value as Json;
 
-use crate::canonical::{allowed_keys, Vocabulary};
+use crate::canonical::{allowed_keys, Declared, Vocabulary};
 use crate::env_file;
 use crate::error::Result;
 use crate::node::{Entry, Node, Table, Value};
@@ -45,6 +45,7 @@ pub struct Context<'a> {
     pub pools: &'a [String],
     pub profiles: &'a [String],
     pub inputs: &'a [String],
+    pub resources: &'a Declared,
     pub env_refs: Vec<EnvRef>,
     pub inline_profiles: Vec<InlineProfile>,
 }
@@ -55,6 +56,8 @@ pub struct EnvRef {
     pub name: String,
     pub target: String,
     pub var_type: Option<String>,
+    /// The `{ input = ".." }` value, which errors about the reference point at.
+    pub span: Range<usize>,
 }
 
 /// Grants written on a workload, which make a profile named after it.
@@ -296,11 +299,16 @@ fn source(ctx: &Context<'_>, build: Entry) -> Result<Entry> {
 
     check_toolchain_keys(ctx, name, &fields)?;
 
-    let src = fields.remove("src").unwrap_or_else(|| Entry {
+    let mut src = fields.remove("src").unwrap_or_else(|| Entry {
         key: "src".into(),
         key_span: span.clone(),
         value: Node::string(span.clone(), "."),
     });
+    // The build reads `src` relative to the working directory, but alien.toml documents it
+    // relative to the file, so a config in a subdirectory names the directory next to it.
+    if let Value::String(path) = &mut src.value.value {
+        *path = relative_to_file(ctx.base_dir, path);
+    }
     let mut toolchain_table = Table::default();
     toolchain_table.insert("type", toolchain.key_span.clone(), toolchain.value);
     toolchain_table.entries.extend(fields.entries);
@@ -322,6 +330,28 @@ fn source(ctx: &Context<'_>, build: Entry) -> Result<Entry> {
         key_span: build.key_span,
         value: Node::table(span, code),
     })
+}
+
+/// `path` as a path from the directory of alien.toml (`base_dir`), written the way the
+/// working directory sees it: `.` when they are the same directory, no `./` or `..` noise.
+fn relative_to_file(base_dir: &Path, path: &str) -> String {
+    let mut parts: Vec<Component<'_>> = Vec::new();
+    let full = base_dir.join(path);
+    for component in full.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(parts.last(), Some(Component::Normal(_))) => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined: PathBuf = parts.iter().collect();
+    if joined.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        joined.display().to_string()
+    }
 }
 
 fn check_toolchain_keys(ctx: &Context<'_>, name: &str, fields: &Table) -> Result<()> {
@@ -1082,6 +1112,7 @@ fn input_reference(
         name: name.to_string(),
         target: target.id.to_string(),
         var_type,
+        span: entry.value.span.clone(),
     })
 }
 
@@ -1141,11 +1172,11 @@ fn permissions(ctx: &mut Context<'_>, target: &Target<'_>, table: &mut Table) ->
                 }
                 let settings = settings(target.ty);
                 for grant in &grants.entries {
-                    if settings.contains(&grant.key) {
+                    if settings.contains(&grant.key) && !ctx.resources.contains_key(&grant.key) {
                         return Err(ctx.error(
                             grant.key_span.clone(),
                             format!(
-                                "'{key}' is a setting of [{kind}.{id}], but it sits inside `permissions`, so it would be a resource ID; move it out of `permissions`, next to the other settings of [{kind}.{id}]",
+                                "'{key}' is a setting of [{kind}.{id}], but it sits inside `permissions`, where a key is a resource ID, and no resource has that ID; move it out of `permissions`, next to the other settings of [{kind}.{id}]",
                                 key = grant.key,
                             ),
                         ));

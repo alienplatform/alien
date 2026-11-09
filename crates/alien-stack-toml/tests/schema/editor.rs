@@ -912,7 +912,8 @@ pub fn generate() -> String {
     text.push('\n');
     // The doc comments the descriptions come from use dashes the repository keeps out of
     // committed files.
-    text.replace(" \u{2014} ", " - ").replace(['\u{2014}', '\u{2013}'], "-")
+    text.replace(" \u{2014} ", " - ")
+        .replace(['\u{2014}', '\u{2013}'], "-")
 }
 
 #[test]

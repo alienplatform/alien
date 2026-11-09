@@ -27,7 +27,7 @@ mod sugar;
 mod suggest;
 mod units;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use alien_core::Stack;
 use alien_error::{Context, IntoAlienError};
@@ -58,17 +58,32 @@ pub fn load(path: &Path) -> Result<Stack> {
             .context(ErrorData::FileUnreadable {
                 file: path.display().to_string(),
             })?;
-    let base_dir = match path.parent() {
+    let parent = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    parse(&text, &path.display().to_string(), base_dir)
+    let base_dir = relative_to_working_dir(parent);
+    parse(&text, &path.display().to_string(), &base_dir)
+}
+
+/// `dir` as a path from the working directory when it is inside it (the form `build.src`
+/// takes in an alien.ts), and as given otherwise.
+fn relative_to_working_dir(dir: &Path) -> PathBuf {
+    let relative = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| dir.strip_prefix(cwd).ok().map(Path::to_path_buf));
+    match relative {
+        Some(relative) if relative.as_os_str().is_empty() => PathBuf::from("."),
+        Some(relative) => relative,
+        None => dir.to_path_buf(),
+    }
 }
 
 /// Resolves `alien.toml` source text into a stack.
 ///
-/// `file_name` is shown in errors. `base_dir` is the directory relative paths in the file
-/// (such as `env-file`) are resolved against.
+/// `file_name` is shown in errors. `base_dir` is the directory of the file, as a path from the
+/// working directory: relative paths in the file (`env-file`, `build.src`) are resolved
+/// against it, and `build.src` is written to the stack relative to the working directory.
 pub fn parse(text: &str, file_name: &str, base_dir: &Path) -> Result<Stack> {
     let file = SourceFile {
         name: file_name.to_string(),
