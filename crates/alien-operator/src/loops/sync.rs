@@ -506,7 +506,9 @@ async fn sync_with_manager(
         }
     }
     if let Some(ref targets) = sync_response.target_dynamic_containers {
-        state.db.set_target_dynamic_containers(targets).await?;
+        if !state.config.is_protected() {
+            state.db.set_target_dynamic_containers(targets).await?;
+        }
     }
 
     let mut state_hydrated = false;

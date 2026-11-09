@@ -4029,8 +4029,13 @@ async fn agent_sync(
         }
         _ => None,
     };
-    if let (Some(values), Some(targets)) = (state.values.as_deref(), &mut target_dynamic_containers)
-    {
+    // A protected install runs no dynamic containers, so their environment is
+    // not loaded for it.
+    if let (Some(values), Some(targets), false) = (
+        state.values.as_deref(),
+        &mut target_dynamic_containers,
+        is_protected(&deployment),
+    ) {
         if let Err(error) =
             crate::values::load_container_env(values, &req.deployment_id, targets).await
         {
@@ -4180,10 +4185,18 @@ pub(crate) async fn build_pull_target(
 
     let manager_url = state.config.base_url();
 
+    // A protected install takes its variables and inputs from its signed
+    // config and its own inputs, so nothing from the value store is loaded
+    // for it.
+    let protected = is_protected(deployment);
     let stored_record = deployment;
-    let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
-        .await
-        .map_err(|e| e.into_response())?;
+    let held = if protected {
+        std::borrow::Cow::Borrowed(deployment)
+    } else {
+        crate::values::hydrate_held_values(state.values.as_deref(), deployment)
+            .await
+            .map_err(|e| e.into_response())?
+    };
     let deployment: &DeploymentRecord = &held;
 
     // Derive native image host for Lambda/Cloud Run so controllers
@@ -4214,21 +4227,27 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    let (held, _) =
+    let held = if protected {
+        held
+    } else {
         crate::values::with_generated_inputs(state.values.as_deref(), Some(&stack), held)
             .await
-            .map_err(|e| e.into_response())?;
+            .map_err(|e| e.into_response())?
+            .0
+    };
     let deployment: &DeploymentRecord = &held;
 
-    crate::values::HeldValues::of_step(
-        state.values.as_deref(),
-        &state.config,
-        stored_record,
-        deployment,
-        Some(&stack),
-    )
-    .await
-    .map_err(|e| e.into_response())?;
+    if !protected {
+        crate::values::HeldValues::of_step(
+            state.values.as_deref(),
+            &state.config,
+            stored_record,
+            deployment,
+            Some(&stack),
+        )
+        .await
+        .map_err(|e| e.into_response())?;
+    }
 
     let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
         Ok(variables) => variables,
