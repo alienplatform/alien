@@ -643,9 +643,13 @@ async fn sync_with_manager(
     Ok(has_update || state_hydrated)
 }
 
-/// Whether an enrolled Operator runs a settled release without its config. A
-/// token-mode Operator cleared the config after each apply; once it enrolls,
-/// it needs the config to keep workload credentials fresh.
+/// Whether an enrolled Operator runs a settled release without a config it
+/// can use. A token-mode Operator cleared the config after each apply; once it
+/// enrolls, it needs the config to keep workload credentials fresh. A config
+/// the previous pod saved before enrollment (it has no manager audience) is
+/// also unusable when the release has a command receiver built before
+/// capability files: that config holds no commands key for the receiver, and
+/// the Operator must not pass on the deployment token it holds instead.
 async fn installed_config_missing(
     state: &OperatorState,
     deployment_state: &alien_core::DeploymentState,
@@ -659,9 +663,22 @@ async fn installed_config_missing(
             .current_release
             .as_ref()
             .is_some_and(|release| release.release_id.is_some());
-    Ok(settled
-        && crate::daily_identity::has_runtime_identity(&state.db).await?
-        && state.db.get_deployment_config().await?.is_none())
+    if !settled || !crate::daily_identity::has_runtime_identity(&state.db).await? {
+        return Ok(false);
+    }
+    let Some(config) = state.db.get_deployment_config().await? else {
+        return Ok(true);
+    };
+    let needs_commands_key = deployment_state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| {
+            !release
+                .stack
+                .command_receivers_without_capability_file()
+                .is_empty()
+        });
+    Ok(config.runtime_identity_audience.is_none() && needs_commands_key)
 }
 
 /// Make `target_deployment` the Operator's target: record the release as the
@@ -3671,5 +3688,139 @@ mod tests {
             &manager_state
         ));
         assert_eq!(local_state.status, DeploymentStatus::Deleting);
+    }
+
+    fn container_receiver(id: &str, reads_capability_file: bool) -> alien_core::Container {
+        let mut container = alien_core::Container::new(id.to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        container.commands_capability_file = reads_capability_file;
+        container
+    }
+
+    /// A config saved before the Operator enrolled has no commands key for a
+    /// receiver built before capability files, and the manager sends the
+    /// settled release again only when the config is missing. The Operator
+    /// asks for it then, so the receiver gets its key on the next sync. A
+    /// config that already has the manager's audience, or a release with no
+    /// such receiver, needs nothing.
+    #[tokio::test]
+    async fn a_config_saved_before_enrollment_is_asked_for_again_when_a_receiver_needs_the_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_k8s").await.unwrap();
+        db.write_daily_identity(&crate::daily_identity::DailyIdentityState {
+            manager_url: "https://manager.example.com".into(),
+            audience: "https://manager.example.com".into(),
+            deployment_id: "dep_k8s".into(),
+            current: "ax_day_v1_fixture".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+        })
+        .await
+        .unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(directory.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let deployment_state = |receiver_marked: bool| DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: Some(ReleaseInfo {
+                release_id: Some("rel_settled".to_string()),
+                version: None,
+                description: None,
+                stack: Stack::new("app".to_string())
+                    .add(
+                        container_receiver("api", receiver_marked),
+                        alien_core::ResourceLifecycle::Live,
+                    )
+                    .build(),
+            }),
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let saved_config = |audience: Option<&str>| {
+            let mut config = alien_core::DeploymentConfig::builder()
+                .base_platform(Platform::Aws)
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build();
+            config.runtime_identity_audience = audience.map(str::to_string);
+            config
+        };
+
+        state
+            .db
+            .set_deployment_config(&saved_config(None))
+            .await
+            .unwrap();
+        assert!(
+            super::installed_config_missing(&state, &deployment_state(false))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !super::installed_config_missing(&state, &deployment_state(true))
+                .await
+                .unwrap()
+        );
+
+        state
+            .db
+            .set_deployment_config(&saved_config(Some("https://manager.example.com")))
+            .await
+            .unwrap();
+        assert!(
+            !super::installed_config_missing(&state, &deployment_state(false))
+                .await
+                .unwrap()
+        );
+
+        state.db.clear_deployment_config().await.unwrap();
+        assert!(
+            super::installed_config_missing(&state, &deployment_state(true))
+                .await
+                .unwrap()
+        );
     }
 }
