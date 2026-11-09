@@ -133,8 +133,8 @@ mod tests {
     use std::sync::Arc;
 
     use alien_core::{
-        DeploymentConfig, EnvironmentVariablesSnapshot, Platform, StackInputKind,
-        StackInputProvider,
+        DeploymentConfig, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
+        StackInputKind, StackInputProvider, ValueSlotRef,
     };
     use chrono::Utc;
 
@@ -426,6 +426,75 @@ mod tests {
             .map(|v| v.slot.to_string())
             .collect();
         assert_eq!(stored, ["input:signingKey"]);
+    }
+
+    /// A deployment created before its manager stored values got its generated
+    /// secrets from the sender, which keeps delivering them with each update.
+    /// When the manager starts storing values, its first step must not generate
+    /// a second value for any of them: the copy of the sender's value has to be
+    /// the one that lands in the empty slot.
+    #[tokio::test]
+    async fn secrets_the_sender_still_delivers_are_not_generated_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::values::fixtures::kv_store(dir.path()).await;
+        let ids: Vec<String> = (0..16).map(|n| format!("secret{n}")).collect();
+        let mut inputs: Vec<_> = ids.iter().map(|id| input(id, Some(48), None)).collect();
+        inputs.push(input("added", Some(32), None));
+        inputs.push(input("held", Some(32), None));
+        let stack = stack(inputs);
+        let mut record = record();
+        let config = record.deployment_config.as_mut().unwrap();
+        // The sender stores the 16 answers and `held`. Only `held` is in the
+        // manager, so only it has a slot reference.
+        let mut stored = ids.clone();
+        stored.push("held".to_string());
+        config.stored_secret_input_ids = Some(stored);
+        config.value_slots = vec![ValueSlotRef {
+            slot: "input:held".to_string(),
+            kind: EnvironmentVariableType::Secret,
+            digest: String::new(),
+            env_name: None,
+            targets: None,
+        }];
+
+        let (filled, generated) = generate(&store, &stack, &record).await;
+
+        // `added` came with a later release and the sender stores nothing for
+        // it; `held` is the manager's own. Both are generated as before.
+        let slots: Vec<_> = generated.slots.iter().map(|m| m.slot.to_string()).collect();
+        assert_eq!(slots, ["input:added", "input:held"]);
+        for id in &ids {
+            assert!(!filled.input_values.contains_key(id), "{id} was filled");
+        }
+        // The migration's copy of each sender value lands in an empty slot.
+        let scope = scope();
+        for id in &ids {
+            let slot: ValueSlot = format!("input:{id}").parse().unwrap();
+            let copied = store
+                .put_if_absent(&scope, &slot, ValueKind::Secret, format!("\"sender-{id}\""))
+                .await
+                .unwrap();
+            assert!(copied.is_some(), "{id}: the manager already held a value");
+        }
+        assert_eq!(store.list(&scope).await.unwrap().len(), 18);
+    }
+
+    #[tokio::test]
+    async fn a_sender_that_lists_no_stored_secrets_gets_them_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::values::fixtures::kv_store(dir.path()).await;
+        let stack = stack(vec![input("signingKey", Some(32), None)]);
+        let mut record = record();
+        record
+            .deployment_config
+            .as_mut()
+            .unwrap()
+            .stored_secret_input_ids = Some(Vec::new());
+
+        let (_, generated) = generate(&store, &stack, &record).await;
+
+        let slots: Vec<_> = generated.slots.iter().map(|m| m.slot.to_string()).collect();
+        assert_eq!(slots, ["input:signingKey"]);
     }
 
     #[tokio::test]
