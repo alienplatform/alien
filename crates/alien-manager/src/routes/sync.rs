@@ -3312,6 +3312,41 @@ mod tests {
     }
 
     #[test]
+    fn a_cleared_refusal_and_a_newer_release_are_not_restored_from_the_operator() {
+        let stored_release = alien_core::InstalledHelmRelease {
+            name: "shop".into(),
+            namespace: "apps".into(),
+        };
+        let mut stored = deployment_record_with_state("running", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            installed_helm_release: Some(stored_release.clone()),
+            ..RuntimeMetadata::default()
+        });
+        // The Operator saved an earlier checkpoint: it still carries a refusal
+        // the manager has cleared and an older release name.
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(RuntimeMetadata {
+            setup_report_refusal: Some(alien_core::SetupReportRefusal {
+                reason: "stale chart".into(),
+                reported_release_id: "rel_1".into(),
+                at: chrono::Utc::now(),
+            }),
+            installed_helm_release: Some(alien_core::InstalledHelmRelease {
+                name: "old".into(),
+                namespace: "apps".into(),
+            }),
+            ..RuntimeMetadata::default()
+        });
+        preserve_setup_update_authorization(&mut incoming, &stored);
+        let metadata = incoming.runtime_metadata.unwrap();
+        assert!(metadata.setup_report_refusal.is_none());
+        assert_eq!(
+            metadata.installed_helm_release.map(|release| release.name),
+            Some(stored_release.name)
+        );
+    }
+
+    #[test]
     fn a_report_from_the_operator_does_not_erase_the_recorded_helm_release() {
         let mut stored = deployment_record_with_state("running", None);
         stored.runtime_metadata = Some(RuntimeMetadata {
@@ -4482,29 +4517,17 @@ fn gate_resources(stack: &alien_core::Stack) -> std::collections::HashMap<String
 /// reported current release is the authorized one, the update has run and the
 /// grant is dropped.
 fn preserve_setup_update_authorization(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
-    // The reason a setup report was declined is the manager's own record; the
-    // Operator's copy of the metadata never carries it.
-    if let (Some(refusal), Some(metadata)) = (
-        stored
-            .runtime_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.setup_report_refusal.as_ref()),
-        incoming.runtime_metadata.as_mut(),
-    ) {
-        if metadata.setup_report_refusal.is_none() {
-            metadata.setup_report_refusal = Some(refusal.clone());
-        }
-    }
-    if let (Some(release), Some(metadata)) = (
-        stored
-            .runtime_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.installed_helm_release.as_ref()),
-        incoming.runtime_metadata.as_mut(),
-    ) {
-        if metadata.installed_helm_release.is_none() {
-            metadata.installed_helm_release = Some(release.clone());
-        }
+    // The reason a setup report was declined and the Helm release the install
+    // reported are the manager's own records; the Operator's copy of the
+    // metadata never carries them. The stored values win even when they are
+    // empty, so a refusal the manager cleared does not come back from an
+    // Operator that saved an earlier checkpoint.
+    if let Some(metadata) = incoming.runtime_metadata.as_mut() {
+        let stored_metadata = stored.runtime_metadata.as_ref();
+        metadata.setup_report_refusal =
+            stored_metadata.and_then(|stored| stored.setup_report_refusal.clone());
+        metadata.installed_helm_release =
+            stored_metadata.and_then(|stored| stored.installed_helm_release.clone());
     }
     let Some(authorization) = stored
         .runtime_metadata
