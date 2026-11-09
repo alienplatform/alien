@@ -119,6 +119,15 @@ pub struct Daemon {
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
     pub commands_enabled: bool,
+
+    /// Set by `alien build` when the daemon's command receiver reads its
+    /// credential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the
+    /// receiver may be older, so a deployer that rotates credentials keeps
+    /// the long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any
+    /// value written in the stack definition.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commands_capability_file: bool,
 }
 
 impl Daemon {

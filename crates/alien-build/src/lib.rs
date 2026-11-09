@@ -1,4 +1,5 @@
 pub(crate) mod command_output;
+mod commands_receiver;
 pub mod dependencies;
 mod dockerignore;
 pub mod error;
@@ -257,6 +258,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     info!("Ensured output directory exists: {}", output_dir.display());
 
     let stack_id = stack.id().to_string();
+
+    // Only this build may say a receiver reads the capability file: drop any
+    // value the stack definition carried, then set it for what is built below.
+    for (_, entry) in stack.resources_mut() {
+        if let Some(container) = entry.config.downcast_mut::<Container>() {
+            container.commands_capability_file = false;
+        } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+            daemon.commands_capability_file = false;
+        }
+    }
 
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
@@ -675,6 +686,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 Ok((resource_id, daemon, build_result)) => match build_result {
                     Ok(image_uri) => {
                         let mut updated_daemon = daemon;
+                        updated_daemon.commands_capability_file = updated_daemon.commands_enabled
+                            && match &updated_daemon.code {
+                                DaemonCode::Source { src, toolchain } => {
+                                    commands_receiver::receiver_reads_capability_file(
+                                        src, toolchain,
+                                    )
+                                    .await
+                                }
+                                DaemonCode::Image { .. } => false,
+                            };
                         updated_daemon.code = DaemonCode::Image { image: image_uri };
                         build_results.push((resource_id, updated_daemon));
                         completed_tasks += 1;
@@ -1072,8 +1093,20 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     match build_result {
                         Ok(image_uri) => {
                             // Success - update ALL containers in this group with the same image
+                            // One binary serves the group, so one answer does too.
+                            let reads_capability_file = match &containers_group[0].1.code {
+                                ContainerCode::Source { src, toolchain } => {
+                                    commands_receiver::receiver_reads_capability_file(
+                                        src, toolchain,
+                                    )
+                                    .await
+                                }
+                                ContainerCode::Image { .. } => false,
+                            };
                             for (resource_id, container) in containers_group {
                                 let mut updated_container = container;
+                                updated_container.commands_capability_file =
+                                    updated_container.commands_enabled && reads_capability_file;
                                 updated_container.code = ContainerCode::Image {
                                     image: image_uri.clone(),
                                 };

@@ -5,6 +5,12 @@ edition = "2021"
 description = "Alien Commands protocol implementation"
 license-file.workspace = true
 
+# Read by `alien build` (`cargo metadata`) to record that an app built against
+# this crate has a command receiver that reads `ALIEN_COMMANDS_CAPABILITY_FILE`.
+# Remove it only with that support.
+[package.metadata.alien]
+commandsCapabilityFile = true
+
 [features]
 default = ["server", "runtime"]
 server = [

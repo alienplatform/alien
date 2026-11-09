@@ -113,6 +113,7 @@ fn merge_platform(
         let mut tarballs: BTreeMap<String, PathBuf> = BTreeMap::new();
         let mut source_locations = BTreeSet::new();
         let mut is_local = false;
+        let mut reads_capability_file = false;
 
         for partial in partials {
             let Some(image) = compute_image(&partial.stack, &resource_id) else {
@@ -132,6 +133,10 @@ fn merge_platform(
                 )
             }));
             is_local = true;
+            // Only a partial that built the resource knows its receiver.
+            reads_capability_file |= partial
+                .stack
+                .command_receiver_reads_capability_file(&resource_id);
             for tar in read_oci_tarballs(&artifact_dir)? {
                 let name = tar
                     .file_name()
@@ -183,6 +188,7 @@ fn merge_platform(
             &resource_id,
             absolute.to_string_lossy().into_owned(),
         );
+        set_commands_capability_file(&mut merged_stack, &resource_id, reads_capability_file);
         for (source_platform, basename) in source_locations {
             artifact_rewrites.insert(
                 (source_platform, resource_id.clone(), basename),
@@ -277,6 +283,8 @@ fn blank_images(stack: &Stack) -> Stack {
     let mut blanked = stack.clone();
     let ids: Vec<String> = blanked.resources().map(|(id, _)| id.clone()).collect();
     for id in ids {
+        // Only the partial that built a resource records its receiver.
+        set_commands_capability_file(&mut blanked, &id, false);
         set_compute_image(&mut blanked, &id, String::new());
     }
     blanked
@@ -329,6 +337,19 @@ fn set_compute_image(stack: &mut Stack, resource_id: &str, image: String) {
             image,
             bundled_from: None,
         };
+    }
+}
+
+/// Set the build's record that a Container or Daemon's command receiver reads the capability
+/// file. No-op for other resources.
+fn set_commands_capability_file(stack: &mut Stack, resource_id: &str, reads: bool) {
+    let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == resource_id) else {
+        return;
+    };
+    if let Some(container) = entry.config.downcast_mut::<Container>() {
+        container.commands_capability_file = reads;
+    } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+        daemon.commands_capability_file = reads;
     }
 }
 
@@ -672,6 +693,54 @@ mod tests {
         let merged_dir = PathBuf::from(&image);
         assert!(merged_dir.join("darwin-aarch64.oci.tar").exists());
         assert!(merged_dir.join("linux-x64.oci.tar").exists());
+    }
+
+    #[test]
+    fn merged_stack_keeps_the_receiver_marker_of_the_partials_that_built_it() {
+        // `agent` is built by both groups and marked in each; `web` is built by one group and
+        // marked there, and left as source (so unmarked) by the other. Neither difference may
+        // fail the compatibility check, and the merged stack keeps the marker.
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        let write_partial_with_markers = |partial: &str, tarball: &str, builds_web: bool| {
+            let platform_dir = root.path().join(partial).join("build").join("local");
+            let built_dir = |resource: &str| -> String {
+                let dir = platform_dir.join(format!("{resource}-{partial}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(tarball), tarball.as_bytes()).unwrap();
+                dir.canonicalize().unwrap().to_string_lossy().into_owned()
+            };
+            let mut agent = Daemon::new("agent".to_string())
+                .permissions("execution".to_string())
+                .code(DaemonCode::Image {
+                    image: built_dir("agent"),
+                })
+                .build();
+            agent.commands_capability_file = true;
+            let web = if builds_web {
+                let mut web = container("web", &built_dir("web"));
+                web.commands_capability_file = true;
+                web
+            } else {
+                container_source("web")
+            };
+            let stack = Stack::new("merge-test".to_string())
+                .add(agent, ResourceLifecycle::Live)
+                .add(web, ResourceLifecycle::Live)
+                .build();
+            std::fs::write(
+                platform_dir.join("stack.json"),
+                serde_json::to_string_pretty(&stack).unwrap(),
+            )
+            .unwrap();
+        };
+        write_partial_with_markers("arm", "linux-aarch64.oci.tar", true);
+        write_partial_with_markers("darwin", "darwin-aarch64.oci.tar", false);
+
+        merge_build_outputs(root.path(), out.path()).unwrap();
+        let merged: Stack = read_stack(&out.path().join("build/local/stack.json")).unwrap();
+        assert!(merged.command_receiver_reads_capability_file("agent"));
+        assert!(merged.command_receiver_reads_capability_file("web"));
     }
 
     #[test]
