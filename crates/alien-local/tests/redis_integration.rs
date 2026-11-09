@@ -244,7 +244,10 @@ async fn refuses_to_adopt_or_delete_a_container_with_the_same_name_that_is_not_o
         .start_redis("cache", spec(false, "allkeys-lru", 64))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("not created by Alien"), "{error}");
+    assert!(
+        error.to_string().contains("not created by Alien"),
+        "{error}"
+    );
     assert!(manager.delete_redis("cache").await.is_err());
     // The foreign container is untouched.
     docker.inspect_container(&name, None).await.unwrap();

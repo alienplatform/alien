@@ -644,10 +644,9 @@ mod tests {
         let compute = ResourceRef::new(alien_core::ComputeCluster::RESOURCE_TYPE, "compute");
         let aws = build(Platform::Aws).await;
         assert!(aws.resources["cache"].dependencies.contains(&compute));
-        assert!(!aws.resources["compute"].dependencies.contains(&ResourceRef::new(
-            alien_core::Redis::RESOURCE_TYPE,
-            "cache"
-        )));
+        assert!(!aws.resources["compute"]
+            .dependencies
+            .contains(&ResourceRef::new(alien_core::Redis::RESOURCE_TYPE, "cache")));
         let gcp = build(Platform::Gcp).await;
         assert!(!gcp.resources["cache"].dependencies.contains(&compute));
     }

@@ -40,7 +40,8 @@ use tracing::{debug, info, warn};
 pub const VALKEY_VERSION: &str = "9.0";
 
 /// The official image, pinned by digest so every machine runs the same bytes.
-const VALKEY_IMAGE: &str = "valkey/valkey:9.0@sha256:7e1deda01b64ece3167d370ab5be3452d29734feec22cbcbc69b3a64f6859d6d";
+const VALKEY_IMAGE: &str =
+    "valkey/valkey:9.0@sha256:7e1deda01b64ece3167d370ab5be3452d29734feec22cbcbc69b3a64f6859d6d";
 const CONTAINER_PORT: &str = "6379/tcp";
 /// The image's `valkey` user. The config file must be readable by it.
 const VALKEY_UID: u64 = 999;
@@ -262,7 +263,9 @@ impl LocalRedisManager {
             .config
             .as_ref()
             .and_then(|config| config.labels.as_ref());
-        if labels.and_then(|labels| labels.get(LABEL_OWNER)).map(String::as_str)
+        if labels
+            .and_then(|labels| labels.get(LABEL_OWNER))
+            .map(String::as_str)
             == Some(self.owner_label(id).as_str())
         {
             return Ok(());
@@ -300,7 +303,11 @@ impl LocalRedisManager {
                         .start_container(&name, None)
                         .await
                         .into_alien_error()
-                        .context(container_error(&name, "start", "Failed to start the container"))?;
+                        .context(container_error(
+                            &name,
+                            "start",
+                            "Failed to start the container",
+                        ))?;
                 }
                 return wait_until_ready(docker, &name, metadata).await;
             }
@@ -354,7 +361,10 @@ impl LocalRedisManager {
             ])),
             exposed_ports: Some(vec![CONTAINER_PORT.to_string()]),
             host_config: Some(HostConfig {
-                port_bindings: Some(HashMap::from([(CONTAINER_PORT.to_string(), Some(bindings))])),
+                port_bindings: Some(HashMap::from([(
+                    CONTAINER_PORT.to_string(),
+                    Some(bindings),
+                )])),
                 binds: metadata
                     .spec
                     .persistence
@@ -379,7 +389,11 @@ impl LocalRedisManager {
             )
             .await
             .into_alien_error()
-            .context(container_error(&name, "create", "Failed to create the container"))?;
+            .context(container_error(
+                &name,
+                "create",
+                "Failed to create the container",
+            ))?;
 
         // The config holds the password: upload it into the container (readable by the
         // server's user only) instead of passing it as an argument or environment value,
@@ -388,18 +402,30 @@ impl LocalRedisManager {
         docker
             .upload_to_container(
                 &name,
-                Some(UploadToContainerOptionsBuilder::default().path("/etc").build()),
+                Some(
+                    UploadToContainerOptionsBuilder::default()
+                        .path("/etc")
+                        .build(),
+                ),
                 bollard::body_full(archive.into()),
             )
             .await
             .into_alien_error()
-            .context(container_error(&name, "configure", "Failed to write the Redis config"))?;
+            .context(container_error(
+                &name,
+                "configure",
+                "Failed to write the Redis config",
+            ))?;
 
         docker
             .start_container(&name, None)
             .await
             .into_alien_error()
-            .context(container_error(&name, "start", "Failed to start the container"))?;
+            .context(container_error(
+                &name,
+                "start",
+                "Failed to start the container",
+            ))?;
         wait_until_ready(docker, &name, metadata).await
     }
 
@@ -410,7 +436,10 @@ impl LocalRedisManager {
         };
         self.require_ours(&name, id, &existing)?;
         match docker
-            .stop_container(&name, Some(StopContainerOptionsBuilder::default().t(10).build()))
+            .stop_container(
+                &name,
+                Some(StopContainerOptionsBuilder::default().t(10).build()),
+            )
             .await
         {
             Ok(()) => Ok(()),
@@ -419,9 +448,11 @@ impl LocalRedisManager {
                 status_code: 304 | 404,
                 ..
             }) => Ok(()),
-            Err(error) => Err(error)
-                .into_alien_error()
-                .context(container_error(&name, "stop", "Failed to stop the container")),
+            Err(error) => Err(error).into_alien_error().context(container_error(
+                &name,
+                "stop",
+                "Failed to stop the container",
+            )),
         }
     }
 
@@ -648,7 +679,11 @@ async fn ensure_image(docker: &Docker, name: &str) -> Result<()> {
         .try_collect::<Vec<_>>()
         .await
         .into_alien_error()
-        .context(container_error(name, "pull_image", "Failed to pull the Valkey image"))?;
+        .context(container_error(
+            name,
+            "pull_image",
+            "Failed to pull the Valkey image",
+        ))?;
     Ok(())
 }
 
@@ -692,11 +727,19 @@ fn config_archive(config: &str) -> Result<Vec<u8>> {
     builder
         .append_data(&mut header, "alien-valkey.conf", config.as_bytes())
         .into_alien_error()
-        .context(container_error("redis", "configure", "Failed to build the config archive"))?;
+        .context(container_error(
+            "redis",
+            "configure",
+            "Failed to build the config archive",
+        ))?;
     builder
         .into_inner()
         .into_alien_error()
-        .context(container_error("redis", "configure", "Failed to build the config archive"))
+        .context(container_error(
+            "redis",
+            "configure",
+            "Failed to build the config archive",
+        ))
 }
 
 /// Waits until the server answers an authenticated PING on the published port, failing early
@@ -736,7 +779,9 @@ async fn wait_until_ready(docker: &Docker, name: &str, metadata: &RedisMetadata)
 /// One authenticated PING over a fresh connection.
 async fn ping(port: u16, password: &str) -> bool {
     let attempt = async {
-        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .ok()?;
         let request = format!(
             "*3\r\n$4\r\nAUTH\r\n$7\r\ndefault\r\n${}\r\n{password}\r\n*1\r\n$4\r\nPING\r\n",
             password.len()
@@ -810,7 +855,10 @@ mod tests {
         let mut other = metadata(true);
         other.spec.eviction_policy = "noeviction".to_string();
         assert_ne!(base, config_hash(&other, None));
-        assert_ne!(base, config_hash(&metadata(true), Some("172.17.0.1".to_string())));
+        assert_ne!(
+            base,
+            config_hash(&metadata(true), Some("172.17.0.1".to_string()))
+        );
     }
 
     #[test]
