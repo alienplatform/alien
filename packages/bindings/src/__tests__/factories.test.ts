@@ -176,6 +176,9 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     vault: async () => vaultHandle,
     container: async () => containerHandle,
     postgres: async () => postgresHandle,
+    redis: async () => {
+      throw new Error("not used by this test")
+    },
     sandbox: async () => sandboxHandle,
   }
 

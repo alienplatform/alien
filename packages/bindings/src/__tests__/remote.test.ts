@@ -135,6 +135,10 @@ function fakeRemoteAddon() {
       throw new Error("unused")
     }
 
+    async redis(): Promise<never> {
+      throw new Error("unused")
+    }
+
     async sandbox(): Promise<never> {
       throw new Error("unused")
     }
