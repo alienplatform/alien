@@ -143,7 +143,8 @@ fn linked_sandbox_routes(
     ctx: &ResourceControllerContext<'_>,
     config: &Container,
 ) -> Vec<(String, String)> {
-    config
+    // Keyed by sandbox, so a sandbox linked more than once is forwarded once
+    let routes: std::collections::BTreeMap<String, String> = config
         .links
         .iter()
         .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
@@ -153,7 +154,8 @@ fn linked_sandbox_routes(
                 .ok()?;
             Some((link.id.clone(), sandbox.route_url?))
         })
-        .collect()
+        .collect();
+    routes.into_iter().collect()
 }
 
 #[controller]
@@ -292,15 +294,7 @@ impl LocalContainerController {
         // The bindings of linked Local sandboxes as the controller resolved them, before any
         // deployment variable is added. Only these get a host token file mounted: a variable
         // shaped like a sandbox binding would otherwise mount any host file it names.
-        let sandbox_bindings: Vec<(String, String)> = config
-            .links
-            .iter()
-            .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
-            .filter_map(|link| {
-                let key = alien_core::binding_env_var_name(link.id());
-                env_vars.get(&key).map(|value| (key, value.clone()))
-            })
-            .collect();
+        let sandbox_bindings = local_utils::linked_sandbox_bindings(&config.links, &env_vars);
 
         for var in applicable_secret_environment_variables(
             &config.id,

@@ -357,6 +357,24 @@ pub(super) fn rewrite_localhost_urls_for_container(
 /// Where a linked Local sandbox's token file is mounted in a container, one file per binding.
 const SANDBOX_TOKEN_DIR: &str = "/run/alien/sandbox";
 
+/// The bindings of the Local sandboxes a container links, as the controller resolved them from
+/// those links, once per sandbox. A sandbox linked more than once still gets one token mount:
+/// Docker refuses two mounts at the same container path.
+pub(super) fn linked_sandbox_bindings(
+    links: &[alien_core::ResourceRef],
+    env_vars: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let bindings: std::collections::BTreeMap<String, String> = links
+        .iter()
+        .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
+        .filter_map(|link| {
+            let key = binding_env_var_name(link.id());
+            env_vars.get(&key).map(|value| (key, value.clone()))
+        })
+        .collect();
+    bindings.into_iter().collect()
+}
+
 /// Makes each linked Local sandbox reachable from inside a container.
 ///
 /// The binding points at the manager's route on loopback and at a token file on the host; neither
@@ -605,6 +623,27 @@ mod tests {
             BindingValue::value("/run/alien/sandbox/alien_code_binding.token".to_string()),
             "the linked binding replaces the variable written over it"
         );
+    }
+
+    /// Linking the same sandbox twice mounts its token once; Docker refuses a container whose
+    /// mounts repeat a path.
+    #[test]
+    fn a_sandbox_linked_twice_mounts_its_token_once() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        std::fs::write(&token, "t").unwrap();
+        let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let link = alien_core::ResourceRef::new(alien_core::Sandbox::RESOURCE_TYPE, "code");
+        let unlinked = alien_core::ResourceRef::new(alien_core::Sandbox::RESOURCE_TYPE, "absent");
+
+        let bindings = linked_sandbox_bindings(&[link.clone(), link, unlinked], &env);
+        assert_eq!(bindings.len(), 1, "{bindings:?}");
+        assert_eq!(bindings[0].0, binding_env_var_name("code"));
+
+        let mut mounts = Vec::new();
+        mount_local_sandboxes_for_container(bindings, &mut env, &mut mounts).unwrap();
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(mounts[0].host_path, token);
     }
 
     /// The bindings as the controller resolved them from the container's links.
