@@ -179,14 +179,21 @@ fn bind_setup_authorization(
     let Some(metadata) = state.runtime_metadata.as_mut() else {
         return;
     };
-    if metadata
-        .setup_update_authorization
-        .as_ref()
-        .is_some_and(|authorization| authorization.setup_fingerprint != installed.setup_fingerprint)
-    {
-        warn!(
-            "Ignoring a setup update authorization for a different installed setup; upgrade to the chart version the deployment is waiting for"
-        );
+    let Some(authorization) = metadata.setup_update_authorization.as_ref() else {
+        return;
+    };
+    if authorization.setup_fingerprint != installed.setup_fingerprint {
+        // The loop runs every second; say it once per authorization.
+        static WARNED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let mut warned = WARNED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if warned.as_deref() != Some(authorization.nonce.as_str()) {
+            warn!(
+                "Ignoring a setup update authorization for a different installed setup; upgrade to the chart version the deployment is waiting for"
+            );
+            *warned = Some(authorization.nonce.clone());
+        }
         metadata.setup_update_authorization = None;
     }
 }
