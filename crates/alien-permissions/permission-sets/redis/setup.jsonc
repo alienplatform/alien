@@ -109,14 +109,14 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackRedisSecretMetadata",
-              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && resource.name.endsWith(\"-auth\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceRedisSecretMetadata",
-              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name == \"projects/${projectNumber}/secrets/${resourceName}-auth\" && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
             }
           }
         }

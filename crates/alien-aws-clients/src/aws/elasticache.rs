@@ -763,7 +763,7 @@ mod tests {
 
     // The exact error body ElastiCache returned for a missing group in the test account.
     const NOT_FOUND: &str = r#"<ErrorResponse xmlns="http://elasticache.amazonaws.com/doc/2015-02-02/">
-  <Error><Type>Sender</Type><Code>ReplicationGroupNotFoundFault</Code><Message>ReplicationGroup r36-nope not found.</Message></Error>
+  <Error><Type>Sender</Type><Code>ReplicationGroupNotFoundFault</Code><Message>ReplicationGroup redis-nope not found.</Message></Error>
   <RequestId>cdf1d3a6-c259-4677-8c99-5bccb80cd8a8</RequestId></ErrorResponse>"#;
 
     #[test]

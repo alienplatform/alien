@@ -135,10 +135,10 @@ pub(crate) async fn resolve_memorystore(
     )
 }
 
-/// `(resource group, cluster name)` from a database resource ID such as
+/// `(subscription, resource group, cluster name)` from a database resource ID such as
 /// `/subscriptions/s/resourceGroups/rg/providers/Microsoft.Cache/redisEnterprise/c/databases/default`.
 #[cfg(feature = "azure")]
-pub(crate) fn parse_database_id(id: &str) -> Option<(String, String)> {
+pub(crate) fn parse_database_id(id: &str) -> Option<(String, String, String)> {
     let parts: Vec<&str> = id.trim_matches('/').split('/').collect();
     let at = |key: &str| {
         parts
@@ -148,7 +148,11 @@ pub(crate) fn parse_database_id(id: &str) -> Option<(String, String)> {
             .map(|value| value.to_string())
     };
     if at("providers")?.eq_ignore_ascii_case("Microsoft.Cache") && !at("databases")?.is_empty() {
-        Some((at("resourceGroups")?, at("redisEnterprise")?))
+        Some((
+            at("subscriptions")?,
+            at("resourceGroups")?,
+            at("redisEnterprise")?,
+        ))
     } else {
         None
     }
@@ -165,19 +169,21 @@ pub(crate) async fn resolve_azure_managed_redis(
         "databaseResourceId",
         &binding.database_resource_id,
     )?;
-    let (resource_group, cluster) = parse_database_id(&database_id).ok_or_else(|| {
-        AlienError::new(ErrorData::config_invalid(
-            binding_name,
-            "databaseResourceId must be an Azure Managed Redis database resource ID",
-        ))
-    })?;
-    let keys = client.list_keys(&resource_group, &cluster).await.context(
-        ErrorData::RedisCredentialResolutionFailed {
+    let (subscription, resource_group, cluster) =
+        parse_database_id(&database_id).ok_or_else(|| {
+            AlienError::new(ErrorData::config_invalid(
+                binding_name,
+                "databaseResourceId must be an Azure Managed Redis database resource ID",
+            ))
+        })?;
+    let keys = client
+        .list_keys(&subscription, &resource_group, &cluster)
+        .await
+        .context(ErrorData::RedisCredentialResolutionFailed {
             binding_name: binding_name.to_string(),
             source_locator: database_id.clone(),
             reason: "listKeys failed".to_string(),
-        },
-    )?;
+        })?;
     let password = keys
         .primary_key
         .filter(|key| !key.is_empty())
@@ -205,10 +211,14 @@ mod azure_tests {
 
     #[test]
     fn parses_the_database_id_the_controller_emits() {
-        let id = "/subscriptions/s/resourceGroups/my-rg/providers/Microsoft.Cache/redisEnterprise/test-cache/databases/default";
+        let id = "/subscriptions/sub-from-id/resourceGroups/my-rg/providers/Microsoft.Cache/redisEnterprise/test-cache/databases/default";
         assert_eq!(
             parse_database_id(id),
-            Some(("my-rg".to_string(), "test-cache".to_string()))
+            Some((
+                "sub-from-id".to_string(),
+                "my-rg".to_string(),
+                "test-cache".to_string()
+            ))
         );
         assert_eq!(
             parse_database_id("/subscriptions/s/resourceGroups/rg"),
@@ -371,7 +381,7 @@ mod tests {
                 port: BindingValue::value(10000),
                 username: BindingValue::value("default".to_string()),
                 database_resource_id: BindingValue::value(
-                    "/subscriptions/s/resourceGroups/my-rg/providers/Microsoft.Cache/redisEnterprise/test-cache/databases/default".to_string(),
+                    "/subscriptions/sub-from-id/resourceGroups/my-rg/providers/Microsoft.Cache/redisEnterprise/test-cache/databases/default".to_string(),
                 ),
             }
         }
@@ -382,8 +392,10 @@ mod tests {
             client
                 .expect_list_keys()
                 .times(1)
-                .withf(|group, cluster| group == "my-rg" && cluster == "test-cache")
-                .returning(|_, _| {
+                .withf(|subscription, group, cluster| {
+                    subscription == "sub-from-id" && group == "my-rg" && cluster == "test-cache"
+                })
+                .returning(|_, _, _| {
                     Ok(serde_json::from_str::<ManagedRedisAccessKeys>(
                         r#"{"primaryKey":"k1","secondaryKey":"k2"}"#,
                     )
@@ -400,7 +412,7 @@ mod tests {
         #[tokio::test]
         async fn disabled_key_authentication_is_an_invalid_credential() {
             let mut client = MockManagedRedisApi::new();
-            client.expect_list_keys().returning(|_, _| {
+            client.expect_list_keys().returning(|_, _, _| {
                 Ok(serde_json::from_str::<ManagedRedisAccessKeys>("{}").unwrap())
             });
             let error = resolve_azure_managed_redis("cache", &binding(), &client)

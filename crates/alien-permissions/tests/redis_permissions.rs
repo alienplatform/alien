@@ -553,3 +553,90 @@ fn azure_resource_bindings_name_only_their_own_cluster() {
         assert!(cluster_bound > 0, "{resource}: cluster grants missing");
     }
 }
+
+/// The stack-level Redis sets read (data-access) or describe (setup) only `-auth` secrets, so a
+/// workload holding them cannot reach another resource's secret in the same stack.
+#[test]
+fn stack_level_redis_sets_do_not_reach_other_resources_secrets() {
+    // AWS
+    let foreign = Request::new(
+        "secretsmanager:GetSecretValue",
+        format!("{SECRETS}:my-stack-db-password-AbCdEf"),
+    )
+    .resource_tags(OWN);
+    let own = Request::new(
+        "secretsmanager:GetSecretValue",
+        format!("{SECRETS}:my-stack-cache-auth-AbCdEf"),
+    )
+    .resource_tags(OWN);
+    let statements = aws("redis/data-access", BindingTarget::Stack, "cache");
+    assert!(allowed(&statements, &own));
+    assert!(!allowed(&statements, &foreign));
+
+    // GCP
+    let generator = GcpRuntimePermissionsGenerator::new();
+    for id in ["redis/data-access", "redis/setup"] {
+        let plan = generator
+            .generate_grant_plan(
+                get_permission_set(id).unwrap(),
+                BindingTarget::Stack,
+                &gcp_context("cache"),
+            )
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        let expressions: Vec<_> = plan
+            .bindings
+            .iter()
+            .filter_map(|b| b.condition.as_ref())
+            .map(|c| c.expression.clone())
+            .filter(|e| e.contains("Secret"))
+            .collect();
+        assert!(!expressions.is_empty(), "{id}");
+        for expression in expressions {
+            assert!(
+                !gcp_condition_allows(
+                    &expression,
+                    "projects/123456789012/secrets/my-stack-db-password"
+                ),
+                "{id}: {expression}"
+            );
+            assert!(
+                !gcp_condition_allows(
+                    &expression,
+                    "projects/123456789012/secrets/my-stack-db-password/versions/1"
+                ),
+                "{id}"
+            );
+        }
+    }
+}
+
+/// Setup's metadata read on a resource's secret is the exact `-auth` secret, not a prefix.
+#[test]
+fn gcp_setup_metadata_read_is_the_exact_auth_secret() {
+    let plan = GcpRuntimePermissionsGenerator::new()
+        .generate_grant_plan(
+            get_permission_set("redis/setup").unwrap(),
+            BindingTarget::Resource,
+            &gcp_context("cache"),
+        )
+        .unwrap();
+    let expression = plan
+        .bindings
+        .iter()
+        .filter_map(|b| b.condition.as_ref())
+        .map(|c| c.expression.clone())
+        .find(|e| e.contains("secrets/cache-auth"))
+        .expect("a resource-scoped secret condition");
+    assert!(gcp_condition_allows(
+        &expression,
+        "projects/123456789012/secrets/cache-auth"
+    ));
+    assert!(!gcp_condition_allows(
+        &expression,
+        "projects/123456789012/secrets/cache-prod-auth"
+    ));
+    assert!(!gcp_condition_allows(
+        &expression,
+        "projects/123456789012/secrets/cache-prod"
+    ));
+}

@@ -473,7 +473,10 @@ impl LocalRedisManager {
             .context(container_error(
                 name,
                 "start",
-                "Failed to start the container",
+                &format!(
+                    "Failed to start the container. If another program took host port {}, stop it and retry",
+                    metadata.port
+                ),
             ))?;
         Ok(())
     }
@@ -663,6 +666,7 @@ async fn remove_container(docker: &Docker, name: &str) -> Result<()> {
             name,
             Some(RemoveContainerOptions {
                 force: true,
+                v: true,
                 ..Default::default()
             }),
         )

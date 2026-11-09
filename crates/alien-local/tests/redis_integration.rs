@@ -83,12 +83,25 @@ async fn volumes_named(docker: &Docker, fragment: &str) -> usize {
         .len()
 }
 
+async fn all_volumes(docker: &Docker) -> std::collections::BTreeSet<String> {
+    docker
+        .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+        .await
+        .unwrap()
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|volume| volume.name)
+        .collect()
+}
+
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn persistent_server_keeps_data_across_restarts_and_setting_changes_then_deletes_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let manager = LocalRedisManager::new(dir.path().to_path_buf());
     let docker = docker();
+    let volumes_before = all_volumes(&docker).await;
 
     manager
         .start_redis("cache", spec(true, "volatile-lru", 64))
@@ -150,6 +163,8 @@ async fn persistent_server_keeps_data_across_restarts_and_setting_changes_then_d
     assert!(manager.try_get_binding("cache").unwrap().is_none());
     assert_eq!(containers_named(&docker, "alien-redis-").await, 0);
     assert_eq!(volumes_named(&docker, "alien-redis-").await, 0);
+    // The image declares an anonymous /data volume; none may be left behind.
+    assert_eq!(all_volumes(&docker).await, volumes_before);
     assert!(!dir.path().join("redis").join("cache").exists());
 }
 
@@ -158,6 +173,8 @@ async fn persistent_server_keeps_data_across_restarts_and_setting_changes_then_d
 async fn data_is_lost_on_restart_when_persistence_is_off() {
     let dir = tempfile::tempdir().unwrap();
     let manager = LocalRedisManager::new(dir.path().to_path_buf());
+    let docker = docker();
+    let volumes_before = all_volumes(&docker).await;
 
     manager
         .start_redis("cache", spec(false, "allkeys-lru", 64))
@@ -185,6 +202,7 @@ async fn data_is_lost_on_restart_when_persistence_is_off() {
         .unwrap();
     assert_eq!(command(&binding, &["GET", "k2"]).await, "$1\r\nv\r\n");
     manager.delete_redis("cache").await.unwrap();
+    assert_eq!(all_volumes(&docker).await, volumes_before);
 }
 
 #[tokio::test]
@@ -408,4 +426,61 @@ async fn a_settings_change_keeps_every_acknowledged_write() {
         .unwrap();
     assert!(command(&binding, &["DBSIZE"]).await.contains(":200"));
     manager.delete_redis("cache").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_pruned_container_and_a_server_started_while_docker_was_down_come_back_on_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = LocalRedisManager::new(dir.path().to_path_buf());
+    let docker = docker();
+    manager
+        .start_redis("cache", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    let binding = manager.get_binding("cache").unwrap();
+
+    // Someone prunes the container behind our back.
+    let name = containers_named_exact(&docker).await;
+    docker
+        .remove_container(
+            &name,
+            Some(bollard::query_parameters::RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(manager.check_health("cache").await.is_err());
+
+    manager
+        .start_redis("cache", spec(true, "volatile-lru", 64))
+        .await
+        .unwrap();
+    manager.check_health("cache").await.unwrap();
+    assert_eq!(manager.get_binding("cache").unwrap(), binding);
+    assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
+    manager.delete_redis("cache").await.unwrap();
+}
+
+async fn containers_named_exact(docker: &Docker) -> String {
+    docker
+        .list_containers(Some(bollard::query_parameters::ListContainersOptions {
+            all: true,
+            filters: Some(std::collections::HashMap::from([(
+                "name".to_string(),
+                vec!["alien-redis-".to_string()],
+            )])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .and_then(|c| c.names)
+        .and_then(|n| n.into_iter().next())
+        .unwrap()
+        .trim_start_matches('/')
+        .to_string()
 }

@@ -202,8 +202,11 @@ pub trait ManagedRedisApi: Send + Sync + std::fmt::Debug {
 
     /// Reads the database access keys. The management identity of a deployment never calls
     /// this; it exists for the workload-side binding and for tests.
+    ///
+    /// `subscription_id` is the database's own subscription, which need not be the client's.
     async fn list_keys(
         &self,
+        subscription_id: &str,
         resource_group: &str,
         cluster_name: &str,
     ) -> Result<ManagedRedisAccessKeys>;
@@ -287,13 +290,14 @@ impl AzureManagedRedisClient {
         response: reqwest::Response,
         what: &str,
     ) -> Result<T> {
-        let body = response
-            .text()
-            .await
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
-                message: format!("Azure {what}: failed to read response body"),
-            })?;
+        let body =
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: format!("Azure {what}: failed to read response body"),
+                })?;
         serde_json::from_str(&body)
             .into_alien_error()
             .context(ErrorData::SerializationError {
@@ -454,10 +458,13 @@ impl ManagedRedisApi for AzureManagedRedisClient {
 
     async fn list_keys(
         &self,
+        subscription_id: &str,
         resource_group: &str,
         cluster_name: &str,
     ) -> Result<ManagedRedisAccessKeys> {
-        let path = format!("{}/listKeys", self.database_path(resource_group, cluster_name));
+        let path = format!(
+            "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Cache/redisEnterprise/{cluster_name}/databases/{DEFAULT_DATABASE}/listKeys"
+        );
         let req = self.signed(Method::POST, &path, None).await?;
         let response = self
             .base
@@ -465,13 +472,14 @@ impl ManagedRedisApi for AzureManagedRedisClient {
             .await?;
         // The body holds the access keys, and serde's parse errors can quote the offending value:
         // report only that the parse failed.
-        let body = response
-            .text()
-            .await
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
-                message: "Azure ListManagedRedisKeys: failed to read response body".to_string(),
-            })?;
+        let body =
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: "Azure ListManagedRedisKeys: failed to read response body".to_string(),
+                })?;
         serde_json::from_str(&body).map_err(|_| {
             alien_error::AlienError::new(ErrorData::SerializationError {
                 message: "Azure ListManagedRedisKeys: the response did not parse (body withheld \

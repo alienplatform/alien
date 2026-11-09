@@ -628,7 +628,7 @@ mod tests {
 
     // Trimmed from a real instance read in the test project (Valkey, cluster disabled).
     const INSTANCE: &str = r#"{
-      "name": "projects/p/locations/us-east4/instances/r36-m0",
+      "name": "projects/p/locations/us-east4/instances/redis-m0",
       "state": "ACTIVE", "mode": "CLUSTER_DISABLED", "engineVersion": "VALKEY_9_0",
       "nodeType": "STANDARD_SMALL", "shardCount": 1, "replicaCount": 0,
       "authorizationMode": "TOKEN_AUTH", "transitEncryptionMode": "SERVER_AUTHENTICATION",

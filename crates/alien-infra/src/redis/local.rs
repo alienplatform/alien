@@ -116,6 +116,16 @@ impl LocalRedisController {
         let config = ctx.desired_resource_config::<Redis>()?;
         let manager = manager(ctx)?;
 
+        // Start is idempotent: it is a no-op for a running server and brings back one whose
+        // container was stopped, pruned, or never started because Docker was down.
+        manager
+            .start_redis(&config.id, spec_for(&config)?)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to bring local Redis '{}' back up", config.id),
+                resource_id: Some(config.id.clone()),
+            })?;
+
         manager
             .check_health(&config.id)
             .await
@@ -211,10 +221,18 @@ impl LocalRedisController {
         state = CreateFailed,
         status = ResourceStatus::ProvisionFailed
     );
-    terminal_state!(
+    // A failed refresh is retried on the next step, so Redis returns once Docker is back.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
@@ -345,5 +363,64 @@ mod tests {
         // The persisted controller state must not hold it either.
         let state = serde_json::to_string(&controller).unwrap();
         assert!(!state.contains("s3cr3t-value"));
+    }
+
+    /// A pruned container (or Docker being down at start) must not leave Redis failed: the next
+    /// steps start it again with the same connection details.
+    #[tokio::test]
+    #[ignore = "requires Docker"]
+    async fn a_pruned_container_is_started_again_by_the_next_step() {
+        use alien_core::{Platform, ResourceStatus};
+
+        use crate::core::controller_test::SingleControllerExecutor;
+
+        let directory = tempfile::tempdir().unwrap();
+        let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+        let manager = bindings.redis_manager().clone();
+        let services = std::sync::Arc::new(
+            crate::DefaultPlatformServiceProvider::with_local_bindings(bindings.clone()),
+        );
+        let config = redis(Some("64Mi"), true, false);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(LocalRedisController::default())
+            .platform(Platform::Local)
+            .client_config(alien_core::ClientConfig::Local {
+                state_directory: directory.path().to_string_lossy().into_owned(),
+            })
+            .service_provider(services)
+            .build()
+            .await
+            .unwrap();
+        executor
+            .run_until_status(ResourceStatus::Running)
+            .await
+            .unwrap();
+        let binding = manager.get_binding("cache").unwrap();
+
+        // The test owns every `alien-redis-` container on the box while it runs (the Docker
+        // tests run one at a time).
+        let listed = std::process::Command::new("docker")
+            .args(["ps", "-aq", "--filter", "name=alien-redis-"])
+            .output()
+            .unwrap();
+        let ids = String::from_utf8(listed.stdout).unwrap();
+        assert_eq!(ids.split_whitespace().count(), 1, "one Redis container");
+        let removed = std::process::Command::new("docker")
+            .args(["rm", "-f"])
+            .args(ids.split_whitespace())
+            .status()
+            .unwrap();
+        assert!(removed.success());
+        assert!(manager.check_health("cache").await.is_err());
+
+        for _ in 0..3 {
+            executor.step().await.unwrap();
+        }
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        manager.check_health("cache").await.unwrap();
+        assert_eq!(manager.get_binding("cache").unwrap(), binding);
+
+        manager.delete_redis("cache").await.unwrap();
     }
 }
