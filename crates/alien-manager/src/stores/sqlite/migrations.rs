@@ -428,6 +428,11 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             expires_at INTEGER NOT NULL,
             revision INTEGER NOT NULL
         )",
+        // Generation of each deployment's commands key; see `auth::commands_key`.
+        "CREATE TABLE IF NOT EXISTS commands_key_generations (
+            deployment_id TEXT PRIMARY KEY,
+            generation INTEGER NOT NULL
+        )",
         "CREATE TABLE IF NOT EXISTS deployment_values (
             scope TEXT NOT NULL,
             slot TEXT NOT NULL,

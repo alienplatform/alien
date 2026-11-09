@@ -80,4 +80,12 @@ pub trait TokenStore: Send + Sync {
 
     /// List all tokens (returns key_prefix for identification, never key_hash).
     async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError>;
+
+    /// The deployment's commands-key generation. It starts at 0 and only grows.
+    async fn commands_key_generation(&self, deployment_id: &str) -> Result<u64, AlienError>;
+
+    /// Delete every commands key of the deployment and move its generation
+    /// forward, in one step. The commands key is derived from the generation,
+    /// so a revoked key is never issued again.
+    async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError>;
 }

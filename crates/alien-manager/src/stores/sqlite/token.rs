@@ -195,4 +195,58 @@ impl TokenStore for SqliteTokenStore {
         }
         Ok(results)
     }
+
+    async fn commands_key_generation(&self, deployment_id: &str) -> Result<u64, AlienError> {
+        let conn = self.db.conn().lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT generation FROM commands_key_generations WHERE deployment_id = ?1",
+                [deployment_id.to_owned()],
+            )
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to query the commands key generation".to_string(),
+            })?;
+        let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+            message: "Failed to read the commands key generation".to_string(),
+        })?
+        else {
+            return Ok(0);
+        };
+        Ok(RowParser::new(&row)
+            .i64(0, "generation")?
+            .try_into()
+            .unwrap_or_default())
+    }
+
+    async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError> {
+        let failed = || GenericError {
+            message: "Commands key revocation failed".to_string(),
+        };
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        tx.execute(
+            "DELETE FROM tokens WHERE type = 'commands-receiver' AND deployment_id = ?1",
+            [deployment_id.to_owned()],
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.execute(
+            "INSERT INTO commands_key_generations (deployment_id, generation) VALUES (?1, 1) \
+             ON CONFLICT(deployment_id) DO UPDATE SET \
+             generation = commands_key_generations.generation + 1",
+            [deployment_id.to_owned()],
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.commit().await.into_alien_error().context(failed())?;
+        Ok(())
+    }
 }

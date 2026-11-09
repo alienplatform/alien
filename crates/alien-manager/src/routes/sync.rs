@@ -2740,6 +2740,34 @@ mod tests {
         assert_eq!(manager.sync(&key).await, StatusCode::UNAUTHORIZED);
     }
 
+    /// A revoked commands key never comes back: a later release with an
+    /// unmarked receiver gets a different key, and the old one stays refused.
+    #[tokio::test]
+    async fn a_revoked_commands_key_is_not_issued_again() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        let old_key = manager.issue_commands_key().await;
+
+        manager
+            .run_release_with_receivers(&[("old-api", true)])
+            .await;
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert!(!manager.commands_key_is_accepted().await);
+
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        let new_key = manager.issue_commands_key().await;
+
+        assert_ne!(new_key, old_key, "a revoked key must not be derived again");
+        assert_eq!(manager.sync(&old_key).await, StatusCode::UNAUTHORIZED);
+        assert!(manager.commands_key_is_accepted().await);
+        assert_ne!(manager.sync(&new_key).await, StatusCode::UNAUTHORIZED);
+    }
+
     /// The Operator names the release it runs, but the manager knows which
     /// release it assigned. A report of an older, fully marked release, or of a
     /// release with no stack, does not end the commands key while the

@@ -1471,6 +1471,14 @@ mod tests {
         async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError> {
             unreachable!("deployment deletion must not list tokens")
         }
+
+        async fn commands_key_generation(&self, _deployment_id: &str) -> Result<u64, AlienError> {
+            unreachable!("deployment deletion must not read a commands key generation")
+        }
+
+        async fn revoke_commands_keys(&self, _deployment_id: &str) -> Result<(), AlienError> {
+            unreachable!("deployment deletion must not revoke commands keys")
+        }
     }
 
     fn deployment_record() -> DeploymentRecord {
