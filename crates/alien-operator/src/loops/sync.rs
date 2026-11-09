@@ -357,6 +357,7 @@ async fn sync_with_manager(
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
+        installed_setup: state.config.installed_setup.clone(),
     };
     let mut sync_input = SyncInput::builder(sync_request);
     if let Some(operator_image) = operator_image.cloned() {

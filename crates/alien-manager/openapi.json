@@ -2698,6 +2698,17 @@
                 },
                 "description": "Absent for older Operators. This report has no secret values."
               },
+              "installedSetup": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/InstalledSetup",
+                    "description": "The setup the installed chart carries. An observation the manager may\nact on under its own rules; never a grant."
+                  }
+                ]
+              },
               "maxSupportedDeploymentProtocolVersion": {
                 "type": [
                   "integer",
@@ -11370,6 +11381,36 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "InstalledSetup": {
+        "type": "object",
+        "description": "The setup an installed chart was built for, read from the Operator's own\nenvironment. It changes only when the chart's setup changes.",
+        "required": [
+          "releaseId",
+          "setupTarget",
+          "setupFingerprint",
+          "setupFingerprintVersion"
+        ],
+        "properties": {
+          "releaseId": {
+            "type": "string",
+            "description": "Release the chart was built from."
+          },
+          "setupFingerprint": {
+            "type": "string",
+            "description": "Setup compatibility fingerprint embedded in the chart."
+          },
+          "setupFingerprintVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fingerprint algorithm version.",
+            "minimum": 0
+          },
+          "setupTarget": {
+            "type": "string",
+            "description": "Setup target the chart was generated for."
           }
         }
       },

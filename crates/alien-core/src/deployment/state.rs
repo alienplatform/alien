@@ -45,6 +45,19 @@ pub struct SetupUpdateAuthorization {
     pub setup_fingerprint_version: u32,
 }
 
+/// A setup report the manager declined, for display next to the waiting update.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SetupReportRefusal {
+    /// Plain-language reason, safe to show to the customer.
+    pub reason: String,
+    /// Release the chart reported.
+    pub reported_release_id: String,
+    /// When the manager declined it.
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
 /// A credential outage's durable retry window, scoped to its deployment phase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -174,6 +187,11 @@ pub struct RuntimeMetadata {
     /// and canonical resource digests, never the imported payload or tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_update_authorization: Option<SetupUpdateAuthorization>,
+
+    /// Why the manager last declined a setup report from the installed chart,
+    /// with when. Cleared when a report is accepted or no longer needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_report_refusal: Option<SetupReportRefusal>,
 
     /// Last generated CLI package revision whose direct setup was applied.
     /// This lets a newer generated CLI refresh setup-owned infrastructure once

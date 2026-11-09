@@ -1658,6 +1658,7 @@ mod tests {
                 }),
                 log_collector: Some(LogCollectorDefault::PodApi),
                 registry_pull_secret: false,
+                setup: None,
             },
         )
         .unwrap();

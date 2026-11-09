@@ -30,7 +30,7 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::error::{ErrorData, Result};
 
@@ -162,6 +162,35 @@ impl DeploymentLoopTransport for OperatorTransport {
     }
 }
 
+/// Drops a setup update authorization minted for a different installed setup.
+///
+/// The manager mints an authorization when the installed chart reports a setup.
+/// If the chart is rolled back afterwards, this Operator restarts with the older
+/// fingerprint and must not apply an authorization that belongs to the newer
+/// chart. Without a recorded setup (not installed from a chart that carries one)
+/// the authorization is left as it is.
+fn bind_setup_authorization(
+    state: &mut DeploymentState,
+    installed: Option<&alien_core::sync::InstalledSetup>,
+) {
+    let Some(installed) = installed else {
+        return;
+    };
+    let Some(metadata) = state.runtime_metadata.as_mut() else {
+        return;
+    };
+    if metadata
+        .setup_update_authorization
+        .as_ref()
+        .is_some_and(|authorization| authorization.setup_fingerprint != installed.setup_fingerprint)
+    {
+        warn!(
+            "Ignoring a setup update authorization for a different installed setup; upgrade to the chart version the deployment is waiting for"
+        );
+        metadata.setup_update_authorization = None;
+    }
+}
+
 /// Run the deployment loop
 ///
 /// This loop:
@@ -218,6 +247,8 @@ pub(crate) async fn run_deployment_continuously(
         Some(s) => s,
         None => return Ok((0, Duration::ZERO)),
     };
+
+    bind_setup_authorization(&mut current, state.config.installed_setup.as_ref());
 
     // Check if there's a target to deploy
     let target_release = match &current.target_release {
@@ -845,6 +876,67 @@ mod tests {
         }
     }
 
+    fn state_with_authorization(fingerprint: &str) -> DeploymentState {
+        DeploymentState {
+            platform: Platform::Test,
+            status: DeploymentStatus::UpdatePending,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                setup_update_authorization: Some(alien_core::SetupUpdateAuthorization {
+                    nonce: "n".into(),
+                    baseline_frozen_digest: "a".into(),
+                    target_frozen_digest: "b".into(),
+                    release_id: "rel_2".into(),
+                    setup_target: "helm".into(),
+                    setup_fingerprint: fingerprint.into(),
+                    setup_fingerprint_version: 1,
+                }),
+                ..alien_core::RuntimeMetadata::default()
+            }),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn installed(fingerprint: &str) -> alien_core::sync::InstalledSetup {
+        alien_core::sync::InstalledSetup {
+            release_id: "rel_1".into(),
+            setup_target: "helm".into(),
+            setup_fingerprint: fingerprint.into(),
+            setup_fingerprint_version: 1,
+        }
+    }
+
+    /// After a rollback the Operator restarts with the older fingerprint, so an
+    /// authorization minted for the newer chart must go unused.
+    #[test]
+    fn an_authorization_for_another_installed_setup_goes_unused() {
+        let has_authorization = |state: &DeploymentState| {
+            state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .setup_update_authorization
+                .is_some()
+        };
+
+        let mut matching = state_with_authorization("fp_new");
+        bind_setup_authorization(&mut matching, Some(&installed("fp_new")));
+        assert!(has_authorization(&matching));
+
+        let mut rolled_back = state_with_authorization("fp_new");
+        bind_setup_authorization(&mut rolled_back, Some(&installed("fp_old")));
+        assert!(!has_authorization(&rolled_back));
+
+        let mut no_record = state_with_authorization("fp_new");
+        bind_setup_authorization(&mut no_record, None);
+        assert!(has_authorization(&no_record));
+    }
+
     /// A maintenance refresh is an observation. If the sync loop accepted newer
     /// work while it ran (the claim may already be complete), its checkpoint must
     /// not overwrite that target.
@@ -980,7 +1072,7 @@ mod tests {
             current_release: None,
             target_release: Some(release.clone()),
             stack_state: Some(stack_state),
-            runtime_metadata: Some(RuntimeMetadata {
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
                 prepared_stack: Some(stack),
                 ..Default::default()
             }),

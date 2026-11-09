@@ -6755,6 +6755,18 @@ spec:
               value: "helm"
             - name: OPERATOR_HELM_RELEASE
               value: {{ .Release.Name | quote }}
+            {{- with .Chart.Annotations }}
+            {{- if index . "setup.alien.dev/fingerprint" }}
+            - name: OPERATOR_SETUP_RELEASE_ID
+              value: {{ index . "setup.alien.dev/release-id" | quote }}
+            - name: OPERATOR_SETUP_TARGET
+              value: {{ index . "setup.alien.dev/target" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT
+              value: {{ index . "setup.alien.dev/fingerprint" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT_VERSION
+              value: {{ index . "setup.alien.dev/fingerprint-version" | quote }}
+            {{- end }}
+            {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
@@ -9652,6 +9664,103 @@ runtime:
             }
             assert!(cleanup_pods > 0, "{label} rendered no cleanup hooks");
         }
+    }
+
+    /// Env of the operator container in a rendered chart, by name.
+    fn rendered_operator_env(chart: &HelmChart) -> std::collections::BTreeMap<String, String> {
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("operator env render");
+        for document in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+            let document = YamlValue::deserialize(document).expect("valid Kubernetes YAML");
+            if document["kind"].as_str() != Some("Deployment") {
+                continue;
+            }
+            let Some(containers) = document["spec"]["template"]["spec"]["containers"].as_sequence()
+            else {
+                continue;
+            };
+            for container in containers {
+                let env: std::collections::BTreeMap<String, String> = container["env"]
+                    .as_sequence()
+                    .map(|vars| {
+                        vars.iter()
+                            .filter_map(|var| {
+                                Some((
+                                    var["name"].as_str()?.to_string(),
+                                    var["value"].as_str()?.to_string(),
+                                ))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if env.contains_key("OPERATOR_HELM_RELEASE") {
+                    return env;
+                }
+            }
+        }
+        panic!("no operator Deployment rendered");
+    }
+
+    #[test]
+    fn operator_env_carries_the_setup_the_chart_was_built_for() {
+        let packaged = |setup| {
+            crate::apply_package_defaults(
+                sample_product_chart(),
+                &crate::PackageDefaults {
+                    version: Some("1.5.0"),
+                    management_url: None,
+                    operator_image: None,
+                    log_collector: None,
+                    registry_pull_secret: false,
+                    setup,
+                },
+            )
+            .expect("package defaults")
+        };
+
+        let with_setup = rendered_operator_env(&packaged(Some(crate::SetupDefault {
+            release_id: "rel_2",
+            target: "helm",
+            fingerprint: "sha256:abc",
+            fingerprint_version: 3,
+        })));
+        assert_eq!(with_setup["OPERATOR_SETUP_RELEASE_ID"], "rel_2");
+        assert_eq!(with_setup["OPERATOR_SETUP_TARGET"], "helm");
+        assert_eq!(with_setup["OPERATOR_SETUP_FINGERPRINT"], "sha256:abc");
+        assert_eq!(with_setup["OPERATOR_SETUP_FINGERPRINT_VERSION"], "3");
+
+        // A chart built without a setup keeps the env absent, and keeps the
+        // chart's own annotation.
+        let without = packaged(None);
+        let env = rendered_operator_env(&without);
+        for name in [
+            "OPERATOR_SETUP_RELEASE_ID",
+            "OPERATOR_SETUP_TARGET",
+            "OPERATOR_SETUP_FINGERPRINT",
+            "OPERATOR_SETUP_FINGERPRINT_VERSION",
+        ] {
+            assert!(
+                !env.contains_key(name),
+                "{name} must be absent without a setup"
+            );
+        }
+        let chart_yaml = &without
+            .files
+            .iter()
+            .find(|(path, _)| path.as_str() == "Chart.yaml")
+            .expect("Chart.yaml")
+            .1;
+        assert!(chart_yaml.contains("alien.dev/remote-operator-lifecycle"));
     }
 
     #[test]

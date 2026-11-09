@@ -198,6 +198,25 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
     pub self_update_deployment: Option<String>,
 
+    /// Release the installed chart was built from. With the target,
+    /// fingerprint and fingerprint version below, it is the setup the chart
+    /// carries. The Operator reports it on every sync and applies a setup
+    /// update authorization only while the fingerprint matches.
+    #[arg(long, env = "OPERATOR_SETUP_RELEASE_ID")]
+    pub setup_release_id: Option<String>,
+
+    /// Setup target the installed chart was generated for.
+    #[arg(long, env = "OPERATOR_SETUP_TARGET")]
+    pub setup_target: Option<String>,
+
+    /// Setup compatibility fingerprint embedded in the installed chart.
+    #[arg(long, env = "OPERATOR_SETUP_FINGERPRINT")]
+    pub setup_fingerprint: Option<String>,
+
+    /// Fingerprint algorithm version embedded in the installed chart.
+    #[arg(long, env = "OPERATOR_SETUP_FINGERPRINT_VERSION")]
+    pub setup_fingerprint_version: Option<u32>,
+
     /// Air-gapped: Secret that bundles write deployment targets into.
     #[arg(long, env = "AIRGAP_TARGET_SECRET")]
     pub airgap_target_secret: Option<String>,
@@ -704,6 +723,12 @@ async fn run_operator_cli(
         "chart default bindings",
     )?;
     let operations = parse_operator_operations(args.operations)?;
+    let installed_setup = installed_setup_from_args(
+        args.setup_release_id.clone(),
+        args.setup_target.clone(),
+        args.setup_fingerprint.clone(),
+        args.setup_fingerprint_version,
+    )?;
 
     let operator_config = OperatorConfig::builder()
         .platform(args.platform)
@@ -743,6 +768,7 @@ async fn run_operator_cli(
         .stack_settings(stack_settings)
         .maybe_chart_default_bindings(chart_default_bindings)
         .maybe_operations(operations)
+        .maybe_installed_setup(installed_setup)
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
@@ -1205,6 +1231,39 @@ fn parse_platform(s: &str) -> std::result::Result<Platform, String> {
             "Invalid platform: {}. Must be one of: aws, gcp, azure, kubernetes, local, test",
             s
         )),
+    }
+}
+
+/// The setup a chart records in the Operator's environment. All four values
+/// or none: a partial record would report a setup that no chart carries.
+fn installed_setup_from_args(
+    release_id: Option<String>,
+    setup_target: Option<String>,
+    setup_fingerprint: Option<String>,
+    setup_fingerprint_version: Option<u32>,
+) -> Result<Option<alien_core::sync::InstalledSetup>> {
+    match (
+        release_id,
+        setup_target,
+        setup_fingerprint,
+        setup_fingerprint_version,
+    ) {
+        (None, None, None, None) => Ok(None),
+        (Some(release_id), Some(setup_target), Some(setup_fingerprint), Some(version))
+            if !release_id.is_empty()
+                && !setup_target.is_empty()
+                && !setup_fingerprint.is_empty() =>
+        {
+            Ok(Some(alien_core::sync::InstalledSetup {
+                release_id,
+                setup_target,
+                setup_fingerprint,
+                setup_fingerprint_version: version,
+            }))
+        }
+        _ => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "OPERATOR_SETUP_RELEASE_ID, OPERATOR_SETUP_TARGET, OPERATOR_SETUP_FINGERPRINT and OPERATOR_SETUP_FINGERPRINT_VERSION must be set together and non-empty".to_string(),
+        })),
     }
 }
 

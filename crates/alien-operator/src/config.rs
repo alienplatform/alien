@@ -126,6 +126,11 @@ pub struct OperatorConfig {
     /// installed without a release.
     pub operations: Option<alien_core::OperationsConfig>,
 
+    /// The setup the installed chart carries, from its environment. Reported on
+    /// every sync; a setup update authorization is applied only while its
+    /// fingerprint equals this one.
+    pub installed_setup: Option<alien_core::sync::InstalledSetup>,
+
     /// Accept tunnel requests from the manager for the stack's declared
     /// tunnel endpoints. The operator dials only when the manager advertises
     /// a tunnel URL and the stack declares at least one endpoint.

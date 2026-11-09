@@ -205,6 +205,10 @@ struct AgentSyncWireRequest {
     /// setting values. Opaque to OSS beyond forwarding it.
     #[serde(default)]
     operations_config: Option<alien_core::OperationsConfig>,
+    /// The setup the installed chart carries. An observation the manager may
+    /// act on under its own rules; never a grant.
+    #[serde(default)]
+    installed_setup: Option<alien_core::sync::InstalledSetup>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3468,6 +3472,7 @@ async fn agent_sync(
         application,
         dynamic_containers,
         operations_config,
+        installed_setup,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -3489,6 +3494,26 @@ async fn agent_sync(
     if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
+
+    // Handled before the state report below, which reads the record again.
+    let deployment = match installed_setup.as_ref() {
+        Some(report) => {
+            super::installed_setup::handle_installed_setup(&state, &subject, &deployment, report)
+                .await;
+            match state
+                .deployment_store
+                .get_deployment(&subject, &req.deployment_id)
+                .await
+            {
+                Ok(Some(d)) => d,
+                Ok(None) => {
+                    return ErrorData::not_found_deployment(&req.deployment_id).into_response()
+                }
+                Err(e) => return e.into_response(),
+            }
+        }
+        None => deployment,
+    };
 
     let supported_protocol = max_supported_deployment_protocol_version
         .unwrap_or(1)
