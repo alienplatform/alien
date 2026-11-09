@@ -1447,6 +1447,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "utoipa",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -13190,6 +13191,7 @@ dependencies = [
  "futures-task",
  "futures-util",
  "getrandom 0.2.17",
+ "getrandom 0.3.4",
  "getrandom 0.4.3",
  "hashbrown 0.15.5",
  "hashbrown 0.17.1",
@@ -13204,6 +13206,7 @@ dependencies = [
  "icu_locale_core",
  "icu_normalizer",
  "icu_provider",
+ "idna",
  "indexmap 2.14.1",
  "inout 0.1.4",
  "insta",
@@ -13221,7 +13224,9 @@ dependencies = [
  "mio",
  "moka",
  "nom",
+ "num-bigint",
  "num-integer",
+ "num-iter",
  "num-traits",
  "objc2-core-foundation",
  "object_store",
@@ -13304,6 +13309,7 @@ dependencies = [
  "windows-result 0.4.1",
  "windows-sys 0.52.0",
  "windows-sys 0.61.2",
+ "winnow 0.7.15",
  "winnow 1.0.4",
  "writeable",
  "yasna 0.5.2",
