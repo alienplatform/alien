@@ -38,6 +38,7 @@ dirs = "5.0"
 futures = "0.3"
 fs2 = "0.4"
 which = "6.0"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 
 [dev-dependencies]

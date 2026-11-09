@@ -152,6 +152,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -195,6 +196,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wasm-bindgen",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -240,6 +242,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -252,6 +255,7 @@ dependencies = [
  "progenitor",
  "serde_json",
  "syn 2.0.119",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -265,6 +269,7 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -278,6 +283,7 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -291,6 +297,7 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -304,6 +311,7 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -317,6 +325,7 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -372,6 +381,7 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -391,6 +401,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -409,6 +420,7 @@ dependencies = [
  "serde_json",
  "temp-env",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -447,6 +459,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "which 6.0.3",
+ "workspace-hack",
  "workspace_root",
  "zip 2.4.2",
  "zstd",
@@ -533,6 +546,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "which 6.0.3",
+ "workspace-hack",
  "workspace_root",
  "zip 2.4.2",
 ]
@@ -565,6 +579,7 @@ dependencies = [
  "tempfile",
  "termcolor",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -583,6 +598,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -602,6 +618,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -623,6 +640,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -661,6 +679,7 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -676,6 +695,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -781,6 +801,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which 7.0.3",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -820,6 +841,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -863,6 +885,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "webpki-roots 1.0.10",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -921,6 +944,7 @@ dependencies = [
  "urlencoding",
  "utoipa",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -945,6 +969,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1010,6 +1035,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "workspace-hack",
  "workspace_root",
  "zip 2.4.2",
 ]
@@ -1041,6 +1067,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "urlencoding",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -1093,6 +1120,7 @@ dependencies = [
  "turso",
  "urlencoding",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -1180,6 +1208,7 @@ dependencies = [
  "urlencoding",
  "utoipa",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -1220,6 +1249,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1236,6 +1266,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1292,6 +1323,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "windows-service",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1369,6 +1401,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utoipa",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1395,6 +1428,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1407,6 +1441,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1429,6 +1464,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1466,6 +1502,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "utoipa",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1489,6 +1526,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1542,6 +1580,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
  "zip 2.4.2",
 ]
 
@@ -1561,6 +1600,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1589,6 +1629,7 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1613,6 +1654,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1640,6 +1682,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1659,6 +1702,7 @@ dependencies = [
  "tonic-build",
  "tonic-reflection",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1722,6 +1766,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
  "workspace_root",
 ]
 
@@ -2885,6 +2930,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3230,6 +3276,7 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3744,6 +3791,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4070,6 +4118,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4702,6 +4751,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turso",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4897,6 +4947,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -9753,6 +9804,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -10692,6 +10744,7 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -13325,6 +13378,186 @@ dependencies = [
  "ff",
  "group",
  "hybrid-array",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "anstyle-parse 1.0.0",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-sts",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "axum 0.8.9",
+ "base64 0.23.1",
+ "bitflags 2.13.1",
+ "bon",
+ "bon-macros",
+ "bumpalo",
+ "bytes",
+ "cc",
+ "chrono",
+ "cipher 0.4.4",
+ "clap",
+ "clap_builder",
+ "concurrent-queue",
+ "console",
+ "const-oid 0.10.2",
+ "crc32fast",
+ "crypto-common 0.1.7",
+ "crypto-common 0.2.2",
+ "ctutils",
+ "data-encoding",
+ "der 0.7.10",
+ "digest 0.10.7",
+ "digest 0.11.3",
+ "displaydoc",
+ "ed25519-compact",
+ "either",
+ "errno",
+ "event-listener 5.4.2",
+ "fastrand",
+ "flate2",
+ "form_urlencoded",
+ "futures",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
+ "heck 0.4.1",
+ "hmac 0.12.1",
+ "http-body-util",
+ "httparse",
+ "hybrid-array",
+ "hyper 1.11.1",
+ "hyper-rustls",
+ "hyper-util",
+ "icu_locale_core",
+ "icu_normalizer",
+ "icu_provider",
+ "indexmap 2.14.1",
+ "inout 0.1.4",
+ "insta",
+ "ipnet",
+ "lalrpop-util",
+ "lambda_runtime_api_client",
+ "lazy_static",
+ "libc",
+ "linux-raw-sys 0.12.1",
+ "litemap",
+ "lock_api",
+ "log",
+ "md-5 0.11.0",
+ "memchr",
+ "mio",
+ "moka",
+ "nom",
+ "num-integer",
+ "num-iter",
+ "num-traits",
+ "objc2-core-foundation",
+ "object_store",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "percent-encoding",
+ "phf_shared 0.11.3",
+ "pkcs8 0.10.2",
+ "postgresql_archive",
+ "potential_utf",
+ "predicates",
+ "prettyplease 0.2.37",
+ "proc-macro2",
+ "prost 0.13.5",
+ "quote",
+ "rand 0.10.3",
+ "rand 0.8.7",
+ "rand 0.9.5",
+ "rand_core 0.6.4",
+ "regex",
+ "regex-automata",
+ "regex-syntax",
+ "reqwest 0.12.28",
+ "ring",
+ "rustix 1.1.4",
+ "rustls",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "schemars 0.8.22",
+ "security-framework-sys",
+ "semver",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "serde_spanned 1.1.1",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "simd-adler32",
+ "similar",
+ "slab",
+ "smallvec",
+ "spki 0.7.3",
+ "stable_deref_trait",
+ "strum 0.26.3",
+ "strum 0.27.2",
+ "subtle",
+ "syn 2.0.119",
+ "syn 3.0.3",
+ "sync_wrapper",
+ "temp-env",
+ "time",
+ "tiny-keccak",
+ "tinystr",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_parser",
+ "tonic",
+ "tower",
+ "tower-http 0.6.11",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "tungstenite",
+ "typenum",
+ "unicode-xid",
+ "url",
+ "utoipa",
+ "utoipa-gen",
+ "uuid",
+ "whoami",
+ "winapi",
+ "windows-result 0.4.1",
+ "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
+ "winnow 0.7.15",
+ "winnow 1.0.4",
+ "writeable",
+ "yasna 0.5.2",
+ "yoke",
+ "zerocopy",
+ "zerofrom",
+ "zeroize",
+ "zerotrie",
+ "zerovec",
 ]
 
 [[package]]

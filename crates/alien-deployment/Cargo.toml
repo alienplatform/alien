@@ -49,6 +49,7 @@ dirs = "6"
 
 # OpenAPI (optional)
 utoipa = { version = "5", optional = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-client-core = { workspace = true }

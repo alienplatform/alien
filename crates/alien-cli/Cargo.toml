@@ -104,6 +104,7 @@ toml = { workspace = true }
 crossterm = { workspace = true }
 alien-signing = { workspace = true }
 alien-aws-clients = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }

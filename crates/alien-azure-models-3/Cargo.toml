@@ -19,6 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 serde-aux = "4"
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [build-dependencies]
 alien-azure-model-generator = { path = "../alien-azure-model-generator", version = "3.3.22" }

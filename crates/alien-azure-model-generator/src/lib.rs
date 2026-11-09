@@ -153,6 +153,7 @@ pub fn generate_azure_models(
         let file = std::fs::File::open(source_path).unwrap();
         let mut spec_json: serde_json::Value = serde_json::from_reader(file).unwrap();
         remove_zero_min_length(&mut spec_json);
+        sort_object_keys(&mut spec_json);
         if *spec_name == "ComputeRP.json" {
             // Azure marks VM sizes as extensible strings: the listed SKUs are examples,
             // not an exhaustive set. Progenitor otherwise rejects newer live VM sizes.
@@ -370,6 +371,30 @@ pub fn generate_azure_models(
         );
     }
     total_generated_lines
+}
+
+/// Order every JSON object's keys alphabetically.
+///
+/// With serde_json's `preserve_order` feature, objects keep document order; without
+/// it they are sorted. Cargo unifies that feature across the whole build graph, so it
+/// can differ between builds. Progenitor's choice of which type in a reference cycle
+/// to box depends on schema order, so sorting here keeps the generated models
+/// identical in every build.
+fn sort_object_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            let sorted: BTreeMap<String, serde_json::Value> = std::mem::take(object)
+                .into_iter()
+                .map(|(key, mut child)| {
+                    sort_object_keys(&mut child);
+                    (key, child)
+                })
+                .collect();
+            object.extend(sorted);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(sort_object_keys),
+        _ => {}
+    }
 }
 
 fn remove_zero_min_length(value: &mut serde_json::Value) {

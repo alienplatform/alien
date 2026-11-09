@@ -31,6 +31,7 @@ oci-client = { workspace = true, features = ["rustls-tls"] }
 sha2 = { workspace = true }
 tar = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-terraform = { workspace = true, features = ["test-utils"] }
