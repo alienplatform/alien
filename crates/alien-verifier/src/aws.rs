@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
-use crate::function::StillNewest;
+use crate::function::{Accepting, StillNewest};
 use crate::machines::{plan_roll, roll, MachineApi, RollMachines};
 use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
@@ -295,6 +295,7 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         place: &Place,
         release: &ReleaseBody,
         request: &RollMachines,
+        acceptance: &dyn Accepting,
     ) -> Result<Value> {
         let image = self
             .machines
@@ -306,7 +307,7 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
                 })
             })?;
         let plan = plan_roll(place, release, request, &self.images, &image)?;
-        let rolled = roll(&self.machines, &plan).await?;
+        let rolled = roll(&self.machines, &plan, acceptance).await?;
         serde_json::to_value(rolled).map_err(|error| {
             AlienError::new(ErrorData::ConfigurationInvalid {
                 message: format!("the roll result does not serialize: {error}"),

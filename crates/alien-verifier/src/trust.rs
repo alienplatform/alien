@@ -434,6 +434,45 @@ impl crate::function::StillNewest for Floor<'_> {
     }
 }
 
+/// What a request applying `accepted` does with the install's ledger: records it before the
+/// first write, then rechecks it before each.
+pub struct Acceptance<'a> {
+    floor: Floor<'a>,
+    ledger: &'a Ledger,
+}
+
+impl<'a> Acceptance<'a> {
+    /// The acceptance of `accepted` in the ledger of `prefix` in `store`.
+    pub fn new(store: &'a dyn InstallStore, prefix: &'a str, accepted: &'a Accepted) -> Self {
+        Self {
+            floor: Floor {
+                store,
+                prefix,
+                release: Entry {
+                    sequence: accepted.release.sequence,
+                    digest: accepted.release.digest.clone(),
+                },
+                config: accepted.ledger.config.clone(),
+            },
+            ledger: &accepted.ledger,
+        }
+    }
+}
+
+#[async_trait]
+impl crate::function::StillNewest for Acceptance<'_> {
+    async fn check(&self) -> Result<()> {
+        self.floor.check().await
+    }
+}
+
+#[async_trait]
+impl crate::function::Accepting for Acceptance<'_> {
+    async fn accept(&self) -> Result<()> {
+        store_ledger(self.floor.store, self.floor.prefix, self.ledger).await
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -706,6 +745,31 @@ pub(crate) mod tests {
 
     pub async fn found(store: &MemoryStore) -> Result<Install> {
         find_install(store, &format!("{PREFIX}-verifier"), &aws_install).await
+    }
+
+    /// A fresh install's store and two requests that both passed `accept` against its first
+    /// ledger: release 10 with `older`, release 11 with `newer`. The second overtakes the first
+    /// when they run one after the other.
+    pub async fn overtaking(
+        platform: &str,
+        older: &ReleaseBody,
+        newer: &ReleaseBody,
+    ) -> (MemoryStore, Accepted, Accepted) {
+        let store = MemoryStore::protected(&settings());
+        let install = found(&store).await.unwrap();
+        let accepted = |sequence, body: &ReleaseBody| {
+            accept(
+                &install,
+                &[signer_list()],
+                &signed_release(sequence, body),
+                None,
+                platform,
+                now(),
+            )
+            .unwrap()
+        };
+        let (older, newer) = (accepted(10, older), accepted(11, newer));
+        (store, older, newer)
     }
 
     fn reason(error: AlienError<ErrorData>) -> String {

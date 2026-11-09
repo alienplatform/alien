@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use alien_error::{AlienError, Context};
-use alien_signing::{Entry, InstallId, Trust, Workload};
+use alien_signing::{InstallId, Trust, Workload};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -12,10 +12,10 @@ use tracing::info;
 
 use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
-use crate::function::StillNewest;
+use crate::function::{Accepting, StillNewest};
 use crate::machines::{self, DeleteMachines, RemoveMachines, RollMachines, Scale};
 use crate::plan::{DeleteWorkload, OwnResource, Place, Reads, Request, SetupNetwork};
-use crate::trust::{accept, find_install, store_ledger, Floor, Install, InstallStore};
+use crate::trust::{accept, find_install, Acceptance, Install, InstallStore};
 
 /// The cloud writes one verifier makes.
 #[async_trait]
@@ -62,12 +62,14 @@ pub trait Backend: Send + Sync {
             write.operation()
         )))
     }
-    /// Roll a machine group to the signed release.
+    /// Roll a machine group to the signed release. Every check that refuses the roll comes
+    /// first; then `acceptance` records the release, and it is checked right before each write.
     async fn roll(
         &self,
         _place: &Place,
         _release: &alien_signing::ReleaseBody,
         _request: &RollMachines,
+        _acceptance: &dyn Accepting,
     ) -> Result<Value> {
         Err(refused(
             "this cloud scales machines through `scale`, not `rollMachines`",
@@ -256,19 +258,11 @@ impl Verifier {
         // Every write passed, so the install accepts the release before the first goes out: a
         // request for an older release that arrives while these writes run is refused, and
         // can't land in the middle of them.
-        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
-        let floor = Floor {
-            store: self.store.as_ref(),
-            prefix: &place.prefix,
-            release: Entry {
-                sequence: accepted.release.sequence,
-                digest: accepted.release.digest.clone(),
-            },
-            config: accepted.ledger.config.clone(),
-        };
+        let acceptance = Acceptance::new(self.store.as_ref(), &place.prefix, &accepted);
+        acceptance.accept().await?;
         let mut answers = Vec::with_capacity(request.writes.len());
         for write in &request.writes {
-            answers.push(self.backend.forward(&facts, write, &floor).await?);
+            answers.push(self.backend.forward(&facts, write, &acceptance).await?);
             info!(
                 function = %facts.own_name,
                 operation = write.operation(),
@@ -294,13 +288,10 @@ impl Verifier {
             place.platform(),
             Utc::now(),
         )?;
-        // Check before writing the ledger; the backend refuses with the reason.
-        let rolled = self
-            .backend
-            .roll(&place, &accepted.release.body, request)
-            .await?;
-        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
-        Ok(rolled)
+        let acceptance = Acceptance::new(self.store.as_ref(), &place.prefix, &accepted);
+        self.backend
+            .roll(&place, &accepted.release.body, request, &acceptance)
+            .await
     }
 
     /// The release a scale or removal reads the signed bounds from: verified,

@@ -542,6 +542,7 @@ impl Backend for AzureBackend {
         place: &Place,
         release: &alien_signing::ReleaseBody,
         request: &crate::machines::RollMachines,
+        acceptance: &dyn crate::function::Accepting,
     ) -> Result<Value> {
         let alien_signing::InstallId::Azure {
             subscription,
@@ -560,6 +561,7 @@ impl Backend for AzureBackend {
             release,
             request,
             &self.1,
+            acceptance,
         )
         .await
     }

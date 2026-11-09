@@ -18,6 +18,7 @@ use alien_error::AlienError;
 use alien_signing::ReleaseBody;
 
 use crate::error::{ErrorData, Result};
+use crate::function::Accepting;
 use crate::machines::{
     check_setup_ids, roll_basics, ImageFacts, ImagePins, RollBasics, RollMachines,
 };
@@ -230,6 +231,7 @@ pub fn scale_set_body(
 /// signed minimum when new, keeping its capacity within the signed bounds
 /// otherwise. Answers `{template, version, group}`: the scale set, its
 /// model's etag, and the scale set again.
+#[allow(clippy::too_many_arguments)]
 pub async fn roll(
     api: &dyn AzureMachineApi,
     place: &Place,
@@ -238,6 +240,7 @@ pub async fn roll(
     release: &ReleaseBody,
     request: &RollMachines,
     pins: &ImagePins,
+    acceptance: &dyn Accepting,
 ) -> Result<Value> {
     if request.zone.is_some() {
         return Err(refused("a scale set takes no zone"));
@@ -334,6 +337,8 @@ pub async fn roll(
         &identities,
         &client_id,
     )?;
+    acceptance.accept().await?;
+    acceptance.check().await?;
     let written = api.put(&set_path, &body).await?;
     Ok(json!({
         "template": basics.name,
@@ -427,11 +432,12 @@ mod tests {
     use super::*;
     use crate::fixtures::*;
     use crate::plan::SetupNetwork;
+    use crate::trust::Acceptance;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
     use alien_signing::InstallId;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     const GALLERY: &str = "machines-1111aaaa-2222-3333-4444-555566667777";
     const SUBSCRIPTION: &str = "00000000-0000-0000-0000-000000000000";
@@ -460,6 +466,10 @@ mod tests {
     }
 
     fn release() -> ReleaseBody {
+        release_up_to(3)
+    }
+
+    fn release_up_to(max_size: u32) -> ReleaseBody {
         let stack = Stack::new("shop".to_string())
             .add(
                 ComputeCluster::new("compute".to_string())
@@ -468,7 +478,7 @@ mod tests {
                         instance_type: Some("Standard_D2s_v5".to_string()),
                         profile: None,
                         min_size: 1,
-                        max_size: 3,
+                        max_size,
                         scale_policy: None,
                         nested_virtualization: None,
                         data_disk_gib_range: None,
@@ -521,6 +531,8 @@ mod tests {
         existing: Option<Value>,
         puts: Mutex<Vec<(String, Value)>>,
         posts: Mutex<Vec<(String, Value)>>,
+        /// Held when it reads the scale set, until the test lets it go on.
+        hold_at_scale_set_read: Mutex<Option<Arc<Pause>>>,
     }
 
     #[async_trait]
@@ -531,6 +543,10 @@ mod tests {
             } else if path.contains("/virtualMachines?") {
                 Some(json!({"value": [{"instanceId": "0"}, {"instanceId": "4"}]}))
             } else if path.contains("/virtualMachineScaleSets/") {
+                let hold = self.hold_at_scale_set_read.lock().unwrap().take();
+                if let Some(pause) = hold {
+                    pause.hold().await;
+                }
                 let posted = self.posts.lock().unwrap().len();
                 self.existing.clone().map(|mut set| {
                     if posted > 0 {
@@ -573,6 +589,24 @@ mod tests {
         }
     }
 
+    async fn roll_under(
+        api: &Recorded,
+        release: &ReleaseBody,
+        acceptance: &Acceptance<'_>,
+    ) -> Result<Value> {
+        roll(
+            api,
+            &place(),
+            SUBSCRIPTION,
+            "acme-prod",
+            release,
+            &request(),
+            &pins(),
+            acceptance,
+        )
+        .await
+    }
+
     async fn roll_with(api: &Recorded, request: &RollMachines) -> Result<Value> {
         roll(
             api,
@@ -582,6 +616,7 @@ mod tests {
             &release(),
             request,
             &pins(),
+            &Unopposed,
         )
         .await
     }
@@ -749,6 +784,7 @@ mod tests {
             &body,
             &request,
             &pins(),
+            &Unopposed,
         )
         .await
         .unwrap();
@@ -813,5 +849,50 @@ mod tests {
         assert_eq!(&blob[15..19], &32u32.to_be_bytes());
         assert_eq!(blob.len(), 19 + 32);
         assert_ne!(key, unusable_ssh_key().unwrap());
+    }
+
+    /// Release 10 and release 11 roll the same scale set at once. Release 10 read the scale
+    /// set first and release 11 is accepted and writes the model before release 10 does; release
+    /// 10 must not then write its own, older model over it.
+    #[tokio::test]
+    async fn a_roll_overtaken_by_a_newer_release_never_writes_the_older_model_over_it() {
+        let (older_release, newer_release) = (release_up_to(2), release_up_to(3));
+        let (store, older, newer) =
+            crate::trust::tests::overtaking("azure", &older_release, &newer_release).await;
+        let pause = Arc::new(Pause::default());
+        let api = Recorded {
+            published: "2026-11-01T08:00:00.1234567+00:00".to_string(),
+            existing: Some(json!({"sku": {"capacity": 3}, "properties": {}})),
+            hold_at_scale_set_read: Mutex::new(Some(pause.clone())),
+            ..Default::default()
+        };
+        let (older_acceptance, newer_acceptance) = (
+            Acceptance::new(&store, PREFIX, &older),
+            Acceptance::new(&store, PREFIX, &newer),
+        );
+
+        let (older_result, newer_result) =
+            tokio::join!(roll_under(&api, &older_release, &older_acceptance), async {
+                pause.reached().await;
+                let rolled = roll_under(&api, &newer_release, &newer_acceptance).await;
+                pause.resume();
+                rolled
+            });
+
+        let reason = crate::describe(&older_result.expect_err("release 10 was overtaken"));
+        assert!(
+            reason.contains("release 11 was accepted while release 10 was being applied"),
+            "{reason}"
+        );
+        newer_result.unwrap();
+        let puts = api.puts.into_inner().unwrap();
+        let [(_, body)] = puts.as_slice() else {
+            panic!("only release 11 writes the model: {puts:?}")
+        };
+        assert_eq!(
+            body["sku"]["capacity"], 3,
+            "release 11's bounds, not release 10's"
+        );
+        assert_eq!(store.ledger_of(PREFIX).release.unwrap().sequence, 11);
     }
 }

@@ -38,6 +38,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
+use crate::function::Accepting;
 use crate::plan::Place;
 
 /// Roll one capacity group of a machine cluster to the signed release (AWS).
@@ -688,9 +689,25 @@ fn group_tags(deployment: &str) -> Vec<AsgTag> {
 
 /// Write the launch template version and point the group at it with the
 /// signed bounds. Machines already running keep their template until the
-/// platform replaces them.
-pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
-    let (template_id, version) = match api.template(&plan.template_name).await? {
+/// platform replaces them. The install accepts the release before the first
+/// write, and no write goes out once it has accepted a newer one: a roll for an
+/// older release that a newer one overtakes can't leave its template behind it.
+pub async fn roll(
+    api: &dyn MachineApi,
+    plan: &RollPlan,
+    acceptance: &dyn Accepting,
+) -> Result<Rolled> {
+    let template = api.template(&plan.template_name).await?;
+    let group_exists = api.group_exists(&plan.group_name).await?;
+    if !group_exists && plan.subnet_ids.is_empty() {
+        return Err(refused(format!(
+            "group {} does not exist and no subnets were given to create it",
+            plan.group_name
+        )));
+    }
+    acceptance.accept().await?;
+    acceptance.check().await?;
+    let (template_id, version) = match template {
         Some(id) => {
             let version = api.create_version(&id, &plan.data).await?;
             (id, version)
@@ -706,13 +723,18 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
         launch_template_name: None,
         version: Some(version.to_string()),
     };
-    if !api.group_exists(&plan.group_name).await? {
-        if plan.subnet_ids.is_empty() {
-            return Err(refused(format!(
-                "group {} does not exist and no subnets were given to create it",
-                plan.group_name
-            )));
-        }
+    acceptance.check().await?;
+    if group_exists {
+        api.update_group(
+            UpdateAutoScalingGroupRequest::builder()
+                .auto_scaling_group_name(plan.group_name.clone())
+                .min_size(plan.min_size)
+                .max_size(plan.max_size)
+                .launch_template(launch_template)
+                .build(),
+        )
+        .await?;
+    } else {
         api.create_group(
             CreateAutoScalingGroupRequest::builder()
                 .auto_scaling_group_name(plan.group_name.clone())
@@ -725,21 +747,7 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
                 .build(),
         )
         .await?;
-        return Ok(Rolled {
-            launch_template_id: template_id,
-            version,
-            group: plan.group_name.clone(),
-        });
     }
-    api.update_group(
-        UpdateAutoScalingGroupRequest::builder()
-            .auto_scaling_group_name(plan.group_name.clone())
-            .min_size(plan.min_size)
-            .max_size(plan.max_size)
-            .launch_template(launch_template)
-            .build(),
-    )
-    .await?;
     Ok(Rolled {
         launch_template_id: template_id,
         version,
@@ -1029,6 +1037,7 @@ mod tests {
     use super::*;
     use crate::fixtures::*;
     use crate::plan::SetupNetwork;
+    use crate::trust::Acceptance;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{ResourceLifecycle, Stack};
     use alien_signing::InstallId;
@@ -1575,6 +1584,10 @@ mod tests {
         calls: Mutex<Vec<String>>,
         /// The groups it was asked to create.
         groups: Mutex<Vec<CreateAutoScalingGroupRequest>>,
+        /// The number the next template version gets.
+        next_version: Mutex<i64>,
+        /// Held after it adds a version for this image, until the test lets it go on.
+        hold_after_version_of: Option<(String, Arc<Pause>)>,
     }
 
     impl Recorded {
@@ -1604,11 +1617,19 @@ mod tests {
             Ok("lt-0aaaaaaaaaaaaaaaa".to_string())
         }
         async fn create_version(&self, id: &str, data: &RequestLaunchTemplateData) -> Result<i64> {
-            self.call(format!(
-                "CreateLaunchTemplateVersion {id} {}",
-                data.image_id.clone().unwrap()
-            ));
-            Ok(7)
+            let image = data.image_id.clone().unwrap();
+            self.call(format!("CreateLaunchTemplateVersion {id} {image}"));
+            let version = {
+                let mut next = self.next_version.lock().unwrap();
+                *next += 1;
+                *next + 6
+            };
+            if let Some((held, pause)) = &self.hold_after_version_of {
+                if *held == image {
+                    pause.hold().await;
+                }
+            }
+            Ok(version)
         }
         async fn group_exists(&self, _name: &str) -> Result<bool> {
             Ok(self.group_exists)
@@ -1731,7 +1752,7 @@ mod tests {
     #[tokio::test]
     async fn setup_lets_management_scale_and_delete_the_group_a_roll_creates() {
         let api = Recorded::default();
-        roll(&api, &plan()).await.unwrap();
+        roll(&api, &plan(), &Unopposed).await.unwrap();
         let groups = api.groups.into_inner().unwrap();
         assert_eq!(groups.len(), 1, "the first roll creates the group");
         let group = &groups[0];
@@ -1793,7 +1814,7 @@ mod tests {
             group_exists: true,
             ..Default::default()
         };
-        let rolled = roll(&api, &plan()).await.unwrap();
+        let rolled = roll(&api, &plan(), &Unopposed).await.unwrap();
         assert_eq!(rolled.version, 7);
         let calls = api.calls.into_inner().unwrap();
         assert_eq!(calls.len(), 2, "{calls:?}");
@@ -1810,7 +1831,7 @@ mod tests {
     #[tokio::test]
     async fn a_first_roll_creates_the_template_and_group() {
         let api = Recorded::default();
-        let rolled = roll(&api, &plan()).await.unwrap();
+        let rolled = roll(&api, &plan(), &Unopposed).await.unwrap();
         assert_eq!(rolled.version, 1);
         let calls = api.calls.into_inner().unwrap();
         assert_eq!(
@@ -1821,5 +1842,91 @@ mod tests {
             calls[1],
             "CreateAutoScalingGroup acme-prod-compute-general min=1 max=4 desired=Some(1) version=Some(\"1\") subnets=Some(\"subnet-0123456789abcdef0\")"
         );
+    }
+
+    fn request_for(image: &str) -> RollMachines {
+        RollMachines {
+            machine_image: image.to_string(),
+            ..request()
+        }
+    }
+
+    /// Release 10 and release 11 roll the same group at once. Release 10 has added its template
+    /// version when release 11 is accepted and rolls the group to the end; release 10 must not
+    /// then point the group back at its own, older version.
+    #[tokio::test]
+    async fn a_roll_overtaken_by_a_newer_release_never_points_the_group_back() {
+        let (store, older, newer) =
+            crate::trust::tests::overtaking("aws", &release(), &release()).await;
+        let pause = Arc::new(Pause::default());
+        let api = Recorded {
+            template: Some("lt-0aaaaaaaaaaaaaaaa".to_string()),
+            group_exists: true,
+            hold_after_version_of: Some(("ami-0123456789abcdef1".to_string(), pause.clone())),
+            ..Default::default()
+        };
+        let plan_for = |image: &str| {
+            plan_roll(
+                &place(),
+                &release(),
+                &request_for(image),
+                &pins(),
+                &arm_image(PUBLISHER),
+            )
+            .unwrap()
+        };
+        let (older_plan, newer_plan) = (
+            plan_for("ami-0123456789abcdef1"),
+            plan_for("ami-0123456789abcdef2"),
+        );
+        let older_acceptance = Acceptance::new(&store, PREFIX, &older);
+        let newer_acceptance = Acceptance::new(&store, PREFIX, &newer);
+
+        let (older_result, newer_result) =
+            tokio::join!(roll(&api, &older_plan, &older_acceptance), async {
+                pause.reached().await;
+                let rolled = roll(&api, &newer_plan, &newer_acceptance).await;
+                pause.resume();
+                rolled
+            });
+
+        let reason = crate::describe(&older_result.expect_err("release 10 was overtaken"));
+        assert!(
+            reason.contains("release 11 was accepted while release 10 was being applied"),
+            "{reason}"
+        );
+        assert_eq!(newer_result.unwrap().version, 8);
+        let calls = api.calls.into_inner().unwrap();
+        assert_eq!(
+            calls,
+            [
+                "CreateLaunchTemplateVersion lt-0aaaaaaaaaaaaaaaa ami-0123456789abcdef1",
+                "CreateLaunchTemplateVersion lt-0aaaaaaaaaaaaaaaa ami-0123456789abcdef2",
+                "UpdateAutoScalingGroup acme-prod-compute-general min=Some(1) max=Some(4) desired=None version=Some(\"8\")",
+            ],
+            "the last group write is release 11's"
+        );
+        assert_eq!(store.ledger_of(PREFIX).release.unwrap().sequence, 11);
+    }
+
+    /// A roll the cloud's state refuses leaves the install's floor where it was.
+    #[tokio::test]
+    async fn a_refused_roll_does_not_raise_the_floor() {
+        let (store, older, _) =
+            crate::trust::tests::overtaking("aws", &release(), &release()).await;
+        let mut plan = plan();
+        plan.subnet_ids.clear();
+        let error = roll(
+            &Recorded::default(),
+            &plan,
+            &Acceptance::new(&store, PREFIX, &older),
+        )
+        .await
+        .expect_err("a new group needs subnets");
+        assert!(
+            crate::describe(&error).contains("no subnets were given"),
+            "{error}"
+        );
+        assert_eq!(store.ledger_of(PREFIX).release, None);
     }
 }

@@ -18,6 +18,7 @@ use alien_error::AlienError;
 use alien_signing::ReleaseBody;
 
 use crate::error::{ErrorData, Result};
+use crate::function::Accepting;
 use crate::machines::{
     check_setup_ids, check_zone, roll_basics, ImageFacts, ImagePins, RollMachines,
 };
@@ -220,6 +221,7 @@ pub async fn roll(
     release: &ReleaseBody,
     request: &RollMachines,
     pins: &ImagePins,
+    acceptance: &dyn Accepting,
 ) -> Result<Value> {
     image_project(&request.machine_image)?;
     let image = api
@@ -263,43 +265,44 @@ pub async fn roll(
         )));
     }
     let body = template_body(place, &basics, &request.machine_image, &template)?;
-    api.insert(
-        &format!("projects/{project}/global/instanceTemplates"),
-        &body,
-    )
-    .await?;
     let template_link = format!("projects/{project}/global/instanceTemplates/{template}");
     let scope = match &request.zone {
         Some(zone) => format!("projects/{project}/zones/{zone}"),
         None => format!("projects/{project}/regions/{region}"),
     };
     let group_path = format!("{scope}/instanceGroupManagers/{}", basics.name);
+    let group_exists = api.get(&group_path).await?.is_some();
+    acceptance.accept().await?;
+    acceptance.check().await?;
+    api.insert(
+        &format!("projects/{project}/global/instanceTemplates"),
+        &body,
+    )
+    .await?;
     let update_policy = json!({"type": "OPPORTUNISTIC"});
-    match api.get(&group_path).await? {
-        None => {
-            api.insert(
-                &format!("{scope}/instanceGroupManagers"),
-                &json!({
-                    "name": basics.name,
-                    "baseInstanceName": basics.name,
-                    "instanceTemplate": template_link,
-                    "targetSize": basics.group.min_size,
-                    "updatePolicy": update_policy,
-                }),
-            )
-            .await?
-        }
-        Some(_) => {
-            api.patch(
-                &group_path,
-                &json!({
-                    "instanceTemplate": template_link,
-                    "versions": [{"instanceTemplate": template_link}],
-                    "updatePolicy": update_policy,
-                }),
-            )
-            .await?
-        }
+    acceptance.check().await?;
+    if group_exists {
+        api.patch(
+            &group_path,
+            &json!({
+                "instanceTemplate": template_link,
+                "versions": [{"instanceTemplate": template_link}],
+                "updatePolicy": update_policy,
+            }),
+        )
+        .await?
+    } else {
+        api.insert(
+            &format!("{scope}/instanceGroupManagers"),
+            &json!({
+                "name": basics.name,
+                "baseInstanceName": basics.name,
+                "instanceTemplate": template_link,
+                "targetSize": basics.group.min_size,
+                "updatePolicy": update_policy,
+            }),
+        )
+        .await?
     }
     Ok(json!({"template": template, "version": version, "group": basics.name}))
 }
@@ -391,11 +394,12 @@ mod tests {
     use super::*;
     use crate::fixtures::*;
     use crate::plan::SetupNetwork;
+    use crate::trust::Acceptance;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
     use alien_signing::InstallId;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     const PUBLISHER: &str = "machine-images";
     const IMAGE: &str = "projects/machine-images/global/images/machine-x86-20261101";
@@ -489,6 +493,8 @@ mod tests {
         templates: Vec<String>,
         group: Option<Value>,
         calls: Mutex<Vec<(String, String, Value)>>,
+        /// Held after the first instance template it inserts, until the test lets it go on.
+        hold_after_first_template: Mutex<Option<Arc<Pause>>>,
     }
 
     #[async_trait]
@@ -501,13 +507,26 @@ mod tests {
         }
         async fn template_names(&self, pattern: &str) -> Result<Vec<String>> {
             assert_eq!(pattern, "acme-prod-compute-general-[0-9]+");
-            Ok(self.templates.clone())
+            let calls = self.calls.lock().unwrap();
+            let inserted = calls
+                .iter()
+                .filter(|(_, path, _)| path.ends_with("/instanceTemplates"))
+                .map(|(_, _, body)| body["name"].as_str().unwrap().to_string());
+            Ok(self.templates.iter().cloned().chain(inserted).collect())
         }
         async fn insert(&self, path: &str, body: &Value) -> Result<()> {
             self.calls
                 .lock()
                 .unwrap()
                 .push(("POST".into(), path.into(), body.clone()));
+            let hold = if path.ends_with("/instanceTemplates") {
+                self.hold_after_first_template.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some(pause) = hold {
+                pause.hold().await;
+            }
             Ok(())
         }
         async fn patch(&self, path: &str, body: &Value) -> Result<()> {
@@ -547,6 +566,20 @@ mod tests {
         }
     }
 
+    async fn roll_under(api: &Recorded, acceptance: &Acceptance<'_>) -> Result<Value> {
+        roll(
+            api,
+            &place(),
+            "shop-prod",
+            "us-central1",
+            &release(),
+            &request(),
+            &pins(),
+            acceptance,
+        )
+        .await
+    }
+
     async fn roll_with(api: &Recorded, request: &RollMachines) -> Result<Value> {
         roll(
             api,
@@ -556,6 +589,7 @@ mod tests {
             &release(),
             request,
             &pins(),
+            &Unopposed,
         )
         .await
     }
@@ -865,5 +899,78 @@ mod tests {
     fn metadata_keys_are_the_tags_in_kebab_case() {
         assert_eq!(metadata_key("CapacityGroup"), "capacity-group");
         assert_eq!(metadata_key("ApiUrl"), "api-url");
+    }
+
+    /// Release 10 and release 11 roll the same group at once. Release 10 has inserted its
+    /// instance template when release 11 is accepted and rolls the group to the end; release 10
+    /// must not then point the group back at its own, older template.
+    #[tokio::test]
+    async fn a_roll_overtaken_by_a_newer_release_never_points_the_group_back() {
+        let (store, older, newer) =
+            crate::trust::tests::overtaking("gcp", &release(), &release()).await;
+        let pause = Arc::new(Pause::default());
+        let api = Recorded {
+            group: Some(json!({"name": "acme-prod-compute-general"})),
+            hold_after_first_template: Mutex::new(Some(pause.clone())),
+            ..api("2026-11-01T10:00:00.000-07:00")
+        };
+        let (older_acceptance, newer_acceptance) = (
+            Acceptance::new(&store, PREFIX, &older),
+            Acceptance::new(&store, PREFIX, &newer),
+        );
+
+        let (older_result, newer_result) =
+            tokio::join!(roll_under(&api, &older_acceptance), async {
+                pause.reached().await;
+                let rolled = roll_under(&api, &newer_acceptance).await;
+                pause.resume();
+                rolled
+            });
+
+        let reason = crate::describe(&older_result.expect_err("release 10 was overtaken"));
+        assert!(
+            reason.contains("release 11 was accepted while release 10 was being applied"),
+            "{reason}"
+        );
+        assert_eq!(
+            newer_result.unwrap()["template"],
+            "acme-prod-compute-general-2"
+        );
+        let calls: Vec<(String, String)> = api
+            .calls
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .map(|(method, path, body)| {
+                let target = body["instanceTemplate"]
+                    .as_str()
+                    .or(body["name"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                (format!("{method} {path}"), target)
+            })
+            .collect();
+        let templates = "POST projects/shop-prod/global/instanceTemplates";
+        let group = "PATCH projects/shop-prod/zones/us-central1-a/instanceGroupManagers/acme-prod-compute-general";
+        assert_eq!(
+            calls,
+            [
+                (
+                    templates.to_string(),
+                    "acme-prod-compute-general-1".to_string()
+                ),
+                (
+                    templates.to_string(),
+                    "acme-prod-compute-general-2".to_string()
+                ),
+                (
+                    group.to_string(),
+                    "projects/shop-prod/global/instanceTemplates/acme-prod-compute-general-2"
+                        .to_string()
+                ),
+            ],
+            "the group's template is release 11's"
+        );
+        assert_eq!(store.ledger_of(PREFIX).release.unwrap().sequence, 11);
     }
 }

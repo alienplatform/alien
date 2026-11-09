@@ -777,6 +777,7 @@ impl Backend for GcpBackend {
         place: &Place,
         release: &alien_signing::ReleaseBody,
         request: &crate::machines::RollMachines,
+        acceptance: &dyn crate::function::Accepting,
     ) -> Result<Value> {
         crate::gcp_machines::roll(
             &self.0,
@@ -786,6 +787,7 @@ impl Backend for GcpBackend {
             release,
             request,
             &self.1,
+            acceptance,
         )
         .await
     }

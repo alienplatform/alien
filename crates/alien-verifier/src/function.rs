@@ -24,6 +24,14 @@ pub trait StillNewest: Send + Sync {
     async fn check(&self) -> Result<()>;
 }
 
+/// A request that makes the install accept its release and config, once its checks have passed
+/// and before its first write. Every write after that is preceded by [`StillNewest::check`].
+#[async_trait]
+pub trait Accepting: StillNewest {
+    /// Record the release and config in the install's ledger.
+    async fn accept(&self) -> Result<()>;
+}
+
 #[async_trait]
 impl<T: LambdaApi> FunctionStore for T {
     async fn get(&self, name: &str) -> Result<Value> {
