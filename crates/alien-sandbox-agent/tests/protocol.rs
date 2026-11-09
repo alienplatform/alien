@@ -59,6 +59,10 @@ impl Agent {
     }
 
     async fn start_with_authorization(authorization: Option<AgentAuthorization>) -> Self {
+        Self::start_with(authorization, 1 << 20).await
+    }
+
+    async fn start_with(authorization: Option<AgentAuthorization>, output_cap: usize) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path().canonicalize().expect("canonical root");
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
@@ -76,7 +80,7 @@ impl Agent {
                 },
             }),
             exec_identity: test_identity(),
-            output_cap: 1 << 20,
+            output_cap,
             jobs: JobRegistry::new(),
             interactive: Default::default(),
             agent_binary: agent_binary(),
@@ -1490,7 +1494,10 @@ async fn an_interactive_command_answers_each_input_while_it_runs() {
 /// deadline has killed: sixteen such callers would otherwise refuse every later start.
 #[tokio::test]
 async fn a_command_killed_at_its_deadline_frees_its_id_while_its_stream_is_unread() {
-    let agent = Agent::start().await;
+    // A cap far above what the channels and loopback buffers hold, so the output backs up and
+    // the terminal frame cannot be delivered. Under the default cap the whole output can fit in
+    // those buffers, and the stream would end without anyone reading it.
+    let agent = Agent::start_with(None, 256 << 20).await;
     let unread = reqwest::Client::new()
         .post(format!("{}/v1/interactive", agent.base_url))
         .bearer_auth(agent.capability())
@@ -1500,8 +1507,7 @@ async fn a_command_killed_at_its_deadline_frees_its_id_while_its_stream_is_unrea
         .expect("responds");
     assert_eq!(unread.status(), 200, "an interactive command starts");
 
-    // `yes` fills every buffer between it and the caller long before its deadline, so the
-    // terminal frame cannot be delivered while `unread` is held.
+    // `yes` fills every buffer between it and the caller well before its 500ms deadline.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while !agent.state.interactive.is_empty() {
         assert!(
