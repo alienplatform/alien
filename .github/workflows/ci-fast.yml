@@ -681,7 +681,9 @@ jobs:
           install_args: rust
           cache: false
 
-      - uses: taiki-e/install-action@cargo-hakari
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari@0.9.39
 
       - name: Configure git credentials for cargo
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"

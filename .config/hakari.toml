@@ -29,3 +29,9 @@ platforms = [
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
+
+# The SDK crates' opt-in `native-tls` feature would otherwise be unified into every
+# member (hakari also evaluates all-features), pulling OpenSSL into builds that only
+# use rustls.
+[traversal-excludes]
+workspace-members = ["alien-manager-api", "alien-platform-api"]

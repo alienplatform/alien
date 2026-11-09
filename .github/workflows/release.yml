@@ -517,7 +517,9 @@ jobs:
           name: qualified-crates
           path: qualified/crates
 
-      - uses: taiki-e/install-action@cargo-hakari
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari@0.9.39
 
       - name: Publish crates
         env:

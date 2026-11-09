@@ -1184,7 +1184,6 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "tokio",
- "workspace-hack",
 ]
 
 [[package]]
@@ -1334,7 +1333,6 @@ dependencies = [
  "syn 2.0.119",
  "tokio",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -13056,7 +13054,6 @@ dependencies = [
  "predicates",
  "prettyplease 0.2.37",
  "proc-macro2",
- "progenitor",
  "prost 0.13.5",
  "quote",
  "rand 0.10.3",
