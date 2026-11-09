@@ -848,6 +848,21 @@ fn reported_installed_setup(
     config: &crate::OperatorConfig,
 ) -> Option<alien_core::sync::InstalledSetup> {
     let mut setup = config.installed_setup.clone()?;
+    if let Some(path) = config.setup_fingerprint_file.as_ref() {
+        match std::fs::read_to_string(path) {
+            Ok(fingerprint) if fingerprint.trim() == setup.setup_fingerprint => {}
+            Ok(_) => {
+                // The mounted chart was upgraded to a different setup while this
+                // pod still runs the old one: the release would name the new
+                // chart next to the old fingerprint.
+                return None;
+            }
+            Err(error) => {
+                warn!(path = %path.display(), %error, "Cannot read the installed setup fingerprint; not reporting the installed setup");
+                return None;
+            }
+        }
+    }
     if let Some(path) = config.setup_release_file.as_ref() {
         match std::fs::read_to_string(path) {
             Ok(release) if !release.trim().is_empty() => {
@@ -1057,6 +1072,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("setup-release-id");
         std::fs::write(&file, "rel_1\n").unwrap();
+        let fp_file = dir.path().join("setup-fingerprint");
+        std::fs::write(&fp_file, "fp").unwrap();
         let config = OperatorConfig::builder()
             .platform(Platform::Test)
             .sync(SyncConfig {
@@ -1074,6 +1091,7 @@ mod tests {
                 namespace: None,
             })
             .setup_release_file(file.clone())
+            .setup_fingerprint_file(fp_file.clone())
             .build();
         assert_eq!(
             super::reported_installed_setup(&config).unwrap().release_id,
@@ -1083,6 +1101,11 @@ mod tests {
         let report = super::reported_installed_setup(&config).unwrap();
         assert_eq!(report.release_id, "rel_2");
         assert_eq!(report.setup_fingerprint, "fp");
+        // A setup-changing upgrade rewrote the mounted chart under this old pod.
+        std::fs::write(&file, "rel_3\n").unwrap();
+        std::fs::write(&fp_file, "fp_new").unwrap();
+        assert!(super::reported_installed_setup(&config).is_none());
+        std::fs::write(&fp_file, "fp").unwrap();
         std::fs::remove_file(&file).unwrap();
         assert!(super::reported_installed_setup(&config).is_none());
     }

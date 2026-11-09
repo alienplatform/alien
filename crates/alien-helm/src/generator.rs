@@ -5929,6 +5929,7 @@ data:
   {{- with .Chart.Annotations }}
   {{- if index . "setup.alien.dev/release-id" }}
   setup-release-id: {{ index . "setup.alien.dev/release-id" | quote }}
+  setup-fingerprint: {{ index . "setup.alien.dev/fingerprint" | quote }}
   {{- end }}
   {{- end }}
 "#
@@ -6764,6 +6765,8 @@ spec:
             {{- if index . "setup.alien.dev/fingerprint" }}
             - name: OPERATOR_SETUP_RELEASE_FILE
               value: /etc/deployment/config/setup-release-id
+            - name: OPERATOR_SETUP_FINGERPRINT_FILE
+              value: /etc/deployment/config/setup-fingerprint
             - name: OPERATOR_SETUP_TARGET
               value: {{ index . "setup.alien.dev/target" | quote }}
             - name: OPERATOR_SETUP_FINGERPRINT

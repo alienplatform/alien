@@ -136,6 +136,11 @@ pub struct OperatorConfig {
     /// it in place, so it is read again on every sync.
     pub setup_release_file: Option<PathBuf>,
 
+    /// File the chart keeps its setup fingerprint in. When it differs from the
+    /// fingerprint this process started with, the chart was upgraded under a
+    /// running old pod, and the report is skipped.
+    pub setup_fingerprint_file: Option<PathBuf>,
+
     /// Accept tunnel requests from the manager for the stack's declared
     /// tunnel endpoints. The operator dials only when the manager advertises
     /// a tunnel URL and the stack declares at least one endpoint.

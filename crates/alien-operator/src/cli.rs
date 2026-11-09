@@ -207,6 +207,12 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SETUP_RELEASE_FILE")]
     pub setup_release_file: Option<PathBuf>,
 
+    /// File holding the fingerprint of the chart currently mounted. When it
+    /// differs from `OPERATOR_SETUP_FINGERPRINT`, the mounted chart was
+    /// upgraded and this process still runs the old one, so it reports nothing.
+    #[arg(long, env = "OPERATOR_SETUP_FINGERPRINT_FILE")]
+    pub setup_fingerprint_file: Option<PathBuf>,
+
     /// Setup target the installed chart was generated for.
     #[arg(long, env = "OPERATOR_SETUP_TARGET")]
     pub setup_target: Option<String>,
@@ -775,6 +781,7 @@ async fn run_operator_cli(
         .maybe_operations(operations)
         .maybe_installed_setup(installed_setup)
         .maybe_setup_release_file(args.setup_release_file.clone())
+        .maybe_setup_fingerprint_file(args.setup_fingerprint_file.clone())
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
