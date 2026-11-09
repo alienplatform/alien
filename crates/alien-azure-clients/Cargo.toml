@@ -39,6 +39,7 @@ mockall = { workspace = true, optional = true }
 
 # Azure specific dependencies
 regress = { version = "0.11.0" }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 # jwt-simple = { version = "0.12.12", default-features = false, features = ["pure-rust"] }
 
 [dev-dependencies]

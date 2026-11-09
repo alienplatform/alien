@@ -35,6 +35,7 @@ tokio-stream = { workspace = true, optional = true }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [build-dependencies]
 tonic-build = { workspace = true }

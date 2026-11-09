@@ -28,6 +28,7 @@ tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 url = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-tunnel = { path = ".", features = ["manager", "operator"] }

@@ -79,6 +79,7 @@ ngrok = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 url = { workspace = true }
 async-trait = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 zip = { workspace = true }

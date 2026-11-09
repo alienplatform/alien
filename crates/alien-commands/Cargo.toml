@@ -112,6 +112,7 @@ tokio-util = { workspace = true, optional = true }
 # Test utilities feature dependencies
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"], optional = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
