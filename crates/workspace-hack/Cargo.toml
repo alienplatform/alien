@@ -40,7 +40,6 @@ crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", d
 ctutils = { version = "0.4", default-features = false, features = ["subtle"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", features = ["mac", "std"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11", features = ["alloc", "mac", "oid"] }
-dockdash = { git = "https://github.com/alienplatform/dockdash", rev = "fd4f517312a56b329f3bdb08ff32685aeacd73b3", features = ["test-utils"] }
 ed25519-compact = { version = "2" }
 either = { version = "1", features = ["use_std"] }
 event-listener = { version = "5" }
@@ -87,7 +86,6 @@ nom = { version = "7" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object_store = { version = "0.12", features = ["aws", "azure", "gcp", "http", "tls-webpki-roots"] }
-oci-client = { version = "0.15", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
 once_cell = { version = "1", features = ["critical-section"] }
 opentelemetry = { version = "0.30", features = ["testing"] }
 opentelemetry-proto = { version = "0.30" }
@@ -192,7 +190,6 @@ ctutils = { version = "0.4", default-features = false, features = ["subtle"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", features = ["mac", "std"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11", features = ["alloc", "mac", "oid"] }
 displaydoc = { version = "0.2" }
-dockdash = { git = "https://github.com/alienplatform/dockdash", rev = "fd4f517312a56b329f3bdb08ff32685aeacd73b3", features = ["test-utils"] }
 ed25519-compact = { version = "2" }
 either = { version = "1", features = ["use_std"] }
 event-listener = { version = "5" }
@@ -240,7 +237,6 @@ nom = { version = "7" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object_store = { version = "0.12", features = ["aws", "azure", "gcp", "http", "tls-webpki-roots"] }
-oci-client = { version = "0.15", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
 once_cell = { version = "1", features = ["critical-section"] }
 opentelemetry = { version = "0.30", features = ["testing"] }
 opentelemetry-proto = { version = "0.30" }
