@@ -652,12 +652,12 @@ enum InstalledConfig {
     /// No config at all. A token-mode Operator cleared the config after each
     /// apply; once it enrolls, it needs the config again.
     Missing,
-    /// A config the previous pod saved before enrollment (it has no manager
-    /// audience) while the release has a command receiver built before
-    /// capability files. It holds no commands key for the receiver, and the
-    /// Operator must not pass on the deployment token it holds instead. The
-    /// receiver also still holds that token, so the release has to be applied
-    /// again, not just refreshed.
+    /// A release with a command receiver built before capability files, and
+    /// no config with the manager's audience: either the config is gone, or
+    /// the previous pod saved it before enrollment. Neither holds a commands
+    /// key for the receiver, the Operator must not pass on the deployment
+    /// token it holds instead, and the receiver still has that token. The
+    /// release has to be applied again, not just refreshed.
     WithoutCommandsKey,
 }
 
@@ -690,15 +690,17 @@ async fn installed_config(
     if !crate::daily_identity::has_runtime_identity(&state.db).await? {
         return Ok(InstalledConfig::Usable);
     }
-    let Some(config) = state.db.get_deployment_config().await? else {
-        // An update in flight with no config cannot be applied; the target
-        // that carried it is gone. Ask for the release again.
-        return Ok(InstalledConfig::Missing);
-    };
     let needs_commands_key = !release
         .stack
         .command_receivers_without_capability_file()
         .is_empty();
+    let Some(config) = state.db.get_deployment_config().await? else {
+        return Ok(if needs_commands_key {
+            InstalledConfig::WithoutCommandsKey
+        } else {
+            InstalledConfig::Missing
+        });
+    };
     Ok(
         if config.runtime_identity_audience.is_none() && needs_commands_key {
             InstalledConfig::WithoutCommandsKey
@@ -3918,7 +3920,8 @@ mod tests {
             );
         }
 
-        // No config at all: the release is refreshed in place.
+        // No config at all: the release is refreshed in place, unless a
+        // receiver needs the key, which only an update gives it.
         state.db.clear_deployment_config().await.unwrap();
         for state_of in states {
             assert_eq!(
@@ -3926,6 +3929,12 @@ mod tests {
                     .await
                     .unwrap(),
                 InstalledConfig::Missing
+            );
+            assert_eq!(
+                super::installed_config(&state, &state_of(false))
+                    .await
+                    .unwrap(),
+                InstalledConfig::WithoutCommandsKey
             );
         }
     }
