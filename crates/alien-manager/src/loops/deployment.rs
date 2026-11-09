@@ -2023,9 +2023,11 @@ fn worker_commands_push_env_vars(
 ///
 /// A Container or Daemon on a machine with a runtime identity gets no token:
 /// the machine writes a short-lived command credential into the files named in
-/// its environment. Everything else keeps the deployment token in
-/// `ALIEN_COMMANDS_TOKEN`: Local (`alien dev`), Kubernetes (the operator
-/// replaces it), and machines that do not have a runtime identity yet.
+/// its environment. That holds only when `alien build` recorded that the
+/// receiver reads the capability file. Everything else keeps the deployment
+/// token in `ALIEN_COMMANDS_TOKEN`: Local (`alien dev`), Kubernetes (the
+/// operator replaces it for marked receivers), machines that do not have a
+/// runtime identity yet, and receivers built before capability files.
 fn commands_receiver_env_vars(
     commands_base_url: String,
     deployment: &DeploymentRecord,
@@ -2036,12 +2038,16 @@ fn commands_receiver_env_vars(
         .as_ref()
         .and_then(|config| config.compute_backend.as_ref());
     deployment_stack.receiver_command_env_vars(&commands_base_url, |resource_id| {
-        if machine_writes_command_credentials(
-            deployment.platform,
-            compute_backend,
-            deployment_stack,
-            resource_id,
-        ) {
+        // A receiver the build did not record as reading the capability file
+        // is an older receiver. It cannot start without the token.
+        if deployment_stack.command_receiver_reads_capability_file(resource_id)
+            && machine_writes_command_credentials(
+                deployment.platform,
+                compute_backend,
+                deployment_stack,
+                resource_id,
+            )
+        {
             ReceiverCommandCredential::HostFiles
         } else {
             ReceiverCommandCredential::Token(deployment.deployment_token.clone())
@@ -6349,10 +6355,16 @@ mod tests {
         alien_deployment::set_ephemeral_secrets_digest_key();
         let mut api = command_container("api", true);
         api.cluster = Some("compute".to_string());
+        api.commands_capability_file = true;
+        // Built before capability files: same cluster, but its receiver needs the token.
+        let mut old_build = command_container("old-build", true);
+        old_build.cluster = Some("compute".to_string());
         let mut legacy = command_container("legacy", true);
         legacy.cluster = Some("old".to_string());
+        legacy.commands_capability_file = true;
         let stack = Stack::new("machine-commands-stack".to_string())
             .add(api, ResourceLifecycle::Live)
+            .add(old_build, ResourceLifecycle::Live)
             .add(legacy, ResourceLifecycle::Live)
             .build();
         let cluster = |runtime_identity| alien_core::HorizonClusterConfig {
@@ -6449,6 +6461,13 @@ mod tests {
             api.get(ENV_ALIEN_COMMANDS_URL).map(String::as_str),
             Some("https://manager.example.test/v1")
         );
+        let old_build = environment_of(&config, "old-build");
+        assert_eq!(
+            old_build.get(ENV_ALIEN_COMMANDS_TOKEN).map(String::as_str),
+            Some("ax_dep_test"),
+            "an older receiver on an identity cluster keeps the token"
+        );
+        assert!(!old_build.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
         let legacy = environment_of(&config, "legacy");
         assert_eq!(
             legacy.get(ENV_ALIEN_COMMANDS_TOKEN).map(String::as_str),
