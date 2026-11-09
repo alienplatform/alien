@@ -76,6 +76,9 @@ pub struct ManagedRedisClusterUpdate {
 pub struct ManagedRedisClusterUpdateProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_network_access: Option<String>,
+    /// `Enabled` turns high availability on. Azure cannot turn it off again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_availability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
