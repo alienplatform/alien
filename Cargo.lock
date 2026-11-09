@@ -935,6 +935,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "heck 0.5.0",
+ "hmac 0.12.1",
  "httpmock",
  "indexmap 2.14.1",
  "insta",

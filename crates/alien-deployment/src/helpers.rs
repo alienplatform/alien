@@ -1325,10 +1325,10 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> Result<String> {
 
 fn process_digest_key() -> Result<[u8; 32]> {
     #[cfg(test)]
-    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    let key = alien_core::secrets_digest_key::get().or(Some([7; 32]));
     #[cfg(not(test))]
-    let key = SECRETS_DIGEST_KEY.get();
-    key.copied().ok_or_else(|| {
+    let key = alien_core::secrets_digest_key::get();
+    key.ok_or_else(|| {
         AlienError::new(ErrorData::InternalError {
             message: "No secrets digest key is set; the embedding process must call \
                       set_secrets_digest_key"
@@ -1336,9 +1336,6 @@ fn process_digest_key() -> Result<[u8; 32]> {
         })
     })
 }
-
-/// The key for digests of secret values, set once at startup.
-static SECRETS_DIGEST_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
 
 /// Sets the key that digests of secret values are computed with.
 ///
@@ -1349,10 +1346,10 @@ static SECRETS_DIGEST_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::
 /// can't read. Without a key, syncing secrets fails. Setting the key that is
 /// already set is allowed; a different key is an error.
 pub fn set_secrets_digest_key(key: [u8; 32]) -> Result<()> {
-    match SECRETS_DIGEST_KEY.set(key) {
-        Ok(()) => Ok(()),
-        Err(_) if SECRETS_DIGEST_KEY.get() == Some(&key) => Ok(()),
-        Err(_) => Err(AlienError::new(ErrorData::InternalError {
+    match alien_core::secrets_digest_key::set_if_unset(key) {
+        true => Ok(()),
+        false if alien_core::secrets_digest_key::get() == Some(key) => Ok(()),
+        false => Err(AlienError::new(ErrorData::InternalError {
             message: "A different secrets digest key is already set for this process".to_string(),
         })),
     }
@@ -1363,7 +1360,7 @@ pub fn set_secrets_digest_key(key: [u8; 32]) -> Result<()> {
 /// For managers built several times in one process, each reading its own key
 /// file: the first key wins.
 pub fn set_secrets_digest_key_if_unset(key: [u8; 32]) -> bool {
-    SECRETS_DIGEST_KEY.set(key).is_ok()
+    alien_core::secrets_digest_key::set_if_unset(key)
 }
 
 /// Uses a random key that lives as long as this process.
@@ -1374,13 +1371,13 @@ pub fn set_secrets_digest_key_if_unset(key: [u8; 32]) -> bool {
 pub fn set_ephemeral_secrets_digest_key() {
     let mut key = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
-    let _ = SECRETS_DIGEST_KEY.set(key);
+    alien_core::secrets_digest_key::set_if_unset(key);
 }
 
 /// Whether a key has been set, by [`set_secrets_digest_key`] or
 /// [`set_ephemeral_secrets_digest_key`].
 pub fn secrets_digest_key_is_set() -> bool {
-    SECRETS_DIGEST_KEY.get().is_some()
+    alien_core::secrets_digest_key::get().is_some()
 }
 
 /// Digest of the secrets last written to the vault, recorded in runtime
@@ -1394,10 +1391,10 @@ fn secrets_sync_hash(
 ) -> Result<String> {
     // Unit tests step deployments without an embedding process to set the key.
     #[cfg(test)]
-    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    let key = alien_core::secrets_digest_key::get().or(Some([7; 32]));
     #[cfg(not(test))]
-    let key = SECRETS_DIGEST_KEY.get();
-    configured_secrets_sync_hash(key, deployment_scope, desired_secrets)
+    let key = alien_core::secrets_digest_key::get();
+    configured_secrets_sync_hash(key.as_ref(), deployment_scope, desired_secrets)
 }
 
 fn configured_secrets_sync_hash(
@@ -1448,18 +1445,8 @@ fn keyed_secrets_sync_hash(
 /// and a digest cannot be matched across deployments. The control plane
 /// stores the digest to notice changes and cannot use it to test guesses.
 pub fn value_digest(scope: &str, slot: &str, value: &str) -> Result<String> {
-    #[cfg(test)]
-    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
-    #[cfg(not(test))]
-    let key = SECRETS_DIGEST_KEY.get();
-    let key = key.ok_or_else(|| {
-        AlienError::new(ErrorData::InternalError {
-            message: "No secrets digest key is set; the embedding process must call \
-                      set_secrets_digest_key"
-                .to_string(),
-        })
-    })?;
-    Ok(keyed_value_digest(key, scope, slot, value))
+    let key = process_digest_key()?;
+    Ok(keyed_value_digest(&key, scope, slot, value))
 }
 
 /// Fingerprint of a deployment's environment variables, as `env-<hex>`.
@@ -1469,18 +1456,8 @@ pub fn value_digest(scope: &str, slot: &str, value: &str) -> Result<String> {
 /// so a copy of the workload settings cannot be used to test guesses at the
 /// values.
 pub fn environment_snapshot_hash(variables: &[EnvironmentVariable]) -> Result<String> {
-    #[cfg(test)]
-    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
-    #[cfg(not(test))]
-    let key = SECRETS_DIGEST_KEY.get();
-    let key = key.ok_or_else(|| {
-        AlienError::new(ErrorData::InternalError {
-            message: "No secrets digest key is set; the embedding process must call \
-                      set_secrets_digest_key"
-                .to_string(),
-        })
-    })?;
-    let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    let key = process_digest_key()?;
+    let mut derive = HmacSha256::new_from_slice(&key).expect("HMAC accepts any key length");
     derive.update(b"alien-env-snapshot\0");
     let snapshot_key = derive.finalize().into_bytes();
 

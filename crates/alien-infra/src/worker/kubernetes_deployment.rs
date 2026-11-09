@@ -296,7 +296,9 @@ mod tests {
         );
 
         let variables = vec![secret_env_var("APP_SECRET", "s3cret", None)];
-        let plan = environment_secret_plan("api", "api", &variables).expect("plan");
+        let plan = environment_secret_plan("api", "api", &variables)
+            .expect("checksum key")
+            .expect("plan");
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
         let controller = KubernetesWorkerController {
             deployment_name: Some("api".to_string()),
