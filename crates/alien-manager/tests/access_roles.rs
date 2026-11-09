@@ -1724,6 +1724,103 @@ mod runtime_credentials {
         assert_eq!(completed.state, alien_core::CommandState::Succeeded);
     }
 
+    /// Clients are generated from the published schema, so a request built
+    /// with the generated types must be accepted for every proof kind.
+    #[tokio::test]
+    async fn exchange_accepts_requests_built_with_the_generated_client_types() {
+        use alien_manager::auth::identity_exchange::{
+            IdentityExchangeRequest, RuntimeIdentityVerifier,
+        };
+        use alien_manager_api::types as sdk;
+
+        struct ProofChecker {
+            deployment: String,
+        }
+        #[async_trait]
+        impl RuntimeIdentityVerifier for ProofChecker {
+            async fn verify(
+                &self,
+                request: &IdentityExchangeRequest,
+                _: &str,
+            ) -> Result<VerifiedRuntimeIdentity, AlienError> {
+                let expected = match &request.proof {
+                    RuntimeIdentityProof::Aws { presigned_url } => presigned_url == "aws-proof",
+                    RuntimeIdentityProof::Gcp { id_token } => id_token == "gcp-proof",
+                    RuntimeIdentityProof::Session { token } => token == "session-proof",
+                    RuntimeIdentityProof::DailyKey { key } => key == "daily-proof",
+                };
+                if !expected {
+                    return Err(
+                        alien_manager::error::ErrorData::unauthorized("wrong proof").into_generic()
+                    );
+                }
+                let mut grant = grant(&self.deployment);
+                grant.purpose = request.purpose.clone();
+                Ok(VerifiedRuntimeIdentity {
+                    grant,
+                    authority_deadline: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+                })
+            }
+        }
+
+        let (state, deployment, _tmp) = state().await;
+        let proofs = [
+            sdk::RuntimeIdentityProof::Aws {
+                presigned_url: "aws-proof".into(),
+            },
+            sdk::RuntimeIdentityProof::Gcp {
+                id_token: "gcp-proof".into(),
+            },
+            sdk::RuntimeIdentityProof::Session {
+                token: "session-proof".into(),
+            },
+            sdk::RuntimeIdentityProof::DailyKey {
+                key: "daily-proof".into(),
+            },
+        ];
+        let purposes = [
+            sdk::RuntimePurpose::Telemetry,
+            sdk::RuntimePurpose::OperationRelay(sdk::CommandTarget {
+                resource_id: "worker-a".into(),
+                resource_type: sdk::CommandTargetType::Worker,
+            }),
+        ];
+        for proof in proofs {
+            for purpose in &purposes {
+                let body = sdk::IdentityExchangeRequest::builder()
+                    .deployment_id(deployment.clone())
+                    .proof(proof.clone())
+                    .purpose(purpose.clone());
+                let body = sdk::IdentityExchangeRequest::try_from(body).unwrap();
+                let router = alien_manager::auth::identity_exchange::router(
+                    credentials("manager-a", Arc::new(AtomicI64::new(1_799_999_000))),
+                    Arc::new(ProofChecker {
+                        deployment: deployment.clone(),
+                    }),
+                )
+                .with_state(state.clone());
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/identity/exchange")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "{:?} with {:?}",
+                    body.proof,
+                    body.purpose
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn exchange_refuses_overgrants_and_redacts_provider_errors() {
         use alien_error::ContextError;

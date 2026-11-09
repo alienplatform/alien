@@ -19228,11 +19228,11 @@
             "type": "object",
             "description": "An audience-signed STS GetCallerIdentity request.",
             "required": [
-              "presigned_url",
+              "presignedUrl",
               "type"
             ],
             "properties": {
-              "presigned_url": {
+              "presignedUrl": {
                 "type": "string"
               },
               "type": {
@@ -19247,11 +19247,11 @@
             "type": "object",
             "description": "A metadata identity token for this manager's audience.",
             "required": [
-              "id_token",
+              "idToken",
               "type"
             ],
             "properties": {
-              "id_token": {
+              "idToken": {
                 "type": "string"
               },
               "type": {

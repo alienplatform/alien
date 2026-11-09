@@ -32,9 +32,15 @@ use crate::{
 )]
 pub enum RuntimeIdentityProof {
     /// An audience-signed STS GetCallerIdentity request.
-    Aws { presigned_url: String },
+    Aws {
+        #[cfg_attr(feature = "openapi", schema(rename = "presignedUrl"))]
+        presigned_url: String,
+    },
     /// A metadata identity token for this manager's audience.
-    Gcp { id_token: String },
+    Gcp {
+        #[cfg_attr(feature = "openapi", schema(rename = "idToken"))]
+        id_token: String,
+    },
     /// A bounded parent session; it cannot renew itself.
     Session { token: String },
     /// The explicit daily-key exception for enrolled components.
