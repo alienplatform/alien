@@ -15,7 +15,7 @@ use crate::traits::deployment_store::DeploymentRecord;
 use crate::traits::ReleaseStore;
 
 /// The environment variables a deployment gets from values this manager holds.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct HeldValues {
     /// `None` when the manager holds no values: nothing is redacted or restored.
     scope: Option<String>,
@@ -28,6 +28,21 @@ pub struct HeldValues {
     /// because the stack that maps them is gone: redacted wherever the text
     /// appears as a variable's whole value.
     by_content: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for HeldValues {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self
+            .variables
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        f.debug_struct("HeldValues")
+            .field("scope", &self.scope)
+            .field("variables", &names)
+            .field("values", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeldValues {
@@ -487,6 +502,44 @@ mod tests {
             .await
             .unwrap()
             .into_owned()
+    }
+
+    #[tokio::test]
+    async fn debug_output_of_held_values_has_no_value() {
+        let (_dir, store) = store().await;
+        let url = put(&store, "dep_1", "env:API_URL", CANARY).await;
+        let endpoint = put(
+            &store,
+            "dep_1",
+            "input:endpoint",
+            &format!("\"{INPUT_CANARY}\""),
+        )
+        .await;
+        let deployment = record(vec![
+            slot_ref("env:API_URL", &url),
+            slot_ref("input:endpoint", &endpoint),
+        ]);
+        let held = held_record(&store, &deployment).await;
+        let config = ManagerConfig::default();
+        let stack = deployment.supplied_stacks.as_ref().unwrap().current.clone();
+        let step = HeldValues::of_step(Some(&store), &config, &deployment, &held, stack.as_ref())
+            .await
+            .unwrap();
+        let without_stack = HeldValues::of_step(Some(&store), &config, &deployment, &held, None)
+            .await
+            .unwrap();
+
+        for held_values in [&step, &without_stack] {
+            let shown = format!("{held_values:?}");
+            assert!(!shown.contains(CANARY), "{shown}");
+            assert!(!shown.contains(INPUT_CANARY), "{shown}");
+            let pretty = format!("{held_values:#?}");
+            assert!(
+                !pretty.contains(CANARY) && !pretty.contains(INPUT_CANARY),
+                "{pretty}"
+            );
+        }
+        assert!(format!("{step:?}").contains("API_URL"));
     }
 
     #[tokio::test]

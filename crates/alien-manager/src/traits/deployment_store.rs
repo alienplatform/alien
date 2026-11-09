@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
+    import::ImportSourceKind,
+    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
     EnvironmentVariable, GcpEnvironmentInfo, ManagementConfig, ObservedInventoryBatch, Platform,
     ResourceHeartbeat, RuntimeMetadata, Stack, StackSettings, StackState,
-    import::ImportSourceKind,
-    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
 };
 use alien_error::AlienError;
 
