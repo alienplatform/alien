@@ -1445,6 +1445,18 @@ spec:
               value: "helm"
             - name: OPERATOR_HELM_RELEASE
               value: {{ .Release.Name | quote }}
+            {{- with .Chart.Annotations }}
+            {{- if index . "setup.alien.dev/fingerprint" }}
+            - name: OPERATOR_SETUP_RELEASE_ID
+              value: {{ index . "setup.alien.dev/release-id" | quote }}
+            - name: OPERATOR_SETUP_TARGET
+              value: {{ index . "setup.alien.dev/target" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT
+              value: {{ index . "setup.alien.dev/fingerprint" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT_VERSION
+              value: {{ index . "setup.alien.dev/fingerprint-version" | quote }}
+            {{- end }}
+            {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
