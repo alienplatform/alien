@@ -683,9 +683,9 @@ async fn interactive_start(
                     output_cap,
                     alien_core::sandbox_process::Framing::Chunks,
                     sender,
-                    // The group is forgotten once the command exits and before it is reaped,
-                    // not when the terminal frame is delivered, which a slow reader can hold off
-                    // indefinitely.
+                    // The group is forgotten and the id freed once the command exits and before
+                    // it is reaped, not when the terminal frame is delivered, which a slow reader
+                    // can hold off indefinitely.
                     Some(|| reservation.exited()),
                 )
                 .await;

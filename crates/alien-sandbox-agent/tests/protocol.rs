@@ -1486,6 +1486,38 @@ async fn an_interactive_command_answers_each_input_while_it_runs() {
     );
 }
 
+/// A caller that holds the stream open without reading cannot keep a slot for a command its
+/// deadline has killed: sixteen such callers would otherwise refuse every later start.
+#[tokio::test]
+async fn a_command_killed_at_its_deadline_frees_its_id_while_its_stream_is_unread() {
+    let agent = Agent::start().await;
+    let unread = reqwest::Client::new()
+        .post(format!("{}/v1/interactive", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"id": "flood-1", "command": ["yes"], "timeoutMs": 500}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(unread.status(), 200, "an interactive command starts");
+
+    // `yes` fills every buffer between it and the caller long before its deadline, so the
+    // terminal frame cannot be delivered while `unread` is held.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !agent.state.interactive.is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the id outlived the command its deadline killed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let again = Interactive::start(&agent, "flood-1", &["true"]).await;
+    let (terminal, _, _) = again.finish().await;
+    assert_eq!(terminal["t"], "exit", "the freed id starts a new command");
+    assert_eq!(terminal["code"], 0);
+    drop(unread);
+}
+
 /// A write that is retried — because its answer was lost — must be applied once, and a write that
 /// would skip bytes must be refused rather than leave a silent gap in the program's input.
 #[tokio::test]

@@ -73,8 +73,10 @@ struct Stdin {
     generation: u64,
 }
 
-/// A slot held for one command. Dropping it frees the id, which is what makes a signal after the
-/// command ended name nothing.
+/// A slot held for one command. The id is freed once the command has exited, or when this is
+/// dropped if it never started, which is what makes a signal after the command ended name
+/// nothing. Freeing it at the exit, not after the terminal frame, keeps a caller that holds the
+/// stream open without reading from holding a slot for a command that is gone.
 pub struct Reservation {
     registry: Arc<InteractiveRegistry>,
     id: String,
@@ -90,16 +92,28 @@ impl Reservation {
         *lock(&self.command.process_group) = process_group;
     }
 
-    /// Forgets the process group. Called once the command has exited and before it is reaped;
-    /// waits for a signal being sent to finish first.
+    /// Forgets the process group and frees the id. Called once the command has exited and before
+    /// it is reaped; waits for a signal being sent to finish first.
     pub fn exited(&self) {
         *lock(&self.command.process_group) = 0;
+        self.release();
+    }
+
+    /// Frees the id, unless it already names a later command that reused it.
+    fn release(&self) {
+        let mut commands = self.registry.lock();
+        if commands
+            .get(&self.id)
+            .is_some_and(|command| Arc::ptr_eq(command, &self.command))
+        {
+            commands.remove(&self.id);
+        }
     }
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.registry.lock().remove(&self.id);
+        self.release();
     }
 }
 
@@ -430,6 +444,26 @@ mod tests {
             registry.reserve("a").is_ok(),
             "a released id can be used again"
         );
+    }
+
+    #[tokio::test]
+    async fn an_exited_command_frees_its_id_and_its_late_drop_frees_nothing_else() {
+        let registry = Arc::new(InteractiveRegistry::with_capacity(1));
+        let first = registry.reserve("a").expect("reserves");
+        first.exited();
+        assert!(registry.is_empty(), "the exit frees the slot");
+        let second = registry
+            .reserve("a")
+            .expect("the exited id can be used again");
+        drop(first);
+        assert_eq!(
+            registry.len(),
+            1,
+            "the first command's late drop leaves the reused id alone"
+        );
+        assert!(registry.reserve("b").is_err(), "the session is still full");
+        drop(second);
+        assert!(registry.is_empty());
     }
 
     #[test]
