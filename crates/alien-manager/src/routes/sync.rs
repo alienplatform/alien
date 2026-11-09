@@ -923,7 +923,7 @@ async fn reconcile(
             application: None,
             dynamic_containers: None,
             operations_config: None,
-            pull_secret_refreshed: false,
+            deployment_token_revocable: false,
             generated_slots,
         },
     )
@@ -1977,9 +1977,9 @@ mod tests {
         credentials: Arc<crate::auth::runtime_capability::RuntimeCredentials>,
         identity: Arc<crate::stores::sqlite::SqliteRuntimeIdentityStore>,
         stored: Arc<Mutex<DeploymentRecord>>,
-        /// The pull-Secret flag of every sync that reached the store as a
-        /// reconcile request, in order.
-        pull_secret_reports: Arc<Mutex<Vec<bool>>>,
+        /// The `deployment_token_revocable` value of every sync that reached
+        /// the store as a reconcile request, in order.
+        revocable_reports: Arc<Mutex<Vec<bool>>>,
     }
 
     impl TokenEnrollment {
@@ -2018,7 +2018,7 @@ mod tests {
             }
 
             let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
-            let pull_secret_reports = Arc::new(Mutex::new(Vec::new()));
+            let revocable_reports = Arc::new(Mutex::new(Vec::new()));
             let mut store = MockDeploymentStore::new();
             store.expect_requires_execution_claims().return_const(false);
             let current = stored.clone();
@@ -2046,14 +2046,14 @@ mod tests {
                 .returning(move |_, data| apply(&current, data));
             // A sync that carries a receipt reaches the store as a request.
             let current = stored.clone();
-            let received = pull_secret_reports.clone();
+            let received = revocable_reports.clone();
             store
                 .expect_reconcile_request()
                 .returning(move |_, request| {
                     received
                         .lock()
                         .unwrap()
-                        .push(request.pull_secret_refreshed());
+                        .push(request.deployment_token_revocable());
                     let (data, _) = request.into_parts();
                     apply(&current, data)
                 });
@@ -2092,7 +2092,7 @@ mod tests {
                 credentials,
                 identity,
                 stored,
-                pull_secret_reports,
+                revocable_reports,
             }
         }
 
@@ -2495,22 +2495,23 @@ mod tests {
             .unwrap());
     }
 
-    /// The report reaches the deployment store with the reconcile, so a store
-    /// that revokes the deployment's tokens elsewhere can wait for it too. A
-    /// sync without the report does not send one.
+    /// The Operator's pull-Secret report reaches the deployment store with the
+    /// reconcile as `deployment_token_revocable`, so a store that revokes the
+    /// deployment's tokens elsewhere waits for it too. A sync without the
+    /// report does not send one.
     #[tokio::test]
-    async fn the_pull_secret_report_reaches_the_deployment_store() {
+    async fn a_refreshed_pull_secret_tells_the_store_the_token_is_revocable() {
         let manager = TokenEnrollment::new().await;
         let operator = manager.operator_capability();
 
         assert_eq!(manager.sync(&operator).await, StatusCode::OK);
-        assert!(manager.pull_secret_reports.lock().unwrap().is_empty());
+        assert!(manager.revocable_reports.lock().unwrap().is_empty());
 
         assert_eq!(
             manager.sync_with_refreshed_pull_secret(&operator).await,
             StatusCode::OK
         );
-        assert_eq!(*manager.pull_secret_reports.lock().unwrap(), vec![true]);
+        assert_eq!(*manager.revocable_reports.lock().unwrap(), vec![true]);
     }
 
     /// A report alone does not end the token. Workloads deployed before the
@@ -2554,7 +2555,7 @@ mod tests {
         );
         assert_eq!(manager.sync(old_token).await, StatusCode::OK);
         assert_eq!(
-            *manager.pull_secret_reports.lock().unwrap(),
+            *manager.revocable_reports.lock().unwrap(),
             Vec::<bool>::new(),
             "the store is never told the Operator is ready to lose the token"
         );
@@ -2591,25 +2592,53 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
-        assert_eq!(*manager.pull_secret_reports.lock().unwrap(), vec![true]);
+        assert_eq!(*manager.revocable_reports.lock().unwrap(), vec![true]);
     }
 
     /// A release the manager cannot read could hold an unmarked receiver, so
-    /// the token stays.
+    /// the token stays, the store is not told it is revocable, and the warning
+    /// names the deployment.
     #[tokio::test]
     async fn the_deployment_token_is_kept_when_the_current_release_cannot_be_read() {
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
         let manager = TokenEnrollment::new().await;
         let operator = manager.operator_capability();
         manager.stored.lock().unwrap().current_release_id = Some("rel_gone".into());
-
         manager.stored.lock().unwrap().status = "update-pending".into();
-        assert_eq!(
-            manager.sync_with_refreshed_pull_secret(&operator).await,
-            StatusCode::OK
-        );
+
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let status = manager.sync_with_refreshed_pull_secret(&operator).await;
+        drop(guard);
+
+        assert_eq!(status, StatusCode::OK);
         assert_eq!(
             manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
             StatusCode::OK
+        );
+        assert!(manager.revocable_reports.lock().unwrap().is_empty());
+        let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("Current release not found; keeping the deployment token")
+                && logs.contains("dep_test"),
+            "{logs}"
         );
     }
 
@@ -4203,7 +4232,7 @@ struct AgentReportExtras {
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
-    pull_secret_refreshed: bool,
+    deployment_token_revocable: bool,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -4218,14 +4247,14 @@ async fn reconcile_agent_report(
         application,
         dynamic_containers,
         operations_config,
-        pull_secret_refreshed,
+        deployment_token_revocable,
         generated_slots,
     } = extras;
     if operator_image.is_none()
         && application.is_none()
         && dynamic_containers.is_none()
         && operations_config.is_none()
-        && !pull_secret_refreshed
+        && !deployment_token_revocable
         && generated_slots.is_empty()
     {
         return store.reconcile(subject, data).await;
@@ -4246,7 +4275,9 @@ async fn reconcile_agent_report(
     store
         .reconcile_request(
             subject,
-            request.pull_secret_refreshed(pull_secret_refreshed).build(),
+            request
+                .deployment_token_revocable(deployment_token_revocable)
+                .build(),
         )
         .await
 }
@@ -4484,7 +4515,7 @@ async fn agent_sync(
                         Ok(slots) => slots,
                         Err(response) => return response,
                     };
-                    let pull_secret_refreshed = pull_secret_refreshed
+                    let deployment_token_revocable = pull_secret_refreshed
                         && !command_receivers_need_token(
                             &state,
                             &deployment,
@@ -4516,7 +4547,7 @@ async fn agent_sync(
                             application: application.clone(),
                             dynamic_containers: dynamic_containers.clone(),
                             operations_config: operations_config.clone(),
-                            pull_secret_refreshed,
+                            deployment_token_revocable,
                             generated_slots,
                         },
                     )
@@ -4549,7 +4580,7 @@ async fn agent_sync(
                                 &subject,
                                 &deployment,
                                 &outcome.record,
-                                pull_secret_refreshed,
+                                deployment_token_revocable,
                             )
                             .await;
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
@@ -4812,7 +4843,7 @@ async fn agent_sync(
                         Ok(slots) => slots,
                         Err(response) => return response,
                     };
-                    let pull_secret_refreshed = pull_secret_refreshed
+                    let deployment_token_revocable = pull_secret_refreshed
                         && !command_receivers_need_token(&state, &deployment, None).await;
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
@@ -4836,7 +4867,7 @@ async fn agent_sync(
                             application: application.clone(),
                             dynamic_containers: dynamic_containers.clone(),
                             operations_config: operations_config.clone(),
-                            pull_secret_refreshed,
+                            deployment_token_revocable,
                             generated_slots,
                         },
                     )
@@ -5529,9 +5560,10 @@ fn token_hold_key(deployment_id: &str) -> String {
 /// token must outlive it. A release that cannot be read counts as needing the
 /// token. A deployment with no current release has no receiver.
 ///
-/// The result is folded into `pull_secret_refreshed` before the report reaches
-/// the deployment store, so every store revokes on the one condition and a
-/// deployment that never redeploys keeps its token.
+/// The result is folded into `deployment_token_revocable` (the Operator's
+/// `pull_secret_refreshed` report and no unmarked receiver) before the report
+/// reaches the deployment store, so every store revokes on the one condition
+/// and a deployment that never redeploys keeps its token.
 async fn command_receivers_need_token(
     state: &AppState,
     deployment: &DeploymentRecord,
@@ -5575,8 +5607,8 @@ async fn command_receivers_need_token(
 /// Secret that still holds the token would stop the Operator pod from pulling
 /// its image on a new node, so the token stays until the report arrives. A
 /// command receiver built before capability files starts only with the token,
-/// so `pull_secret_refreshed` here is already false while the current release
-/// has one. An Operator that never reports keeps its token; that is logged
+/// so `deployment_token_revocable` here is already false while the current
+/// release has one. An Operator that never reports keeps its token; that is logged
 /// once, with the deployment id. Neither case fails the sync.
 async fn settle_deployment_token(
     state: &AppState,
@@ -5584,7 +5616,7 @@ async fn settle_deployment_token(
     subject: &crate::auth::Subject,
     before: &DeploymentRecord,
     after: &DeploymentRecord,
-    pull_secret_refreshed: bool,
+    deployment_token_revocable: bool,
 ) {
     if !matches!(subject.role, crate::auth::Role::OperatorSync)
         || !crate::auth::runtime_capability::is_runtime_capability(&subject.bearer_token)
@@ -5593,7 +5625,7 @@ async fn settle_deployment_token(
     }
     let key = token_hold_key(deployment_id);
     let rolled_out = rollout_by_enrolled_operator_finished(subject, before, after);
-    if !pull_secret_refreshed {
+    if !deployment_token_revocable {
         if rolled_out {
             if let Err(error) = state
                 .kv

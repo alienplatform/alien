@@ -426,7 +426,7 @@ pub struct ReconcileInput {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
-    pull_secret_refreshed: bool,
+    deployment_token_revocable: bool,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -439,16 +439,18 @@ impl ReconcileInput {
             dynamic_containers: None,
             operations_config: None,
             applied_configuration_revision: None,
-            pull_secret_refreshed: false,
+            deployment_token_revocable: false,
             generated_slots: Vec::new(),
         }
     }
 
-    /// The Operator reported that the pull Secret its Deployment references
-    /// holds its own registry credential, or that no such Secret needs one.
-    /// Embedders that revoke the deployment's static tokens wait for it.
-    pub fn pull_secret_refreshed(&self) -> bool {
-        self.pull_secret_refreshed
+    /// Whether the deployment's static token is safe to revoke. The manager
+    /// sets it when the Operator reported that the pull Secret its Deployment
+    /// references holds its own registry credential (or that no such Secret
+    /// needs one) and the current release has no command receiver that still
+    /// starts only with the token. Embedders that revoke the token wait for it.
+    pub fn deployment_token_revocable(&self) -> bool {
+        self.deployment_token_revocable
     }
 
     /// Secret inputs the manager generated for the deployment, as metadata
@@ -496,7 +498,7 @@ pub struct ReconcileInputBuilder {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
-    pull_secret_refreshed: bool,
+    deployment_token_revocable: bool,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -518,9 +520,9 @@ impl ReconcileInputBuilder {
         self
     }
 
-    /// Attach the Operator's report that its pull Secret holds its own credential.
-    pub fn pull_secret_refreshed(mut self, refreshed: bool) -> Self {
-        self.pull_secret_refreshed = refreshed;
+    /// Attach whether the deployment's static token is safe to revoke.
+    pub fn deployment_token_revocable(mut self, revocable: bool) -> Self {
+        self.deployment_token_revocable = revocable;
         self
     }
 
@@ -550,7 +552,7 @@ impl ReconcileInputBuilder {
             dynamic_containers: self.dynamic_containers,
             operations_config: self.operations_config,
             applied_configuration_revision: self.applied_configuration_revision,
-            pull_secret_refreshed: self.pull_secret_refreshed,
+            deployment_token_revocable: self.deployment_token_revocable,
             generated_slots: self.generated_slots,
         }
     }
