@@ -1,0 +1,42 @@
+{
+  "id": "acme-vault",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Whether this deployment gets the vault.",
+      "env": [],
+      "id": "vault_enabled",
+      "kind": "boolean",
+      "label": "Create vault",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "main": {
+      "config": {
+        "id": "main",
+        "type": "vault"
+      },
+      "dependencies": [],
+      "description": "The vault the acme services share.",
+      "displayName": "Primary vault",
+      "enabledWhen": "vault_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

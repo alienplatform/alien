@@ -99,6 +99,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "serde",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -115,7 +129,7 @@ checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 
 [[package]]
 name = "alien-ai-gateway"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -143,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -186,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-azure-model-generator",
  "alien-azure-models-1",
@@ -231,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-model-generator"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "openapiv3",
  "prettyplease 0.2.37",
@@ -242,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-1"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -255,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-2"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -268,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-3"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -281,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-4"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -294,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-5"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -307,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -363,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-node"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -381,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-python"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-ai-gateway",
  "alien-bindings",
@@ -399,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -440,7 +454,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-bindings",
@@ -462,6 +476,7 @@ dependencies = [
  "alien-permissions",
  "alien-platform-api",
  "alien-preflights",
+ "alien-stack-toml",
  "alien-terraform",
  "alien-worker-runtime",
  "async-trait",
@@ -523,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -548,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -566,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -585,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -603,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -641,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "base64 0.23.1",
@@ -656,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -685,6 +700,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
@@ -697,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-cli-common",
  "alien-core",
@@ -745,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -783,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "alien-egress-gateway"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-bindings",
@@ -826,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -839,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -849,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -883,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -905,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -970,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -1000,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -1054,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1063,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "aegis",
  "aes-gcm 0.10.3",
@@ -1138,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error",
  "chrono",
@@ -1157,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1177,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operations-sdk"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1193,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -1247,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permission-types"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "indexmap 2.14.1",
  "serde",
@@ -1256,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1280,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1301,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1324,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-agent"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1350,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-conformance"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -1362,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -1383,8 +1399,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-stack-toml"
+version = "3.3.58"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "indexmap 2.14.1",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "strsim",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "utoipa",
+]
+
+[[package]]
 name = "alien-terraform"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-cloudformation",
  "alien-core",
@@ -1405,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-ai-gateway",
  "alien-aws-clients",
@@ -1459,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error",
  "alien-sdk",
@@ -1505,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "alien-tunnel"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error",
  "alien-tunnel",
@@ -1529,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-protocol"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-error",
  "async-stream",
@@ -1548,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-runtime"
-version = "3.3.57"
+version = "3.3.58"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -2824,6 +2857,15 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec 0.8.0",
+]
+
+[[package]]
+name = "bit-set"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
@@ -2836,6 +2878,12 @@ name = "bit-vec"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bit-vec"
@@ -3015,6 +3063,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "borrow-or-share"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
+
+[[package]]
 name = "borsh"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3085,6 +3139,12 @@ dependencies = [
  "utoipa",
  "uuid",
 ]
+
+[[package]]
+name = "bytecount"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
 name = "bytemuck"
@@ -4439,6 +4499,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "email_address"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "ena"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4607,6 +4676,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
+name = "fancy-regex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e24cb5a94bcae1e5408b0effca5cd7172ea3c5755049c5f3af4cd283a165298"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "fastbloom"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4730,6 +4810,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluent-uri"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1918b65d96df47d3591bed19c5cca17e3fa5d0707318e4b5ef2eae01764df7e5"
+dependencies = [
+ "borrow-or-share",
+ "ref-cast",
+ "serde",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4769,6 +4860,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fraction"
+version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
+dependencies = [
+ "lazy_static",
+ "num",
 ]
 
 [[package]]
@@ -6201,6 +6302,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonschema"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1b46a0365a611fbf1d2143104dcf910aada96fafd295bab16c60b802bf6fa1d"
+dependencies = [
+ "ahash",
+ "base64 0.22.1",
+ "bytecount",
+ "email_address",
+ "fancy-regex",
+ "fraction",
+ "idna",
+ "itoa",
+ "num-cmp",
+ "num-traits",
+ "once_cell",
+ "percent-encoding",
+ "referencing",
+ "regex",
+ "regex-syntax",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "uuid-simd",
+]
+
+[[package]]
 name = "jwt"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7149,6 +7277,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "num"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
+dependencies = [
+ "num-bigint",
+ "num-complex",
+ "num-integer",
+ "num-iter",
+ "num-rational",
+ "num-traits",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7175,6 +7317,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-cmp"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63335b2e2c34fae2fb0aa2cecfd9f0832a1e24b3b32ecec612c3426d46dc8aaa"
+
+[[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "num-conv"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7195,6 +7352,17 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c92800bd69a1eac91786bcfe9da64a897eb72911b8dc3095decbd07429e8048b"
 dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -9023,6 +9191,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "referencing"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8eff4fa778b5c2a57e85c5f2fe3a709c52f0e60d23146e2151cbef5893f420e"
+dependencies = [
+ "ahash",
+ "fluent-uri",
+ "once_cell",
+ "parking_lot",
+ "percent-encoding",
+ "serde_json",
 ]
 
 [[package]]
@@ -11785,7 +11967,7 @@ version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8464ec13c3691491391d9fce00f6416c9a48e46972f72d7865688be2080192c9"
 dependencies = [
- "rand 0.9.5",
+ "rand 0.10.3",
 ]
 
 [[package]]
@@ -12064,6 +12246,17 @@ dependencies = [
  "serde_core",
  "sha1_smol",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uuid-simd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b082222b4f6619906941c17eb2297fff4c2fb96cb60164170522942a200bd8"
+dependencies = [
+ "outref",
+ "uuid",
+ "vsimd",
 ]
 
 [[package]]

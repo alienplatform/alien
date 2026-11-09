@@ -1,0 +1,19 @@
+name = "acme-daemon-health"
+platforms = ["machines"]
+
+# An empty table keeps every default: GET /health, 1s timeout, 3 failures.
+[daemon.defaults]
+image = "ghcr.io/acme/defaults:1.0.0"
+health-check = {}
+
+[daemon.path-only]
+image = "ghcr.io/acme/path-only:1.0.0"
+health-check = { path = "/ready" }
+
+[daemon.everything]
+image = "ghcr.io/acme/everything:1.0.0"
+health-check = { path = "/status", port = 8081, method = "POST", timeout = "5s", failure-threshold = 2 }
+
+# Without a health check the field stays unset.
+[daemon.unchecked]
+image = "ghcr.io/acme/unchecked:1.0.0"

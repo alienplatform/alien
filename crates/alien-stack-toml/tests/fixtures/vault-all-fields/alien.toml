@@ -1,0 +1,17 @@
+name = "acme-vault"
+platforms = ["aws", "gcp", "azure"]
+
+[vault.main]
+display-name = "Primary vault"
+description = "The vault the acme services share."
+lifecycle = "live"
+remote-access = true
+enabled-when = "vault_enabled"
+
+[input.vault_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create vault"
+description = "Whether this deployment gets the vault."
+default = false
+platforms = ["aws"]

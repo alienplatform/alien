@@ -1,0 +1,105 @@
+{
+  "id": "acme-storage",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the reports bucket.",
+      "env": [],
+      "id": "reports_enabled",
+      "kind": "boolean",
+      "label": "Create reports bucket",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "bucket-key": {
+      "config": {
+        "id": "bucket-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "displayName": "Bucket key",
+      "lifecycle": "frozen"
+    },
+    "uploads": {
+      "config": {
+        "id": "uploads",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "exports": {
+      "config": {
+        "id": "exports",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [
+          "https://app.acme.example",
+          "https://admin.acme.example"
+        ],
+        "encryptionKey": {
+          "id": "bucket-key",
+          "type": "key"
+        },
+        "lifecycleRules": [
+          {
+            "days": 7,
+            "prefix": "tmp/"
+          },
+          {
+            "days": 365
+          }
+        ],
+        "notifications": [
+          {
+            "events": [
+              "created"
+            ],
+            "prefix": "incoming/",
+            "queue": {
+              "id": "uploads",
+              "type": "queue"
+            },
+            "suffix": ".csv"
+          },
+          {
+            "events": [
+              "created"
+            ],
+            "prefix": "outgoing/",
+            "queue": {
+              "id": "exports",
+              "type": "queue"
+            }
+          }
+        ],
+        "publicRead": true,
+        "versioning": true
+      },
+      "dependencies": [],
+      "description": "Customer-facing report archive.",
+      "displayName": "Reports",
+      "enabledWhen": "reports_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

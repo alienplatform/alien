@@ -1,0 +1,72 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-pipeline"
+platforms = ["machines", "aws"]
+
+[cluster]
+id = "pipeline"
+
+[pool.frontend]
+cpu = 4
+memory = "16Gi"
+ephemeral-storage = "50Gi"
+architecture = "x86_64"
+autoscaling = { min = 2, max = 8 }
+
+[pool.batch]
+cpu = 16
+memory = "64Gi"
+architecture = "arm64"
+data-disk = "1Ti"
+gpu = { type = "nvidia-l4", count = 2 }
+machines = 1
+failure-domain-spread = 2
+
+[storage.artifacts]
+versioning = true
+
+[container.api]
+image = "ghcr.io/acme/pipeline-api:4.0.1"
+pool = "frontend"
+cpu = 1
+memory = "2Gi"
+ports = [8080]
+autoscaling = { min = 2, max = 6, target-cpu-percent = 65 }
+health-check = { path = "/healthz", port = 8080 }
+links = ["artifacts"]
+permissions = { artifacts = ["storage/data-read", "storage/data-write"] }
+
+[container.api.public-endpoints]
+http = { port = 8080 }
+
+[container.api.env]
+RUST_LOG = "info"
+ARTIFACT_PREFIX = "builds/"
+
+[daemon.log-shipper]
+build = { toolchain = "rust", binary-name = "log-shipper" }
+pool = "frontend"
+cpu = 0.25
+memory = "128Mi"
+env-file = "shared/telemetry.env"
+links = ["artifacts"]
+permissions = { artifacts = ["storage/data-write"] }
+
+[daemon.log-shipper.env]
+SHIP_BATCH_SIZE = 200
+SHIP_TARGET = { input = "log_sink" }
+
+[daemon.gpu-monitor]
+image = "ghcr.io/acme/gpu-monitor:0.9.4"
+pool = "batch"
+host-access = true
+stop-grace-period = 30
+env-file = "shared/telemetry.env"
+
+[daemon.gpu-monitor.env]
+POLL_INTERVAL_SECONDS = 15
+
+[input.log_sink]
+kind = "string"
+format = "url"
+label = "Log sink"
+description = "Where shipped logs are sent."

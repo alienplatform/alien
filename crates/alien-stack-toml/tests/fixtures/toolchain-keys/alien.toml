@@ -1,0 +1,25 @@
+name = "acme-toolchain-keys"
+platforms = ["machines", "aws"]
+
+# Every key a build table takes, on the kinds that build from source other than a container.
+[daemon.python-agent]
+build = { toolchain = "python", command = ["python", "-m", "agent"], package = "acme-agent", python-version = "3.12", src = "agents/python" }
+
+[daemon.docker-agent]
+build = { toolchain = "docker", dockerfile = "agents/Dockerfile", target = "runtime", build-args = { VERSION = "2.1", FEATURES = "tls" }, src = "agents" }
+
+[worker.docker-worker]
+build = { toolchain = "docker", dockerfile = "workers/Dockerfile", target = "runtime", build-args = { VERSION = "2.1" }, src = "workers" }
+
+[worker.python-worker]
+build = { toolchain = "python", command = ["python", "worker.py"], package = "acme-worker", python-version = "3.11", src = "workers/python" }
+
+[sandbox.python-box]
+build = { toolchain = "python", command = ["python", "-m", "box"], package = "acme-box", python-version = "3.12", src = "boxes/python" }
+egress = "none"
+session = {}
+
+[sandbox.docker-box]
+build = { toolchain = "docker", dockerfile = "boxes/Dockerfile", target = "runtime", build-args = { VERSION = "2.1" }, src = "boxes" }
+egress = "none"
+session = {}

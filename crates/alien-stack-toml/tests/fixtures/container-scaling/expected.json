@@ -1,0 +1,146 @@
+{
+  "id": "acme-scaling",
+  "permissions": {
+    "profiles": {
+      "elastic": {},
+      "warm": {},
+      "targeted": {},
+      "fixed": {}
+    }
+  },
+  "resources": {
+    "elastic": {
+      "config": {
+        "id": "elastic",
+        "type": "container",
+        "autoscaling": {
+          "desired": 2,
+          "max": 10,
+          "min": 2
+        },
+        "code": {
+          "image": "ghcr.io/acme/elastic:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "elastic",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "warm": {
+      "config": {
+        "id": "warm",
+        "type": "container",
+        "autoscaling": {
+          "desired": 4,
+          "max": 8,
+          "min": 1
+        },
+        "code": {
+          "image": "ghcr.io/acme/warm:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "warm",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "targeted": {
+      "config": {
+        "id": "targeted",
+        "type": "container",
+        "autoscaling": {
+          "desired": 3,
+          "max": 30,
+          "min": 3,
+          "targetCpuPercent": 55.5,
+          "targetHttpInFlightPerReplica": 50
+        },
+        "code": {
+          "image": "ghcr.io/acme/targeted:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "targeted",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "fixed": {
+      "config": {
+        "id": "fixed",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/fixed:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "fixed",
+        "ports": [],
+        "publicEndpoints": [],
+        "replicas": 3,
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

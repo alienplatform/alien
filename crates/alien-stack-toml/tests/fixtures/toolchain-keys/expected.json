@@ -1,0 +1,185 @@
+{
+  "id": "acme-toolchain-keys",
+  "permissions": {
+    "profiles": {
+      "docker-worker": {},
+      "python-worker": {}
+    }
+  },
+  "resources": {
+    "python-agent": {
+      "config": {
+        "id": "python-agent",
+        "type": "daemon",
+        "code": {
+          "src": "agents/python",
+          "toolchain": {
+            "command": [
+              "python",
+              "-m",
+              "agent"
+            ],
+            "package": "acme-agent",
+            "pythonVersion": "3.12",
+            "type": "python"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "docker-agent": {
+      "config": {
+        "id": "docker-agent",
+        "type": "daemon",
+        "code": {
+          "src": "agents",
+          "toolchain": {
+            "buildArgs": {
+              "VERSION": "2.1",
+              "FEATURES": "tls"
+            },
+            "dockerfile": "agents/Dockerfile",
+            "target": "runtime",
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "docker-worker": {
+      "config": {
+        "id": "docker-worker",
+        "type": "worker",
+        "code": {
+          "src": "workers",
+          "toolchain": {
+            "buildArgs": {
+              "VERSION": "2.1"
+            },
+            "dockerfile": "workers/Dockerfile",
+            "target": "runtime",
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "docker-worker",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "python-worker": {
+      "config": {
+        "id": "python-worker",
+        "type": "worker",
+        "code": {
+          "src": "workers/python",
+          "toolchain": {
+            "command": [
+              "python",
+              "worker.py"
+            ],
+            "package": "acme-worker",
+            "pythonVersion": "3.11",
+            "type": "python"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "python-worker",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "python-box": {
+      "config": {
+        "id": "python-box",
+        "type": "sandbox",
+        "code": {
+          "src": "boxes/python",
+          "toolchain": {
+            "command": [
+              "python",
+              "-m",
+              "box"
+            ],
+            "package": "acme-box",
+            "pythonVersion": "3.12",
+            "type": "python"
+          },
+          "type": "source"
+        },
+        "egress": "none",
+        "lifecycle": {}
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "docker-box": {
+      "config": {
+        "id": "docker-box",
+        "type": "sandbox",
+        "code": {
+          "src": "boxes",
+          "toolchain": {
+            "buildArgs": {
+              "VERSION": "2.1"
+            },
+            "dockerfile": "boxes/Dockerfile",
+            "target": "runtime",
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "egress": "none",
+        "lifecycle": {}
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws"
+  ]
+}

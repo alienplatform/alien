@@ -304,6 +304,19 @@ pub struct HealthCheck {
     pub failure_threshold: u32,
 }
 
+impl Default for HealthCheck {
+    /// The values a health check takes for every field it leaves out; no port.
+    fn default() -> Self {
+        HealthCheck {
+            path: default_health_path(),
+            port: None,
+            method: default_health_method(),
+            timeout_seconds: default_timeout_seconds(),
+            failure_threshold: default_failure_threshold(),
+        }
+    }
+}
+
 fn default_health_path() -> String {
     "/health".to_string()
 }

@@ -1,0 +1,42 @@
+{
+  "id": "acme-queue",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Whether this deployment gets the queue.",
+      "env": [],
+      "id": "queue_enabled",
+      "kind": "boolean",
+      "label": "Create queue",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "main": {
+      "config": {
+        "id": "main",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "description": "The queue the acme services share.",
+      "displayName": "Primary queue",
+      "enabledWhen": "queue_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

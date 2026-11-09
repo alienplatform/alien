@@ -1,0 +1,93 @@
+{
+  "id": "acme-jobs",
+  "inputs": [
+    {
+      "description": "Token the worker uses to pull jobs from your control plane.",
+      "env": [
+        {
+          "name": "JOBS_API_TOKEN",
+          "targetResources": [
+            "job-worker"
+          ]
+        }
+      ],
+      "id": "jobs_api_token",
+      "kind": "secret",
+      "label": "Jobs API token",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "resources": {
+    "compute": {
+      "config": {
+        "id": "compute",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "workers",
+            "maxSize": 3,
+            "minSize": 3,
+            "profile": {
+              "cpu": "4",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 8589934592
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 3,
+                "max": 20,
+                "min": 1
+              },
+              "type": "fixed"
+            }
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "job-worker": {
+      "config": {
+        "id": "job-worker",
+        "type": "daemon",
+        "cluster": "compute",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "job-worker",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "3",
+          "min": "3"
+        },
+        "environment": {
+          "RUST_LOG": "info"
+        },
+        "healthCheck": {
+          "path": "/healthz",
+          "port": 8080
+        },
+        "links": [],
+        "memory": {
+          "desired": "6Gi",
+          "min": "6Gi"
+        },
+        "publicEndpoints": [],
+        "stopGracePeriodSeconds": 600
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines"
+  ]
+}

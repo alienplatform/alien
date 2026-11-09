@@ -1,0 +1,37 @@
+name = "acme-triggers"
+platforms = ["aws", "gcp", "azure"]
+
+[queue.orders]
+
+[queue.refunds]
+
+[storage.imports]
+
+# A queue trigger: without `batch`, messages arrive as the platform delivers them.
+[worker.order-handler]
+image = "ghcr.io/acme/orders:1.0.0"
+triggers = [{ queue = "orders" }]
+
+# A queue trigger with batching; the window is a duration.
+[worker.refund-batcher]
+image = "ghcr.io/acme/refunds:1.0.0"
+triggers = [{ queue = "refunds", batch = { max-messages = 100, max-window = "2m" } }]
+
+# A storage trigger fires on `created` unless `events` says otherwise.
+[worker.import-reader]
+image = "ghcr.io/acme/imports:1.0.0"
+triggers = [{ storage = "imports" }]
+
+[worker.import-auditor]
+image = "ghcr.io/acme/imports:1.0.0"
+triggers = [{ storage = "imports", events = ["created"] }]
+
+# A schedule is a cron expression.
+[worker.nightly]
+image = "ghcr.io/acme/nightly:1.0.0"
+triggers = [{ schedule = "0 2 * * *" }]
+
+# Several triggers, in the order they are written.
+[worker.everything]
+image = "ghcr.io/acme/everything:1.0.0"
+triggers = [{ schedule = "*/15 * * * *" }, { storage = "imports" }, { queue = "orders" }, { queue = "refunds", batch = { max-messages = 5, max-window = "10s" } }]

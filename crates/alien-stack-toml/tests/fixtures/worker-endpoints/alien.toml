@@ -1,0 +1,20 @@
+name = "acme-worker-endpoints"
+platforms = ["aws", "gcp"]
+
+# A list of names: endpoints without a host label.
+[worker.api]
+image = "ghcr.io/acme/api:1.0.0"
+public-endpoints = ["api", "webhooks"]
+
+# A table keyed by name, for the settings of an endpoint.
+[worker.sites]
+image = "ghcr.io/acme/sites:1.0.0"
+
+[worker.sites.public-endpoints]
+marketing = { host-label = "@" }
+customers = { host-label = "customers", wildcard-subdomains = true }
+docs = {}
+
+# No endpoints: only triggers and commands reach the worker.
+[worker.private]
+image = "ghcr.io/acme/private:1.0.0"

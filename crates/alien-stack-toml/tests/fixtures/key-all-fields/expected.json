@@ -1,0 +1,21 @@
+{
+  "id": "acme-key",
+  "resources": {
+    "records": {
+      "config": {
+        "id": "records",
+        "type": "key"
+      },
+      "dependencies": [],
+      "description": "Customer-managed key for the records at rest.",
+      "displayName": "Records key",
+      "lifecycle": "frozen",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

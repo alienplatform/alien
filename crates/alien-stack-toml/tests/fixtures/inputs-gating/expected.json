@@ -1,0 +1,300 @@
+{
+  "id": "acme-media",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Create the uploads bucket and the daemon that fills it.",
+      "env": [],
+      "id": "uploads_enabled",
+      "kind": "boolean",
+      "label": "Accept uploads",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "",
+      "env": [],
+      "id": "archive_enabled",
+      "kind": "boolean",
+      "label": "Keep an archive",
+      "platforms": [
+        "aws",
+        "gcp"
+      ],
+      "providedBy": [
+        "developer",
+        "deployer"
+      ],
+      "required": false
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Create the session store.",
+      "env": [],
+      "id": "sessions_enabled",
+      "kind": "boolean",
+      "label": "Store sessions",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Create the job queue and the worker that drains it.",
+      "env": [],
+      "id": "jobs_enabled",
+      "kind": "boolean",
+      "label": "Run background jobs",
+      "platforms": [
+        "aws",
+        "gcp"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Create a vault for keys the deployer manages.",
+      "env": [],
+      "id": "customer_keys_enabled",
+      "kind": "boolean",
+      "label": "Customer-managed keys",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Run the thumbnail renderer on the render pool.",
+      "env": [],
+      "id": "renderer_enabled",
+      "kind": "boolean",
+      "label": "Render thumbnails",
+      "platforms": [
+        "machines"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "uploader": {
+        "uploads": [
+          "storage/data-read",
+          "storage/data-write"
+        ]
+      },
+      "ingest": {},
+      "renderer": {}
+    }
+  },
+  "resources": {
+    "compute": {
+      "config": {
+        "id": "compute",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "render",
+            "maxSize": 2,
+            "minSize": 2,
+            "profile": {
+              "cpu": "4",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 8589934592
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 2,
+                "max": 2,
+                "min": 2
+              },
+              "type": "fixed"
+            }
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "uploads": {
+      "config": {
+        "id": "uploads",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": true
+      },
+      "dependencies": [],
+      "enabledWhen": "uploads_enabled",
+      "lifecycle": "frozen"
+    },
+    "uploader": {
+      "config": {
+        "id": "uploader",
+        "type": "daemon",
+        "cluster": "compute",
+        "code": {
+          "image": "ghcr.io/acme/uploader:1.8.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [
+          {
+            "id": "uploads",
+            "type": "storage"
+          }
+        ],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "permissions": "uploader",
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "enabledWhen": "uploads_enabled",
+      "lifecycle": "live"
+    },
+    "archive": {
+      "config": {
+        "id": "archive",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "enabledWhen": "archive_enabled",
+      "lifecycle": "live"
+    },
+    "sessions": {
+      "config": {
+        "id": "sessions",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "enabledWhen": "sessions_enabled",
+      "lifecycle": "frozen"
+    },
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "enabledWhen": "jobs_enabled",
+      "lifecycle": "frozen"
+    },
+    "ingest": {
+      "config": {
+        "id": "ingest",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/ingest:1.8.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [
+          {
+            "id": "jobs",
+            "type": "queue"
+          }
+        ],
+        "memoryMb": 512,
+        "permissions": "ingest",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "enabledWhen": "jobs_enabled",
+      "lifecycle": "live"
+    },
+    "customer-keys": {
+      "config": {
+        "id": "customer-keys",
+        "type": "vault"
+      },
+      "dependencies": [],
+      "enabledWhen": "customer_keys_enabled",
+      "lifecycle": "frozen"
+    },
+    "renderer": {
+      "config": {
+        "id": "renderer",
+        "type": "container",
+        "cluster": "compute",
+        "code": {
+          "image": "ghcr.io/acme/renderer:2.1.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "renderer",
+        "pool": "render",
+        "ports": [
+          {
+            "port": 8080
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "enabledWhen": "renderer_enabled",
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws",
+    "gcp"
+  ]
+}

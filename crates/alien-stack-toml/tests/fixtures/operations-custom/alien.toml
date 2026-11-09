@@ -1,0 +1,28 @@
+name = "acme-custom-operations"
+platforms = ["aws"]
+
+[input.audit_url]
+kind = "string"
+provided-by = "deployer"
+required = true
+label = "Audit URL"
+description = "Where the audit plugin reports."
+
+[storage.reports]
+
+[[operations.custom]]
+name = "acme-audit"
+version = "0.3.1"
+sink = { input = "audit_url" }
+bucket = { resources = ["reports"] }
+mode = "strict"
+token = { env = "AUDIT_TOKEN" }
+
+[operations.custom.approval]
+"*" = "manual"
+inspect = { decision = "auto", max-risk = "low" }
+
+[[operations.custom]]
+name = "acme-cleanup"
+version = "2.0.0"
+approval = { "*" = "auto" }

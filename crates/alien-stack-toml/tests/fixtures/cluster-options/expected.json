@@ -1,0 +1,78 @@
+{
+  "id": "acme-cluster-options",
+  "resources": {
+    "models": {
+      "config": {
+        "id": "models",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "scratch": {
+      "config": {
+        "id": "scratch",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "acme-nodes": {
+      "config": {
+        "id": "acme-nodes",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "general",
+            "maxSize": 2,
+            "minSize": 2,
+            "profile": {
+              "cpu": "2",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 8589934592
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 2,
+                "max": 2,
+                "min": 2
+              },
+              "type": "fixed"
+            }
+          }
+        ],
+        "containerCidr": "10.96.0.0/16",
+        "nodePermissions": {
+          "models": [
+            "storage/data-read"
+          ],
+          "scratch": [
+            "storage/data-read",
+            "storage/data-write"
+          ]
+        },
+        "nodePermissionsPlatforms": [
+          "aws",
+          "gcp"
+        ]
+      },
+      "dependencies": [],
+      "description": "Machines that run acme workloads.",
+      "displayName": "Acme nodes",
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

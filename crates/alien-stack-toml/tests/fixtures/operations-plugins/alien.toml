@@ -1,0 +1,39 @@
+name = "acme-operations"
+platforms = ["aws"]
+
+[input.db_url]
+kind = "string"
+provided-by = "deployer"
+required = true
+label = "Database URL"
+description = "Analytics database URL."
+
+[input.db_password]
+kind = "secret"
+provided-by = "deployer"
+required = true
+label = "Database password"
+description = "Analytics database password."
+
+[storage.exports]
+
+[storage.archive]
+
+[operations.kubernetes]
+approval = { "*" = "auto" }
+
+[operations.clickhouse]
+url = { input = "db_url" }
+password = { input = "db_password" }
+database = "app"
+token = { env = "CLICKHOUSE_TOKEN" }
+
+[operations.clickhouse.approval]
+read = "auto"
+write = { decision = "manual", max-risk = "medium" }
+drop = { decision = "manual" }
+
+[operations.s3]
+buckets = { resources = ["exports", "archive"] }
+default-bucket = { resources = ["exports"] }
+region = "us-east-1"

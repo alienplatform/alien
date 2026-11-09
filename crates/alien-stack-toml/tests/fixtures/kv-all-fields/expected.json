@@ -1,0 +1,42 @@
+{
+  "id": "acme-kv",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Whether this deployment gets the kv.",
+      "env": [],
+      "id": "kv_enabled",
+      "kind": "boolean",
+      "label": "Create kv",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "main": {
+      "config": {
+        "id": "main",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "description": "The kv the acme services share.",
+      "displayName": "Primary kv",
+      "enabledWhen": "kv_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

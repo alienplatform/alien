@@ -1,0 +1,248 @@
+{
+  "id": "inputs-demo",
+  "inputs": [
+    {
+      "description": "Region key this deployment's workers consume.",
+      "env": [
+        {
+          "name": "RUNNER_REGION",
+          "targetResources": [
+            "worker"
+          ]
+        }
+      ],
+      "id": "runner_region",
+      "kind": "string",
+      "label": "Runner region",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "minLength": 1,
+        "pattern": "^[a-z0-9-]+$"
+      }
+    },
+    {
+      "default": {
+        "type": "string",
+        "value": "sqlite"
+      },
+      "description": "Backend that stores registry state.",
+      "env": [
+        {
+          "name": "STORE_BACKEND"
+        }
+      ],
+      "id": "store_backend",
+      "kind": "enum",
+      "label": "Store backend",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "values": [
+          "sqlite",
+          "cas"
+        ]
+      }
+    },
+    {
+      "default": {
+        "type": "number",
+        "value": "100"
+      },
+      "description": "Largest local cache, in GiB.",
+      "env": [
+        {
+          "name": "CACHE_SIZE_GB"
+        },
+        {
+          "name": "LEGACY_CACHE_GB",
+          "targetResources": [
+            "work*"
+          ]
+        }
+      ],
+      "id": "cache_size_gb",
+      "kind": "integer",
+      "label": "Cache size",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "max": "4096",
+        "min": "1"
+      }
+    },
+    {
+      "default": {
+        "type": "number",
+        "value": "0.25"
+      },
+      "description": "",
+      "env": [],
+      "id": "sample_rate",
+      "kind": "number",
+      "label": "Trace sample rate",
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {
+        "max": "1",
+        "min": "0"
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Observe decisions without applying them.",
+      "env": [
+        {
+          "name": "DRY_RUN",
+          "targetResources": [
+            "worker"
+          ]
+        }
+      ],
+      "id": "dry_run",
+      "kind": "boolean",
+      "label": "Dry run",
+      "providedBy": [
+        "developer",
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "default": {
+        "type": "stringList",
+        "value": [
+          "ghcr.io/acme/runner:latest"
+        ]
+      },
+      "description": "",
+      "env": [
+        {
+          "name": "PREWARM_IMAGES"
+        }
+      ],
+      "id": "prewarm_images",
+      "kind": "stringList",
+      "label": "Prewarm images",
+      "platforms": [
+        "machines"
+      ],
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {
+        "maxItems": 8
+      }
+    },
+    {
+      "description": "Short-lived token used to enroll this runtime.",
+      "env": [
+        {
+          "name": "ACTIVATION_TOKEN"
+        }
+      ],
+      "id": "activation_token",
+      "kind": "secret",
+      "label": "Activation token",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {
+        "minLength": 32
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Create an Alien-managed bucket for this deployment's data.",
+      "env": [],
+      "id": "managed_bucket",
+      "kind": "boolean",
+      "label": "Create a data bucket",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "description": "Token the worker uses to call the API.",
+      "env": [
+        {
+          "name": "API_TOKEN",
+          "targetResources": [
+            "worker"
+          ]
+        }
+      ],
+      "id": "api_token",
+      "kind": "secret",
+      "label": "API token",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "resources": {
+    "data": {
+      "config": {
+        "id": "data",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "enabledWhen": "managed_bucket",
+      "lifecycle": "frozen"
+    },
+    "worker": {
+      "config": {
+        "id": "worker",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/worker:2.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws"
+  ]
+}

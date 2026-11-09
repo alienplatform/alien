@@ -606,6 +606,20 @@ jobs:
         # the gate focused on generated behavior and schema content.
         run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk packages/permissions/generated
 
+      - name: Check alien.toml fixtures match the TypeScript SDK
+        # The differential fixtures pair each alien.toml with the stack its alien.ts builds.
+        # Regenerating expected.json from the SDK source fails the job when an SDK change
+        # leaves a snapshot stale.
+        run: |
+          bash crates/alien-stack-toml/tests/fixtures/regenerate.sh
+          git diff --exit-code -- crates/alien-stack-toml/tests/fixtures
+
+      - name: Bare-metal worker example tests
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        # The example is a standalone Cargo workspace, so the repository's cargo commands skip it.
+        working-directory: examples/bare-metal-worker
+        run: cargo test --locked
+
   rust-check:
     name: Rust check
     needs: [pr-conventions, changes]

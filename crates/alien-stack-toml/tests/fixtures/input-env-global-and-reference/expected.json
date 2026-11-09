@@ -1,0 +1,88 @@
+{
+  "id": "acme-token",
+  "inputs": [
+    {
+      "description": "Token the workloads present to the control plane.",
+      "env": [
+        {
+          "name": "TOKEN"
+        }
+      ],
+      "id": "token",
+      "kind": "secret",
+      "label": "Token",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "api": {},
+      "worker": {}
+    }
+  },
+  "resources": {
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/api:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "api",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "worker": {
+      "config": {
+        "id": "worker",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/worker:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "worker",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

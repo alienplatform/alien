@@ -1,0 +1,41 @@
+{
+  "id": "acme-management-override",
+  "permissions": {
+    "management": {
+      "override": {
+        "*": [
+          "storage/management"
+        ],
+        "cache": [
+          "kv/management"
+        ]
+      }
+    },
+    "profiles": {}
+  },
+  "resources": {
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "cache": {
+      "config": {
+        "id": "cache",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "id": "acme-build-sizes",
+  "permissions": {
+    "profiles": {
+      "shared": {
+        "cache": [
+          "storage/data-read"
+        ]
+      },
+      "default-size": {},
+      "small": {},
+      "extra-large": {}
+    }
+  },
+  "resources": {
+    "cache": {
+      "config": {
+        "id": "cache",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "default-size": {
+      "config": {
+        "id": "default-size",
+        "type": "build",
+        "environment": {},
+        "links": [],
+        "permissions": "default-size"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "small": {
+      "config": {
+        "id": "small",
+        "type": "build",
+        "computeType": "small",
+        "environment": {},
+        "links": [],
+        "permissions": "small"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "medium": {
+      "config": {
+        "id": "medium",
+        "type": "build",
+        "computeType": "medium",
+        "environment": {},
+        "links": [],
+        "permissions": "shared"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "large": {
+      "config": {
+        "id": "large",
+        "type": "build",
+        "computeType": "large",
+        "environment": {},
+        "links": [
+          {
+            "id": "cache",
+            "type": "storage"
+          }
+        ],
+        "permissions": "shared"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "extra-large": {
+      "config": {
+        "id": "extra-large",
+        "type": "build",
+        "computeType": "x-large",
+        "environment": {
+          "TOOLCHAIN": "stable",
+          "CI": "true"
+        },
+        "links": [],
+        "permissions": "extra-large"
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

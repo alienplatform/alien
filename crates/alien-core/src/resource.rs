@@ -831,6 +831,7 @@ impl ResourceStatus {
 /// Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Hash, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceLifecycle {
     /// Frozen resources are owned by setup. Setup creates, updates, and
