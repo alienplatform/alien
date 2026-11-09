@@ -1,0 +1,114 @@
+{
+  "id": "acme-permissions",
+  "permissions": {
+    "profiles": {
+      "reader": {
+        "*": [
+          "storage/data-read",
+          "kv/data-read"
+        ],
+        "reports": [
+          "storage/data-write"
+        ],
+        "cache": [
+          "kv/data-write",
+          "kv/data-read"
+        ]
+      },
+      "processor": {
+        "*": [
+          "queue/data-read"
+        ],
+        "jobs": [
+          "queue/data-write",
+          {
+            "description": "Publish job metrics.",
+            "id": "acme/jobs-metrics",
+            "platforms": {
+              "aws": [
+                {
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "*"
+                      ]
+                    }
+                  },
+                  "grant": {
+                    "actions": [
+                      "cloudwatch:PutMetricData"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "secrets": [
+          "vault/data-read"
+        ]
+      },
+      "archivist": {
+        "archive": [
+          "storage/data-read",
+          "storage/data-write"
+        ]
+      },
+      "idle": {}
+    }
+  },
+  "resources": {
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "archive": {
+      "config": {
+        "id": "archive",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "cache": {
+      "config": {
+        "id": "cache",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "secrets": {
+      "config": {
+        "id": "secrets",
+        "type": "vault"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

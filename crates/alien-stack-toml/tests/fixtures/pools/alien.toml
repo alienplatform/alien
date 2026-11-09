@@ -1,0 +1,72 @@
+name = "edge-fleet"
+platforms = ["machines", "aws", "gcp"]
+
+[cluster]
+id = "edge-runtime"
+
+[pool.servers]
+cpu = 8
+memory = "32Gi"
+architecture = "arm64"
+data-disk = "500Gi"
+failure-domain-spread = 3
+gpu = { type = "nvidia-l4", count = 1 }
+machines = 3
+
+[pool.workers]
+cpu = 0.5
+memory = "1.5Gi"
+ephemeral-storage = "100Gi"
+data-disk = { default = "200Gi", allowed = ["0Gi", "4Ti"] }
+autoscaling = { min = 1, max = { default = 10, allowed = [2, 20] } }
+
+[storage.artifacts]
+lifecycle = "live"
+versioning = true
+public-read = true
+
+[daemon.server]
+image = "ghcr.io/acme/edge-server:1.4.0"
+pool = "servers"
+command = ["edge-server", "--role", "server"]
+cpu = 0.5
+stop-grace-period = 600
+health-check = { port = 9000, path = "/ready", method = "HEAD", timeout = "2s", failure-threshold = 5 }
+links = ["artifacts"]
+permissions = { artifacts = ["storage/data-read"] }
+
+[daemon.server.public-endpoints]
+console = { port = 9000 }
+
+[daemon.server.env]
+FLEET_SEED = { input = "fleet_seed" }
+
+[daemon.worker]
+build = { toolchain = "rust", binary-name = "edge-worker", src = "crates/worker" }
+memory = "256Mi"
+stop-grace-period = "1h30m"
+lifecycle = "frozen"
+enabled-when = "worker_enabled"
+
+[daemon.worker.env]
+FLEET_SEED = { input = "fleet_seed" }
+WORKER_TOKEN = { input = "worker_token" }
+
+[input.fleet_seed]
+kind = "secret"
+label = "Fleet seed"
+description = "Shared seed for fleet identities."
+
+[input.worker_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create worker"
+description = "Whether this deployment gets the worker daemon."
+default = true
+platforms = ["aws", "gcp"]
+
+[input.worker_token]
+kind = "secret"
+label = "Worker token"
+description = "Token the worker presents to the scheduler."
+platforms = ["aws"]

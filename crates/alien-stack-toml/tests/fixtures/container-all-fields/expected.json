@@ -1,0 +1,198 @@
+{
+  "id": "acme-ledger",
+  "permissions": {
+    "profiles": {
+      "ledger": {
+        "cache": [
+          "kv/data-read",
+          "kv/data-write"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "compute": {
+      "config": {
+        "id": "compute",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "general",
+            "maxSize": 2,
+            "minSize": 2,
+            "profile": {
+              "cpu": "4",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 17179869184
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 2,
+                "max": 2,
+                "min": 2
+              },
+              "type": "fixed"
+            }
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "cache": {
+      "config": {
+        "id": "cache",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "data-key": {
+      "config": {
+        "id": "data-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "ledger": {
+      "config": {
+        "id": "ledger",
+        "type": "container",
+        "autoscaling": {
+          "desired": 3,
+          "max": 12,
+          "maxHttpP95LatencyMs": 250,
+          "min": 2,
+          "targetCpuPercent": 65,
+          "targetHttpInFlightPerReplica": 100,
+          "targetMemoryPercent": 75
+        },
+        "cluster": "compute",
+        "code": {
+          "image": "ghcr.io/acme/ledger:3.1.0",
+          "type": "image"
+        },
+        "command": [
+          "ledger",
+          "serve",
+          "--verbose"
+        ],
+        "commandsEnabled": true,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "egress": "internet",
+        "environment": {
+          "LOG_LEVEL": "debug",
+          "WORKER_THREADS": "4",
+          "TRACE": "true"
+        },
+        "ephemeralStorage": "20Gi",
+        "gpu": {
+          "count": 1,
+          "type": "nvidia-l4"
+        },
+        "healthCheck": {
+          "failureThreshold": 5,
+          "method": "HEAD",
+          "path": "/ready",
+          "port": 8080,
+          "timeoutSeconds": 2
+        },
+        "kubernetesLivenessProbe": {
+          "path": "/livez",
+          "port": 8080
+        },
+        "kubernetesReadinessProbe": {
+          "path": "/readyz",
+          "port": 8080
+        },
+        "kubernetesSecretMounts": [
+          {
+            "mountPath": "/etc/ledger/tls",
+            "secretName": "ledger-tls"
+          }
+        ],
+        "links": [
+          {
+            "id": "cache",
+            "type": "kv"
+          }
+        ],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "permissions": "ledger",
+        "persistentStorage": {
+          "backups": {
+            "enabled": true,
+            "intervalHours": 6,
+            "retentionDays": 14
+          },
+          "encryptionKey": {
+            "id": "data-key",
+            "type": "key"
+          },
+          "mountPath": "/var/lib/ledger",
+          "size": "100Gi"
+        },
+        "pool": "general",
+        "ports": [
+          {
+            "port": 9090
+          },
+          {
+            "port": 9091
+          },
+          {
+            "port": 8080
+          },
+          {
+            "port": 7000
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "hostLabel": "ledger",
+            "name": "api",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": true
+          }
+        ],
+        "resourceChoices": {
+          "cpu": {
+            "default": "2",
+            "max": "4",
+            "min": "1"
+          },
+          "memory": {
+            "default": "4Gi",
+            "max": "16Gi",
+            "min": "2Gi"
+          }
+        },
+        "security": {
+          "profile": "restricted",
+          "readOnlyRootFilesystem": true,
+          "runAsGroup": 10002,
+          "runAsUser": 10001
+        },
+        "stateful": true,
+        "stopGracePeriodSeconds": 300,
+        "tunnel": {
+          "port": 7000
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

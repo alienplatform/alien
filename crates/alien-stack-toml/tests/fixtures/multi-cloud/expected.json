@@ -1,0 +1,344 @@
+{
+  "id": "acme-analytics",
+  "inputs": [
+    {
+      "description": "Key the API signs session tokens with. Alien generates it once per deployment.",
+      "env": [
+        {
+          "name": "SIGNING_KEY",
+          "targetResources": [
+            "api"
+          ]
+        }
+      ],
+      "generate": {
+        "length": 48
+      },
+      "id": "signing_key",
+      "kind": "secret",
+      "label": "Signing key",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Sign users in with your identity provider.",
+      "env": [],
+      "id": "sso_enabled",
+      "kind": "boolean",
+      "label": "Single sign-on",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "description": "OIDC issuer of your identity provider.",
+      "env": [
+        {
+          "name": "SSO_ISSUER",
+          "targetResources": [
+            "api"
+          ]
+        }
+      ],
+      "id": "sso_issuer",
+      "kind": "string",
+      "label": "SSO issuer URL",
+      "placeholder": "https://login.example.com",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {
+        "format": "url"
+      },
+      "when": {
+        "equals": true,
+        "input": "sso_enabled"
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Keep a separate, versioned bucket for audit exports.",
+      "env": [],
+      "id": "audit_archive",
+      "kind": "boolean",
+      "label": "Audit archive bucket",
+      "platforms": [
+        "aws",
+        "gcp"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "operations": {
+    "plugins": {
+      "cloudwatch": {
+        "approval": {
+          "*": "auto"
+        }
+      }
+    }
+  },
+  "permissions": {
+    "profiles": {
+      "api": {
+        "events": [
+          "storage/data-read"
+        ],
+        "db": [
+          "postgres/data-access"
+        ],
+        "connectors": [
+          "vault/data-read",
+          "vault/data-write"
+        ]
+      },
+      "ingest": {
+        "events": [
+          "storage/data-read",
+          "storage/data-write"
+        ],
+        "new-events": [
+          "queue/data-read"
+        ],
+        "db": [
+          "postgres/data-access"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "data-key": {
+      "config": {
+        "id": "data-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "events": {
+      "config": {
+        "id": "events",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "encryptionKey": {
+          "id": "data-key",
+          "type": "key"
+        },
+        "lifecycleRules": [
+          {
+            "days": 30,
+            "prefix": "tmp/"
+          }
+        ],
+        "notifications": [
+          {
+            "events": [
+              "created"
+            ],
+            "queue": {
+              "id": "new-events",
+              "type": "queue"
+            },
+            "suffix": ".json"
+          }
+        ],
+        "publicRead": false,
+        "versioning": true
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+      "remoteAccess": true
+    },
+    "audit-archive": {
+      "config": {
+        "id": "audit-archive",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": true
+      },
+      "dependencies": [],
+      "enabledWhen": "audit_archive",
+      "lifecycle": "frozen"
+    },
+    "new-events": {
+      "config": {
+        "id": "new-events",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "db": {
+      "config": {
+        "id": "db",
+        "type": "postgres",
+        "encryptionKey": {
+          "id": "data-key",
+          "type": "key"
+        },
+        "highAvailability": true,
+        "memory": "8Gi",
+        "storage": "100Gi",
+        "version": "17"
+      },
+      "dependencies": [],
+      "description": "Primary analytics database.",
+      "lifecycle": "frozen"
+    },
+    "connectors": {
+      "config": {
+        "id": "connectors",
+        "type": "vault"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/analytics-api:2.3.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {
+          "LOG_FORMAT": "json"
+        },
+        "healthCheck": {
+          "path": "/ready",
+          "timeoutSeconds": 2
+        },
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "events",
+            "type": "storage"
+          },
+          {
+            "id": "db",
+            "type": "postgres"
+          },
+          {
+            "id": "connectors",
+            "type": "vault"
+          }
+        ],
+        "memory": {
+          "desired": "2Gi",
+          "min": "2Gi"
+        },
+        "permissions": "api",
+        "ports": [
+          {
+            "port": 8080
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "hostLabel": "api",
+            "name": "api",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "replicas": 2,
+        "resourceChoices": {
+          "cpu": {
+            "default": "1",
+            "max": "4",
+            "min": "0.5"
+          },
+          "memory": {
+            "default": "2Gi",
+            "max": "16Gi",
+            "min": "1Gi"
+          }
+        },
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "ingest": {
+      "config": {
+        "id": "ingest",
+        "type": "worker",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "ingest-worker",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [
+          {
+            "id": "events",
+            "type": "storage"
+          },
+          {
+            "id": "new-events",
+            "type": "queue"
+          },
+          {
+            "id": "db",
+            "type": "postgres"
+          }
+        ],
+        "memoryMb": 1024,
+        "permissions": "ingest",
+        "publicEndpoints": [],
+        "timeoutSeconds": 300,
+        "triggers": [
+          {
+            "batch": {
+              "maxMessages": 10,
+              "maxWindowSeconds": 30
+            },
+            "queue": {
+              "id": "new-events",
+              "type": "queue"
+            },
+            "type": "queue"
+          },
+          {
+            "cron": "0 3 * * *",
+            "type": "schedule"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

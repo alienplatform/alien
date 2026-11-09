@@ -1,0 +1,70 @@
+{
+  "id": "acme-custom-operations",
+  "inputs": [
+    {
+      "description": "Where the audit plugin reports.",
+      "env": [],
+      "id": "audit_url",
+      "kind": "string",
+      "label": "Audit URL",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "operations": {
+    "custom": [
+      {
+        "approval": {
+          "*": "manual",
+          "inspect": {
+            "decision": "auto",
+            "maxRisk": "low"
+          }
+        },
+        "settings": {
+          "sink": {
+            "input": "audit_url"
+          },
+          "bucket": {
+            "resources": [
+              "reports"
+            ]
+          },
+          "mode": "strict",
+          "token": {
+            "env": "AUDIT_TOKEN"
+          }
+        },
+        "name": "acme-audit",
+        "version": "0.3.1"
+      },
+      {
+        "approval": {
+          "*": "auto"
+        },
+        "name": "acme-cleanup",
+        "version": "2.0.0"
+      }
+    ]
+  },
+  "resources": {
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

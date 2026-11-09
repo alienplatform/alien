@@ -1,0 +1,65 @@
+{
+  "id": "acme-gating-key-email",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": false
+      },
+      "description": "Whether this deployment gets the mail sender and the key that protects it.",
+      "env": [],
+      "id": "mail_enabled",
+      "kind": "boolean",
+      "label": "Send mail",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "inbox": {
+      "config": {
+        "id": "inbox",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "notifications": {
+      "config": {
+        "id": "notifications",
+        "type": "email",
+        "domains": [
+          "mail.acme.example"
+        ],
+        "inbound": {
+          "storage": {
+            "id": "inbox",
+            "type": "storage"
+          }
+        }
+      },
+      "dependencies": [],
+      "enabledWhen": "mail_enabled",
+      "lifecycle": "frozen"
+    },
+    "signing": {
+      "config": {
+        "id": "signing",
+        "type": "key"
+      },
+      "dependencies": [],
+      "enabledWhen": "mail_enabled",
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

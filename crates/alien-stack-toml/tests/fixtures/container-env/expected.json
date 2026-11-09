@@ -1,0 +1,218 @@
+{
+  "id": "acme-env",
+  "inputs": [
+    {
+      "description": "Token the containers present to the control plane.",
+      "env": [
+        {
+          "name": "API_TOKEN",
+          "targetResources": [
+            "with-inputs",
+            "with-inputs-too"
+          ]
+        }
+      ],
+      "id": "api_token",
+      "kind": "secret",
+      "label": "API token",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "Region the containers report from.",
+      "env": [
+        {
+          "name": "REGION",
+          "targetResources": [
+            "with-inputs"
+          ],
+          "type": "plain"
+        }
+      ],
+      "id": "region",
+      "kind": "string",
+      "label": "Region",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "inline": {},
+      "one-file": {},
+      "merged": {},
+      "with-inputs": {},
+      "with-inputs-too": {}
+    }
+  },
+  "resources": {
+    "inline": {
+      "config": {
+        "id": "inline",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/inline:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {
+          "NODE_ENV": "production",
+          "PORT": "3000",
+          "RATIO": "0.75",
+          "DEBUG": "false"
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "inline",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "one-file": {
+      "config": {
+        "id": "one-file",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/one-file:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {
+          "APP_MODE": "standard",
+          "APP_GREETING": "hello, \"world\"",
+          "APP_PATTERN": "^[a-z]+$ # kept",
+          "LOG_LEVEL": "info"
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "one-file",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "merged": {
+      "config": {
+        "id": "merged",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/merged:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {
+          "APP_MODE": "standard",
+          "APP_GREETING": "hello, \"world\"",
+          "APP_PATTERN": "^[a-z]+$ # kept",
+          "LOG_LEVEL": "error",
+          "APP_REGION": "eu-west-1",
+          "EXTRA": "1"
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "merged",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "with-inputs": {
+      "config": {
+        "id": "with-inputs",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/with-inputs:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {
+          "MODE": "inputs"
+        },
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "with-inputs",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "with-inputs-too": {
+      "config": {
+        "id": "with-inputs-too",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/with-inputs:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "with-inputs-too",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

@@ -1,0 +1,142 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-collector"
+platforms = ["machines", "aws", "gcp"]
+
+[daemon.collector]
+image = "ghcr.io/acme/collector:3.2.0"
+
+[daemon.collector.env]
+NODE_ROLE = "primary"
+DEPLOYMENT_LABEL = { input = "deployment_label" }
+OPERATOR_NOTE = { input = "operator_note", type = "secret" }
+
+[daemon.collector-canary]
+image = "ghcr.io/acme/collector:3.3.0-rc1"
+
+[daemon.collector-canary.env]
+NODE_ROLE = "canary"
+DEPLOYMENT_LABEL = { input = "deployment_label" }
+
+# A string, with every constraint a string can carry.
+[input.service_url]
+kind = "string"
+label = "Service URL"
+description = "Base URL of the service the collector reports to."
+placeholder = "https://reports.example.com"
+format = "url"
+min-length = 12
+max-length = 200
+pattern = "^https://[a-z0-9.-]+(/.*)?$"
+env = "SERVICE_URL"
+
+# A secret the developer or the deployer may provide, delivered as a plain variable as well.
+[input.api_key]
+kind = "secret"
+provided-by = ["developer", "deployer"]
+label = "API key"
+description = "Key the collector presents to the reporting service."
+min-length = 20
+max-length = 64
+pattern = "^[A-Za-z0-9_-]+$"
+env = [
+  { name = "API_KEY", target-resources = ["collector"], type = "secret" },
+  { name = "API_KEY_FINGERPRINT_SOURCE", type = "plain" },
+]
+
+# Alien generates the value; `generate = 48` is the same as `generate = { length = 48 }`.
+[input.session_key]
+kind = "secret"
+label = "Session key"
+description = "Key that signs collector sessions."
+generate = { length = 48 }
+env = { name = "SESSION_KEY", target-resources = ["collector*"] }
+
+# A secret only the deployer provides, which never reaches Alien.
+[input.upstream_credential]
+kind = "secret"
+provided-by = "deployer"
+required = false
+label = "Upstream credential"
+platforms = ["aws", "gcp"]
+env = { name = "UPSTREAM_CREDENTIAL", target-resources = ["collector"] }
+
+[input.log_level]
+kind = "enum"
+values = ["error", "warn", "info", "debug"]
+default = "info"
+label = "Log level"
+description = "How much the collector logs."
+env = "LOG_LEVEL"
+
+[input.batch_size]
+kind = "integer"
+provided-by = ["deployer", "developer"]
+default = 500
+min = 1
+max = 10000
+label = "Batch size"
+description = "Records sent per request."
+env = "BATCH_SIZE"
+
+[input.sample_ratio]
+kind = "number"
+default = 0.5
+min = 0
+max = 1.0
+label = "Sample ratio"
+description = "Share of records the collector keeps."
+env = { name = "SAMPLE_RATIO", target-resources = ["collector", "collector-canary"] }
+
+[input.telemetry_enabled]
+kind = "boolean"
+default = true
+label = "Telemetry"
+description = "Send usage telemetry to the developer."
+env = "TELEMETRY_ENABLED"
+
+# Applies only while telemetry is on (the string form means `equals = true`).
+[input.telemetry_endpoint]
+kind = "string"
+required = false
+when = "telemetry_enabled"
+label = "Telemetry endpoint"
+placeholder = "https://telemetry.example.com"
+env = "TELEMETRY_ENDPOINT"
+
+# Applies only while telemetry is off.
+[input.local_trace_dir]
+kind = "string"
+required = false
+when = { input = "telemetry_enabled", equals = false }
+default = "/var/lib/collector/traces"
+label = "Local trace directory"
+env = "LOCAL_TRACE_DIR"
+
+[input.allowed_origins]
+kind = "string-list"
+default = ["https://app.example.com"]
+min-items = 1
+max-items = 10
+label = "Allowed origins"
+description = "Origins the collector accepts reports from."
+env = "ALLOWED_ORIGINS"
+
+[input.tenant_id]
+kind = "string"
+provided-by = "deployer"
+required = false
+platforms = ["aws", "gcp"]
+label = "Tenant ID"
+env = "TENANT_ID"
+
+# Read through `{ input = "..." }` in the daemons' env tables, not through its own env.
+[input.deployment_label]
+kind = "string"
+default = "default"
+label = "Deployment label"
+description = "Free-form label that shows up in reports."
+
+[input.operator_note]
+kind = "string"
+required = false
+label = "Operator note"

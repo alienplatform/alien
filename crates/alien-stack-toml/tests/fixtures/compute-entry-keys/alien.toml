@@ -1,0 +1,38 @@
+name = "acme-entry-keys"
+platforms = ["aws", "gcp"]
+
+[input.workers_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Run workers"
+description = "Whether this deployment runs the worker and the container."
+default = true
+
+# Every resource table may carry these keys next to its own settings.
+[container.dashboard]
+image = "ghcr.io/acme/dashboard:1.0.0"
+cpu = 1
+memory = "1Gi"
+lifecycle = "frozen"
+enabled-when = "workers_enabled"
+display-name = "Customer dashboard"
+description = "Serves the customer dashboard."
+remote-access = true
+
+# `live` is what a workload gets without a lifecycle; saying it changes nothing.
+[daemon.collector]
+image = "ghcr.io/acme/collector:1.0.0"
+lifecycle = "live"
+display-name = "Metrics collector"
+
+[worker.exporter]
+image = "ghcr.io/acme/exporter:1.0.0"
+enabled-when = "workers_enabled"
+description = "Exports reports on a schedule."
+remote-access = true
+
+[build-environment.packager]
+lifecycle = "frozen"
+display-name = "Packager"
+description = "Builds customer packages."
+remote-access = true

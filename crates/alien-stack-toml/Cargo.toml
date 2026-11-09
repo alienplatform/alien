@@ -1,0 +1,23 @@
+[package]
+name = "alien-stack-toml"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
+strsim = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+alien-core = { workspace = true, features = ["openapi"] }
+jsonschema = { workspace = true }
+tempfile = { workspace = true }
+utoipa = { workspace = true }

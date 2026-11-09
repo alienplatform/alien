@@ -1,0 +1,8 @@
+name = "acme-management-auto"
+platforms = ["aws"]
+management-permissions = "auto"
+
+[storage.reports]
+
+[permissions.reader]
+reports = ["storage/data-read"]

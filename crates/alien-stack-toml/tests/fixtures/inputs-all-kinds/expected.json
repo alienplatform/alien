@@ -1,0 +1,391 @@
+{
+  "id": "acme-collector",
+  "inputs": [
+    {
+      "description": "Base URL of the service the collector reports to.",
+      "env": [
+        {
+          "name": "SERVICE_URL"
+        }
+      ],
+      "id": "service_url",
+      "kind": "string",
+      "label": "Service URL",
+      "placeholder": "https://reports.example.com",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "format": "url",
+        "maxLength": 200,
+        "minLength": 12,
+        "pattern": "^https://[a-z0-9.-]+(/.*)?$"
+      }
+    },
+    {
+      "description": "Key the collector presents to the reporting service.",
+      "env": [
+        {
+          "name": "API_KEY",
+          "targetResources": [
+            "collector"
+          ],
+          "type": "secret"
+        },
+        {
+          "name": "API_KEY_FINGERPRINT_SOURCE",
+          "type": "plain"
+        }
+      ],
+      "id": "api_key",
+      "kind": "secret",
+      "label": "API key",
+      "providedBy": [
+        "developer",
+        "deployer"
+      ],
+      "required": true,
+      "validation": {
+        "maxLength": 64,
+        "minLength": 20,
+        "pattern": "^[A-Za-z0-9_-]+$"
+      }
+    },
+    {
+      "description": "Key that signs collector sessions.",
+      "env": [
+        {
+          "name": "SESSION_KEY",
+          "targetResources": [
+            "collector*"
+          ]
+        }
+      ],
+      "generate": {
+        "length": 48
+      },
+      "id": "session_key",
+      "kind": "secret",
+      "label": "Session key",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "UPSTREAM_CREDENTIAL",
+          "targetResources": [
+            "collector"
+          ]
+        }
+      ],
+      "id": "upstream_credential",
+      "kind": "secret",
+      "label": "Upstream credential",
+      "platforms": [
+        "aws",
+        "gcp"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": false,
+      "validation": {}
+    },
+    {
+      "default": {
+        "type": "string",
+        "value": "info"
+      },
+      "description": "How much the collector logs.",
+      "env": [
+        {
+          "name": "LOG_LEVEL"
+        }
+      ],
+      "id": "log_level",
+      "kind": "enum",
+      "label": "Log level",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "values": [
+          "error",
+          "warn",
+          "info",
+          "debug"
+        ]
+      }
+    },
+    {
+      "default": {
+        "type": "number",
+        "value": "500"
+      },
+      "description": "Records sent per request.",
+      "env": [
+        {
+          "name": "BATCH_SIZE"
+        }
+      ],
+      "id": "batch_size",
+      "kind": "integer",
+      "label": "Batch size",
+      "providedBy": [
+        "deployer",
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "max": "10000",
+        "min": "1"
+      }
+    },
+    {
+      "default": {
+        "type": "number",
+        "value": "0.5"
+      },
+      "description": "Share of records the collector keeps.",
+      "env": [
+        {
+          "name": "SAMPLE_RATIO",
+          "targetResources": [
+            "collector",
+            "collector-canary"
+          ]
+        }
+      ],
+      "id": "sample_ratio",
+      "kind": "number",
+      "label": "Sample ratio",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "max": "1",
+        "min": "0"
+      }
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Send usage telemetry to the developer.",
+      "env": [
+        {
+          "name": "TELEMETRY_ENABLED"
+        }
+      ],
+      "id": "telemetry_enabled",
+      "kind": "boolean",
+      "label": "Telemetry",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "TELEMETRY_ENDPOINT"
+        }
+      ],
+      "id": "telemetry_endpoint",
+      "kind": "string",
+      "label": "Telemetry endpoint",
+      "placeholder": "https://telemetry.example.com",
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {},
+      "when": {
+        "equals": true,
+        "input": "telemetry_enabled"
+      }
+    },
+    {
+      "default": {
+        "type": "string",
+        "value": "/var/lib/collector/traces"
+      },
+      "description": "",
+      "env": [
+        {
+          "name": "LOCAL_TRACE_DIR"
+        }
+      ],
+      "id": "local_trace_dir",
+      "kind": "string",
+      "label": "Local trace directory",
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {},
+      "when": {
+        "equals": false,
+        "input": "telemetry_enabled"
+      }
+    },
+    {
+      "default": {
+        "type": "stringList",
+        "value": [
+          "https://app.example.com"
+        ]
+      },
+      "description": "Origins the collector accepts reports from.",
+      "env": [
+        {
+          "name": "ALLOWED_ORIGINS"
+        }
+      ],
+      "id": "allowed_origins",
+      "kind": "stringList",
+      "label": "Allowed origins",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {
+        "maxItems": 10,
+        "minItems": 1
+      }
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "TENANT_ID"
+        }
+      ],
+      "id": "tenant_id",
+      "kind": "string",
+      "label": "Tenant ID",
+      "platforms": [
+        "aws",
+        "gcp"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": false,
+      "validation": {}
+    },
+    {
+      "default": {
+        "type": "string",
+        "value": "default"
+      },
+      "description": "Free-form label that shows up in reports.",
+      "env": [
+        {
+          "name": "DEPLOYMENT_LABEL",
+          "targetResources": [
+            "collector",
+            "collector-canary"
+          ]
+        }
+      ],
+      "id": "deployment_label",
+      "kind": "string",
+      "label": "Deployment label",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "OPERATOR_NOTE",
+          "targetResources": [
+            "collector"
+          ],
+          "type": "secret"
+        }
+      ],
+      "id": "operator_note",
+      "kind": "string",
+      "label": "Operator note",
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {}
+    }
+  ],
+  "resources": {
+    "collector": {
+      "config": {
+        "id": "collector",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/collector:3.2.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {
+          "NODE_ROLE": "primary"
+        },
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "collector-canary": {
+      "config": {
+        "id": "collector-canary",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/collector:3.3.0-rc1",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {
+          "NODE_ROLE": "canary"
+        },
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws",
+    "gcp"
+  ]
+}

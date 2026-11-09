@@ -1,0 +1,127 @@
+{
+  "id": "acme-entry-keys",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment runs the worker and the container.",
+      "env": [],
+      "id": "workers_enabled",
+      "kind": "boolean",
+      "label": "Run workers",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "dashboard": {},
+      "exporter": {},
+      "packager": {}
+    }
+  },
+  "resources": {
+    "dashboard": {
+      "config": {
+        "id": "dashboard",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/dashboard:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "dashboard",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "description": "Serves the customer dashboard.",
+      "displayName": "Customer dashboard",
+      "enabledWhen": "workers_enabled",
+      "lifecycle": "frozen",
+      "remoteAccess": true
+    },
+    "collector": {
+      "config": {
+        "id": "collector",
+        "type": "daemon",
+        "code": {
+          "image": "ghcr.io/acme/collector:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "displayName": "Metrics collector",
+      "lifecycle": "live"
+    },
+    "exporter": {
+      "config": {
+        "id": "exporter",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/exporter:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "exporter",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "description": "Exports reports on a schedule.",
+      "enabledWhen": "workers_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    },
+    "packager": {
+      "config": {
+        "id": "packager",
+        "type": "build",
+        "environment": {},
+        "links": [],
+        "permissions": "packager"
+      },
+      "dependencies": [],
+      "description": "Builds customer packages.",
+      "displayName": "Packager",
+      "lifecycle": "frozen",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

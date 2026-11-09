@@ -1,0 +1,107 @@
+{
+  "id": "acme-operations",
+  "inputs": [
+    {
+      "description": "Analytics database URL.",
+      "env": [],
+      "id": "db_url",
+      "kind": "string",
+      "label": "Database URL",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "Analytics database password.",
+      "env": [],
+      "id": "db_password",
+      "kind": "secret",
+      "label": "Database password",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "operations": {
+    "plugins": {
+      "kubernetes": {
+        "approval": {
+          "*": "auto"
+        }
+      },
+      "clickhouse": {
+        "approval": {
+          "read": "auto",
+          "write": {
+            "decision": "manual",
+            "maxRisk": "medium"
+          },
+          "drop": {
+            "decision": "manual"
+          }
+        },
+        "settings": {
+          "url": {
+            "input": "db_url"
+          },
+          "password": {
+            "input": "db_password"
+          },
+          "database": "app",
+          "token": {
+            "env": "CLICKHOUSE_TOKEN"
+          }
+        }
+      },
+      "s3": {
+        "settings": {
+          "buckets": {
+            "resources": [
+              "exports",
+              "archive"
+            ]
+          },
+          "default-bucket": {
+            "resources": [
+              "exports"
+            ]
+          },
+          "region": "us-east-1"
+        }
+      }
+    }
+  },
+  "resources": {
+    "exports": {
+      "config": {
+        "id": "exports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "archive": {
+      "config": {
+        "id": "archive",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

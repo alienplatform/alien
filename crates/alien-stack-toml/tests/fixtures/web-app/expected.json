@@ -1,0 +1,143 @@
+{
+  "id": "acme-app",
+  "permissions": {
+    "profiles": {
+      "web": {
+        "sessions": [
+          "kv/data-read",
+          "kv/data-write"
+        ],
+        "emails": [
+          "queue/data-write"
+        ]
+      },
+      "mailer": {
+        "emails": [
+          "queue/data-read"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "sessions": {
+      "config": {
+        "id": "sessions",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "emails": {
+      "config": {
+        "id": "emails",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "web": {
+      "config": {
+        "id": "web",
+        "type": "container",
+        "autoscaling": {
+          "desired": 2,
+          "max": 10,
+          "min": 2
+        },
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "type": "docker"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {
+          "PORT": "3000",
+          "NODE_ENV": "production"
+        },
+        "healthCheck": {
+          "path": "/health"
+        },
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "sessions",
+            "type": "kv"
+          },
+          {
+            "id": "emails",
+            "type": "queue"
+          }
+        ],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "web",
+        "ports": [
+          {
+            "port": 3000
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "name": "web",
+            "port": 3000,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "mailer": {
+      "config": {
+        "id": "mailer",
+        "type": "worker",
+        "code": {
+          "src": "crates/mailer",
+          "toolchain": {
+            "binaryName": "mailer",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [
+          {
+            "id": "emails",
+            "type": "queue"
+          }
+        ],
+        "memoryMb": 512,
+        "permissions": "mailer",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": [
+          {
+            "queue": {
+              "id": "emails",
+              "type": "queue"
+            },
+            "type": "queue"
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

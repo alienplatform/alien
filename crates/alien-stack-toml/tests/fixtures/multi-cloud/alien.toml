@@ -1,0 +1,98 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+# One stack for AWS, GCP and Azure. Every table resolves to the same alien-core
+# resource on each cloud; the platform picks the backend (S3 or Cloud Storage or
+# Blob Storage, Aurora or Cloud SQL or Flexible Server, and so on).
+name = "acme-analytics"
+platforms = ["aws", "gcp", "azure"]
+
+# ---------- Inputs ----------
+
+[input.signing_key]
+kind = "secret"
+generate = 48
+label = "Signing key"
+description = "Key the API signs session tokens with. Alien generates it once per deployment."
+
+[input.sso_enabled]
+kind = "boolean"
+provided-by = "deployer"
+default = false
+label = "Single sign-on"
+description = "Sign users in with your identity provider."
+
+[input.sso_issuer]
+kind = "string"
+provided-by = "deployer"
+when = "sso_enabled"
+format = "url"
+label = "SSO issuer URL"
+description = "OIDC issuer of your identity provider."
+placeholder = "https://login.example.com"
+
+[input.audit_archive]
+kind = "boolean"
+provided-by = "deployer"
+platforms = ["aws", "gcp"]
+default = false
+label = "Audit archive bucket"
+description = "Keep a separate, versioned bucket for audit exports."
+
+# ---------- Data ----------
+
+# Customer-managed key. The bucket and the database are encrypted with it.
+[key.data-key]
+
+[storage.events]
+versioning = true
+encryption-key = "data-key"
+lifecycle-rules = [{ days = 30, prefix = "tmp/" }]
+notifications = [{ queue = "new-events", suffix = ".json" }]
+remote-access = true
+
+[storage.audit-archive]
+versioning = true
+enabled-when = "audit_archive"
+
+[queue.new-events]
+
+[postgres.db]
+description = "Primary analytics database."
+memory = "8Gi"
+storage = "100Gi"
+high-availability = true
+encryption-key = "data-key"
+
+[vault.connectors]
+
+# ---------- Compute ----------
+
+[container.api]
+image = "ghcr.io/acme/analytics-api:2.3.0"
+cpu = { default = 1, allowed = [0.5, 4] }
+memory = { default = "2Gi", allowed = ["1Gi", "16Gi"] }
+replicas = 2
+public-endpoints.api = { port = 8080, host-label = "api" }
+health-check = { path = "/ready", timeout = "2s" }
+links = ["events", "db", "connectors"]
+permissions = { events = ["storage/data-read"], db = ["postgres/data-access"], connectors = ["vault/data-read", "vault/data-write"] }
+
+[container.api.env]
+LOG_FORMAT = "json"
+SIGNING_KEY = { input = "signing_key" }
+SSO_ISSUER = { input = "sso_issuer" }
+
+[worker.ingest]
+build = { toolchain = "rust", binary-name = "ingest-worker" }
+memory = "1Gi"
+timeout = "5m"
+triggers = [
+  { queue = "new-events", batch = { max-messages = 10, max-window = "30s" } },
+  { schedule = "0 3 * * *" },
+]
+links = ["events", "new-events", "db"]
+permissions = { events = ["storage/data-read", "storage/data-write"], new-events = ["queue/data-read"], db = ["postgres/data-access"] }
+
+# ---------- Operations ----------
+
+[operations.cloudwatch]
+approval = { "*" = "auto" }

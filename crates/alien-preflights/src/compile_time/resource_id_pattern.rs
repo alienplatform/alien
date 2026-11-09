@@ -9,6 +9,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
+use alien_core::stack_authoring::validate_resource_id;
 use alien_core::{Platform, Stack};
 
 /// Validates that all resource IDs are valid cloud resource name segments.
@@ -39,42 +40,6 @@ impl CompileTimeCheck for ResourceIdPatternCheck {
             Ok(CheckResult::failed(errors))
         }
     }
-}
-
-/// Validates a resource ID against the common cloud naming constraints.
-///
-/// Valid IDs match `[a-z0-9]([a-z0-9-]*[a-z0-9])?`:
-/// - Lowercase letters, digits, and hyphens only
-/// - Must start and end with a letter or digit
-/// - No consecutive hyphens
-/// - At least 1 character
-fn validate_resource_id(id: &str) -> std::result::Result<(), &'static str> {
-    if id.is_empty() {
-        return Err("must not be empty");
-    }
-
-    let first = id.as_bytes()[0];
-    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return Err("must start with a lowercase letter or digit");
-    }
-
-    let last = id.as_bytes()[id.len() - 1];
-    if !last.is_ascii_lowercase() && !last.is_ascii_digit() {
-        return Err("must end with a lowercase letter or digit");
-    }
-
-    if !id
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    {
-        return Err("must only contain lowercase letters, digits, and hyphens");
-    }
-
-    if id.contains("--") {
-        return Err("must not contain consecutive hyphens");
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

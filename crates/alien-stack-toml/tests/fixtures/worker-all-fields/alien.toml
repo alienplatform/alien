@@ -1,0 +1,25 @@
+name = "acme-processor"
+platforms = ["aws", "gcp", "azure"]
+
+[queue.jobs]
+
+[storage.uploads]
+
+[kv.state]
+
+[worker.processor]
+build = { toolchain = "typescript", binary-name = "processor", src = "workers/processor" }
+commands-enabled = true
+concurrency-limit = 25
+memory = "2Gi"
+timeout = "10m"
+readiness-probe = { method = "GET", path = "/ready" }
+public-endpoints = ["hooks"]
+triggers = [
+  { queue = "jobs", batch = { max-messages = 20, max-window = "45s" } },
+  { storage = "uploads", events = ["created"] },
+  { schedule = "0 */6 * * *" },
+]
+links = ["jobs", "uploads", "state"]
+permissions = { jobs = ["queue/data-read"], uploads = ["storage/data-read"], state = ["kv/data-write"] }
+env = { BATCH_LIMIT = 500, REGION = "global" }

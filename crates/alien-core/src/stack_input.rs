@@ -84,7 +84,7 @@ pub enum StackInputEnvironmentVariableType {
 }
 
 /// Portable stack input validation constraints.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackInputValidation {

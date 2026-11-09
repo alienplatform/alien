@@ -62,7 +62,7 @@ pub struct BuildArgs {
     #[command(subcommand)]
     pub command: Option<BuildSubcommand>,
 
-    /// Path to alien.ts/js/json file or directory containing it
+    /// Path to alien.ts/js/json/toml file or directory containing it
     #[arg(short = 'c', long)]
     pub config: Option<String>,
 
@@ -118,7 +118,7 @@ pub enum BuildSubcommand {
 
 #[derive(Parser, Debug, Clone)]
 pub struct BuildPlanArgs {
-    /// Path to alien.ts/js/json file or directory containing it
+    /// Path to alien.ts/js/json/toml file or directory containing it
     #[arg(short = 'c', long)]
     pub config: Option<String>,
 

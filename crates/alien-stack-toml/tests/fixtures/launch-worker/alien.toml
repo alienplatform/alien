@@ -1,0 +1,25 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-jobs"
+platforms = ["machines"]
+
+# Machines join this pool with `join --pool workers`.
+[pool.workers]
+cpu = 4
+memory = "8Gi"
+machines = { default = 3, allowed = [1, 20] }
+
+[daemon.job-worker]
+build = { toolchain = "rust", binary-name = "job-worker" }
+cpu = 3
+memory = "6Gi"
+stop-grace-period = "10m"
+health-check = { port = 8080, path = "/healthz" }
+
+[daemon.job-worker.env]
+RUST_LOG = "info"
+JOBS_API_TOKEN = { input = "jobs_api_token" }
+
+[input.jobs_api_token]
+kind = "secret"
+label = "Jobs API token"
+description = "Token the worker uses to pull jobs from your control plane."

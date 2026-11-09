@@ -1,0 +1,25 @@
+name = "acme-postgres"
+platforms = ["aws", "gcp", "azure"]
+
+[key.db-key]
+
+[postgres.ledger]
+display-name = "Ledger database"
+description = "Transactional store for the ledger service."
+lifecycle = "live"
+remote-access = true
+enabled-when = "ledger_enabled"
+version = "16"
+cpu = "2"
+memory = "8Gi"
+storage = "100Gi"
+high-availability = true
+encryption-key = "db-key"
+backend = { type = "aurora-serverless-v2" }
+
+[input.ledger_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create ledger database"
+description = "Whether this deployment gets the ledger database."
+default = true

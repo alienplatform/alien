@@ -1,0 +1,67 @@
+import * as alien from "@alienplatform/core"
+
+const fixed = new alien.Container("fixed")
+  .code({ type: "image", image: "ghcr.io/acme/fixed:1.0.0" })
+  .cpu(0.5)
+  .memory("512Mi")
+  .ephemeralStorage("10Gi")
+  .permissions("fixed")
+  .build()
+
+const bothRanges = new alien.Container("both-ranges")
+  .code({ type: "image", image: "ghcr.io/acme/ranges:1.0.0" })
+  .cpu({ min: 0.5, max: 8, default: 1.5 })
+  .memory({ min: "1Gi", max: "32Gi", default: "3Gi" })
+  .ephemeralStorage("50Gi")
+  .permissions("both-ranges")
+  .build()
+
+const cpuRange = new alien.Container("cpu-range")
+  .code({ type: "image", image: "ghcr.io/acme/ranges:1.0.0" })
+  .cpu({ min: 1, max: 4, default: 2 })
+  .memory("2Gi")
+  .permissions("cpu-range")
+  .build()
+
+const memoryRange = new alien.Container("memory-range")
+  .code({ type: "image", image: "ghcr.io/acme/ranges:1.0.0" })
+  .cpu(2)
+  .memory({ min: "4Gi", max: "64Gi", default: "8Gi" })
+  .permissions("memory-range")
+  .build()
+
+const millicores = new alien.Container("millicores")
+  .code({ type: "image", image: "ghcr.io/acme/small:1.0.0" })
+  .cpu({ min: "500m", desired: "500m" })
+  .memory("256Mi")
+  .permissions("millicores")
+  .build()
+
+const trainer = new alien.Container("trainer")
+  .code({ type: "image", image: "ghcr.io/acme/trainer:1.0.0" })
+  .cpu(8)
+  .memory("64Gi")
+  .ephemeralStorage("500Gi")
+  .gpu({ type: "nvidia-a100", count: 4 })
+  .permissions("trainer")
+  .build()
+
+export default new alien.Stack("acme-resources")
+  .platforms(["aws", "gcp", "azure"])
+  .add(fixed, "live")
+  .add(bothRanges, "live")
+  .add(cpuRange, "live")
+  .add(memoryRange, "live")
+  .add(millicores, "live")
+  .add(trainer, "live")
+  .permissions({
+    profiles: {
+      fixed: {},
+      "both-ranges": {},
+      "cpu-range": {},
+      "memory-range": {},
+      millicores: {},
+      trainer: {},
+    },
+  })
+  .build()

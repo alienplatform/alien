@@ -68,6 +68,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "Start with one Rust worker and no infrastructure.",
     ),
     (
+        "bare-metal-worker",
+        "Rust job worker for Linux servers, alien.toml",
+    ),
+    (
         "byob-storage-ts",
         "Use customer-owned object storage from a hosted backend.",
     ),
@@ -452,6 +456,29 @@ fn rewrite_package_json_name(target_dir: &Path, new_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The commands to print after scaffolding. A project without a package.json has nothing to
+/// install and no dev server to start, so it goes straight to a release.
+fn next_steps(
+    directory: &str,
+    has_package_json: bool,
+    installed: bool,
+    package_manager: &str,
+) -> Vec<String> {
+    let mut steps = Vec::new();
+    if directory != "." {
+        steps.push(format!("cd {directory}"));
+    }
+    if has_package_json {
+        if !installed {
+            steps.push(format!("{package_manager} install"));
+        }
+        steps.push(command("alien dev"));
+    } else {
+        steps.push(command("alien release"));
+    }
+    steps
+}
+
 pub async fn init_task(args: InitArgs) -> Result<()> {
     println!(
         "{}",
@@ -608,15 +635,21 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     remove_unused_template_lockfile(&target_dir, package_manager)?;
     steps.complete(1, Some("ready".to_string()));
 
+    let has_package_json = target_dir.join("package.json").exists();
     steps.activate(2, Some("installing...".to_string()));
-    let installed = match install_dependencies(&target_dir, package_manager).await {
-        Ok(true) => {
-            steps.complete(2, Some("done".to_string()));
-            true
-        }
-        _ => {
-            steps.skip(2, Some("run manually".to_string()));
-            false
+    let installed = if !has_package_json {
+        steps.skip(2, Some("no package.json".to_string()));
+        false
+    } else {
+        match install_dependencies(&target_dir, package_manager).await {
+            Ok(true) => {
+                steps.complete(2, Some("done".to_string()));
+                true
+            }
+            _ => {
+                steps.skip(2, Some("run manually".to_string()));
+                false
+            }
         }
     };
     drop(steps);
@@ -627,20 +660,22 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     println!("{} {}", dim_label("Template "), accent(&selected.name));
     println!();
     println!("{}", dim_label("Next steps"));
-    if directory != "." {
-        println!("  cd {directory}");
+    for step in next_steps(
+        &directory,
+        has_package_json,
+        installed,
+        package_manager.unwrap_or("npm"),
+    ) {
+        println!("  {step}");
     }
-    if !installed {
-        println!("  {} install", package_manager.unwrap_or("npm"));
-    }
-    println!("  {}", command("alien dev"));
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{destination_for_init, display_directory, KNOWN_TEMPLATES};
+    use super::{destination_for_init, display_directory, next_steps, KNOWN_TEMPLATES};
+    use crate::ui::command;
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
@@ -672,6 +707,23 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert_eq!(catalog_templates, metadata_templates);
+    }
+
+    #[test]
+    fn next_steps_for_a_node_project_install_then_start_the_dev_server() {
+        assert_eq!(
+            next_steps("app", true, false, "pnpm"),
+            ["cd app", "pnpm install", &command("alien dev")]
+        );
+        assert_eq!(next_steps(".", true, true, "pnpm"), [command("alien dev")]);
+    }
+
+    #[test]
+    fn next_steps_for_a_project_without_package_json_skip_install() {
+        assert_eq!(
+            next_steps("worker", false, false, "npm"),
+            ["cd worker", &command("alien release")]
+        );
     }
 
     #[test]
