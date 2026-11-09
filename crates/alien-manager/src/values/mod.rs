@@ -32,7 +32,7 @@ pub use generated::{with_generated_inputs, GeneratedInputs};
 pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
-pub use state::{redact_held_values, restore_held_values};
+pub use state::HeldValues;
 pub use types::{
     SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot, MAX_VALUE_BYTES,
 };
@@ -74,6 +74,12 @@ impl ValueStore {
     pub fn refusing_writes(mut self) -> Self {
         self.refuse_writes = true;
         self
+    }
+
+    /// Whether a write can succeed. A manager whose store does not offer
+    /// this does not advertise the values capability.
+    pub fn accepts_writes(&self) -> bool {
+        !self.refuse_writes
     }
 
     /// Stores `value`, replacing any earlier value in the slot.

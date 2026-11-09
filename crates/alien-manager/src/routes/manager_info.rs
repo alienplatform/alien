@@ -77,7 +77,12 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
         capabilities: ManagerCapabilities {
             tunnels: state.tunnels.is_some(),
             charts: state.charts.is_some(),
-            values: (state.values.is_some() && state.value_access.is_some()).then_some(1),
+            values: (state
+                .values
+                .as_ref()
+                .is_some_and(|store| store.accepts_writes())
+                && state.value_access.is_some())
+            .then_some(1),
         },
         operator_image: state
             .charts

@@ -29,7 +29,7 @@ pub struct ManagerTransport {
     execution_claim: Option<ExecutionClaim>,
     /// AWS regions the artifact registry serves; see `reconcile_registry_access_with_proxy`.
     supported_aws_regions: Vec<String>,
-    values: Option<Arc<crate::values::ValueStore>>,
+    held_values: crate::values::HeldValues,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -51,14 +51,14 @@ impl ManagerTransport {
             session,
             execution_claim,
             supported_aws_regions,
-            values: None,
+            held_values: crate::values::HeldValues::default(),
             generated_slots: Vec::new(),
         }
     }
 
-    /// Keep the deployment's held values out of the state this transport saves.
-    pub fn with_value_store(mut self, values: Option<Arc<crate::values::ValueStore>>) -> Self {
-        self.values = values;
+    /// Keep the values the step loaded out of the state this transport saves.
+    pub fn with_held_values(mut self, held_values: crate::values::HeldValues) -> Self {
+        self.held_values = held_values;
         self
     }
 }
@@ -133,13 +133,9 @@ impl DeploymentLoopTransport for ManagerTransport {
         // no caller passthrough is available).
         let caller = Subject::system();
         let mut saved_state = updated_state.clone();
-        crate::values::redact_held_values(
-            self.values.as_deref(),
-            deployment_id,
-            saved_state.stack_state.as_mut(),
-        )
-        .await
-        .map_err(|error| error.into_generic())?;
+        self.held_values
+            .redact(saved_state.stack_state.as_mut())
+            .map_err(|error| error.into_generic())?;
         let data = ReconcileData {
             deployment_id: deployment_id.to_string(),
             session: self.session.clone(),

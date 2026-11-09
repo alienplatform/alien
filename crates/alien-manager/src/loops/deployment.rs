@@ -1110,22 +1110,24 @@ impl DeploymentLoop {
         let loaded = async {
             let held =
                 crate::values::hydrate_held_values(self.values.as_deref(), &deployment).await?;
-            crate::values::restore_held_values(
-                self.values.as_deref(),
-                &deployment_id,
-                state.stack_state.as_mut(),
-            )
-            .await?;
             let (held, generated) = crate::values::with_generated_inputs(
                 self.values.as_deref(),
                 deployment_stack.as_ref(),
                 held,
             )
             .await?;
-            Ok::<_, AlienError<crate::error::ErrorData>>((held, generated.slots))
+            let step_values = crate::values::HeldValues::of_step(
+                self.values.as_deref(),
+                &self.config,
+                &deployment,
+                &held,
+                deployment_stack.as_ref(),
+            )?;
+            step_values.restore(state.stack_state.as_mut())?;
+            Ok::<_, AlienError<crate::error::ErrorData>>((held, generated.slots, step_values))
         }
         .await;
-        let (held, generated_slots) = match loaded {
+        let (held, generated_slots, step_values) = match loaded {
             Ok(loaded) => loaded,
             Err(error) => {
                 warn!(
@@ -1245,7 +1247,7 @@ impl DeploymentLoop {
             execution_claim.clone(),
             self.config.supported_aws_regions.clone(),
         )
-        .with_value_store(self.values.clone())
+        .with_held_values(step_values)
         .with_generated_slots(generated_slots);
 
         let mut config = config;
@@ -1873,7 +1875,7 @@ fn input_environment_parts(
 /// The environment variables snapshot injected into the deployment's
 /// workloads: `ALIEN_DEPLOYMENT_ID`, `ALIEN_DEPLOYMENT_NAME`, command delivery
 /// configuration, and the deployment's own variables.
-fn deployment_environment_variables(
+pub(crate) fn deployment_environment_variables(
     config: &ManagerConfig,
     deployment: &DeploymentRecord,
     deployment_stack: Option<&Stack>,

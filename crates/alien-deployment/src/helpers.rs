@@ -1653,6 +1653,24 @@ pub fn redact_held_values(
     })
 }
 
+/// Like [`redact_held_values`], for values known only by the digest a sender
+/// planned them with (`planned`: name and digest of `env:NAME`). An
+/// environment entry whose own digest equals the planned one is replaced with
+/// the same marker, so a value that was changed or deleted on the manager
+/// after the step loaded it is still kept out of saved state.
+pub fn redact_planned_values(
+    stack_state: &mut StackState,
+    scope: &str,
+    planned: &[(String, String)],
+) -> Result<()> {
+    rewrite_held_values(stack_state, planned, |name, digest, current| {
+        Ok(
+            (value_digest(scope, &format!("env:{name}"), current)? == digest)
+                .then(|| format!("{HELD_VALUE_PREFIX}{digest}")),
+        )
+    })
+}
+
 /// Undoes [`redact_held_values`] for the values `held` now has. A marker for
 /// a value that has since changed stays, so it differs from the desired
 /// environment and the resource is updated.
@@ -3928,6 +3946,54 @@ mod tests {
 
         restore_held_values(&mut state, "dep:dep_1", &held).unwrap();
         assert_eq!(serde_json::to_value(&state).unwrap(), original);
+    }
+
+    #[test]
+    fn a_value_known_by_its_planned_digest_is_redacted_to_the_same_marker() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let scope = "dep:dep_1";
+        let planned_digest = value_digest(scope, "env:TOKEN", "planned").unwrap();
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "planned"), ("OTHER", "planned")]),
+        );
+        let mut by_value = state.clone();
+
+        redact_planned_values(
+            &mut state,
+            scope,
+            &[("TOKEN".to_string(), planned_digest.clone())],
+        )
+        .unwrap();
+
+        let env = environment_of(&state, "api");
+        assert_eq!(env["TOKEN"], format!("alien-held:{planned_digest}"));
+        assert_eq!(env["OTHER"], "planned", "only the planned name is touched");
+        redact_held_values(
+            &mut by_value,
+            scope,
+            &[("TOKEN".to_string(), "planned".to_string())],
+        )
+        .unwrap();
+        assert_eq!(
+            environment_of(&by_value, "api")["TOKEN"],
+            env["TOKEN"],
+            "the marker is the one redacting by value gives"
+        );
+
+        let mut changed = StackState::new(Platform::Aws);
+        changed.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "someone-elses")]),
+        );
+        redact_planned_values(
+            &mut changed,
+            scope,
+            &[("TOKEN".to_string(), planned_digest)],
+        )
+        .unwrap();
+        assert_eq!(environment_of(&changed, "api")["TOKEN"], "someone-elses");
     }
 
     #[test]

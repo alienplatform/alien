@@ -557,6 +557,24 @@ async fn acquire(
     .into_response()
 }
 
+/// Keeps the values this manager holds for `deployment` out of a state that a
+/// runner or an operator reported, before it is saved.
+async fn redact_reported_values(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    stack_state: Option<&mut alien_core::StackState>,
+) -> Result<(), AlienError> {
+    crate::values::HeldValues::current(
+        state.values.as_deref(),
+        &state.config,
+        state.release_store.as_ref(),
+        deployment,
+    )
+    .await
+    .and_then(|held| held.redact(stack_state))
+    .map_err(|e| e.into_generic())
+}
+
 /// An acquired deployment as the runner that acquired it receives it.
 ///
 /// `deploymentConfig` is the config the manager's own loop would run with, so
@@ -602,9 +620,15 @@ async fn acquired_deployment_response(
     // The record's saved state carries markers for held values; the runner's
     // executor compares it with the config above, which carries the values.
     let mut served = record.clone();
-    crate::values::restore_held_values(values, &record.id, served.stack_state.as_mut())
-        .await
-        .map_err(|e| e.into_generic())?;
+    crate::values::HeldValues::of_step(
+        values,
+        sources.config,
+        record,
+        &held,
+        deployment_stack.as_ref(),
+    )
+    .and_then(|step_values| step_values.restore(served.stack_state.as_mut()))
+    .map_err(|e| e.into_generic())?;
     let mut deployment =
         serde_json::to_value(&served)
             .into_alien_error()
@@ -800,12 +824,8 @@ async fn reconcile(
     // 2. Persist the step result (including any registry access changes).
     //    Values this manager holds for the deployment stay out of what is saved.
     let mut saved_state = final_state.clone();
-    if let Err(error) = crate::values::redact_held_values(
-        state.values.as_deref(),
-        &req.deployment_id,
-        saved_state.stack_state.as_mut(),
-    )
-    .await
+    if let Err(error) =
+        redact_reported_values(&state, &deployment, saved_state.stack_state.as_mut()).await
     {
         return error.into_response();
     }
@@ -1167,6 +1187,22 @@ mod tests {
         Vec<ReconcileData>,
         Vec<Vec<crate::values::ValueMeta>>,
     ) {
+        sync_operator_reporting(record, targets, values, stack, None).await
+    }
+
+    /// Like [`sync_operator_report`], with the Operator's report carrying
+    /// `stack_state`.
+    async fn sync_operator_reporting(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+        stack_state: Option<Value>,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1258,6 +1294,9 @@ mod tests {
             "currentRelease": { "releaseId": "rel_target", "stack": { "id": "app", "resources": {} } },
             "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         });
+        if let Some(stack_state) = stack_state {
+            body["currentState"]["stackState"] = stack_state;
+        }
         let response = super::router()
             .with_state(state)
             .oneshot(
@@ -1890,6 +1929,104 @@ mod tests {
         }
         seen.push_str(&serde_json::to_string(&generated).unwrap());
         assert!(!seen.contains(&value), "{seen}");
+    }
+
+    /// An Operator reports a stack state that still carries a value the
+    /// manager holds, which the user replaced after the deployment loaded it.
+    /// Neither the old nor the new value reaches the control plane.
+    #[tokio::test]
+    async fn an_operator_report_is_redacted_of_a_replaced_held_value() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const OLD: &str = "canary-old-6c13f0";
+        const NEW: &str = "canary-new-a94e27";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        let slot: ValueSlot = "env:API_URL".parse().expect("slot");
+        let planned = values
+            .put(&scope, &slot, ValueKind::Plain, OLD.to_string())
+            .await
+            .expect("stored")
+            .digest;
+        let mut record = deployment_record_with_state("running", None);
+        let mut config = alien_core::DeploymentConfig::builder()
+            .deployment_name("test".to_string())
+            .stack_settings(StackSettings::default())
+            .input_values(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        config.value_slots = vec![alien_core::ValueSlotRef {
+            slot: "env:API_URL".to_string(),
+            kind: alien_core::EnvironmentVariableType::Plain,
+            digest: planned,
+            env_name: None,
+            targets: None,
+        }];
+        record.deployment_config = Some(config);
+        values
+            .put(&scope, &slot, ValueKind::Plain, NEW.to_string())
+            .await
+            .expect("replaced");
+
+        let mut worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        worker.environment = [("API_URL".to_string(), OLD.to_string())].into();
+        let resource = alien_core::Resource::new(worker);
+        let mut reported = StackState::new(Platform::Kubernetes);
+        reported.resources.insert(
+            "api".to_string(),
+            alien_core::StackResourceState {
+                progress: None,
+                display_name: None,
+                description: None,
+                resource_type: resource.resource_type().as_ref().to_string(),
+                internal_state: None,
+                status: alien_core::ResourceStatus::Running,
+                outputs: None,
+                previous_config: None,
+                config: resource,
+                retry_attempt: 0,
+                error: None,
+                lifecycle: Some(alien_core::ResourceLifecycle::Live),
+                controller_platform: None,
+                dependencies: Vec::new(),
+                last_failed_state: None,
+                remote_binding_params: None,
+                external_binding: false,
+            },
+        );
+
+        let (_, reconciled, _) = sync_operator_reporting(
+            record,
+            None,
+            Some(values),
+            Stack::new("app".to_string()).build(),
+            Some(serde_json::to_value(&reported).expect("state json")),
+        )
+        .await;
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        let seen = reconciled
+            .iter()
+            .map(|data| serde_json::to_string(&data.state).unwrap())
+            .collect::<String>();
+        assert!(
+            seen.contains("alien-held:"),
+            "the report was redacted: {seen}"
+        );
+        assert!(!seen.contains(OLD), "{seen}");
+        assert!(!seen.contains(NEW), "{seen}");
     }
 
     #[tokio::test]
@@ -3325,9 +3462,9 @@ async fn agent_sync(
                     }
 
                     let mut saved_state = agent_state.clone();
-                    if let Err(error) = crate::values::redact_held_values(
-                        state.values.as_deref(),
-                        &req.deployment_id,
+                    if let Err(error) = redact_reported_values(
+                        &state,
+                        &deployment,
                         saved_state.stack_state.as_mut(),
                     )
                     .await

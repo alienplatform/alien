@@ -105,8 +105,10 @@ impl alien_manager::values::ValueAccessAuthorizer for AllowMigrate {
         _headers: &axum::http::HeaderMap,
         _scope: &alien_manager::values::ValueScope,
         _needed: alien_manager::values::ValueAccess,
-    ) -> Result<alien_manager::values::ValueGrant, alien_error::AlienError<alien_manager::error::ErrorData>>
-    {
+    ) -> Result<
+        alien_manager::values::ValueGrant,
+        alien_error::AlienError<alien_manager::error::ErrorData>,
+    > {
         Ok(alien_manager::values::ValueGrant {
             access: alien_manager::values::ValueAccess::Migrate,
             slots: None,
@@ -406,6 +408,20 @@ async fn values_are_kept_in_the_encrypted_database_file() {
 #[tokio::test]
 async fn an_ephemeral_state_dir_without_a_values_key_refuses_writes_and_keeps_reads() {
     let server = start_with(true).await;
+
+    let (status, info) = server
+        .call(
+            reqwest::Method::GET,
+            "/v1/manager",
+            Some(&server.admin),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert!(
+        info["capabilities"].get("values").is_none(),
+        "a manager that refuses every write must not offer to hold values: {info}"
+    );
 
     let (status, body) = server
         .put(json!([{ "slot": "env:A", "value": CANARY, "kind": "secret" }]))
