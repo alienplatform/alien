@@ -205,6 +205,10 @@ struct AgentSyncWireRequest {
     /// setting values. Opaque to OSS beyond forwarding it.
     #[serde(default)]
     operations_config: Option<alien_core::OperationsConfig>,
+    /// The setup the installed chart carries. An observation the manager may
+    /// act on under its own rules; never a grant.
+    #[serde(default)]
+    installed_setup: Option<alien_core::sync::InstalledSetup>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1019,7 +1023,7 @@ async fn release(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::routes) mod tests {
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{
         dispatchers::NullCommandDispatcher,
@@ -1072,7 +1076,8 @@ mod tests {
         acquired_deployment_response, agent_needs_initial_state_hydration,
         agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
         deployment_state_from_record, deployment_target_release_id, management_platform,
-        may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
+        may_deliver_agent_target, preserve_recorded_gate_answers,
+        preserve_setup_update_authorization, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
         validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
         InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
@@ -1346,7 +1351,7 @@ mod tests {
     }
 
     /// The sync routes' state over `deployment_store`, with local command storage.
-    async fn test_app_state(
+    pub(in crate::routes) async fn test_app_state(
         directory: &std::path::Path,
         deployment_store: Arc<dyn crate::traits::DeploymentStore>,
         release_store: Arc<SqliteReleaseStore>,
@@ -3283,6 +3288,131 @@ mod tests {
     }
 
     #[test]
+    fn a_report_from_the_operator_does_not_erase_the_recorded_setup_refusal() {
+        let mut stored = deployment_record_with_state("update-failed", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            setup_report_refusal: Some(alien_core::SetupReportRefusal {
+                reason: "stale chart".into(),
+                reported_release_id: "rel_1".into(),
+                at: chrono::Utc::now(),
+            }),
+            ..RuntimeMetadata::default()
+        });
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(RuntimeMetadata::default());
+        preserve_setup_update_authorization(&mut incoming, &stored);
+        assert_eq!(
+            incoming
+                .runtime_metadata
+                .unwrap()
+                .setup_report_refusal
+                .map(|refusal| refusal.reason),
+            Some("stale chart".to_string())
+        );
+    }
+
+    #[test]
+    fn a_cleared_refusal_and_a_newer_release_are_not_restored_from_the_operator() {
+        let stored_release = alien_core::InstalledHelmRelease {
+            name: "shop".into(),
+            namespace: "apps".into(),
+        };
+        let mut stored = deployment_record_with_state("running", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            installed_helm_release: Some(stored_release.clone()),
+            ..RuntimeMetadata::default()
+        });
+        // The Operator saved an earlier checkpoint: it still carries a refusal
+        // the manager has cleared and an older release name.
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(RuntimeMetadata {
+            setup_report_refusal: Some(alien_core::SetupReportRefusal {
+                reason: "stale chart".into(),
+                reported_release_id: "rel_1".into(),
+                at: chrono::Utc::now(),
+            }),
+            installed_helm_release: Some(alien_core::InstalledHelmRelease {
+                name: "old".into(),
+                namespace: "apps".into(),
+            }),
+            ..RuntimeMetadata::default()
+        });
+        preserve_setup_update_authorization(&mut incoming, &stored);
+        let metadata = incoming.runtime_metadata.unwrap();
+        assert!(metadata.setup_report_refusal.is_none());
+        assert_eq!(
+            metadata.installed_helm_release.map(|release| release.name),
+            Some(stored_release.name)
+        );
+    }
+
+    #[test]
+    fn a_report_from_the_operator_does_not_erase_the_recorded_helm_release() {
+        let mut stored = deployment_record_with_state("running", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            installed_helm_release: Some(alien_core::InstalledHelmRelease {
+                name: "shop".into(),
+                namespace: "apps".into(),
+            }),
+            ..RuntimeMetadata::default()
+        });
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(RuntimeMetadata::default());
+        preserve_setup_update_authorization(&mut incoming, &stored);
+        assert_eq!(
+            incoming
+                .runtime_metadata
+                .unwrap()
+                .installed_helm_release
+                .map(|release| (release.name, release.namespace)),
+            Some(("shop".to_string(), "apps".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_report_without_the_minted_authorization_does_not_erase_it_until_the_update_ran() {
+        let authorization = alien_core::SetupUpdateAuthorization {
+            nonce: "n".into(),
+            baseline_frozen_digest: "a".into(),
+            target_frozen_digest: "b".into(),
+            release_id: "rel_2".into(),
+            setup_target: "helm".into(),
+            setup_fingerprint: "fp".into(),
+            setup_fingerprint_version: 1,
+        };
+        let mut stored = deployment_record_with_state("update-failed", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            setup_update_authorization: Some(authorization.clone()),
+            ..RuntimeMetadata::default()
+        });
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("s".to_string()).build(),
+        };
+
+        let mut waiting = uninitialized_state();
+        waiting.runtime_metadata = Some(RuntimeMetadata::default());
+        waiting.current_release = Some(release("rel_1"));
+        preserve_setup_update_authorization(&mut waiting, &stored);
+        assert_eq!(
+            waiting.runtime_metadata.unwrap().setup_update_authorization,
+            Some(authorization)
+        );
+
+        let mut done = uninitialized_state();
+        done.runtime_metadata = Some(RuntimeMetadata::default());
+        done.current_release = Some(release("rel_2"));
+        preserve_setup_update_authorization(&mut done, &stored);
+        assert!(done
+            .runtime_metadata
+            .unwrap()
+            .setup_update_authorization
+            .is_none());
+    }
+
+    #[test]
     fn preserving_gate_answers_folds_key_by_key_with_the_record_winning() {
         let mut recorded = RuntimeMetadata::default();
         recorded
@@ -3468,6 +3598,7 @@ async fn agent_sync(
         application,
         dynamic_containers,
         operations_config,
+        installed_setup,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -3489,6 +3620,33 @@ async fn agent_sync(
     if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
+
+    // Handled before the state report below, which needs the record as the
+    // report left it. Re-read only when the report changed it.
+    let deployment = match installed_setup.as_ref() {
+        Some(report)
+            if super::installed_setup::handle_installed_setup(
+                &state,
+                &subject,
+                &deployment,
+                report,
+            )
+            .await =>
+        {
+            match state
+                .deployment_store
+                .get_deployment(&subject, &req.deployment_id)
+                .await
+            {
+                Ok(Some(d)) => d,
+                Ok(None) => {
+                    return ErrorData::not_found_deployment(&req.deployment_id).into_response()
+                }
+                Err(e) => return e.into_response(),
+            }
+        }
+        _ => deployment,
+    };
 
     let supported_protocol = max_supported_deployment_protocol_version
         .unwrap_or(1)
@@ -3599,6 +3757,7 @@ async fn agent_sync(
                     // Stays below the ignore check: restoring metadata here
                     // would make an uninitialized report look initialized.
                     let _ = preserve_recorded_gate_answers(&mut agent_state, &deployment, None);
+                    preserve_setup_update_authorization(&mut agent_state, &deployment);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
                     // Pull sync is the agent's only channel to the manager, so a pending
@@ -4357,6 +4516,46 @@ fn gate_resources(stack: &alien_core::Stack) -> std::collections::HashMap<String
             .push(resource_id.clone());
     }
     gates
+}
+
+/// Keeps the setup update authorization the manager minted until the Operator
+/// has run it. An Operator that has not received the authorization yet reports
+/// state without it, and saving that report must not erase the grant. Once the
+/// reported current release is the authorized one, the update has run and the
+/// grant is dropped.
+fn preserve_setup_update_authorization(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+    // The reason a setup report was declined and the Helm release the install
+    // reported are the manager's own records; the Operator's copy of the
+    // metadata never carries them. The stored values win even when they are
+    // empty, so a refusal the manager cleared does not come back from an
+    // Operator that saved an earlier checkpoint.
+    if let Some(metadata) = incoming.runtime_metadata.as_mut() {
+        let stored_metadata = stored.runtime_metadata.as_ref();
+        metadata.setup_report_refusal =
+            stored_metadata.and_then(|stored| stored.setup_report_refusal.clone());
+        metadata.installed_helm_release =
+            stored_metadata.and_then(|stored| stored.installed_helm_release.clone());
+        metadata.cloud_setup_required =
+            stored_metadata.and_then(|stored| stored.cloud_setup_required.clone());
+    }
+    let Some(authorization) = stored
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
+    else {
+        return;
+    };
+    let Some(metadata) = incoming.runtime_metadata.as_mut() else {
+        return;
+    };
+    let already_ran = incoming
+        .current_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref())
+        == Some(authorization.release_id.as_str());
+    if metadata.setup_update_authorization.is_none() && !already_ran {
+        metadata.setup_update_authorization = Some(authorization.clone());
+    }
 }
 
 fn preserve_recorded_gate_answers(

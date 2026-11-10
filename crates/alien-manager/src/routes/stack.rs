@@ -690,6 +690,7 @@ pub async fn stack_import(
                     setup_fingerprint_version: req.setup_fingerprint_version,
                     activation_status,
                     schedule_reconciliation: should_reconcile,
+                    expected_updated_at: None,
                     input_values: req.input_values.clone(),
                 },
             )
@@ -1298,7 +1299,7 @@ fn is_pending_setup_reservation(existing: &DeploymentRecord, release_id: &str) -
             == Some(release_id)
 }
 
-fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
+pub(super) fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
     is_stable_setup_repair_state(&existing.status)
 }
 
@@ -1562,6 +1563,41 @@ async fn prepare_import_stack(
     req: &StackImportRequest,
     stack_settings: &StackSettings,
 ) -> crate::error::Result<Stack> {
+    let imported_quota_activation = req
+        .resources
+        .iter()
+        .any(|resource| resource.id == "enable-cloud-quotas");
+    prepare_setup_stack(
+        source_stack,
+        &PrepareSetupStack {
+            platform: req.platform,
+            base_platform: req.base_platform,
+            deployment_name: &req.deployment_name,
+            management_config: req.management_config.as_ref(),
+            imported_quota_activation,
+        },
+        stack_settings,
+    )
+    .await
+}
+
+/// What stack preparation reads from a setup registration or a chart report.
+pub(super) struct PrepareSetupStack<'a> {
+    pub platform: Platform,
+    pub base_platform: Option<Platform>,
+    pub deployment_name: &'a str,
+    pub management_config: Option<&'a alien_core::ManagementConfig>,
+    /// The setup delivered the optional quota API resource.
+    pub imported_quota_activation: bool,
+}
+
+/// Derives the stack setup installs: the source stack after template
+/// preflights and mutations.
+pub(super) async fn prepare_setup_stack(
+    source_stack: Stack,
+    req: &PrepareSetupStack<'_>,
+    stack_settings: &StackSettings,
+) -> crate::error::Result<Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
     let mutation_platform = req.platform;
     runner
@@ -1583,9 +1619,9 @@ async fn prepare_import_stack(
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
-        deployment_name: Some(req.deployment_name.clone()),
+        deployment_name: Some(req.deployment_name.to_string()),
         stack_settings: stack_settings.clone(),
-        management_config: req.management_config.clone(),
+        management_config: req.management_config.cloned(),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
             hash: "empty".to_string(),
@@ -1628,10 +1664,7 @@ async fn prepare_import_stack(
     // identity to perform setup. Disabled quota reads remain non-blocking.
     if req.base_platform.unwrap_or(req.platform) == Platform::Gcp
         && !quota_activation_declared
-        && !req
-            .resources
-            .iter()
-            .any(|resource| resource.id == "enable-cloud-quotas")
+        && !req.imported_quota_activation
     {
         prepared.resources.shift_remove("enable-cloud-quotas");
     }
@@ -1735,7 +1768,7 @@ fn parse_aws_account_id_from_arn(value: &str) -> Option<String> {
 /// Look up the stack for the runtime platform being imported. For managed
 /// Kubernetes, `basePlatform` selects the setup cloud and importers, but the
 /// release stack is still keyed by `kubernetes`.
-fn resolve_stack(
+pub(super) fn resolve_stack(
     release: &ReleaseRecord,
     platform: alien_core::Platform,
 ) -> crate::error::Result<&Stack> {

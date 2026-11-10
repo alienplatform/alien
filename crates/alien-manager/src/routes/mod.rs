@@ -9,6 +9,7 @@ pub mod deployments;
 pub mod health;
 pub mod image_repositories;
 pub mod install;
+pub mod installed_setup;
 pub mod logs;
 pub mod manager_info;
 pub mod operator_image;

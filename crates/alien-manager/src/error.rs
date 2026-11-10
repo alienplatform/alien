@@ -117,6 +117,16 @@ pub enum ErrorData {
     )]
     ImportedDeploymentConflict { reason: String },
 
+    /// A conditional write found the deployment changed since it was read
+    #[error(
+        code = "DEPLOYMENT_CHANGED_CONCURRENTLY",
+        message = "Deployment '{deployment_id}' changed since it was read",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentChangedConcurrently { deployment_id: String },
+
     /// Deployment group has reached max deployments
     #[error(
         code = "MAX_DEPLOYMENTS_REACHED",

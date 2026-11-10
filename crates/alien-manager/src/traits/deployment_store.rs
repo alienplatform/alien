@@ -266,6 +266,11 @@ pub struct UpdateImportedDeploymentParams {
     pub activation_status: Option<String>,
     /// Move the deployment to `update-pending` in the same write as the import data.
     pub schedule_reconciliation: bool,
+    /// When set, write only if the stored `updated_at` still equals this value;
+    /// otherwise fail with `DeploymentChangedConcurrently` and write nothing.
+    /// Callers that built the snapshot from an earlier read use this so a
+    /// checkpoint that landed in between is not overwritten.
+    pub expected_updated_at: Option<DateTime<Utc>>,
     /// Deployer stack input values carried by the re-import; they overwrite
     /// the stored map — the edit surface for gate flips.
     pub input_values: HashMap<String, serde_json::Value>,

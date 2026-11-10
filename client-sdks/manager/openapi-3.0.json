@@ -2296,6 +2296,15 @@
                 "description": "Absent for older Operators. This report has no secret values.",
                 "nullable": true
               },
+              "installedSetup": {
+                "nullable": true,
+                "description": "The setup the installed chart carries. An observation the manager may\nact on under its own rules; never a grant.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/InstalledSetup"
+                  }
+                ]
+              },
               "maxSupportedDeploymentProtocolVersion": {
                 "type": "integer",
                 "format": "int32",
@@ -9996,6 +10005,46 @@
           "token": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "InstalledSetup": {
+        "type": "object",
+        "description": "The setup an installed chart was built for, read from the Operator's own\nenvironment. It changes only when the chart's setup changes.",
+        "required": [
+          "releaseId",
+          "setupTarget",
+          "setupFingerprint",
+          "setupFingerprintVersion"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Kubernetes namespace of the Helm release.",
+            "nullable": true
+          },
+          "releaseId": {
+            "type": "string",
+            "description": "Release the chart was built from."
+          },
+          "releaseName": {
+            "type": "string",
+            "description": "Helm release name the chart is installed as.",
+            "nullable": true
+          },
+          "setupFingerprint": {
+            "type": "string",
+            "description": "Setup compatibility fingerprint embedded in the chart."
+          },
+          "setupFingerprintVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fingerprint algorithm version.",
+            "minimum": 0
+          },
+          "setupTarget": {
+            "type": "string",
+            "description": "Setup target the chart was generated for."
           }
         }
       },

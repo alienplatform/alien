@@ -4,6 +4,7 @@ use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -198,6 +199,45 @@ impl Stack {
     /// a Live sandbox the bytes equal the Frozen-only projection. Declined gated entries must be
     /// stripped by the caller.
     pub fn setup_owned_digest(&self) -> String {
+        let (resources, live_sandbox_inputs) = self.setup_owned_projection();
+        let encoded = if live_sandbox_inputs.is_empty() {
+            serde_json::to_vec(&resources)
+        } else {
+            serde_json::to_vec(&(&resources, &live_sandbox_inputs))
+        }
+        .expect("canonical setup-owned projection always serializes");
+        format!("{:x}", Sha256::digest(encoded))
+    }
+
+    /// Per-entry digests of the projection `setup_owned_digest` hashes, keyed by resource ID.
+    /// A Live sandbox's setup inputs are keyed `<id>#setupInputs`. Two stacks with equal
+    /// `setup_owned_digest` have equal maps; comparing the maps names the entries that differ
+    /// without exposing their contents.
+    pub fn setup_owned_entry_digests(&self) -> BTreeMap<String, String> {
+        let (resources, live_sandbox_inputs) = self.setup_owned_projection();
+        resources
+            .iter()
+            .map(|(id, value)| {
+                let encoded = serde_json::to_vec(value).expect("canonical entry always serializes");
+                ((*id).clone(), format!("{:x}", Sha256::digest(encoded)))
+            })
+            .chain(live_sandbox_inputs.iter().map(|(id, inputs)| {
+                let encoded =
+                    serde_json::to_vec(inputs).expect("canonical inputs always serialize");
+                (
+                    format!("{id}#setupInputs"),
+                    format!("{:x}", Sha256::digest(encoded)),
+                )
+            }))
+            .collect()
+    }
+
+    fn setup_owned_projection(
+        &self,
+    ) -> (
+        Vec<(&String, serde_json::Value)>,
+        Vec<(&String, Vec<(&'static str, serde_json::Value)>)>,
+    ) {
         let mut resources = self
             .resources
             .iter()
@@ -262,14 +302,7 @@ impl Stack {
             })
             .collect::<Vec<_>>();
         live_sandbox_inputs.sort_unstable_by_key(|(id, _)| *id);
-
-        let encoded = if live_sandbox_inputs.is_empty() {
-            serde_json::to_vec(&resources)
-        } else {
-            serde_json::to_vec(&(&resources, &live_sandbox_inputs))
-        }
-        .expect("canonical setup-owned projection always serializes");
-        format!("{:x}", Sha256::digest(encoded))
+        (resources, live_sandbox_inputs)
     }
 
     /// Binds a setup update to both its resources and installed permissions.
@@ -1176,5 +1209,59 @@ mod tests {
             .build();
 
         assert_eq!(first.setup_owned_digest(), second.setup_owned_digest());
+        assert_eq!(
+            first.setup_owned_entry_digests(),
+            second.setup_owned_entry_digests()
+        );
+    }
+
+    #[test]
+    fn setup_owned_entry_digests_name_only_the_changed_entries() {
+        let installed = Stack::new("stack".to_string())
+            .add(
+                Storage::new("alpha".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("beta".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("live".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let target = Stack::new("stack".to_string())
+            .add(
+                Storage::new("alpha".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("beta".to_string()).versioning(true).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("live".to_string()).versioning(true).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let installed_entries = installed.setup_owned_entry_digests();
+        let target_entries = target.setup_owned_entry_digests();
+        assert_ne!(installed.setup_owned_digest(), target.setup_owned_digest());
+        assert_eq!(
+            installed_entries.keys().collect::<Vec<_>>(),
+            vec!["alpha", "beta"]
+        );
+        assert_eq!(
+            installed_entries.keys().collect::<Vec<_>>(),
+            target_entries.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(installed_entries["alpha"], target_entries["alpha"]);
+        assert_ne!(installed_entries["beta"], target_entries["beta"]);
+        assert!(installed_entries
+            .values()
+            .chain(target_entries.values())
+            .all(|digest| digest.len() == 64));
     }
 }

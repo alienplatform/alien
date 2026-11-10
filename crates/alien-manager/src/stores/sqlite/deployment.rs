@@ -960,6 +960,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint_version,
             activation_status,
             schedule_reconciliation,
+            expected_updated_at,
             input_values,
         } = params;
         // The import route supplies a complete ownership-aware state: freshly
@@ -1021,6 +1022,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 )
                 .value(Deployments::UpdatedAt, now.to_rfc3339())
                 .and_where(Expr::col(Deployments::Id).eq(deployment_id));
+            if let Some(expected) = expected_updated_at {
+                update.and_where(Expr::col(Deployments::UpdatedAt).eq(expected.to_rfc3339()));
+            }
 
             if let Some(release_id) = current_release_id {
                 update.value(Deployments::CurrentReleaseId, release_id);
@@ -1036,7 +1040,13 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             update.to_string(SqliteQueryBuilder)
         };
-        self.db.execute(&sql).await?;
+        let rows = self.db.execute_returning_rows_affected(&sql).await?;
+        if rows == 0 && expected_updated_at.is_some() {
+            return Err(AlienError::new(ErrorData::DeploymentChangedConcurrently {
+                deployment_id: deployment_id.to_string(),
+            })
+            .into_generic());
+        }
 
         self.get_deployment(caller, deployment_id)
             .await?
