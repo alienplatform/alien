@@ -495,12 +495,13 @@ async fn sync_with_manager(
     {
         sanitize_identity_config(&mut target.config, manager_url, audience)?;
     }
-    // Only a claimed target is replayed. A manager that grants no claim sends
-    // its target on every sync until the deployment reports it; replaying the
-    // stored copy would apply a settled release again on every sync.
+    // The stored target is replayed when the response carries the claim it was
+    // stored with, which includes no claim at all. A manager that grants no
+    // claim sends its target until the deployment reports it and nothing after;
+    // the replay of a settled one is maintenance (see `maintenance` below), so
+    // it refreshes the installed release instead of applying it again.
     let mut durable_target = sync_response.target.clone().or_else(|| {
-        (sync_response.execution_claim.is_some()
-            && sync_response.execution_claim == durable_execution.claim)
+        (sync_response.execution_claim == durable_execution.claim)
             .then(|| durable_execution.target.clone())
             .flatten()
     });
@@ -682,12 +683,23 @@ async fn installed_config(
 ) -> crate::error::Result<InstalledConfig> {
     // A settled deployment runs its current release. One that is applying a
     // target (an update the previous pod accepted before it was replaced)
-    // runs on the config of that target.
-    let settled = deployment_state.target_release.is_none()
-        && matches!(
-            deployment_state.status,
-            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
-        );
+    // runs on the config of that target. A maintenance refresh holds its own
+    // release as the target while the deployment stays Running; that is still
+    // a settled deployment.
+    let settled = matches!(
+        deployment_state.status,
+        DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+    ) && deployment_state
+        .target_release
+        .as_ref()
+        .is_none_or(|target| {
+            target.release_id.is_some()
+                && target.release_id.as_deref()
+                    == deployment_state
+                        .current_release
+                        .as_ref()
+                        .and_then(|current| current.release_id.as_deref())
+        });
     let applying = matches!(
         deployment_state.status,
         DeploymentStatus::UpdatePending | DeploymentStatus::Updating
@@ -2791,18 +2803,19 @@ mod tests {
         assert_eq!(applied.status, DeploymentStatus::Running);
         assert!(applied.target_release.is_none());
 
-        // The manager has nothing more to send. Each later sync must leave the
-        // settled deployment alone.
+        // The manager has nothing more to send. Each later sync replays the
+        // stored target as a maintenance refresh of the installed release, and
+        // must leave the settled deployment Running, never apply it again.
         *response.lock().unwrap() = json!({});
         for _ in 0..3 {
-            let received_update = sync_with_manager(&state, &client, &url, false, None)
+            sync_with_manager(&state, &client, &url, false, None)
                 .await
                 .unwrap();
             let settled = state.db.get_deployment_state().await.unwrap().unwrap();
             assert_eq!(settled.status, DeploymentStatus::Running);
-            assert!(settled.target_release.is_none());
-            assert!(!received_update, "the stored target was replayed");
             run_deployment_until_idle(&state).await;
+            let after = state.db.get_deployment_state().await.unwrap().unwrap();
+            assert_eq!(after.status, DeploymentStatus::Running);
         }
 
         server.abort();
