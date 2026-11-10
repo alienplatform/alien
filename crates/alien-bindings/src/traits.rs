@@ -1270,8 +1270,9 @@ pub struct CreateSandboxRequest {
     /// new sandbox's id. Read the id back from the response rather than assume the one sent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_id: Option<String>,
-    /// Opaque tenant key. No backend supports it yet: AWS, Azure and GCP refuse a request that
-    /// sets it, and Kubernetes and Local ignore it.
+    /// Opaque tenant key. No backend supports it yet. AWS refuses any request that sets it;
+    /// Azure and GCP refuse it when they create a sandbox but ignore it when `get_or_create`
+    /// returns an existing one; Kubernetes and Local ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenant_key: Option<String>,
     /// Environment variables to place in the sandbox.
