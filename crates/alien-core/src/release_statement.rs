@@ -1307,7 +1307,7 @@ mod tests {
             let error = build(name, value).expect_err(name);
             assert_eq!(error.code, "SIGNING_WORKLOAD_REFUSED", "{name}");
             assert!(
-                error.message.contains("not in the signed release"),
+                error.message.contains("is set by the runtime, not by the control plane"),
                 "{name}: {}",
                 error.message
             );
