@@ -154,11 +154,12 @@ impl AwsRuntimePermissionsGenerator {
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
             let actions = super::aws_boundary::protected_management_actions(
+                permission_set,
                 platform_permission.effect.is_allow(),
                 &binding_spec,
                 actions,
                 context,
-            );
+            )?;
             if actions.is_empty() {
                 continue;
             }

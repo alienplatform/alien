@@ -19,11 +19,11 @@ pub mod aws_resource_policies;
 #[cfg(feature = "infrastructure")]
 pub mod generators;
 #[cfg(feature = "infrastructure")]
-pub mod key_access;
-#[cfg(feature = "infrastructure")]
 mod infrastructure;
 #[cfg(feature = "infrastructure")]
 pub mod initial_setup;
+#[cfg(feature = "infrastructure")]
+pub mod key_access;
 #[cfg(feature = "infrastructure")]
 pub mod registry;
 #[cfg(feature = "infrastructure")]

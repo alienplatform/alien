@@ -81,11 +81,11 @@ pub enum ErrorData {
         label: String,
     },
 
-    /// A protected install's management identity would receive a predefined role that holds
-    /// what only the verifier may do.
+    /// A protected install's management identity would receive a predefined role that is not on
+    /// the list of roles it may hold.
     #[error(
         code = "PROTECTED_MANAGEMENT_ROLE_REFUSED",
-        message = "Permission set '{permission_set_id}' grants '{role}', which holds what only the verifier may do on a protected install",
+        message = "Permission set '{permission_set_id}' grants '{role}', which a protected install's management identity may not hold: it is not one of the predefined roles the built-in permission sets use, and a predefined role can't be narrowed to leave out what only the verifier may do",
         retryable = "false",
         internal = "false",
         http_status_code = 400
@@ -95,6 +95,24 @@ pub enum ErrorData {
         permission_set_id: String,
         /// The refused predefined role
         role: String,
+    },
+
+    /// A stack-defined grant to a protected install's management identity would reach what only
+    /// the verifier or setup may do.
+    #[error(
+        code = "PROTECTED_MANAGEMENT_ACTION_REFUSED",
+        message = "Permission set '{permission_set_id}' grants '{action}' to the management identity, which on a protected install could {reason}. Remove it from the stack's management permissions.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedManagementActionRefused {
+        /// Permission set holding the grant
+        permission_set_id: String,
+        /// The refused action pattern, permission or role
+        action: String,
+        /// What the grant would allow
+        reason: String,
     },
 
     /// Required variable not found in permission context.

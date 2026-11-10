@@ -1,8 +1,8 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        verifier_owned::{gcp_verifier_owned, gcp_refused_predefined_role},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        verifier_owned::{gcp_allowed_predefined_role, gcp_verifier_owned},
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -368,9 +368,7 @@ impl GcpRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
-                    if context.signing_protected
-                        && gcp_refused_predefined_role(predefined_role)
-                    {
+                    if context.signing_protected && !gcp_allowed_predefined_role(predefined_role) {
                         return Err(alien_error::AlienError::new(
                             ErrorData::ProtectedManagementRoleRefused {
                                 permission_set_id: permission_set.id.clone(),

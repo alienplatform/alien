@@ -1,8 +1,11 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        verifier_owned::{azure_changes_what_runs, azure_verifier_owned_action},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        verifier_owned::{
+            azure_changes_what_runs, azure_stack_grant_reaches_verifier_action,
+            azure_verifier_owned_action, is_stack_defined_set,
+        },
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -396,7 +399,7 @@ impl AzureRuntimePermissionsGenerator {
             declares_target = true;
 
             if let Some(actions) = &platform_permission.grant.actions {
-                all_actions.extend(granted_actions(actions, context));
+                all_actions.extend(granted_actions(permission_set, actions, context)?);
             }
             if let Some(data_actions) = &platform_permission.grant.data_actions {
                 all_data_actions.extend(data_actions.clone());
@@ -600,13 +603,14 @@ impl AzureRuntimePermissionsGenerator {
         })?;
 
         let mut actions = granted_actions(
+            permission_set,
             platform_permission
                 .grant
                 .actions
                 .as_deref()
                 .unwrap_or_default(),
             context,
-        );
+        )?;
         let mut data_actions = platform_permission
             .grant
             .data_actions
@@ -788,12 +792,40 @@ impl Default for AzureRuntimePermissionsGenerator {
     }
 }
 
-/// The actions of a catalog entry the rendered identity receives: all of them, except that a
+/// The actions of an entry the rendered identity receives: all of them, except that a
 /// protected install's management identity never receives what only the verifier may do, nor
 /// any write or delete of what runs code. The deployment stack's deny holds the resource group
 /// itself, but Azure doesn't carry it to the resources in the group, so the roles must leave
 /// those writes out.
-fn granted_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
+///
+/// A set the stack defines is refused instead when one of its action patterns reaches what only
+/// the verifier may do: a wildcard such as `Microsoft.Compute/*/action` would carry a run
+/// command, which no deny setting refuses.
+fn granted_actions(
+    permission_set: &PermissionSet,
+    actions: &[String],
+    context: &PermissionContext,
+) -> Result<Vec<String>> {
+    if context.signing_protected && is_stack_defined_set(permission_set) {
+        if let Some(action) = actions
+            .iter()
+            .find(|action| azure_stack_grant_reaches_verifier_action(action))
+        {
+            return Err(alien_error::AlienError::new(
+                ErrorData::ProtectedManagementActionRefused {
+                    permission_set_id: permission_set.id.clone(),
+                    action: action.clone(),
+                    reason: "run a command on a machine, start a job with its own containers or \
+                             change which revision serves"
+                        .to_string(),
+                },
+            ));
+        }
+    }
+    Ok(kept_actions(actions, context))
+}
+
+fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
     actions
         .iter()
         .filter(|action| {
@@ -809,7 +841,7 @@ fn grants_residual_azure_permissions(grant: &PermissionGrant, context: &Permissi
     grant
         .actions
         .as_ref()
-        .is_some_and(|actions| !granted_actions(actions, context).is_empty())
+        .is_some_and(|actions| !kept_actions(actions, context).is_empty())
         || grant
             .data_actions
             .as_ref()

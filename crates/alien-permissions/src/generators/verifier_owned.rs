@@ -12,7 +12,9 @@
 //!
 //! [`PermissionContext::signing_protected`]: crate::PermissionContext::signing_protected
 
-use alien_core::{AwsBindingSpec, AwsConditionValue};
+use alien_core::{permissions::PermissionSet, AwsBindingSpec, AwsConditionValue};
+
+use crate::registry::{get_permission_set, iam_action_pattern_matches};
 
 /// AWS actions only the verifier holds on a protected install. AWS scaling stays with the
 /// management identity: `SetDesiredCapacity` can't change what boots, and the verifier sets the
@@ -93,8 +95,67 @@ pub fn aws_management_actions(actions: &[String], binding: &AwsBindingSpec) -> V
         .collect()
 }
 
-/// GCP permissions only the verifier holds, besides every `setIamPolicy` and the Cloud Run
-/// writes [`gcp_cloud_run_write`] names.
+/// Whether `permission_set` is one a stack defines: it is not the built-in set of its id. The
+/// built-in sets are reviewed with the limits in mind and render as they are; a stack's own
+/// grants to a protected management identity are checked against the rules below.
+pub fn is_stack_defined_set(permission_set: &PermissionSet) -> bool {
+    get_permission_set(&permission_set.id) != Some(permission_set)
+}
+
+/// IAM actions that read. Every other IAM action, and any pattern that could reach one, can mint
+/// a role or policy that carries none of the install's limits.
+const AWS_IAM_READ_VERBS: &[&str] = &["get", "list", "simulate", "generate"];
+
+/// STS actions that return credentials for another role.
+const AWS_STS_ASSUME_ACTIONS: &[&str] = &[
+    "assumerole",
+    "assumerolewithsaml",
+    "assumerolewithwebidentity",
+    "assumeroot",
+    "setsourceidentity",
+    "tagsession",
+];
+
+/// Why a stack-defined grant of the AWS action pattern `action` to a protected install's
+/// management identity is refused, or `None` when it is allowed. The limits are Denies on the
+/// management role only: with an IAM write the role could create another role, attach any policy,
+/// trust itself and assume it, and that role holds no limit. The same holds for assuming any role
+/// outside the install.
+pub fn aws_stack_grant_refusal(action: &str) -> Option<&'static str> {
+    const IAM_REASON: &str =
+        "create or change an IAM role or policy and so act without the install's limits";
+    const STS_REASON: &str = "assume a role that carries none of the install's limits";
+    let pattern = action.to_ascii_lowercase();
+    let Some((service, name)) = pattern.split_once(':') else {
+        let reaches =
+            |probe: &str| iam_action_pattern_matches(pattern.as_bytes(), probe.as_bytes());
+        return if reaches("iam:createrole") {
+            Some(IAM_REASON)
+        } else if reaches("sts:assumerole") {
+            Some(STS_REASON)
+        } else {
+            None
+        };
+    };
+    let service_is = |service_name: &str| {
+        iam_action_pattern_matches(service.as_bytes(), service_name.as_bytes())
+    };
+    if service_is("iam") && !AWS_IAM_READ_VERBS.iter().any(|verb| name.starts_with(verb)) {
+        return Some(IAM_REASON);
+    }
+    if service_is("sts")
+        && AWS_STS_ASSUME_ACTIONS
+            .iter()
+            .any(|assume| iam_action_pattern_matches(name.as_bytes(), assume.as_bytes()))
+    {
+        return Some(STS_REASON);
+    }
+    None
+}
+
+/// GCP permissions only the verifier holds, besides every `setIamPolicy`, the Cloud Run writes
+/// [`gcp_cloud_run_write`] names and the OS Login and OS Config writes [`gcp_machine_access_write`]
+/// names.
 const GCP_VERIFIER_OWNED: &[&str] = &[
     // Machines: an instance template, an instance's metadata or the group's configuration
     // decides what a machine boots and runs. `instanceGroupManagers.update` also sets per-instance
@@ -133,14 +194,33 @@ const GCP_VERIFIER_OWNED: &[&str] = &[
     "aiplatform.reasoningEngines.update",
 ];
 
-/// GCP predefined roles a protected management identity is never bound to: each holds a
-/// permission in [`GCP_VERIFIER_OWNED`] or a Cloud Run write.
-const GCP_REFUSED_PREDEFINED_ROLES: &[&str] = &[
-    "roles/iam.serviceAccountTokenCreator",
-    "roles/iam.serviceAccountUser",
-    "roles/run.admin",
-    "roles/run.developer",
-    "roles/run.jobsExecutorWithOverrides",
+/// The GCP predefined roles a protected management identity may be bound to: the ones the
+/// built-in catalog grants it. A predefined role can't be filtered permission by permission, so a
+/// role that is not listed (a broad one such as `roles/editor` or `roles/compute.instanceAdmin.v1`,
+/// or one added to GCP later) is refused rather than checked against a list of what is wrong.
+const GCP_ALLOWED_PREDEFINED_ROLES: &[&str] = &[
+    "roles/artifactregistry.reader",
+    "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+    "roles/cloudkms.viewer",
+    "roles/datastore.user",
+    "roles/datastore.viewer",
+    "roles/iam.roleViewer",
+    "roles/iam.serviceAccountViewer",
+    "roles/logging.logWriter",
+    "roles/pubsub.publisher",
+    "roles/pubsub.subscriber",
+    "roles/pubsub.viewer",
+    "roles/run.invoker",
+    "roles/run.viewer",
+    "roles/secretmanager.secretAccessor",
+    "roles/secretmanager.secretVersionAdder",
+    "roles/secretmanager.viewer",
+    "roles/serviceusage.serviceUsageAdmin",
+    "roles/serviceusage.serviceUsageViewer",
+    "roles/storage.bucketViewer",
+    "roles/storage.objectAdmin",
+    "roles/storage.objectCreator",
+    "roles/storage.objectViewer",
 ];
 
 /// Whether `permission` is a Cloud Run service or job write. The management identity keeps the
@@ -166,11 +246,29 @@ pub fn gcp_verifier_owned(permission: &str) -> bool {
     GCP_VERIFIER_OWNED.contains(&permission)
         || permission.ends_with(".setIamPolicy")
         || gcp_cloud_run_write(permission)
+        || gcp_machine_access_write(permission)
 }
 
-/// Whether a protected management identity must never be bound to the GCP predefined `role`.
-pub fn gcp_refused_predefined_role(role: &str) -> bool {
-    GCP_REFUSED_PREDEFINED_ROLES.contains(&role)
+/// Whether a protected management identity may be bound to the GCP predefined `role`.
+pub fn gcp_allowed_predefined_role(role: &str) -> bool {
+    GCP_ALLOWED_PREDEFINED_ROLES.contains(&role)
+}
+
+/// Whether `permission` writes OS Login or OS Config state, which gives a login or runs a script
+/// on a machine: `osconfig` and `oslogin` permissions other than reads, and the two instance
+/// permissions that open an OS Login session.
+fn gcp_machine_access_write(permission: &str) -> bool {
+    if matches!(
+        permission,
+        "compute.instances.osLogin" | "compute.instances.osAdminLogin"
+    ) {
+        return true;
+    }
+    if permission.starts_with("osconfig.") || permission.starts_with("oslogin.") {
+        let verb = permission.rsplit('.').next().unwrap_or_default();
+        return !(verb.starts_with("get") || verb.starts_with("list"));
+    }
+    false
 }
 
 /// Azure actions a protected management identity loses. Setup's deny settings refuse it every
@@ -196,6 +294,16 @@ pub fn azure_verifier_owned_action(action: &str) -> bool {
     AZURE_VERIFIER_OWNED_ACTIONS
         .iter()
         .any(|owned| owned.eq_ignore_ascii_case(action))
+}
+
+/// Whether the Azure action pattern `action` of a stack-defined grant reaches an action only the
+/// verifier may hold. A `/action` can't be refused by setup's deny settings, so a wildcard such as
+/// `Microsoft.Compute/*/action` would carry a run command to the management identity.
+pub fn azure_stack_grant_reaches_verifier_action(action: &str) -> bool {
+    let pattern = action.to_ascii_lowercase();
+    AZURE_VERIFIER_OWNED_ACTIONS.iter().any(|owned| {
+        iam_action_pattern_matches(pattern.as_bytes(), owned.to_ascii_lowercase().as_bytes())
+    })
 }
 
 /// Azure resource paths whose writes and deletes run code or decide who code runs as. Setup's
