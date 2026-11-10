@@ -1841,7 +1841,7 @@ impl StackExecutor {
     /// data required for the next iteration is carried within the returned
     /// `StackState`.
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
-        self.step_inner(state, true).await
+        self.step_inner(state, true, false).await
     }
 
     /// Steps controllers that are already active without planning stack changes.
@@ -1850,7 +1850,16 @@ impl StackExecutor {
     /// stack, resume failed updates, or initiate create/update/delete transitions.
     /// It is suitable for periodic observation of a Running deployment.
     pub async fn refresh(&self, state: StackState) -> Result<StepResult> {
-        self.step_inner(state, false).await
+        self.step_inner(state, false, false).await
+    }
+
+    /// Runs the Ready handler of every Running resource and returns only the
+    /// heartbeats they emit. Nothing is planned and no other resource is
+    /// stepped. The resulting state is dropped, so a failed check here cannot
+    /// mark a resource failed or end an update that is in progress: the caller
+    /// keeps the state it already has.
+    pub async fn observe_running(&self, state: StackState) -> Result<Vec<ResourceHeartbeat>> {
+        Ok(self.step_inner(state, false, true).await?.heartbeats)
     }
 
     /// Continues controller states registered by an external setup engine
@@ -1954,14 +1963,19 @@ impl StackExecutor {
         }
 
         state.resources.extend(logical_compute);
-        self.step_inner(state, false).await
+        self.step_inner(state, false, false).await
     }
 
     #[alien_event(AlienEvent::StackStep {
         next_state: state.clone(),
         suggested_delay_ms: None,
     })]
-    async fn step_inner(&self, state: StackState, apply_plan: bool) -> Result<StepResult> {
+    async fn step_inner(
+        &self,
+        state: StackState,
+        apply_plan: bool,
+        observe_only: bool,
+    ) -> Result<StepResult> {
         validate_stack_controller_state_versions(&state)?;
 
         // Setup must be able to repair the installed ceiling. An empty desired stack
@@ -2553,6 +2567,14 @@ impl StackExecutor {
             // Check status and terminal state using next_state
             let current_resource_view = next_state.resources.get(resource_id).unwrap(); // Should always exist
                                                                                         // Check terminality based on *desired* state + current status
+            if observe_only
+                && !matches!(
+                    current_resource_view.status,
+                    ResourceStatus::Running | ResourceStatus::RefreshFailed
+                )
+            {
+                continue;
+            }
             let is_potentially_terminal = self.is_resource_synced(resource_id, &next_state);
 
             // If the planned transition put it into a terminal state (e.g. failed update plan), skip.
@@ -2577,7 +2599,8 @@ impl StackExecutor {
                 && current_resource_view
                     .get_internal_controller()?
                     .is_some_and(|controller| controller.requires_convergence_reconciliation());
-            let should_step_out_of_scope_resource = opted_in_running_resource
+            let should_step_out_of_scope_resource = observe_only
+                || opted_in_running_resource
                 || self.should_step_out_of_scope_resource(resource_id, current_resource_view);
 
             if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
@@ -2610,6 +2633,7 @@ impl StackExecutor {
                 // This is important for local platform where ephemeral state (ports, URLs)
                 // needs to be refreshed after restart, even if config hasn't changed.
                 match self.running_resource_policy {
+                    _ if observe_only => true,
                     RunningResourcePolicy::All => true,
                     RunningResourcePolicy::None => false,
                     RunningResourcePolicy::OptIn => opted_in_running_resource,
