@@ -406,6 +406,13 @@ pub(crate) async fn run_deployment_continuously(
     };
 
     if refresh {
+        // Captured before stepping: the sync loop replaces the durable claim
+        // once it reports this refresh complete.
+        let answers_claim = state
+            .db
+            .get_sync_execution()
+            .await?
+            .is_some_and(|execution| execution.claim.is_some());
         let steps = match run_maintenance_refresh(
             state,
             &mut current,
@@ -424,7 +431,7 @@ pub(crate) async fn run_deployment_continuously(
             }
             Err(error) => return Err(error),
         };
-        finish_maintenance_refresh(state, &current).await?;
+        finish_maintenance_refresh(state, &current, answers_claim).await?;
         return Ok((steps, Duration::ZERO));
     }
 
@@ -623,12 +630,16 @@ async fn run_maintenance_refresh(
 
 /// Consume a finished maintenance target: the deployment is settled on its
 /// installed release again, so passive health reporting resumes and the next
-/// tick does not refresh again. Sync right away, so the claim completes with
-/// this refresh's result. A state the sync loop changed meanwhile (for example
-/// a newer target) is left, with its config, for the next tick.
+/// tick does not refresh again. A refresh that answers a claim syncs right
+/// away, so the claim completes with this refresh's result. A manager that
+/// issues no claims replays the stored target on every empty sync, so an
+/// immediate sync would start the next refresh at once; its refreshes follow
+/// the sync interval instead. A state the sync loop changed meanwhile (for
+/// example a newer target) is left, with its config, for the next tick.
 async fn finish_maintenance_refresh(
     state: &OperatorState,
     refreshed: &DeploymentState,
+    answers_claim: bool,
 ) -> Result<()> {
     let mut settled = refreshed.clone();
     settled.target_release = None;
@@ -636,6 +647,7 @@ async fn finish_maintenance_refresh(
         .db
         .finish_target_if_unchanged(refreshed, &settled)
         .await?
+        && answers_claim
     {
         state.db.request_sync();
     }
