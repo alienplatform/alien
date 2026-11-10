@@ -1023,7 +1023,7 @@ async fn release(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::routes) mod tests {
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{
         dispatchers::NullCommandDispatcher,
@@ -1351,7 +1351,7 @@ mod tests {
     }
 
     /// The sync routes' state over `deployment_store`, with local command storage.
-    async fn test_app_state(
+    pub(in crate::routes) async fn test_app_state(
         directory: &std::path::Path,
         deployment_store: Arc<dyn crate::traits::DeploymentStore>,
         release_store: Arc<SqliteReleaseStore>,
@@ -3621,11 +3621,18 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
-    // Handled before the state report below, which reads the record again.
+    // Handled before the state report below, which needs the record as the
+    // report left it. Re-read only when the report changed it.
     let deployment = match installed_setup.as_ref() {
-        Some(report) => {
-            super::installed_setup::handle_installed_setup(&state, &subject, &deployment, report)
-                .await;
+        Some(report)
+            if super::installed_setup::handle_installed_setup(
+                &state,
+                &subject,
+                &deployment,
+                report,
+            )
+            .await =>
+        {
             match state
                 .deployment_store
                 .get_deployment(&subject, &req.deployment_id)
@@ -3638,7 +3645,7 @@ async fn agent_sync(
                 Err(e) => return e.into_response(),
             }
         }
-        None => deployment,
+        _ => deployment,
     };
 
     let supported_protocol = max_supported_deployment_protocol_version
@@ -4528,6 +4535,8 @@ fn preserve_setup_update_authorization(incoming: &mut DeploymentState, stored: &
             stored_metadata.and_then(|stored| stored.setup_report_refusal.clone());
         metadata.installed_helm_release =
             stored_metadata.and_then(|stored| stored.installed_helm_release.clone());
+        metadata.cloud_setup_required =
+            stored_metadata.and_then(|stored| stored.cloud_setup_required.clone());
     }
     let Some(authorization) = stored
         .runtime_metadata

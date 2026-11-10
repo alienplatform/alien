@@ -58,6 +58,19 @@ pub struct SetupReportRefusal {
     pub at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A waiting release whose setup change a Helm chart upgrade cannot carry. The
+/// manager works this out from the release and the installed setup, so every
+/// place that offers an upgrade agrees with the manager's report handling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSetupRequired {
+    /// The waiting release this applies to.
+    pub release_id: String,
+    /// Plain-language reason, safe to show to the customer.
+    pub reason: String,
+}
+
 /// The Helm release an Operator reports it was installed as, so the exact
 /// upgrade command can be shown. Reported, never trusted for authority.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,6 +217,11 @@ pub struct RuntimeMetadata {
     /// with when. Cleared when a report is accepted or no longer needed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_report_refusal: Option<SetupReportRefusal>,
+
+    /// Set while the waiting release changes something only the cloud setup
+    /// can apply, so a chart upgrade is not offered for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_setup_required: Option<CloudSetupRequired>,
 
     /// The Helm release the Operator reported it runs as.
     #[serde(default, skip_serializing_if = "Option::is_none")]

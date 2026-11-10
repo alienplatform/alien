@@ -166,20 +166,25 @@ fn changes_needing_cloud_setup(
     None
 }
 
-/// Handles a report from the Operator of `deployment`. Returns nothing: a
-/// report that cannot be acted on never fails the sync that carried it.
+/// Handles a report from the Operator of `deployment`. A report that cannot be
+/// acted on never fails the sync that carried it. Returns whether the stored
+/// deployment changed, so the caller re-reads it only then.
 pub(super) async fn handle_installed_setup(
     state: &AppState,
     subject: &Subject,
     deployment: &DeploymentRecord,
     report: &InstalledSetup,
-) {
+) -> bool {
     if !is_operator_of(subject, deployment) {
         warn!(deployment_id = %deployment.id, "Ignoring a setup report from another subject");
-        return;
+        return false;
     }
-    if let Err(error) = apply_report(state, subject, deployment, report).await {
-        warn!(deployment_id = %deployment.id, error = %error, "Could not process the installed setup report");
+    match apply_report(state, subject, deployment, report).await {
+        Ok(wrote) => wrote,
+        Err(error) => {
+            warn!(deployment_id = %deployment.id, error = %error, "Could not process the installed setup report");
+            false
+        }
     }
 }
 
@@ -188,17 +193,23 @@ async fn apply_report(
     subject: &Subject,
     deployment: &DeploymentRecord,
     report: &InstalledSetup,
-) -> Result<(), AlienError> {
+) -> Result<bool, AlienError> {
     // Only Helm installs report. Anything else on this field is ignored.
     if deployment.platform != Platform::Kubernetes {
-        return Ok(());
+        return Ok(false);
     }
     let (Some(settings), Some(stack_state), Some(metadata)) = (
         deployment.stack_settings.as_ref(),
         deployment.stack_state.as_ref(),
         deployment.runtime_metadata.as_ref(),
     ) else {
-        return Ok(());
+        return Ok(false);
+    };
+
+    // With no release waiting there is no update to authorize, so nothing in
+    // the release is needed: an idle sync only records the Helm release name.
+    let Some(waiting) = deployment.desired_release_id.as_deref() else {
+        return record_match(state, subject, deployment, report).await;
     };
 
     let release = state
@@ -226,17 +237,35 @@ async fn apply_report(
         }
     };
 
-    match decide(deployment, report, &target) {
-        ReportDecision::NoOp => {
-            // The chart matches what runs; a stale refusal no longer applies.
+    // Whether a chart can carry the waiting release depends on the release,
+    // not on which chart reported, so it is recorded from the waiting
+    // release's own target. A change is written alone; the report repeats on
+    // the next sync and is handled against the updated record.
+    let waiting_target = if report.release_id == waiting {
+        Some(target.clone())
+    } else {
+        target_of_release(state, subject, deployment, settings, stack_state, waiting).await
+    };
+    if let Some(waiting_target) = waiting_target {
+        let required = metadata
+            .prepared_stack
+            .as_ref()
+            .and_then(|baseline| {
+                changes_needing_cloud_setup(baseline, &waiting_target, deployment.base_platform)
+            })
+            .map(|reason| alien_core::CloudSetupRequired {
+                release_id: waiting.to_string(),
+                reason,
+            });
+        if required != metadata.cloud_setup_required {
             let mut next = metadata.clone();
-            next.setup_report_refusal = None;
-            let release_changed = record_release(&mut next, report);
-            if release_changed || metadata.setup_report_refusal.is_some() {
-                write(state, subject, deployment, report, next, false).await?;
-            }
-            Ok(())
+            next.cloud_setup_required = required;
+            return write(state, subject, deployment, report, next, false).await;
         }
+    }
+
+    match decide(deployment, report, &target) {
+        ReportDecision::NoOp => record_match(state, subject, deployment, report).await,
         ReportDecision::Refuse(reason) => {
             record_refusal(state, subject, deployment, report, reason).await
         }
@@ -252,7 +281,7 @@ async fn apply_report(
                 });
             // An update in flight finishes first; the report repeats every sync.
             if already || !can_reconcile_after_import(deployment) {
-                return Ok(());
+                return Ok(false);
             }
             info!(deployment_id = %deployment.id, release_id = %report.release_id, "Chart completes the setup update");
             let mut metadata = metadata.clone();
@@ -262,6 +291,59 @@ async fn apply_report(
             write(state, subject, deployment, report, metadata, true).await
         }
     }
+}
+
+/// The stack `release_id` prepares to for this deployment, or nothing when the
+/// release is gone or cannot be prepared. A release that cannot be prepared
+/// leaves what is recorded as it is; the next sync tries again.
+async fn target_of_release(
+    state: &AppState,
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+    settings: &alien_core::StackSettings,
+    stack_state: &alien_core::StackState,
+    release_id: &str,
+) -> Option<Stack> {
+    let release = match state.release_store.get_release(subject, release_id).await {
+        Ok(Some(release)) => release,
+        Ok(None) => return None,
+        Err(error) => {
+            warn!(deployment_id = %deployment.id, %error, "Could not read the waiting release");
+            return None;
+        }
+    };
+    match prepare_target(&release, deployment, settings, stack_state).await {
+        Ok(target) => Some(target),
+        Err(error) => {
+            warn!(deployment_id = %deployment.id, %error, "Could not prepare the waiting release");
+            None
+        }
+    }
+}
+
+/// The chart matches what runs, or no update waits: a stale refusal no longer
+/// applies, and the Helm release the report names is recorded. Writes only
+/// when one of those changed.
+async fn record_match(
+    state: &AppState,
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+    report: &InstalledSetup,
+) -> Result<bool, AlienError> {
+    let Some(metadata) = deployment.runtime_metadata.as_ref() else {
+        return Ok(false);
+    };
+    let mut next = metadata.clone();
+    next.setup_report_refusal = None;
+    next.cloud_setup_required = None;
+    let release_changed = record_release(&mut next, report);
+    if release_changed
+        || metadata.setup_report_refusal.is_some()
+        || metadata.cloud_setup_required.is_some()
+    {
+        return write(state, subject, deployment, report, next, false).await;
+    }
+    Ok(false)
 }
 
 /// The stack the reported release installs for this deployment: the same
@@ -367,9 +449,9 @@ async fn record_refusal(
     deployment: &DeploymentRecord,
     report: &InstalledSetup,
     reason: String,
-) -> Result<(), AlienError> {
+) -> Result<bool, AlienError> {
     let Some(metadata) = deployment.runtime_metadata.as_ref() else {
-        return Ok(());
+        return Ok(false);
     };
     let mut metadata = metadata.clone();
     let release_changed = record_release(&mut metadata, report);
@@ -381,7 +463,7 @@ async fn record_refusal(
                 refusal.reason == reason && refusal.reported_release_id == report.release_id
             })
     {
-        return Ok(());
+        return Ok(false);
     }
     warn!(deployment_id = %deployment.id, %reason, "Declined the installed setup report");
     metadata.setup_report_refusal = Some(SetupReportRefusal {
@@ -401,12 +483,12 @@ async fn write(
     report: &InstalledSetup,
     runtime_metadata: alien_core::RuntimeMetadata,
     schedule_reconciliation: bool,
-) -> Result<(), AlienError> {
+) -> Result<bool, AlienError> {
     let (Some(stack_settings), Some(stack_state)) = (
         deployment.stack_settings.clone(),
         deployment.stack_state.clone(),
     ) else {
-        return Ok(());
+        return Ok(false);
     };
     let lane_known = deployment.setup_target.is_some();
     let result = state
@@ -444,24 +526,24 @@ async fn write(
         )
         .await;
     match result {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(true),
         // A checkpoint or settings change landed after the record was read.
         // Nothing was written; the report repeats on the next sync.
         Err(error) if error.code == "DEPLOYMENT_CHANGED_CONCURRENTLY" => {
             info!(deployment_id = %deployment.id, "Deployment changed while handling the setup report; the next report retries");
-            Ok(())
+            Ok(false)
         }
         Err(error) => Err(error),
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use alien_core::{RuntimeMetadata, ServiceAccount, StackState, Storage};
     use chrono::Utc;
 
-    fn baseline() -> Stack {
+    pub(in crate::routes) fn baseline() -> Stack {
         Stack::new("app".to_string())
             .add(
                 ServiceAccount::new("execution-sa".to_string()).build(),
@@ -498,7 +580,7 @@ mod tests {
         next
     }
 
-    fn deployment(prepared: Stack) -> DeploymentRecord {
+    pub(in crate::routes) fn deployment(prepared: Stack) -> DeploymentRecord {
         DeploymentRecord {
             supplied_stacks: None,
             id: "dep_1".to_string(),
@@ -748,5 +830,166 @@ mod tests {
         assert!(is_operator_of(&own, &record));
         assert!(!is_operator_of(&other, &record));
         assert!(!is_operator_of(&Subject::system(), &record));
+    }
+
+    /// An idle Helm deployment syncs every few seconds: with no release
+    /// waiting and nothing new in the report, the manager makes no store call
+    /// for the report. The mock store has no expectations, so any call fails.
+    #[tokio::test]
+    async fn an_idle_setup_report_makes_no_store_calls() {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = std::sync::Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &temp.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let state = crate::routes::sync::tests::test_app_state(
+            temp.path(),
+            std::sync::Arc::new(crate::traits::deployment_store::MockDeploymentStore::new()),
+            std::sync::Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(db.clone())),
+            std::sync::Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    temp.path().to_path_buf(),
+                ),
+            ),
+            db,
+        )
+        .await;
+        let subject = Subject {
+            scope: Scope::Deployment {
+                project_id: "project".to_string(),
+                deployment_id: "dep_idle".to_string(),
+            },
+            ..Subject::system()
+        };
+        let mut record = deployment(baseline());
+        record.id = "dep_idle".to_string();
+        record.desired_release_id = None;
+        record.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            installed_helm_release: Some(alien_core::InstalledHelmRelease {
+                name: "acme".to_string(),
+                namespace: "apps".to_string(),
+            }),
+            ..Default::default()
+        });
+        let report = alien_core::sync::InstalledSetup {
+            release_id: "rel_unknown".to_string(),
+            setup_target: "helm".to_string(),
+            setup_fingerprint: "fp".to_string(),
+            setup_fingerprint_version: 1,
+            release_name: Some("acme".to_string()),
+            namespace: Some("apps".to_string()),
+        };
+        let wrote = handle_installed_setup(&state, &subject, &record, &report).await;
+        assert!(!wrote);
+    }
+
+    /// A stale chart reports while the waiting release adds a cloud resource:
+    /// the manager records, from the waiting release itself, that a chart
+    /// upgrade cannot carry it, and does not record it twice.
+    #[tokio::test]
+    async fn the_waiting_release_decides_whether_a_chart_can_carry_it() {
+        use crate::traits::{CreateReleaseParams, ReleaseStore};
+        use std::sync::{Arc, Mutex};
+
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &temp.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let releases = Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(db.clone()));
+        let publish = |stack: Stack| {
+            let releases = releases.clone();
+            async move {
+                releases
+                    .create_release(
+                        &Subject::system(),
+                        CreateReleaseParams {
+                            project_id: "project".to_string(),
+                            stacks: std::collections::HashMap::from([(
+                                Platform::Kubernetes,
+                                stack,
+                            )]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                        },
+                    )
+                    .await
+                    .expect("release")
+                    .id
+            }
+        };
+        let installed_release = publish(baseline()).await;
+        let waiting_release = publish(with_storage(&baseline())).await;
+
+        let mut record = deployment(baseline());
+        record.desired_release_id = Some(waiting_release.clone());
+        // The recorded baseline is what the installed release prepares to.
+        let installed = releases
+            .get_release(&Subject::system(), &installed_release)
+            .await
+            .expect("lookup")
+            .expect("release");
+        let prepared = prepare_target(
+            &installed,
+            &record,
+            record.stack_settings.as_ref().expect("settings"),
+            record.stack_state.as_ref().expect("stack state"),
+        )
+        .await
+        .expect("prepared baseline");
+        record
+            .runtime_metadata
+            .as_mut()
+            .expect("metadata")
+            .prepared_stack = Some(prepared);
+
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        let sink = written.clone();
+        store
+            .expect_update_imported_stack_state()
+            .returning(move |_, _, params| {
+                sink.lock().expect("log").push(params.runtime_metadata);
+                Err(crate::error::ErrorData::internal("stop").into_generic())
+            });
+        let state = crate::routes::sync::tests::test_app_state(
+            temp.path(),
+            Arc::new(store),
+            releases,
+            Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    temp.path().to_path_buf(),
+                ),
+            ),
+            db,
+        )
+        .await;
+        let subject = Subject {
+            scope: Scope::Deployment {
+                project_id: "project".to_string(),
+                deployment_id: "dep_1".to_string(),
+            },
+            ..Subject::system()
+        };
+        // The installed chart still reports the old release.
+        let mut stale = report(&installed_release);
+        stale.release_name = None;
+        handle_installed_setup(&state, &subject, &record, &stale).await;
+
+        let written = written.lock().expect("log");
+        assert_eq!(written.len(), 1, "one write records the verdict");
+        let required = written[0]
+            .cloud_setup_required
+            .as_ref()
+            .expect("the verdict is recorded");
+        assert_eq!(required.release_id, waiting_release);
+        assert!(required.reason.contains("archive"), "{}", required.reason);
     }
 }

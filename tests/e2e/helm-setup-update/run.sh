@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# Helm setup update e2e on kind. See README.md.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
+MANAGER_BIN=${ALIEN_MANAGER_BIN:-$ROOT/target/debug/alien-manager}
+OPERATOR_BIN=${ALIEN_OPERATOR_BIN:-$ROOT/target/debug/alien-operator}
+CLUSTER=${KIND_CLUSTER:-helm-setup-update}
+CTX=kind-$CLUSTER
+W=$(mktemp -d)
+NS=alien
+PORT=8080
+GW=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo 172.18.0.1)
+M=http://localhost:$PORT
+REG=$GW:$PORT
+export HELM_EXPERIMENTAL_OCI=1
+K="kubectl --context $CTX -n $NS"
+echo "work directory: $W"
+
+cleanup() {
+  pkill -f "$MANAGER_BIN" 2>/dev/null || true
+  [ "${KEEP:-}" = 1 ] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+fail() { echo "FAIL: $*"; echo "--- manager log tail"; tail -30 "$W/manager.log"; exit 1; }
+
+# --- cluster, operator image, manager -------------------------------------
+kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" >/dev/null
+mkdir -p "$W/img" && cp "$OPERATOR_BIN" "$W/img/alien-operator"
+# A debug build's symbols do not fit the chart's 512Mi memory limit.
+strip "$W/img/alien-operator"
+cat > "$W/img/Dockerfile" <<'D'
+FROM ubuntu:24.04
+RUN apt-get update -qq && apt-get install -y -qq ca-certificates && rm -rf /var/lib/apt/lists/* && mkdir -p /var/lib/operator && chown 1000:1000 /var/lib/operator
+COPY alien-operator /app/alien-operator
+USER 1000
+ENTRYPOINT ["/app/alien-operator"]
+D
+docker build -q -t alien-operator:e2e "$W/img" >/dev/null
+kind load docker-image alien-operator:e2e --name "$CLUSTER" >/dev/null
+mkdir -p "$W/data"
+cat > "$W/manager.toml" <<T
+[server]
+port = $PORT
+host = "0.0.0.0"
+base-url = "http://$REG"
+deployment-interval-secs = 3
+[database]
+state-dir = "$W/data"
+[operator]
+image = "alien-operator:e2e"
+T
+(cd "$W" && nohup "$MANAGER_BIN" -c manager.toml > manager.log 2>&1 &)
+for _ in $(seq 30); do curl -sf $M/health >/dev/null && break; sleep 1; done
+TOKEN=$(grep -o 'ax_admin_[0-9a-f]*' "$W/manager.log" | head -1)
+[ -n "$TOKEN" ] || fail "manager did not print an admin token"
+
+api() { curl -sf -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' "$@"; }
+json() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)"; }
+
+# --- releases: frozen service accounts, plus one frozen storage -------------
+stack() { # stack <comma-separated service account ids> [storage]
+  python3 - "$1" "${2:-}" <<'P'
+import json, sys
+res = {}
+for i in filter(None, sys.argv[1].split(",")):
+    res[i] = {"config": {"id": i, "stackPermissionSets": [], "type": "service-account"},
+              "dependencies": [], "lifecycle": "frozen", "remoteAccess": False}
+if sys.argv[2]:
+    res[sys.argv[2]] = {"config": {"corsAllowedOrigins": [], "id": sys.argv[2], "lifecycleRules": [],
+              "publicRead": False, "type": "storage", "versioning": False},
+              "dependencies": [], "lifecycle": "frozen", "remoteAccess": False}
+print(json.dumps({"id": "app", "permissions": {"management": "auto", "profiles": {}}, "resources": res}))
+P
+}
+release() { # release <service accounts> [storage] -> release id
+  python3 -c "import json,sys;print(json.dumps({'stack':{'kubernetes':json.loads(sys.argv[1])},'projectId':'default'}))" "$(stack "$@")" \
+    | api -XPOST $M/v1/releases -d @- | json "d['id']"
+}
+
+# --- charts: the manager's chart, stamped the way packaging does ------------
+chart() { # chart <n> <release id> <fingerprint> <service accounts> -> path of the packaged chart
+  local d=$W/charts/$1-$3; rm -rf "$d"; mkdir -p "$d"
+  helm pull oci://$REG/charts/app --version 1.0.$1 --plain-http -d "$d" --untar >/dev/null
+  python3 - "$d/app/values.yaml" "$4" <<'P'
+import sys
+p, ids = sys.argv[1], [i for i in sys.argv[2].split(",") if i]
+s = open(p).read()
+s = s.replace("serviceAccounts:\n  {}", "serviceAccounts:\n" + "".join(f"  {i}: {{}}\n" for i in ids), 1)
+open(p, "w").write(s)
+P
+  cat >> "$d/app/Chart.yaml" <<Y
+annotations:
+  setup.alien.dev/release-id: "$2"
+  setup.alien.dev/target: "${TARGET:-helm}"
+  setup.alien.dev/fingerprint: "$3"
+  setup.alien.dev/fingerprint-version: "1"
+Y
+  helm package "$d/app" -d "$d" >/dev/null; echo "$d/app-1.0.$1.tgz"
+}
+upgrade() { helm --kube-context $CTX upgrade app "$1" -n $NS --set management.token="$DGT" --timeout 120s "${@:2}" >/dev/null; }
+
+dep() { api $M/v1/deployments | python3 -c "import sys,json;print(json.dumps(json.load(sys.stdin)['items'][0]))"; }
+field() { dep | python3 -c "import sys,json;d=json.load(sys.stdin);m=d['runtimeMetadata'];print($1)"; }
+eventually() { # until <description> <python expression over d and m> [seconds]
+  local n=$(( ${3:-180} / 3 ))
+  for _ in $(seq "$n"); do [ "$(field "$2")" = True ] && { echo "PASS: $1"; return; }; sleep 3; done
+  fail "$1 (state: $(field "d['status'],d.get('currentReleaseId'),d.get('desiredReleaseId'),m.get('setupReportRefusal')"))"
+}
+holds() { # holds <description> <expression>: the condition stays true for 30 seconds
+  for _ in $(seq 10); do [ "$(field "$2")" = True ] || fail "$1"; sleep 3; done; echo "PASS: $1"
+}
+mints() { grep -c "Chart completes the setup update" "$W/manager.log" || true; }
+
+# --- install release 1 ----------------------------------------------------------
+R1=$(release execution)
+DG=$(api -XPOST $M/v1/deployment-groups -d '{"name":"e2e"}' | json "d['id']")
+DGT=$(api -XPOST $M/v1/deployment-groups/$DG/tokens -d '{}' | json "d['token']")
+echo "$DGT" | helm registry login $REG --plain-http -u x --password-stdin >/dev/null
+helm --kube-context $CTX install app "$(chart 1 "$R1" fp-1 execution)" -n $NS --create-namespace \
+  --set management.token="$DGT" --wait --timeout 180s >/dev/null
+eventually "release 1 installed and running" "d['status']=='running' and d.get('currentReleaseId')=='$R1'"
+
+# --- case: chart for an older release than the one waiting is refused --------------
+R2=$(release execution,reader)
+eventually "deployment pauses on a release it cannot apply" "d['status']=='update-failed' and d.get('desiredReleaseId')=='$R2'"
+R3=$(release execution,reader,writer)
+eventually "waiting release moves to release 3" "d.get('desiredReleaseId')=='$R3'"
+upgrade "$(chart 2 "$R2" fp-2 execution,reader)"
+eventually "stale chart refused, naming the release to use" \
+  "'waiting for release $R3' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
+[ "$(mints)" = 0 ] || fail "a stale chart minted a grant"
+
+# --- case: a release adding a cloud resource is refused ------------------------------
+R4=$(release execution archive)
+eventually "waiting for release 4" "d.get('desiredReleaseId')=='$R4'"
+upgrade "$(chart 4 "$R4" fp-4 execution)"
+eventually "cloud resource change refused with the cloud setup message" \
+  "'lives in your cloud account' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
+
+# --- case: the chart for the waiting release completes the update --------------------
+R5=$(release execution,reader)
+eventually "waiting for release 5" "d.get('desiredReleaseId')=='$R5'"
+upgrade "$(chart 5 "$R5" fp-5 execution,reader)"
+eventually "helm upgrade completes the setup update" \
+  "d['status']=='running' and d.get('currentReleaseId')=='$R5'"
+$K get sa app-reader-sa >/dev/null || fail "the new service account was not created"
+
+# --- case: a chart-only bump mints nothing ----------------------------------------------
+M0=$(mints); POD=$($K get pods -l app.kubernetes.io/name=app -o name | head -1)
+B=$W/charts/bump; rm -rf "$B"; mkdir -p "$B"; cp -r "$W/charts/5-fp-5/app" "$B/app"
+sed -i 's/^version: 1.0.5/version: 1.0.5-1/' "$B/app/Chart.yaml"; helm package "$B/app" -d "$B" >/dev/null
+upgrade "$B/app-1.0.5-1.tgz" --wait
+sleep 20
+[ "$(mints)" = "$M0" ] || fail "a chart-only bump minted a grant"
+echo "PASS: chart-only bump mints nothing"
+
+# --- case: rollback after success mints nothing -------------------------------------------
+helm --kube-context $CTX rollback app 2 -n $NS --wait >/dev/null
+holds "rollback after success keeps the deployment running" "d['status']=='running'"
+[ "$(mints)" = "$M0" ] || fail "a rollback minted a grant"
+
+# --- case: a chart for another install channel is refused ------------------------------------
+R6=$(release execution,reader,writer)
+eventually "waiting for release 6" "d.get('desiredReleaseId')=='$R6'"
+upgrade "$(TARGET=other chart 6 "$R6" fp-6o execution,reader,writer)"
+eventually "chart from another install channel refused" \
+  "'different setup' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
+
+# --- case: rollback after the grant is minted leaves the update waiting ---------------------------
+P6=$(chart 6 "$R6" fp-6 execution,reader,writer)
+upgrade "$P6" &
+for _ in $(seq 120); do [ "$(field "bool(m.get('setupUpdateAuthorization'))")" = True ] && break; sleep 1; done
+wait || true
+helm --kube-context $CTX rollback app -n $NS --wait >/dev/null
+holds "the grant does not apply to the rolled-back chart" "d['status']!='running' or d.get('currentReleaseId')!='$R6'"
+upgrade "$P6"
+eventually "upgrading to the right chart completes the update" "d['status']=='running' and d.get('currentReleaseId')=='$R6'"
+
+# --- case: the older-Helm fallback, run as the dashboard shows it ------------------------------------
+R7=$(release execution,reader,writer,auditor)
+eventually "waiting for release 7" "d.get('desiredReleaseId')=='$R7'"
+helm --kube-context $CTX get values app -n $NS -o yaml > "$W/current.yaml"
+helm --kube-context $CTX upgrade app "$(chart 7 "$R7" fp-7 execution,reader,writer,auditor)" -n $NS -f "$W/current.yaml" --timeout 120s >/dev/null
+rm -f "$W/current.yaml"
+eventually "the fallback (-o yaml values file) completes the update" "d['status']=='running' and d.get('currentReleaseId')=='$R7'"
+
+# --- case: helm template | kubectl apply ---------------------------------------------------------
+R8=$(release execution,reader,writer,auditor,billing)
+eventually "waiting for release 8" "d.get('desiredReleaseId')=='$R8'"
+KEY=$($K get secret app -o jsonpath='{.data.encryption-key}' | base64 -d)
+helm template app "$(chart 8 "$R8" fp-8 execution,reader,writer,auditor,billing)" -n $NS --no-hooks \
+  --set management.token="$DGT" --set runtime.encryption.key="$KEY" | $K apply -f - >/dev/null
+eventually "helm template | kubectl apply completes the update" "d['status']=='running' and d.get('currentReleaseId')=='$R8'"
+
+echo "ALL PASS"
