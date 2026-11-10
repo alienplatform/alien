@@ -2,9 +2,10 @@
 //! sandbox controller does before it provisions anything. Earlier live sandbox tests ran with an
 //! administrator kubeconfig, which can never catch a permission the chart forgot.
 //!
-//! Two installs of the same chart, under the same release name, go into two namespaces of one
-//! cluster, as a vendor running one copy per tenant does. Each must get its own cluster-scoped
-//! grant, bound to its own Operator.
+//! Installs of the same chart go into one cluster the ways a vendor runs copies: the same release
+//! name in two namespaces (one copy per tenant), and two long release names in one namespace that
+//! differ only past the length a cluster-scoped name can keep. Each must get its own
+//! cluster-scoped grant, bound to its own Operator.
 //!
 //! Run against a disposable cluster:
 //! `ALIEN_SANDBOX_RBAC_KIND_CONTEXT=kind-<name> cargo test -p alien-helm --test sandbox_rbac_kind -- --ignored`
@@ -24,6 +25,26 @@ use std::{
 
 const NAMESPACES: [&str; 2] = ["alien-sandbox-rbac-a", "alien-sandbox-rbac-b"];
 const RELEASE: &str = "sandbox-rbac";
+/// Release names that contain the chart name are used as the full name unchanged, and these two
+/// agree on their first 45 characters, past where the role name truncates the full name.
+const LONG_RELEASES: [&str; 2] = [
+    "sandbox-rbac-tenant-with-a-long-install-name-one",
+    "sandbox-rbac-tenant-with-a-long-install-name-two",
+];
+
+/// Every (release, namespace) the test installs.
+fn installs() -> Vec<(&'static str, &'static str)> {
+    let mut installs: Vec<_> = NAMESPACES
+        .iter()
+        .map(|namespace| (RELEASE, *namespace))
+        .collect();
+    installs.extend(
+        LONG_RELEASES
+            .iter()
+            .map(|release| (*release, NAMESPACES[0])),
+    );
+    installs
+}
 
 struct Cleanup<'a> {
     context: &'a str,
@@ -32,11 +53,13 @@ struct Cleanup<'a> {
 impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         // Best effort on the way out of a disposable cluster; the assertions already ran.
-        for namespace in NAMESPACES {
+        for (release, namespace) in installs() {
             let _ = Command::new("helm")
-                .args(["--kube-context", self.context, "uninstall", RELEASE])
+                .args(["--kube-context", self.context, "uninstall", release])
                 .args(["--namespace", namespace, "--ignore-not-found", "--no-hooks"])
                 .output();
+        }
+        for namespace in NAMESPACES {
             let _ = Command::new("kubectl")
                 .args(["--context", self.context, "delete", "namespace", namespace])
                 .args(["--ignore-not-found", "--wait=false"])
@@ -135,8 +158,8 @@ fn write_chart(directory: &Path) {
     }
 }
 
-/// The sandbox ClusterRoleBinding each namespace's install created: (binding, role, subject).
-fn sandbox_bindings(context: &str) -> Vec<(String, String, String, String)> {
+/// Every sandbox ClusterRoleBinding in the cluster: (binding, role, release, namespace, account).
+fn sandbox_bindings(context: &str) -> Vec<(String, String, String, String, String)> {
     let listing = run_ok(
         "kubectl",
         &[
@@ -144,10 +167,8 @@ fn sandbox_bindings(context: &str) -> Vec<(String, String, String, String)> {
             context,
             "get",
             "clusterrolebindings",
-            "--selector",
-            &format!("app.kubernetes.io/instance={RELEASE}"),
             "--output",
-            "jsonpath={range .items[*]}{.metadata.name} {.roleRef.name} {.subjects[0].namespace} {.subjects[0].name}{\"\\n\"}{end}",
+            "jsonpath={range .items[*]}{.metadata.name} {.roleRef.name} {.metadata.labels.app\\.kubernetes\\.io/instance} {.subjects[0].namespace} {.subjects[0].name}{\"\\n\"}{end}",
         ],
     );
     listing
@@ -155,10 +176,13 @@ fn sandbox_bindings(context: &str) -> Vec<(String, String, String, String)> {
         .filter_map(|line| {
             let fields: Vec<&str> = line.split_whitespace().collect();
             match fields.as_slice() {
-                [binding, role, namespace, account] if binding.contains("-sandbox-broker") => {
+                [binding, role, release, namespace, account]
+                    if binding.contains("-sandbox-broker") =>
+                {
                     Some((
                         binding.to_string(),
                         role.to_string(),
+                        release.to_string(),
                         namespace.to_string(),
                         account.to_string(),
                     ))
@@ -183,16 +207,16 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
     let chart = directory.path().to_str().expect("chart path");
     let _cleanup = Cleanup { context: &context };
 
-    // No --wait: only the RBAC the chart creates is under test, not the Operator pod. The
-    // second install fails here if the two share a cluster-scoped name.
-    for namespace in NAMESPACES {
+    // No --wait: only the RBAC the chart creates is under test, not the Operator pod. A later
+    // install fails here if it shares a cluster-scoped name with an earlier one.
+    for (release, namespace) in installs() {
         run_ok(
             "helm",
             &[
                 "--kube-context",
                 &context,
                 "install",
-                RELEASE,
+                release,
                 chart,
                 "--namespace",
                 namespace,
@@ -212,22 +236,26 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
     let bindings = sandbox_bindings(&context);
     assert_eq!(
         bindings.len(),
-        NAMESPACES.len(),
+        installs().len(),
         "each install needs its own sandbox ClusterRoleBinding: {bindings:?}"
     );
-    for namespace in NAMESPACES {
-        let (binding, role, _, account) = bindings
+    for (release, namespace) in installs() {
+        let (binding, role, _, _, account) = bindings
             .iter()
-            .find(|(_, _, subject_namespace, _)| subject_namespace == namespace)
-            .unwrap_or_else(|| panic!("no sandbox binding for {namespace}: {bindings:?}"));
+            .find(|(_, _, binding_release, subject_namespace, _)| {
+                binding_release == release && subject_namespace == namespace
+            })
+            .unwrap_or_else(|| {
+                panic!("no sandbox binding for {release} in {namespace}: {bindings:?}")
+            });
         assert_eq!(binding, role, "each binding names its own install's role");
         let subject = format!("system:serviceaccount:{namespace}:{account}");
 
         // The sandbox controller's first call: list RuntimeClasses to find gVisor or Kata.
         assert!(
             eventually_can(&context, &subject, "list", "runtimeclasses.node.k8s.io"),
-            "{namespace}: the Operator cannot list RuntimeClasses, so every sandbox stays \
-             Provisioning"
+            "{release} in {namespace}: the Operator cannot list RuntimeClasses, so every sandbox \
+             stays Provisioning"
         );
         // The broker authenticates a session's caller with a TokenReview.
         assert!(
@@ -237,7 +265,7 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
                 "create",
                 "tokenreviews.authentication.k8s.io"
             ),
-            "{namespace}: the broker cannot authenticate callers"
+            "{release} in {namespace}: the broker cannot authenticate callers"
         );
         // Reading is all it needs: a namespaced Operator must not be able to change the
         // cluster's runtimes, which would let it weaken every tenant's isolation.
@@ -245,7 +273,7 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
             assert_eq!(
                 can(&context, &subject, verb, "runtimeclasses.node.k8s.io"),
                 "no",
-                "{namespace}: the Operator must not {verb} RuntimeClasses"
+                "{release} in {namespace}: the Operator must not {verb} RuntimeClasses"
             );
         }
     }
