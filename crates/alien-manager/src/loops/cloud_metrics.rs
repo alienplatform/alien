@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use alien_aws_clients::{AwsCredentialProvider, CloudWatchApi, CloudWatchClient};
 use alien_core::{AwsClientConfig, DeploymentModel, Platform};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_observer::{
     lambda_targets_from_state, LambdaMetricsPuller, LambdaMetricsScope, MetricsWindow,
+    WINDOW_SECONDS,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -20,13 +21,26 @@ use prost::Message;
 use tracing::{debug, warn};
 
 use crate::auth::Subject;
+use crate::error::ErrorData;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
-use crate::traits::{
-    CredentialResolver, DeploymentStore, TelemetryBackend, TelemetryCaller, TelemetrySignal,
-};
+use crate::traits::{CredentialResolver, DeploymentStore, TelemetryBackend, TelemetryCaller};
 
 /// Deployments pulled at the same time.
 const MAX_CONCURRENT_PULLS: usize = 8;
+
+/// Deployments listed per tick. Platform-backed stores answer at most this many, oldest first.
+const MAX_DEPLOYMENTS_PER_TICK: u32 = 500;
+
+/// One deployment's whole pull: credentials, every `GetMetricData` page, and the append. A pull
+/// that takes longer is dropped so it cannot hold a slot and stall the rest of the tick.
+const PULL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// HTTP timeout of a single CloudWatch request.
+const CLOUDWATCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Each pull reads the last `WINDOW_SECONDS`; a longer interval would leave minutes unread.
+/// Five minutes of overlap absorbs a slow tick and late CloudWatch points.
+const MAX_INTERVAL: Duration = Duration::from_secs(WINDOW_SECONDS as u64 - 300);
 
 /// Statuses in which a deployment's functions exist and can be invoked.
 const PULLED_STATUSES: [&str; 5] = [
@@ -46,8 +60,23 @@ pub trait CloudWatchProvider: Send + Sync {
     ) -> Result<Arc<dyn CloudWatchApi>, AlienError>;
 }
 
-/// CloudWatch with the deployment's own credentials.
-pub struct AwsCloudWatchProvider;
+/// CloudWatch with the deployment's own credentials, over one shared HTTP client.
+pub struct AwsCloudWatchProvider {
+    http_client: reqwest::Client,
+}
+
+impl AwsCloudWatchProvider {
+    pub fn new() -> crate::error::Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .timeout(CLOUDWATCH_REQUEST_TIMEOUT)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::ServerInitFailed {
+                reason: "Failed to build the CloudWatch HTTP client".to_string(),
+            })?;
+        Ok(Self { http_client })
+    }
+}
 
 #[async_trait]
 impl CloudWatchProvider for AwsCloudWatchProvider {
@@ -59,7 +88,7 @@ impl CloudWatchProvider for AwsCloudWatchProvider {
             .await
             .map_err(|error| error.into_generic())?;
         Ok(Arc::new(CloudWatchClient::new(
-            reqwest::Client::new(),
+            self.http_client.clone(),
             credentials,
         )))
     }
@@ -74,6 +103,7 @@ pub struct CloudMetricsLoop {
 }
 
 impl CloudMetricsLoop {
+    /// `interval` is capped so that consecutive pulls overlap; see [`MAX_INTERVAL`].
     pub fn new(
         deployment_store: Arc<dyn DeploymentStore>,
         credential_resolver: Arc<dyn CredentialResolver>,
@@ -81,12 +111,19 @@ impl CloudMetricsLoop {
         cloudwatch: Arc<dyn CloudWatchProvider>,
         interval: Duration,
     ) -> Self {
+        if interval > MAX_INTERVAL {
+            warn!(
+                requested_secs = interval.as_secs(),
+                used_secs = MAX_INTERVAL.as_secs(),
+                "Cloud metrics: interval is longer than the pull window; using the maximum"
+            );
+        }
         Self {
             deployment_store,
             credential_resolver,
             telemetry_backend,
             cloudwatch,
-            interval,
+            interval: interval.min(MAX_INTERVAL),
         }
     }
 
@@ -99,7 +136,10 @@ impl CloudMetricsLoop {
             "Starting cloud metrics loop"
         );
         while !*shutdown.borrow() {
-            self.tick().await;
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = self.tick() => {}
+            }
             tokio::select! {
                 _ = shutdown.changed() => break,
                 _ = tokio::time::sleep(self.interval) => {}
@@ -113,7 +153,9 @@ impl CloudMetricsLoop {
         let filter = DeploymentFilter {
             statuses: Some(PULLED_STATUSES.iter().map(|s| s.to_string()).collect()),
             platforms: Some(vec![Platform::Aws]),
+            // Not every store applies this on a list; `is_push` below is the check that holds.
             deployment_model: Some(DeploymentModel::Push),
+            limit: Some(MAX_DEPLOYMENTS_PER_TICK),
             ..Default::default()
         };
         let deployments = match self
@@ -127,10 +169,25 @@ impl CloudMetricsLoop {
                 return;
             }
         };
+        if deployments.len() >= MAX_DEPLOYMENTS_PER_TICK as usize {
+            warn!(
+                listed = deployments.len(),
+                "Cloud metrics: the deployment list is full; newer deployments may not be pulled"
+            );
+        }
         let window = MetricsWindow::last_completed(Utc::now());
-        stream::iter(deployments)
+        stream::iter(deployments.into_iter().filter(is_push))
             .for_each_concurrent(MAX_CONCURRENT_PULLS, |deployment| async move {
-                self.pull_one(&deployment, window).await;
+                if tokio::time::timeout(PULL_TIMEOUT, self.pull_one(&deployment, window))
+                    .await
+                    .is_err()
+                {
+                    warn!(
+                        deployment_id = deployment.id.as_str(),
+                        timeout_secs = PULL_TIMEOUT.as_secs(),
+                        "Cloud metrics: pull timed out"
+                    );
+                }
             })
             .await;
     }
@@ -152,6 +209,10 @@ impl CloudMetricsLoop {
             }
         };
         let Some(aws) = client_config.aws_config() else {
+            warn!(
+                deployment_id,
+                "Cloud metrics: the deployment's credentials are not AWS"
+            );
             return;
         };
         let cloudwatch = match self.cloudwatch.cloudwatch(aws).await {
@@ -190,7 +251,7 @@ impl CloudMetricsLoop {
         let body = bytes::Bytes::from(batch.request.encode_to_vec());
         if let Err(error) = self
             .telemetry_backend
-            .ingest(TelemetrySignal::Metrics, &caller, body)
+            .ingest_cloud_metrics(&caller, body)
             .await
         {
             warn!(deployment_id, %error, "Cloud metrics: the telemetry backend refused the batch");
@@ -203,6 +264,14 @@ impl CloudMetricsLoop {
             "Cloud metrics: appended"
         );
     }
+}
+
+/// Pull-model deployments are reached by their own agent, not with management credentials.
+fn is_push(deployment: &DeploymentRecord) -> bool {
+    deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.deployment_model == DeploymentModel::Push)
 }
 
 #[cfg(test)]
@@ -223,12 +292,14 @@ mod tests {
 
     use super::*;
     use crate::traits::deployment_store::MockDeploymentStore;
+    use crate::traits::TelemetrySignal;
 
     /// Answers every `GetMetricData` query with one point at the window start, or with the
-    /// scripted error, and counts the calls per account.
+    /// scripted error, or never; and counts the calls per account.
     #[derive(Debug, Default)]
     struct StubCloudWatch {
         deny: bool,
+        hang: bool,
         calls: Mutex<usize>,
     }
 
@@ -239,6 +310,9 @@ mod tests {
             request: GetMetricDataRequest,
         ) -> alien_client_core::Result<GetMetricDataResponse> {
             *self.calls.lock().unwrap() += 1;
+            if self.hang {
+                std::future::pending::<()>().await;
+            }
             if self.deny {
                 return Err(AlienError::new(ClientErrorData::RemoteAccessDenied {
                     resource_type: "CloudWatch".into(),
@@ -315,13 +389,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingBackend {
-        ingested: Mutex<
-            Vec<(
-                TelemetrySignal,
-                TelemetryCaller,
-                ExportMetricsServiceRequest,
-            )>,
-        >,
+        ingested: Mutex<Vec<(TelemetryCaller, ExportMetricsServiceRequest)>>,
     }
 
     #[async_trait]
@@ -329,6 +397,14 @@ mod tests {
         async fn ingest(
             &self,
             signal: TelemetrySignal,
+            _: &TelemetryCaller,
+            _: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            panic!("cloud metrics must not take the deployment telemetry path ({signal:?})")
+        }
+
+        async fn ingest_cloud_metrics(
+            &self,
             caller: &TelemetryCaller,
             data: bytes::Bytes,
         ) -> Result<(), AlienError> {
@@ -336,9 +412,24 @@ mod tests {
             self.ingested
                 .lock()
                 .unwrap()
-                .push((signal, caller.clone(), request));
+                .push((caller.clone(), request));
             Ok(())
         }
+    }
+
+    fn store_listing(deployments: Vec<DeploymentRecord>) -> MockDeploymentStore {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_list_deployments()
+            .returning(move |_, _| Ok(deployments.clone()));
+        store.expect_acquire().never();
+        store
+    }
+
+    fn lambda(account: &str) -> Option<String> {
+        Some(format!(
+            "arn:aws:lambda:us-east-1:{account}:function:demo-api"
+        ))
     }
 
     fn worker(arn: Option<&str>) -> StackResourceState {
@@ -423,6 +514,11 @@ mod tests {
                 "dep-denied",
                 Some("arn:aws:lambda:us-east-1:222222222222:function:demo-api"),
             ),
+            // Not every store filters lists by model; its management identity is never used.
+            pull_model(deployment(
+                "dep-pull",
+                Some("arn:aws:lambda:us-east-1:333333333333:function:demo-api"),
+            )),
         ];
         let mut store = MockDeploymentStore::new();
         store
@@ -431,6 +527,7 @@ mod tests {
             .returning(move |_, filter| {
                 assert_eq!(filter.platforms, Some(vec![Platform::Aws]));
                 assert_eq!(filter.deployment_model, Some(DeploymentModel::Push));
+                assert_eq!(filter.limit, Some(MAX_DEPLOYMENTS_PER_TICK));
                 let statuses = filter.statuses.clone().unwrap();
                 assert!(statuses.contains(&"running".to_string()));
                 assert!(
@@ -447,11 +544,13 @@ mod tests {
             deny: true,
             ..Default::default()
         });
+        let pull = Arc::new(StubCloudWatch::default());
         let provider = StubProvider {
             by_account: HashMap::from([
                 ("dep-with-lambda".to_string(), with_lambda.clone()),
                 ("dep-not-created".to_string(), not_created.clone()),
                 ("dep-denied".to_string(), denied.clone()),
+                ("dep-pull".to_string(), pull.clone()),
             ]),
         };
         let backend = Arc::new(RecordingBackend::default());
@@ -468,11 +567,11 @@ mod tests {
         assert_eq!(*with_lambda.calls.lock().unwrap(), 1);
         assert_eq!(*not_created.calls.lock().unwrap(), 0);
         assert_eq!(*denied.calls.lock().unwrap(), 1);
+        assert_eq!(*pull.calls.lock().unwrap(), 0);
 
         let ingested = backend.ingested.lock().unwrap();
         assert_eq!(ingested.len(), 1, "only the allowed pull is appended");
-        let (signal, caller, request) = &ingested[0];
-        assert_eq!(*signal, TelemetrySignal::Metrics);
+        let (caller, request) = &ingested[0];
         assert_eq!(caller.deployment_id.as_deref(), Some("dep-with-lambda"));
         assert_eq!(caller.project_id.as_deref(), Some("prj-of-dep-with-lambda"));
         assert_eq!(
@@ -485,5 +584,95 @@ mod tests {
             1,
             "one resource per function"
         );
+    }
+
+    fn pull_model(mut deployment: DeploymentRecord) -> DeploymentRecord {
+        if let Some(settings) = deployment.stack_settings.as_mut() {
+            settings.deployment_model = DeploymentModel::Pull;
+        }
+        deployment
+    }
+
+    fn provider(stubs: &[(&str, &Arc<StubCloudWatch>)]) -> Arc<StubProvider> {
+        Arc::new(StubProvider {
+            by_account: stubs
+                .iter()
+                .map(|(account, stub)| (account.to_string(), Arc::clone(stub)))
+                .collect(),
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_cloudwatch_does_not_stall_the_other_deployments() {
+        let hung = Arc::new(StubCloudWatch {
+            hang: true,
+            ..Default::default()
+        });
+        let healthy = Arc::new(StubCloudWatch::default());
+        let backend = Arc::new(RecordingBackend::default());
+        let metrics_loop = CloudMetricsLoop::new(
+            Arc::new(store_listing(vec![
+                deployment("dep-hung", lambda("111111111111").as_deref()),
+                deployment("dep-healthy", lambda("222222222222").as_deref()),
+            ])),
+            Arc::new(AccountPerDeployment),
+            backend.clone(),
+            provider(&[("dep-hung", &hung), ("dep-healthy", &healthy)]),
+            Duration::from_secs(300),
+        );
+
+        // With time paused, the tick ends only through the per-pull timeout.
+        metrics_loop.tick().await;
+
+        assert_eq!(*hung.calls.lock().unwrap(), 1);
+        let ingested = backend.ingested.lock().unwrap();
+        assert_eq!(ingested.len(), 1);
+        assert_eq!(ingested[0].0.deployment_id.as_deref(), Some("dep-healthy"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_interrupts_a_tick_in_progress() {
+        let hung = Arc::new(StubCloudWatch {
+            hang: true,
+            ..Default::default()
+        });
+        let metrics_loop = Arc::new(CloudMetricsLoop::new(
+            Arc::new(store_listing(vec![deployment(
+                "dep-hung",
+                lambda("111111111111").as_deref(),
+            )])),
+            Arc::new(AccountPerDeployment),
+            Arc::new(RecordingBackend::default()),
+            provider(&[("dep-hung", &hung)]),
+            Duration::from_secs(300),
+        ));
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        let running = tokio::spawn({
+            let metrics_loop = metrics_loop.clone();
+            async move { metrics_loop.run_until_shutdown(receiver).await }
+        });
+        while *hung.calls.lock().unwrap() == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        sender.send(true).unwrap();
+
+        // Well inside the 60 s pull timeout: the loop stops on the signal, not on the timeout.
+        tokio::time::timeout(Duration::from_secs(1), running)
+            .await
+            .expect("the loop stops while the pull still hangs")
+            .unwrap();
+    }
+
+    #[test]
+    fn an_interval_longer_than_the_pull_window_is_capped_so_no_minute_goes_unread() {
+        let metrics_loop = CloudMetricsLoop::new(
+            Arc::new(MockDeploymentStore::new()),
+            Arc::new(AccountPerDeployment),
+            Arc::new(RecordingBackend::default()),
+            provider(&[]),
+            Duration::from_secs(3600),
+        );
+        assert!(metrics_loop.interval.as_secs() < WINDOW_SECONDS as u64);
     }
 }

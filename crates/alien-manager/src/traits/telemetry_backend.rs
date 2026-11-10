@@ -38,4 +38,18 @@ pub trait TelemetryBackend: Send + Sync {
         caller: &TelemetryCaller,
         data: bytes::Bytes,
     ) -> Result<(), AlienError>;
+
+    /// Ingest OTLP metrics this manager pulled itself from a cloud provider's API (for example
+    /// CloudWatch) for the deployment in `caller`.
+    ///
+    /// Only the manager's own loops call this; telemetry a deployment sends never reaches it.
+    /// So a backend may keep these metrics apart from deployment-supplied metrics and trust
+    /// their resource attributes. Wrappers must forward it to the backend they wrap.
+    async fn ingest_cloud_metrics(
+        &self,
+        caller: &TelemetryCaller,
+        data: bytes::Bytes,
+    ) -> Result<(), AlienError> {
+        self.ingest(TelemetrySignal::Metrics, caller, data).await
+    }
 }
