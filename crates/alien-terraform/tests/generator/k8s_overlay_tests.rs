@@ -101,7 +101,7 @@ fn eks_overlay_use_default_network_emits_az_filtered_default_vpc_subnets() {
     //   - aws_availability_zones.<label>_eks_supported {
     //       exclude_zone_ids = var.unsupported_availability_zone_ids
     //     }
-    //   - aws_subnets.<label>_default filtered by VPC id + AZ id
+    //   - aws_subnets.<label>_default filtered by VPC id, default-for-az and AZ id
     //   - subnet_ids ternary that routes through the data source when
     //     network_mode == "use-default".
     //

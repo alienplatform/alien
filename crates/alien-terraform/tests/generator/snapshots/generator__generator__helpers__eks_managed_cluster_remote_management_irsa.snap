@@ -624,6 +624,13 @@ data "aws_subnets" "kubernetes_default" {
   }
 
   filter {
+    name = "default-for-az"
+    values = [
+      "true"
+    ]
+  }
+
+  filter {
     name   = "availability-zone-id"
     values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
   }
