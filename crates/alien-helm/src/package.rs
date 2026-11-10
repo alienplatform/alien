@@ -28,6 +28,23 @@ pub struct PackageDefaults<'a> {
     /// (`runtime.image.pullWithManagementToken`), for an image served by the
     /// manager itself.
     pub registry_pull_secret: bool,
+    /// The setup this chart version carries. It goes into `Chart.yaml`
+    /// annotations, which `--reuse-values` cannot keep stale, and the Operator
+    /// reads it from its environment.
+    pub setup: Option<SetupDefault<'a>>,
+}
+
+/// The setup a packaged chart was built for.
+#[derive(Debug, Clone, Copy)]
+pub struct SetupDefault<'a> {
+    /// Release the chart was built from.
+    pub release_id: &'a str,
+    /// Setup target the chart was generated for.
+    pub target: &'a str,
+    /// Setup compatibility fingerprint.
+    pub fingerprint: &'a str,
+    /// Fingerprint algorithm version.
+    pub fingerprint_version: u32,
 }
 
 /// Operator image reference split the way the chart values expect it.
@@ -69,6 +86,28 @@ pub fn apply_package_defaults(
             "appVersion: \"0.1.0\"\n",
             &format!("appVersion: {}\n", quote(version)?),
         )?;
+    }
+
+    if let Some(setup) = defaults.setup {
+        let chart_yaml = file_mut(&mut chart, "Chart.yaml")?;
+        let entries = format!(
+            "  setup.alien.dev/release-id: {}\n  setup.alien.dev/target: {}\n  setup.alien.dev/fingerprint: {}\n  setup.alien.dev/fingerprint-version: {}\n",
+            quote(setup.release_id)?,
+            quote(setup.target)?,
+            quote(setup.fingerprint)?,
+            quote(&setup.fingerprint_version.to_string())?,
+        );
+        // Chart.yaml allows one `annotations` map; the product chart already has one.
+        match chart_yaml.find("\nannotations:\n") {
+            Some(at) => chart_yaml.insert_str(at + "\nannotations:\n".len(), &entries),
+            None => {
+                if !chart_yaml.ends_with('\n') {
+                    chart_yaml.push('\n');
+                }
+                chart_yaml.push_str("annotations:\n");
+                chart_yaml.push_str(&entries);
+            }
+        }
     }
 
     let values = file_mut(&mut chart, "values.yaml")?;

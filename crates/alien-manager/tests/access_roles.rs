@@ -426,6 +426,7 @@ async fn vault_routes_refuse_deployer_values_and_preserve_shared_secrets() {
                 setup_fingerprint_version: 1,
                 activation_status: None,
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: Default::default(),
             },
         )
@@ -539,6 +540,7 @@ async fn vault_router(
                 setup_fingerprint_version: 1,
                 activation_status: None,
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: Default::default(),
             },
         )

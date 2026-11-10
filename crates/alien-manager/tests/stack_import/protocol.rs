@@ -28,6 +28,7 @@ async fn protocol_record(fixture: &Fixture, name: &str, version: u32) -> String 
                 setup_fingerprint_version: body.setup_fingerprint_version,
                 activation_status: Some("provisioning".into()),
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: Default::default(),
             },
         )

@@ -35,7 +35,7 @@ pub use generator::{
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,
-    PackageDefaults,
+    PackageDefaults, SetupDefault,
 };
 pub use registry::HelmRegistry;
 pub use signing::{allowed_values, SignedChartPins, LEDGER_KEY, SETTINGS_KEY};

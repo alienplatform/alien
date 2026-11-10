@@ -1299,6 +1299,12 @@ data:
   stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
+  {{- with .Chart.Annotations }}
+  {{- if index . "setup.alien.dev/release-id" }}
+  setup-release-id: {{ index . "setup.alien.dev/release-id" | quote }}
+  setup-fingerprint: {{ index . "setup.alien.dev/fingerprint" | quote }}
+  {{- end }}
+  {{- end }}
 
 === templates/deployment.yaml ===
 {{- include "deployment.validateRuntimeIdentity" . -}}
@@ -1451,6 +1457,20 @@ spec:
               value: "helm"
             - name: OPERATOR_HELM_RELEASE
               value: {{ .Release.Name | quote }}
+            {{- with .Chart.Annotations }}
+            {{- if index . "setup.alien.dev/fingerprint" }}
+            - name: OPERATOR_SETUP_RELEASE_FILE
+              value: /etc/deployment/config/setup-release-id
+            - name: OPERATOR_SETUP_FINGERPRINT_FILE
+              value: /etc/deployment/config/setup-fingerprint
+            - name: OPERATOR_SETUP_TARGET
+              value: {{ index . "setup.alien.dev/target" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT
+              value: {{ index . "setup.alien.dev/fingerprint" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT_VERSION
+              value: {{ index . "setup.alien.dev/fingerprint-version" | quote }}
+            {{- end }}
+            {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}

@@ -315,6 +315,33 @@ pub struct SyncRequest {
     /// release declares them instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations_config: Option<crate::OperationsConfig>,
+    /// The setup the installed chart carries. An observation, never a grant:
+    /// the manager decides whether it completes a pending setup update.
+    /// Absent when the Operator was not installed from a chart that records it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_setup: Option<InstalledSetup>,
+}
+
+/// The setup an installed chart was built for, read from the Operator's own
+/// environment. It changes only when the chart's setup changes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledSetup {
+    /// Release the chart was built from.
+    pub release_id: String,
+    /// Setup target the chart was generated for.
+    pub setup_target: String,
+    /// Setup compatibility fingerprint embedded in the chart.
+    pub setup_fingerprint: String,
+    /// Fingerprint algorithm version.
+    pub setup_fingerprint_version: u32,
+    /// Helm release name the chart is installed as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_name: Option<String>,
+    /// Kubernetes namespace of the Helm release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// Where the Operator read the application identity from.
@@ -537,6 +564,7 @@ mod tests {
             operator_version: None,
             operations_report: None,
             operations_config: None,
+            installed_setup: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -753,6 +781,7 @@ mod tests {
             operator_version: None,
             operations_report: None,
             operations_config: None,
+            installed_setup: None,
         };
         let input = SyncInput::builder(request)
             .operator_image(OperatorImageReport {
@@ -790,6 +819,7 @@ mod tests {
             operator_version: None,
             operations_report: None,
             operations_config: None,
+            installed_setup: None,
         };
 
         let value = serde_json::to_value(SyncInput::builder(request).build()).unwrap();
@@ -875,6 +905,7 @@ mod tests {
                 }],
             }),
             operations_config: None,
+            installed_setup: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
