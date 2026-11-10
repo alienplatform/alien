@@ -1270,6 +1270,10 @@ pub(in crate::routes) mod tests {
         let received = reconciled.clone();
         let reconciled_record = record.clone();
         let outcome_targets = targets.clone();
+        // These tests are about the report, not where a settled deployment goes next.
+        store
+            .expect_retarget_settled_deployment()
+            .returning(|_, _, _, _| Ok(false));
         store.expect_reconcile().returning(move |_, data| {
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {
@@ -1540,6 +1544,10 @@ pub(in crate::routes) mod tests {
         store.expect_renew_lease().returning(|_, _, _, _| Ok(()));
         let received = reconciled.clone();
         let reconciled_record = record.clone();
+        // These tests are about the report, not where a settled deployment goes next.
+        store
+            .expect_retarget_settled_deployment()
+            .returning(|_, _, _, _| Ok(false));
         store.expect_reconcile().returning(move |_, data| {
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {
