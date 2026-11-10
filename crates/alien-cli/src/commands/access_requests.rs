@@ -11,8 +11,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     AccessRequestStatus, ApproveAccessRequestBody, CreateAccessRequest, CreateAccessRequestMaxRisk,
-    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, DenyAccessRequestBody,
-    RevokeAccessRequest,
+    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, RevokeAccessRequest,
 };
 use alien_platform_api::SdkResultExt as _;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -249,9 +248,6 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
     }
 }
 
-/// Recorded with the decision so the audit trail shows where it was made.
-const DECISION_METHOD: &str = "cli";
-
 fn approved_for_minutes(duration: Option<&str>) -> Result<Option<u64>> {
     let Some(duration) = duration else {
         return Ok(None);
@@ -275,7 +271,6 @@ async fn approve_task(
     json: bool,
 ) -> Result<()> {
     let body: ApproveAccessRequestBody = serde_json::from_value(serde_json::json!({
-        "method": DECISION_METHOD,
         "approvedForMinutes": approved_for_minutes(duration)?,
     }))
     .into_alien_error()
@@ -315,18 +310,11 @@ async fn deny_task(
     id: &str,
     json: bool,
 ) -> Result<()> {
-    let body: DenyAccessRequestBody =
-        serde_json::from_value(serde_json::json!({ "method": DECISION_METHOD }))
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "Invalid deny request".to_string(),
-            })?;
     let request = sdk_client
         .deny_access_request()
         .id(id)
         .workspace(workspace)
-        .body(body)
+        .body(serde_json::Map::new())
         .send()
         .await
         .into_sdk_error()
