@@ -13,7 +13,7 @@ use alien_core::sync::InstalledSetup;
 use alien_core::{
     Platform, ResourceLifecycle, SetupReportRefusal, SetupUpdateAuthorization, Stack,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use tracing::{info, warn};
 
 use super::stack::{
@@ -215,10 +215,12 @@ async fn apply_report(
     // Whether a chart can carry the waiting release depends on the release,
     // not on which chart reported, so it is recorded from the waiting
     // release's own target. A waiting release that is gone or cannot be
-    // prepared carries no verdict. A change is written alone; the report
-    // repeats on the next sync and is handled against the updated record.
+    // prepared carries no verdict. A store error says nothing about the
+    // release, so it keeps the stored verdict and fails this report; the
+    // next sync repeats it. A change is written alone; the report repeats on
+    // the next sync and is handled against the updated record.
     let waiting_target =
-        target_of_release(state, subject, deployment, settings, stack_state, waiting).await;
+        target_of_release(state, subject, deployment, settings, stack_state, waiting).await?;
     let required = waiting_target
         .as_ref()
         .ok()
@@ -247,7 +249,7 @@ async fn apply_report(
             stack_state,
             &report.release_id,
         )
-        .await
+        .await?
     };
     let target = match target {
         Ok(target) => target,
@@ -284,7 +286,8 @@ async fn apply_report(
 }
 
 /// The stack `release_id` prepares to for this deployment, or the reason it
-/// cannot be prepared.
+/// cannot be prepared. The outer error is a failure to read the release, which
+/// says nothing about the release itself.
 async fn target_of_release(
     state: &AppState,
     subject: &Subject,
@@ -292,20 +295,23 @@ async fn target_of_release(
     settings: &alien_core::StackSettings,
     stack_state: &alien_core::StackState,
     release_id: &str,
-) -> Result<Stack, String> {
+) -> Result<Result<Stack, String>, AlienError> {
     let release = state
         .release_store
         .get_release(subject, release_id)
         .await
-        .map_err(|error| error.to_string())?;
+        .context(crate::error::ErrorData::InternalError {
+            message: format!("Could not read release {release_id}"),
+        })
+        .map_err(|error| error.into_generic())?;
     let Some(release) = release else {
-        return Err(format!(
+        return Ok(Err(format!(
             "Release {release_id} is unknown. Upgrade to the chart version the deployment is waiting for."
-        ));
+        )));
     };
-    prepare_target(&release, deployment, settings, stack_state)
+    Ok(prepare_target(&release, deployment, settings, stack_state)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string()))
 }
 
 /// The chart matches what runs, or no update waits: a stale refusal no longer
@@ -887,6 +893,7 @@ pub(super) mod tests {
         installed_release: String,
         waiting_release: String,
         written: std::sync::Arc<std::sync::Mutex<Vec<alien_core::RuntimeMetadata>>>,
+        db: std::sync::Arc<crate::stores::sqlite::SqliteDatabase>,
         _temp: tempfile::TempDir,
     }
 
@@ -982,7 +989,7 @@ pub(super) mod tests {
                     temp.path().to_path_buf(),
                 ),
             ),
-            db,
+            db.clone(),
         )
         .await;
         let subject = Subject {
@@ -999,6 +1006,7 @@ pub(super) mod tests {
             installed_release,
             waiting_release,
             written,
+            db,
             _temp: temp,
         }
     }
@@ -1068,6 +1076,33 @@ pub(super) mod tests {
         let written = f.written.lock().expect("log");
         assert_eq!(written.len(), 1);
         assert!(written[0].cloud_setup_required.is_none());
+    }
+
+    /// Reading the waiting release fails (a store error, not a missing
+    /// release): that says nothing about the release, so the stored verdict
+    /// stays and nothing is written. The next sync repeats the report.
+    #[tokio::test]
+    async fn a_store_error_reading_the_waiting_release_keeps_the_verdict() {
+        let mut f = waiting_fixture().await;
+        f.record
+            .runtime_metadata
+            .as_mut()
+            .expect("metadata")
+            .cloud_setup_required = Some(alien_core::CloudSetupRequired {
+            release_id: f.waiting_release.clone(),
+            reason: "kept".to_string(),
+        });
+        f.db.execute("ALTER TABLE releases RENAME TO releases_unavailable")
+            .await
+            .expect("break the release table");
+        let mut installed = report(&f.installed_release);
+        installed.release_name = None;
+        let result = apply_report(&f.state, &f.subject, &f.record, &installed).await;
+        assert!(result.is_err(), "the store error surfaces: {result:?}");
+        assert!(
+            f.written.lock().expect("log").is_empty(),
+            "a store error writes nothing, so the verdict stays"
+        );
     }
 
     /// A write that loses to a concurrent change wrote nothing, but the record
