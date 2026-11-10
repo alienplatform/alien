@@ -414,8 +414,12 @@ impl AwsAiController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider, StackExecutor,
+        StackResourceStateExt,
+    };
     use alien_aws_clients::bedrock::{BedrockAvailabilityStatus, MockBedrockApi};
+    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 
     fn response(
         agreement: Option<&str>,
@@ -727,5 +731,120 @@ mod tests {
             AiModelAvailability::Available
         );
         assert_eq!(data.status.health, ObservedHealth::Healthy);
+    }
+
+    /// A Running Bedrock AI resource in a stack, as the state an update carries.
+    fn running_ai_stack(
+        controller: AwsAiController,
+    ) -> (alien_core::Stack, alien_core::StackState) {
+        let ai = Ai::new("llm".to_string()).build();
+        let stack = alien_core::Stack::new("ai".to_string())
+            .add(ai.clone(), alien_core::ResourceLifecycle::Live)
+            .build();
+        let mut saved = alien_core::StackResourceState::new_pending(
+            "ai".to_string(),
+            alien_core::Resource::new(ai),
+            Some(alien_core::ResourceLifecycle::Live),
+            vec![],
+        );
+        saved.status = ResourceStatus::Running;
+        saved
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        let mut state = alien_core::StackState::new(Platform::Aws);
+        state.resources.insert("llm".to_string(), saved);
+        (stack, state)
+    }
+
+    fn observing_executor(
+        stack: &alien_core::Stack,
+        provider: MockPlatformServiceProvider,
+    ) -> StackExecutor {
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        StackExecutor::builder(
+            stack,
+            alien_core::ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+        )
+        .deployment_config(&config)
+        .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+        .service_provider(Arc::new(provider))
+        .build()
+        .unwrap()
+    }
+
+    /// An update observes its untouched resources every 30 seconds. The model lookup is spaced
+    /// 15 minutes apart, so the time of the last lookup must survive from one observation to
+    /// the next or every observation repeats it.
+    #[tokio::test]
+    async fn an_observation_remembers_when_models_were_last_looked_up() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock
+            .expect_get_foundation_model_availability()
+            .returning(|_| Ok(available()));
+        bedrock
+            .expect_list_inference_profiles()
+            .returning(|| Ok(all_claude_profiles()));
+        let bedrock = Arc::new(bedrock);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_bedrock_client()
+            .times(1)
+            .returning(move |_| Ok(bedrock.clone()));
+        let (stack, state) = running_ai_stack(AwsAiController {
+            state: AwsAiState::Ready,
+            region: Some("us-west-2".to_string()),
+            ..Default::default()
+        });
+        let executor = observing_executor(&stack, provider);
+
+        let first = executor.observe_running(state).await.unwrap();
+        let second = executor.observe_running(first.state.clone()).await.unwrap();
+
+        assert_eq!(first.heartbeats.len(), 1);
+        assert_eq!(
+            second.heartbeats.len(),
+            1,
+            "the second observation still reports, from what it remembers"
+        );
+        let remembered: AwsAiController = first.state.resources["llm"]
+            .get_internal_controller_typed()
+            .unwrap();
+        assert!(remembered.availability_observed_at.is_some());
+        assert_eq!(
+            second.state.resources["llm"].status,
+            ResourceStatus::Running
+        );
+    }
+
+    /// An observation that fails must leave the resource as it was: Running, with no error,
+    /// so a check that cannot run does not fail a resource or an update.
+    #[tokio::test]
+    async fn a_failed_observation_leaves_the_state_as_it_was() {
+        // No region: the Ready handler fails without a retry.
+        let (stack, state) = running_ai_stack(AwsAiController {
+            state: AwsAiState::Ready,
+            region: None,
+            ..Default::default()
+        });
+        let before = serde_json::to_value(&state).unwrap();
+        let executor = observing_executor(&stack, MockPlatformServiceProvider::new());
+
+        let observation = executor.observe_running(state).await.unwrap();
+
+        assert!(observation.heartbeats.is_empty());
+        assert_eq!(serde_json::to_value(&observation.state).unwrap(), before);
+        assert_eq!(
+            observation.state.resources["llm"].status,
+            ResourceStatus::Running
+        );
     }
 }

@@ -81,6 +81,17 @@ pub struct StepResult {
     pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
+/// What [`StackExecutor::observe_running`] saw.
+#[derive(Debug)]
+pub struct RunningObservation {
+    /// The state it was given, with the controller state of every resource whose check
+    /// succeeded. Anything a controller keeps between checks, such as the time of its last
+    /// slow lookup, is in it.
+    pub state: StackState,
+    /// Heartbeats the checks emitted.
+    pub heartbeats: Vec<ResourceHeartbeat>,
+}
+
 /// Result of run_until_synced that includes the final state even on failure
 #[derive(Debug)]
 pub struct CompletionResult {
@@ -1853,13 +1864,34 @@ impl StackExecutor {
         self.step_inner(state, false, false).await
     }
 
-    /// Runs the Ready handler of every Running resource and returns only the
-    /// heartbeats they emit. Nothing is planned and no other resource is
-    /// stepped. The resulting state is dropped, so a failed check here cannot
-    /// mark a resource failed or end an update that is in progress: the caller
-    /// keeps the state it already has.
-    pub async fn observe_running(&self, state: StackState) -> Result<Vec<ResourceHeartbeat>> {
-        Ok(self.step_inner(state, false, true).await?.heartbeats)
+    /// Runs the Ready handler of every Running resource. Nothing is planned and no other
+    /// resource is stepped.
+    ///
+    /// A check that fails changes nothing: it cannot mark a resource failed or end an update
+    /// that is in progress. A check that succeeds hands back the controller's new state, so
+    /// work a controller spaces out over many checks (a lookup it repeats every 15 minutes) is
+    /// not repeated on every call. Only the controller state of a resource that was Running
+    /// before and is Running without an error after is taken. The rest of the returned state
+    /// is the state that was passed in.
+    pub async fn observe_running(&self, state: StackState) -> Result<RunningObservation> {
+        let observed = self.step_inner(state.clone(), false, true).await?;
+        let mut kept = state;
+        for (resource_id, after) in observed.next_state.resources {
+            let Some(before) = kept.resources.get_mut(&resource_id) else {
+                continue;
+            };
+            if before.status == ResourceStatus::Running
+                && after.status == ResourceStatus::Running
+                && after.error.is_none()
+                && after.retry_attempt == 0
+            {
+                before.internal_state = after.internal_state;
+            }
+        }
+        Ok(RunningObservation {
+            state: kept,
+            heartbeats: observed.heartbeats,
+        })
     }
 
     /// Continues controller states registered by an external setup engine

@@ -44,28 +44,35 @@ fn untouched_heartbeat_due(resource_prefix: &str) -> bool {
 /// runs the resources it changes, so without this a resource that is healthy and unchanged goes
 /// silent for as long as the update takes (a wait for a secret can take days) and then reads as
 /// stale or down. A read that fails is left out: it must not hold up the update.
+///
+/// What the controllers of the resources that were read remember between reads is kept in
+/// `stack_state`, so a controller that repeats a slow lookup every 15 minutes does not repeat it
+/// on every read. A read that fails leaves `stack_state` as it was.
 async fn untouched_heartbeats(
     executor: &StackExecutor,
-    stack_state: &StackState,
+    stack_state: &mut StackState,
     already_reported: &[ResourceHeartbeat],
 ) -> Vec<ResourceHeartbeat> {
     if !untouched_heartbeat_due(&stack_state.resource_prefix) {
         return vec![];
     }
-    match executor.observe_running(stack_state.clone()).await {
-        Ok(heartbeats) => heartbeats
-            .into_iter()
-            .filter(|heartbeat| {
-                !already_reported
-                    .iter()
-                    .any(|reported| reported.resource_id == heartbeat.resource_id)
-            })
-            .collect(),
+    let observation = match executor.observe_running(stack_state.clone()).await {
+        Ok(observation) => observation,
         Err(error) => {
             warn!(%error, "Could not read the running resources an update leaves alone");
-            vec![]
+            return vec![];
         }
-    }
+    };
+    *stack_state = observation.state;
+    observation
+        .heartbeats
+        .into_iter()
+        .filter(|heartbeat| {
+            !already_reported
+                .iter()
+                .any(|reported| reported.resource_id == heartbeat.resource_id)
+        })
+        .collect()
 }
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -479,7 +486,7 @@ pub async fn handle_updating(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for updating".to_string(),
         })
@@ -625,7 +632,8 @@ pub async fn handle_updating(
             .join(", ");
         info!(%summary, "Waiting for deployer secrets before starting workloads");
 
-        let heartbeats = untouched_heartbeats(&executor, &stack_state, &[]).await;
+        let heartbeats = untouched_heartbeats(&executor, &mut stack_state, &[]).await;
+        next.stack_state = Some(stack_state);
         next.status = DeploymentStatus::WaitingForSecrets;
         next.error =
             Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
@@ -692,7 +700,8 @@ pub async fn handle_updating(
         info!("Machines update is waiting for the first machine to join");
 
         let mut heartbeats = step_result.heartbeats;
-        let untouched = untouched_heartbeats(&executor, &step_result.next_state, &heartbeats).await;
+        let untouched =
+            untouched_heartbeats(&executor, &mut step_result.next_state, &heartbeats).await;
         heartbeats.extend(untouched);
         next.status = DeploymentStatus::WaitingForMachines;
         next.stack_state = Some(step_result.next_state);
@@ -856,7 +865,8 @@ pub async fn handle_updating(
     } else {
         // Still in progress
         let mut heartbeats = step_result.heartbeats;
-        let untouched = untouched_heartbeats(&executor, &step_result.next_state, &heartbeats).await;
+        let untouched =
+            untouched_heartbeats(&executor, &mut step_result.next_state, &heartbeats).await;
         heartbeats.extend(untouched);
         next.status = DeploymentStatus::Updating;
         next.stack_state = Some(step_result.next_state);

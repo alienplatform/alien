@@ -113,6 +113,18 @@ async fn run_to_completion(state: DeploymentState, config: DeploymentConfig) -> 
 }
 
 /// Helper to request retry on a failed deployment
+/// The record of a resource as JSON, without the test controller's count of Ready checks. An
+/// update reads the resources it leaves alone, and each read is one more check; nothing else
+/// about the record may change.
+fn without_ready_checks(resource: &alien_core::StackResourceState) -> serde_json::Value {
+    let mut record = serde_json::to_value(resource).unwrap();
+    record["_internal"]
+        .as_object_mut()
+        .expect("a controller state")
+        .remove("readyChecks");
+    record
+}
+
 fn request_retry(state: &mut DeploymentState) {
     state.retry_requested = true;
 }
@@ -585,8 +597,8 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
     );
     let resources = &state.stack_state.as_ref().unwrap().resources;
     assert_eq!(
-        serde_json::to_value(&resources["archive"]).unwrap(),
-        serde_json::to_value(frozen).unwrap()
+        without_ready_checks(&resources["archive"]),
+        without_ready_checks(&frozen)
     );
     assert!(!resources.contains_key("old-worker"));
     assert_eq!(
@@ -3778,8 +3790,8 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
         alien_core::ResourceStatus::Running
     );
     assert_eq!(
-        serde_json::to_value(&resources["archive"]).unwrap(),
-        serde_json::to_value(frozen).unwrap()
+        without_ready_checks(&resources["archive"]),
+        without_ready_checks(&frozen)
     );
     assert_eq!(
         deployer_reports(&running)[0].status,
