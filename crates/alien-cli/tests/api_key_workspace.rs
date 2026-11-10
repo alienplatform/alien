@@ -91,31 +91,25 @@ fn api_key_commands_discover_workspace_and_explicit_workspace_still_works() {
                     .header("authorization", "Bearer test-key");
                 then.status(204);
             });
-            let token = api.mock(|when, then| {
+            let grant = api.mock(|when, then| {
                 when.method(POST)
-                    .path("/v1/managers/mgr_0000000000000000000000000000/token")
+                    .path("/v1/managers/mgr_0000000000000000000000000000/data-grants")
                     .query_param("workspace", "demo")
                     .header("authorization", "Bearer test-key")
-                    .json_body(json!({"project":PROJECT}));
-                then.status(200).json_body(
-                    json!({"accessToken":"test-query-token", "expiresIn":3600,
-                    "tokenType":"Bearer", "managerUrl":api.base_url(), "databaseId":"db_test",
-                    "controlPlaneUrl":api.url("/v1")}),
-                );
+                    .json_body(json!({"projectId":PROJECT, "table":"logs", "action":"query"}));
+                then.status(200).json_body(json!({
+                    "grant":"test-data-grant", "expiresAt":"2999-01-01T00:00:00Z",
+                    "dataUrl":api.base_url(), "tenantId":"ws_000000000000000000000000",
+                    "databaseId":PROJECT, "tableId":"logs"
+                }));
             });
-            let splits = api.mock(|when, then| {
-                when.method(GET)
-                    .path("/v1/databases/db_test/splits")
-                    .header("authorization", "Bearer test-query-token");
-                then.status(200).json_body(json!({"splits":[]}));
-            });
-            let search = api.mock(|when, then| {
+            let query = api.mock(|when, then| {
                 when.method(POST)
-                    .path("/v1/logs/search")
-                    .header("authorization", "Bearer test-query-token");
-                then.status(200).json_body(
-                    json!({"hits":[], "num_hits":0, "elapsed_time_micros":1, "errors":[]}),
-                );
+                    .path(format!("/v2/databases/{PROJECT}/tables/logs/query"))
+                    .header("authorization", "Bearer test-data-grant");
+                then.status(200).json_body(json!({
+                    "rows":[], "rowMetadata":[], "coverage":{"complete":true}, "numHits":0
+                }));
             });
             let args = match operation {
                 "list" => vec!["api-keys", "--project", "demo-project", "--json", "list"],
@@ -156,9 +150,8 @@ fn api_key_commands_discover_workspace_and_explicit_workspace_still_works() {
             project.assert_hits(1);
             list.assert_hits(usize::from(operation == "list"));
             revoke.assert_hits(usize::from(operation == "revoke"));
-            token.assert_hits(if operation == "logs" { 2 } else { 0 });
-            splits.assert_hits(usize::from(operation == "logs"));
-            search.assert_hits(usize::from(operation == "logs"));
+            grant.assert_hits(usize::from(operation == "logs"));
+            query.assert_hits(usize::from(operation == "logs"));
         }
     }
 }

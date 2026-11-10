@@ -11,8 +11,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     AccessRequestStatus, ApproveAccessRequestBody, CreateAccessRequest, CreateAccessRequestMaxRisk,
-    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, DenyAccessRequestBody,
-    RevokeAccessRequest,
+    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, RevokeAccessRequest,
 };
 use alien_platform_api::SdkResultExt as _;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -249,9 +248,6 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
     }
 }
 
-/// Recorded with the decision so the audit trail shows where it was made.
-const DECISION_METHOD: &str = "cli";
-
 fn approved_for_minutes(duration: Option<&str>) -> Result<Option<u64>> {
     let Some(duration) = duration else {
         return Ok(None);
@@ -275,7 +271,6 @@ async fn approve_task(
     json: bool,
 ) -> Result<()> {
     let body: ApproveAccessRequestBody = serde_json::from_value(serde_json::json!({
-        "method": DECISION_METHOD,
         "approvedForMinutes": approved_for_minutes(duration)?,
     }))
     .into_alien_error()
@@ -315,18 +310,11 @@ async fn deny_task(
     id: &str,
     json: bool,
 ) -> Result<()> {
-    let body: DenyAccessRequestBody =
-        serde_json::from_value(serde_json::json!({ "method": DECISION_METHOD }))
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "Invalid deny request".to_string(),
-            })?;
     let request = sdk_client
         .deny_access_request()
         .id(id)
         .workspace(workspace)
-        .body(body)
+        .body(serde_json::Map::new())
         .send()
         .await
         .into_sdk_error()
@@ -1219,9 +1207,9 @@ mod tests {
         }
     }
 
-    /// A loopback platform API that answers `POST /v1/access-requests/ar_123/revoke`
-    /// with a canned status and body, recording the query string and request body
-    /// it received.
+    /// A loopback platform API that answers the revoke, approve and deny endpoints of
+    /// `ar_123` with a canned status and body, recording the query string and request
+    /// body it received.
     async fn fake_platform(
         status: u16,
         body: Value,
@@ -1231,7 +1219,7 @@ mod tests {
     ) {
         type Received = Arc<Mutex<Option<(Option<String>, Value)>>>;
 
-        async fn revoke(
+        async fn decide(
             State((status, body, received)): State<(u16, Value, Received)>,
             RawQuery(query): RawQuery,
             Json(request_body): Json<Value>,
@@ -1245,7 +1233,9 @@ mod tests {
 
         let received: Received = Arc::new(Mutex::new(None));
         let app = Router::new()
-            .route("/v1/access-requests/ar_123/revoke", post(revoke))
+            .route("/v1/access-requests/ar_123/revoke", post(decide))
+            .route("/v1/access-requests/ar_123/approve", post(decide))
+            .route("/v1/access-requests/ar_123/deny", post(decide))
             .with_state((status, body, received.clone()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1279,6 +1269,7 @@ mod tests {
                 "createdAt": "2026-10-01T00:00:00Z",
                 "queuedBy": null,
                 "queuedAt": null,
+                "approver": "team",
                 "approvedBy": null,
                 "deniedBy": null,
                 "revokedBy": {
@@ -1360,6 +1351,98 @@ mod tests {
             rendered.contains("revoking access request 'ar_123'"),
             "{rendered}"
         );
+    }
+
+    fn decided_request(status: &str, approved_by: Value, denied_by: Value) -> Value {
+        serde_json::json!({
+            "id": "ar_123",
+            "deploymentId": "dep_1",
+            "title": "Restart api",
+            "reason": "api is wedged",
+            "status": status,
+            "operationPattern": null,
+            "maxRisk": null,
+            "commands": [],
+            "debugGrant": null,
+            "approvedUntil": null,
+            "agentSessionId": null,
+            "createdAt": "2026-10-01T00:00:00Z",
+            "queuedBy": null,
+            "queuedAt": null,
+            "approver": "team",
+            "approvedBy": approved_by,
+            "deniedBy": denied_by,
+            "revokedBy": null,
+            "remediationPlanId": null,
+            "requestedExpiresAt": null,
+            "requesterId": "usr_1",
+            "requesterKind": null
+        })
+    }
+
+    #[tokio::test]
+    async fn approve_sends_only_the_rounded_up_duration_and_reads_the_decider() {
+        let mut approved = decided_request(
+            "customer-approved",
+            serde_json::json!({
+                "method": "cli",
+                "actorId": "usr_2",
+                "slack": null,
+                "at": "2026-10-01T00:05:00Z"
+            }),
+            Value::Null,
+        );
+        approved["approvalMethod"] = serde_json::json!("cli");
+        let (client, received) = fake_platform(200, approved).await;
+
+        approve_task(&client, "acme", "ar_123", Some("90s"), true)
+            .await
+            .expect("an approved response should succeed");
+
+        let (query, body) = received
+            .lock()
+            .expect("read the recorded request")
+            .clone()
+            .expect("the approve endpoint should have been called");
+        assert_eq!(query.as_deref(), Some("workspace=acme"));
+        assert_eq!(body, serde_json::json!({ "approvedForMinutes": 2 }));
+    }
+
+    #[tokio::test]
+    async fn deny_sends_an_empty_body_and_reads_a_slack_decider() {
+        let (client, received) = fake_platform(
+            200,
+            decided_request(
+                "rejected",
+                Value::Null,
+                serde_json::json!({
+                    "method": "slack",
+                    "actorId": null,
+                    "slack": {
+                        "userId": "U123",
+                        "userName": null,
+                        "teamId": "T123",
+                        "teamName": null,
+                        "channelId": "C123",
+                        "messageTs": "1790000000.000100",
+                        "app": "alien"
+                    },
+                    "at": "2026-10-01T00:05:00Z"
+                }),
+            ),
+        )
+        .await;
+
+        deny_task(&client, "acme", "ar_123", true)
+            .await
+            .expect("a denied response should succeed");
+
+        let (_, body) = received
+            .lock()
+            .expect("read the recorded request")
+            .clone()
+            .expect("the deny endpoint should have been called");
+        assert_eq!(body, serde_json::json!({}));
     }
 }
 

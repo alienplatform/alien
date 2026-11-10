@@ -107,39 +107,43 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
 }
 
 #[test]
-fn json_logs_suppress_the_cross_workspace_notice_and_search_once() {
+fn json_logs_suppress_the_cross_workspace_notice_and_query_once() {
     let server = MockServer::start();
     const MANAGER: &str = "mgr_0000000000000000000000000000";
+    const PROJECT: &str = "prj_0000000000000000000000000001";
     server.mock(|when, then| {
-        when.method(GET).path(format!("/v1/managers/{MANAGER}"));
-        then.json_body(
-            json!({"id":MANAGER,"name":"acme-manager","url":server.base_url(),
-            "workspaceId":"ws_000000000000000000000000","createdAt":"2026-01-01T00:00:00Z",
-            "defaultProjectCount":0,"managedDeploymentCount":1,"managementConfigs":{},
-            "isSystem":false,"status":"healthy","targets":["machines"]}),
-        );
+        when.method(GET).path("/v1/projects/acme-app");
+        then.json_body(json!({
+            "id": PROJECT, "name": "acme-app",
+            "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z"
+        }));
     });
     server.mock(|when, then| {
-        when.method(POST).path(format!("/v1/managers/{MANAGER}/token"));
-        then.json_body(json!({"accessToken":"test-token","expiresIn":3600,"tokenType":"Bearer",
-            "managerUrl":server.base_url(),"databaseId":"db_test","controlPlaneUrl":server.url("/v1")}));
-    });
-    server.mock(|when, then| {
-        when.method(GET).path("/v1/databases/db_test/splits");
-        then.json_body(json!({"splits":[]}));
-    });
-    let search = server.mock(|when, then| {
         when.method(POST)
-            .path("/v1/logs/search")
-            .json_body_partial(json!({"max_hits":7}).to_string());
-        then.json_body(json!({"num_hits":0,"hits":[],"elapsed_time_micros":1,"errors":[]}));
+            .path(format!("/v1/managers/{MANAGER}/data-grants"))
+            .json_body(json!({"projectId": PROJECT, "table": "logs", "action": "query"}));
+        then.json_body(json!({
+            "grant": "data-grant-token", "expiresAt": "2999-01-01T00:00:00Z",
+            "dataUrl": server.base_url(), "tenantId": "ws_000000000000000000000000",
+            "databaseId": PROJECT, "tableId": "logs"
+        }));
+    });
+    let query = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/v2/databases/{PROJECT}/tables/logs/query"))
+            .header("authorization", "Bearer data-grant-token")
+            .json_body_partial(json!({"limit": 7}).to_string());
+        then.json_body(json!({
+            "rows": [], "rowMetadata": [], "coverage": {"complete": true},
+            "numHits": 0, "nextCursor": null,
+        }));
     });
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join(".alien")).unwrap();
     std::fs::write(
         directory.path().join(".alien/project.json"),
         json!({
-            "workspace":"other-workspace", "projectId":"prj_0000000000000000000000000000",
+            "workspace":"other-workspace", "projectId":"prj_0000000000000000000000000002",
             "projectName":"linked-app", "rootDirectory":null
         })
         .to_string(),
@@ -152,6 +156,8 @@ fn json_logs_suppress_the_cross_workspace_notice_and_search_once() {
             "--workspace",
             "acme",
             "logs",
+            "--project",
+            "acme-app",
             "--manager",
             MANAGER,
             "--limit",
@@ -178,5 +184,5 @@ fn json_logs_suppress_the_cross_workspace_notice_and_search_once() {
     );
     let value: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
     assert_eq!(value["logs"], json!([]));
-    search.assert_hits(1);
+    query.assert_hits(1);
 }
