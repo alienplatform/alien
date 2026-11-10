@@ -22,7 +22,7 @@ use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
     PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
     AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
-    AWS_LIFECYCLE_RULE_LIMIT,
+    AWS_LIFECYCLE_RULE_LIMIT, AWS_SIGNED_UPLOAD_HEADERS, SIGNED_UPLOAD_EXPOSED_HEADERS,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -141,44 +141,66 @@ impl CfEmitter for AwsStorageEmitter {
             CfExpression::object([("Rules", CfExpression::List(lifecycle_rules))]),
         );
 
-        if !storage.cors_allowed_origins.is_empty() {
+        if storage.has_cors() {
+            let mut cors_rules = Vec::new();
+            if !storage.cors_allowed_origins.is_empty() {
+                cors_rules.push(CfExpression::object([
+                    (
+                        "AllowedHeaders",
+                        CfExpression::list([CfExpression::from("*")]),
+                    ),
+                    (
+                        "AllowedMethods",
+                        CfExpression::list([CfExpression::from("GET"), CfExpression::from("HEAD")]),
+                    ),
+                    (
+                        "AllowedOrigins",
+                        CfExpression::list(
+                            storage
+                                .cors_allowed_origins
+                                .iter()
+                                .cloned()
+                                .map(CfExpression::from),
+                        ),
+                    ),
+                    (
+                        "ExposedHeaders",
+                        CfExpression::list([
+                            CfExpression::from("ETag"),
+                            CfExpression::from("Content-Range"),
+                            CfExpression::from("Accept-Ranges"),
+                        ]),
+                    ),
+                    ("MaxAge", CfExpression::Integer(3600)),
+                ]));
+            }
+            if !storage.cors_upload_origins.is_empty() {
+                let strings = |values: &[&str]| {
+                    CfExpression::list(values.iter().map(|v| CfExpression::from(*v)))
+                };
+                cors_rules.push(CfExpression::object([
+                    ("AllowedHeaders", strings(AWS_SIGNED_UPLOAD_HEADERS)),
+                    (
+                        "AllowedMethods",
+                        CfExpression::list([CfExpression::from("PUT")]),
+                    ),
+                    (
+                        "AllowedOrigins",
+                        CfExpression::list(
+                            storage
+                                .cors_upload_origins
+                                .iter()
+                                .cloned()
+                                .map(CfExpression::from),
+                        ),
+                    ),
+                    ("ExposedHeaders", strings(SIGNED_UPLOAD_EXPOSED_HEADERS)),
+                    ("MaxAge", CfExpression::Integer(3600)),
+                ]));
+            }
             bucket.properties.insert(
                 "CorsConfiguration".to_string(),
-                CfExpression::object([(
-                    "CorsRules",
-                    CfExpression::list([CfExpression::object([
-                        (
-                            "AllowedHeaders",
-                            CfExpression::list([CfExpression::from("*")]),
-                        ),
-                        (
-                            "AllowedMethods",
-                            CfExpression::list([
-                                CfExpression::from("GET"),
-                                CfExpression::from("HEAD"),
-                            ]),
-                        ),
-                        (
-                            "AllowedOrigins",
-                            CfExpression::list(
-                                storage
-                                    .cors_allowed_origins
-                                    .iter()
-                                    .cloned()
-                                    .map(CfExpression::from),
-                            ),
-                        ),
-                        (
-                            "ExposedHeaders",
-                            CfExpression::list([
-                                CfExpression::from("ETag"),
-                                CfExpression::from("Content-Range"),
-                                CfExpression::from("Accept-Ranges"),
-                            ]),
-                        ),
-                        ("MaxAge", CfExpression::Integer(3600)),
-                    ])]),
-                )]),
+                CfExpression::object([("CorsRules", CfExpression::List(cors_rules))]),
             );
         }
 

@@ -11,6 +11,7 @@ use alien_core::{
     LifecycleRule as StorageLifecycleRule, ObservedHealth, Platform, ProviderLifecycleState,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
     Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+    GCP_SIGNED_UPLOAD_HEADERS,
 };
 use alien_gcp_clients::gcs::{
     Bucket, CorsRule, GcsApi, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition,
@@ -21,11 +22,29 @@ use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
-fn read_cors(origins: &[String]) -> Vec<CorsRule> {
-    if origins.is_empty() {
-        return Vec::new();
+/// The bucket's browser CORS rules: a read rule for `cors_allowed_origins`, then a
+/// signed-upload rule for `cors_upload_origins`. Empty when neither is declared.
+fn browser_cors(config: &Storage) -> Vec<CorsRule> {
+    let mut rules = Vec::new();
+    if !config.cors_allowed_origins.is_empty() {
+        rules.push(read_cors(&config.cors_allowed_origins));
     }
-    vec![CorsRule {
+    if !config.cors_upload_origins.is_empty() {
+        rules.push(CorsRule {
+            origin: config.cors_upload_origins.clone(),
+            method: vec!["PUT".into()],
+            response_header: GCP_SIGNED_UPLOAD_HEADERS
+                .iter()
+                .map(|header| header.to_string())
+                .collect(),
+            max_age_seconds: 3600,
+        });
+    }
+    rules
+}
+
+fn read_cors(origins: &[String]) -> CorsRule {
+    CorsRule {
         origin: origins.to_vec(),
         method: vec!["GET".into(), "HEAD".into()],
         response_header: vec![
@@ -36,7 +55,7 @@ fn read_cors(origins: &[String]) -> Vec<CorsRule> {
             "If-Range".into(),
         ],
         max_age_seconds: 3600,
-    }]
+    }
 }
 
 /// Generates the full, prefixed GCP bucket name.
@@ -57,8 +76,8 @@ pub struct GcpStorageController {
     #[serde(default)]
     pub(crate) lifecycle_revision: Option<String>,
 
-    /// A create/update response confirmed the full browser-read CORS contract. Older
-    /// controllers ignored declared origins; repair their nonempty declarations once.
+    /// A create/update response confirmed the full browser CORS contract (read and signed-upload
+    /// rules). Older controllers ignored declared origins; repair their nonempty declarations once.
     /// This is a capability receipt, not a copy of desired configuration.
     #[serde(default)]
     pub(crate) read_cors_applied: bool,
@@ -113,8 +132,8 @@ impl GcpStorageController {
             ),
         });
 
-        if !config.cors_allowed_origins.is_empty() {
-            bucket.cors = Some(read_cors(&config.cors_allowed_origins));
+        if config.has_cors() {
+            bucket.cors = Some(browser_cors(&config));
         }
 
         // Configure versioning if enabled
@@ -139,8 +158,8 @@ impl GcpStorageController {
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
-        self.read_cors_applied = created_bucket.cors.as_deref().unwrap_or_default()
-            == read_cors(&config.cors_allowed_origins);
+        self.read_cors_applied =
+            created_bucket.cors.as_deref().unwrap_or_default() == browser_cors(&config);
         let lifecycle_confirmed =
             gcs_lifecycle_matches(created_bucket.lifecycle.as_ref(), &lifecycle);
         self.notifications_managed = !config.notifications.is_empty();
@@ -324,9 +343,10 @@ impl GcpStorageController {
         let mut needs_update = false;
 
         let cors_changed = config.cors_allowed_origins != prev_config.cors_allowed_origins
+            || config.cors_upload_origins != prev_config.cors_upload_origins
             || (may_repair_lifecycle(ctx, &config.id)
                 && !self.read_cors_applied
-                && !config.cors_allowed_origins.is_empty());
+                && config.has_cors());
         if cors_changed {
             if !may_repair_lifecycle(ctx, &config.id) {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -334,7 +354,7 @@ impl GcpStorageController {
                     message: "Storage CORS is setup-owned; apply the updated setup package to change this Frozen bucket".into(),
                 }));
             }
-            bucket_patch.cors = Some(read_cors(&config.cors_allowed_origins));
+            bucket_patch.cors = Some(browser_cors(&config));
             needs_update = true;
         }
 
@@ -371,8 +391,7 @@ impl GcpStorageController {
                     resource_id: Some(config.id.clone()),
                 })?;
             if cors_changed
-                && updated_bucket.cors.as_deref().unwrap_or_default()
-                    != read_cors(&config.cors_allowed_origins)
+                && updated_bucket.cors.as_deref().unwrap_or_default() != browser_cors(&config)
             {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
@@ -724,7 +743,7 @@ impl GcpStorageController {
         let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
         let desired = gcs_lifecycle_revision(&config.id, &lifecycle)?;
         Ok(self.lifecycle_revision.as_deref() != Some(desired.as_str())
-            || (!self.read_cors_applied && !config.cors_allowed_origins.is_empty())
+            || (!self.read_cors_applied && config.has_cors())
             || (!self.notifications_managed && !config.notifications.is_empty()))
     }
 
@@ -1974,6 +1993,47 @@ mod lifecycle_prefix_tests {
     }
 
     #[tokio::test]
+    async fn signed_upload_cors_follows_the_read_rule_and_its_own_changes() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut config = storage(vec![]);
+        config.cors_allowed_origins = vec!["https://read.example".into()];
+        config.cors_upload_origins = vec!["https://upload.example".into()];
+        let mut run = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(GcpStorageController::default())
+            .platform(Platform::Gcp)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(
+            bodies.lock().unwrap()[0]["cors"],
+            json!([{
+                "origin": ["https://read.example"], "method": ["GET", "HEAD"],
+                "responseHeader": ["ETag", "Content-Range", "Accept-Ranges", "Range", "If-Range"], "maxAgeSeconds": 3600
+            }, {
+                "origin": ["https://upload.example"], "method": ["PUT"],
+                "responseHeader": ["Content-Type", "Content-MD5", "Content-Disposition", "Content-Encoding", "Cache-Control", "x-goog-content-length-range", "ETag"], "maxAgeSeconds": 3600
+            }])
+        );
+        config.cors_allowed_origins.clear();
+        config.cors_upload_origins = vec!["*".into()];
+        run.update(config.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(
+            bodies.lock().unwrap().last().unwrap()["cors"],
+            json!([{
+                "origin": ["*"], "method": ["PUT"],
+                "responseHeader": ["Content-Type", "Content-MD5", "Content-Disposition", "Content-Encoding", "Cache-Control", "x-goog-content-length-range", "ETag"], "maxAgeSeconds": 3600
+            }])
+        );
+        assert_eq!(run.status(), ResourceStatus::Running);
+    }
+
+    #[tokio::test]
     async fn browser_cors_create_replace_clear_and_frozen_gate() {
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let mut config = storage(vec![]);
@@ -2226,7 +2286,7 @@ mod lifecycle_prefix_tests {
         );
         assert_eq!(
             bodies[0]["cors"],
-            serde_json::to_value(super::read_cors(&desired.cors_allowed_origins)).unwrap()
+            serde_json::to_value(super::browser_cors(&desired)).unwrap()
         );
     }
 

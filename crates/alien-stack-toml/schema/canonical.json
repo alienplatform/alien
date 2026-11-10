@@ -2682,6 +2682,12 @@
           },
           "type": "array"
         },
+        "corsUploadOrigins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "encryptionKey": {
           "oneOf": [
             {

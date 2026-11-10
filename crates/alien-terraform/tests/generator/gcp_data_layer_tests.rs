@@ -658,3 +658,27 @@ fn gcp_storage_browser_cors() {
     snapshot_module("gcp_storage_browser_cors", &module);
     assert_terraform_valid(&module, "gcp_storage_browser_cors");
 }
+
+#[test]
+fn gcp_storage_signed_upload_cors() {
+    let stack = Stack::new("browser-storage".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "execution",
+            PermissionProfile::new().resource("uploads", ["storage/data-write"]),
+        ))
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("uploads".to_string())
+                .cors_allowed_origins(vec!["https://app.example.com".to_string()])
+                .cors_upload_origins(vec!["https://app.example.com".to_string()])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_storage_signed_upload_cors", &module);
+    assert_terraform_valid(&module, "gcp_storage_signed_upload_cors");
+}

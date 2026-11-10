@@ -87,6 +87,7 @@ fn stack_state_with_resource(
                 versioning: false,
                 lifecycle_rules: Vec::new(),
                 cors_allowed_origins: Vec::new(),
+                cors_upload_origins: Vec::new(),
                 notifications: Vec::new(),
                 encryption_key: None,
             }))
@@ -164,6 +165,7 @@ fn storage() -> Storage {
         versioning: false,
         lifecycle_rules: Vec::new(),
         cors_allowed_origins: Vec::new(),
+        cors_upload_origins: Vec::new(),
         notifications: Vec::new(),
         encryption_key: None,
     }

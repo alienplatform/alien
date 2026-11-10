@@ -20,6 +20,7 @@ versioning = true
 public-read = true
 encryption-key = "bucket-key"
 cors-allowed-origins = ["https://app.acme.example", "https://admin.acme.example"]
+cors-upload-origins = ["https://app.acme.example"]
 lifecycle-rules = [
   { prefix = "tmp/", days = 7 },
   { days = 365 },

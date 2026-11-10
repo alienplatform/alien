@@ -139,6 +139,9 @@ struct AzureStorageSettings {
     public: BTreeSet<Option<String>>,
     versioning: BTreeSet<Option<String>>,
     cors: BTreeMap<String, BTreeSet<Option<String>>>,
+    /// Signed-upload origins. Omitted when empty so existing setup digests are unchanged.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    upload_cors: BTreeMap<String, BTreeSet<Option<String>>>,
     expiry: BTreeMap<String, (ResourceLifecycle, Option<String>, Vec<LifecycleRule>)>,
 }
 
@@ -161,6 +164,13 @@ fn azure_storage_settings(stack: &Stack) -> AzureStorageSettings {
                 .or_default()
                 .insert(entry.enabled_when.clone());
         }
+        for origin in &storage.cors_upload_origins {
+            settings
+                .upload_cors
+                .entry(origin.clone())
+                .or_default()
+                .insert(entry.enabled_when.clone());
+        }
         if !storage.lifecycle_rules.is_empty() {
             settings.expiry.insert(
                 id.clone(),
@@ -176,6 +186,7 @@ fn azure_storage_settings(stack: &Stack) -> AzureStorageSettings {
     for gates in [&mut settings.public, &mut settings.versioning]
         .into_iter()
         .chain(settings.cors.values_mut())
+        .chain(settings.upload_cors.values_mut())
     {
         if gates.contains(&None) {
             gates.clear();
