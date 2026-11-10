@@ -22,7 +22,7 @@ use sha2::Sha256;
 use crate::dev::LogEntry;
 use crate::ids::sha256_hash;
 use crate::routes::AppState;
-use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
+use crate::traits::token_store::{TokenStore, TokenType};
 
 /// What issuing a commands key needs. A request handler builds it from
 /// [`AppState`]; the deployment loop, which has no request state, builds it
@@ -88,9 +88,8 @@ pub async fn ensure_with(
         tracing::warn!(%deployment_id, "The manager has no signing key, so it cannot issue the commands key a command receiver built before capability files needs");
         return None;
     }
-    // A revocation that lands between reading the generation and storing the
-    // key would leave a key of the old generation accepted, so the generation is
-    // read again after the key is stored.
+    // A revocation can land between reading the generation and storing the
+    // key; the store then refuses it and the key is derived again.
     for _ in 0..3 {
         let generation = match stores
             .token_store
@@ -113,18 +112,19 @@ pub async fn ensure_with(
                 return None;
             }
         }
+        // Stored only while the generation is still the one the key was
+        // derived at, so a key of a revoked generation never lands.
         let created = stores
             .token_store
-            .create_token(CreateTokenParams {
-                token_type: TokenType::CommandsReceiver,
-                key_prefix: raw[..12].to_string(),
-                key_hash: key_hash.clone(),
-                deployment_group_id: None,
-                deployment_id: Some(deployment_id.to_string()),
-            })
+            .create_commands_key(deployment_id, &raw[..12], &key_hash, generation)
             .await;
         match created {
-            Ok(_) => {}
+            Ok(Some(_)) => {
+                warn_vendor(stores, deployment_id, receivers).await;
+                return Some(raw);
+            }
+            // A revocation moved the generation: derive the key again.
+            Ok(None) => continue,
             // A concurrent sync may have issued it first.
             Err(error) => match stores.token_store.validate_token(&key_hash).await {
                 Ok(Some(_)) => return Some(raw),
@@ -133,29 +133,6 @@ pub async fn ensure_with(
                     return None;
                 }
             },
-        }
-        match stores
-            .token_store
-            .commands_key_generation(deployment_id)
-            .await
-        {
-            Ok(now) if now == generation => {
-                warn_vendor(stores, deployment_id, receivers).await;
-                return Some(raw);
-            }
-            Ok(_) => {
-                // Revoked while issuing: remove what was just stored and retry.
-                if let Ok(Some(stale)) = stores.token_store.validate_token(&key_hash).await {
-                    if let Err(error) = stores.token_store.delete_token(&stale.id).await {
-                        tracing::warn!(%deployment_id, %error, "Cannot remove a commands key issued during a revocation");
-                        return None;
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%deployment_id, %error, "Cannot read the commands key generation");
-                return None;
-            }
         }
     }
     tracing::warn!(%deployment_id, "The commands key was revoked repeatedly while issuing it");
@@ -226,5 +203,104 @@ pub async fn revoke(state: &AppState, deployment_id: &str) -> bool {
             tracing::warn!(%deployment_id, %error, "Cannot revoke the commands key");
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::traits::token_store::CreateTokenParams;
+    use crate::stores::sqlite::{SqliteDatabase, SqliteTokenStore};
+    use crate::traits::token_store::{TokenRecord, TokenStore};
+
+    /// A token store that revokes the deployment's commands keys right after the
+    /// generation was read, the moment between deriving a key and storing it,
+    /// and that cannot delete a token.
+    struct RevokesBetweenDeriveAndStore {
+        inner: SqliteTokenStore,
+        revoke_after_next_read: AtomicBool,
+    }
+
+    #[async_trait]
+    impl TokenStore for RevokesBetweenDeriveAndStore {
+        async fn create_token(&self, params: CreateTokenParams) -> Result<TokenRecord, AlienError> {
+            self.inner.create_token(params).await
+        }
+        async fn validate_token(&self, key_hash: &str) -> Result<Option<TokenRecord>, AlienError> {
+            self.inner.validate_token(key_hash).await
+        }
+        async fn create_commands_key(
+            &self,
+            deployment_id: &str,
+            key_prefix: &str,
+            key_hash: &str,
+            generation: u64,
+        ) -> Result<Option<TokenRecord>, AlienError> {
+            self.inner
+                .create_commands_key(deployment_id, key_prefix, key_hash, generation)
+                .await
+        }
+        async fn delete_token(&self, _id: &str) -> Result<(), AlienError> {
+            Err(crate::error::ErrorData::internal("injected: the token cannot be deleted")
+                .into_generic())
+        }
+        async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError> {
+            self.inner.list_tokens().await
+        }
+        async fn commands_key_generation(&self, deployment_id: &str) -> Result<u64, AlienError> {
+            let generation = self.inner.commands_key_generation(deployment_id).await?;
+            if self.revoke_after_next_read.swap(false, Ordering::SeqCst) {
+                self.inner.revoke_commands_keys(deployment_id).await?;
+            }
+            Ok(generation)
+        }
+        async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError> {
+            self.inner.revoke_commands_keys(deployment_id).await
+        }
+    }
+
+    /// A key derived at one generation is never stored once a revocation moved
+    /// the generation on, so a revoked key cannot come back even when the
+    /// cleanup that follows would fail.
+    #[tokio::test]
+    async fn a_key_derived_before_a_revocation_is_never_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(&dir.path().join("manager.db").to_string_lossy())
+                .await
+                .unwrap(),
+        );
+        let store = RevokesBetweenDeriveAndStore {
+            inner: SqliteTokenStore::new(db),
+            revoke_after_next_read: AtomicBool::new(true),
+        };
+        let log_buffer = crate::dev::LogBuffer::new();
+        let stores = CommandsKeyStores {
+            signing_key: b"race-signing-key",
+            token_store: &store,
+            log_buffer: &log_buffer,
+        };
+
+        let issued = ensure_with(&stores, "dep_race", &["api".to_string()]).await;
+
+        let stored: Vec<String> = store
+            .list_tokens()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|token| token.token_type == TokenType::CommandsReceiver)
+            .map(|token| token.key_hash)
+            .collect();
+        let allowed: Vec<String> = issued.iter().map(|key| sha256_hash(key)).collect();
+        assert!(
+            stored.iter().all(|hash| allowed.contains(hash)),
+            "a key of a revoked generation is stored: issued {issued:?}, stored {stored:?}"
+        );
+        assert!(issued.is_some(), "the key is issued at the new generation");
     }
 }

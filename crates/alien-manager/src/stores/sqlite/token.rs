@@ -46,6 +46,11 @@ impl SqliteTokenStore {
 #[async_trait]
 impl TokenStore for SqliteTokenStore {
     async fn create_token(&self, params: CreateTokenParams) -> Result<TokenRecord, AlienError> {
+        if params.token_type == TokenType::CommandsReceiver {
+            return Err(db_error(
+                "Commands keys are stored with create_commands_key, which checks the key generation",
+            ));
+        }
         let id = alien_core::new_id(alien_core::IdType::Token);
         let now = Utc::now();
 
@@ -218,6 +223,51 @@ impl TokenStore for SqliteTokenStore {
             .i64(0, "generation")?
             .try_into()
             .unwrap_or_default())
+    }
+
+    async fn create_commands_key(
+        &self,
+        deployment_id: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        generation: u64,
+    ) -> Result<Option<TokenRecord>, AlienError> {
+        let id = alien_core::new_id(alien_core::IdType::Token);
+        let now = Utc::now();
+        let conn = self.db.conn().lock().await;
+        // One statement: the row is inserted only while the generation is still
+        // the one the key was derived at.
+        let inserted = conn
+            .execute(
+                "INSERT INTO tokens (id, type, key_prefix, key_hash, deployment_group_id, deployment_id, created_at) \
+                 SELECT ?1, 'commands-receiver', ?2, ?3, NULL, ?4, ?5 \
+                 WHERE COALESCE((SELECT generation FROM commands_key_generations WHERE deployment_id = ?4), 0) = ?6",
+                (
+                    id.clone(),
+                    key_prefix.to_owned(),
+                    key_hash.to_owned(),
+                    deployment_id.to_owned(),
+                    now.to_rfc3339(),
+                    i64::try_from(generation).unwrap_or(i64::MAX),
+                ),
+            )
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to store the commands key".to_string(),
+            })?;
+        if inserted == 0 {
+            return Ok(None);
+        }
+        Ok(Some(TokenRecord {
+            id,
+            token_type: TokenType::CommandsReceiver,
+            key_prefix: key_prefix.to_owned(),
+            key_hash: key_hash.to_owned(),
+            deployment_group_id: None,
+            deployment_id: Some(deployment_id.to_owned()),
+            created_at: now,
+        }))
     }
 
     async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError> {

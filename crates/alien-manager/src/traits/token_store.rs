@@ -70,6 +70,8 @@ pub struct CreateTokenParams {
 /// Persistence for API tokens with SHA-256 hashed storage.
 #[async_trait]
 pub trait TokenStore: Send + Sync {
+    /// Create a token. Commands-receiver tokens are refused: they go through
+    /// [`TokenStore::create_commands_key`], which checks the key generation.
     async fn create_token(&self, params: CreateTokenParams) -> Result<TokenRecord, AlienError>;
 
     /// Look up a token by its SHA-256 hash.
@@ -83,6 +85,23 @@ pub trait TokenStore: Send + Sync {
 
     /// The deployment's commands-key generation. It starts at 0 and only grows.
     async fn commands_key_generation(&self, deployment_id: &str) -> Result<u64, AlienError>;
+
+    /// Store a commands key of `deployment_id` only while the deployment's
+    /// commands-key generation is still `generation`, the one the key was
+    /// derived at. The check and the insert are one atomic step, so a key of a
+    /// generation that a revocation has passed is never stored.
+    ///
+    /// Returns `Ok(None)`, storing nothing, when the generation has moved on;
+    /// the caller derives the key again at the new generation. Returns the new
+    /// record otherwise. `create_token` refuses commands-receiver tokens, so
+    /// this is the only way to store one.
+    async fn create_commands_key(
+        &self,
+        deployment_id: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        generation: u64,
+    ) -> Result<Option<TokenRecord>, AlienError>;
 
     /// Delete every commands key of the deployment and move its generation
     /// forward, in one step. The commands key is derived from the generation,

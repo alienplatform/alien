@@ -1472,6 +1472,16 @@ mod tests {
             unreachable!("deployment deletion must not list tokens")
         }
 
+        async fn create_commands_key(
+            &self,
+            _deployment_id: &str,
+            _key_prefix: &str,
+            _key_hash: &str,
+            _generation: u64,
+        ) -> Result<Option<TokenRecord>, AlienError> {
+            unreachable!("deployment deletion must not create a commands key")
+        }
+
         async fn commands_key_generation(&self, _deployment_id: &str) -> Result<u64, AlienError> {
             unreachable!("deployment deletion must not read a commands key generation")
         }

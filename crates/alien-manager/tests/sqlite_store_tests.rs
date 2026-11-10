@@ -1970,15 +1970,10 @@ async fn delete_deployment_removes_its_commands_keys() {
     let kept = create_test_deployment(&store, &group_id, "kept", Platform::Aws).await;
     for (deployment, hash) in [(&gone, "hash-gone"), (&kept, "hash-kept")] {
         tokens
-            .create_token(CreateTokenParams {
-                token_type: TokenType::CommandsReceiver,
-                key_prefix: "ax_cmds_test".to_string(),
-                key_hash: hash.to_string(),
-                deployment_group_id: None,
-                deployment_id: Some(deployment.id.clone()),
-            })
+            .create_commands_key(&deployment.id, "ax_cmds_test", hash, 0)
             .await
-            .unwrap();
+            .unwrap()
+            .expect("stored at the current generation");
     }
 
     store
