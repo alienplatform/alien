@@ -186,6 +186,19 @@ pub trait PlatformServiceProvider: Send + Sync {
         Ok(None)
     }
 
+    /// The digest of `repository:reference` in the registry at `registry_origin`,
+    /// read with the runtime registry pull token.
+    async fn resolve_registry_manifest_digest(
+        &self,
+        registry_origin: &str,
+        repository: &str,
+        reference: &str,
+        token: &str,
+    ) -> Result<String> {
+        crate::registry_digest::fetch_manifest_digest(registry_origin, repository, reference, token)
+            .await
+    }
+
     /// Setup authority available to this runtime without a separate setup handoff.
     fn runtime_setup_authority(
         &self,

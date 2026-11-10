@@ -328,7 +328,10 @@ fn validate_credential(credential: &RuntimeCapability, resource_id: &str) -> Res
     let now = chrono::Utc::now();
     if credential.token.is_empty()
         || credential.expires_at <= now
-        || credential.expires_at > now + chrono::Duration::hours(1)
+        || credential.expires_at
+            > now
+                + chrono::Duration::hours(1)
+                + alien_client_core::runtime_credentials::ALLOWED_CLOCK_SKEW
     {
         return Err(invalid(resource_id, "Runtime leaf has an invalid deadline"));
     }
@@ -442,6 +445,29 @@ pub(crate) async fn delete_environment_secret(
 
 #[cfg(test)]
 mod tests {
+    /// The manager issues the credential with its own clock, so one that is a
+    /// little ahead of this cluster's must still be accepted, the way the
+    /// registry pull credential check accepts it.
+    #[test]
+    fn a_credential_from_a_manager_clock_slightly_ahead_is_accepted() {
+        let credential = |expires_in: chrono::Duration| RuntimeCapability {
+            token: "token".to_string(),
+            expires_at: chrono::Utc::now() + expires_in,
+        };
+        let skew = alien_client_core::runtime_credentials::ALLOWED_CLOCK_SKEW;
+        assert!(validate_credential(
+            &credential(chrono::Duration::hours(1) + skew - chrono::Duration::seconds(30)),
+            "api"
+        )
+        .is_ok());
+        assert!(validate_credential(
+            &credential(chrono::Duration::hours(1) + skew + chrono::Duration::minutes(1)),
+            "api"
+        )
+        .is_err());
+        assert!(validate_credential(&credential(chrono::Duration::minutes(-1)), "api").is_err());
+    }
+
     use std::sync::{Arc, Mutex};
 
     use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource, Vault};

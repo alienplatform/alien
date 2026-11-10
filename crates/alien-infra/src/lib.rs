@@ -1,4 +1,5 @@
 mod core;
+mod registry_digest;
 pub use core::*;
 
 mod error;

@@ -89,22 +89,54 @@ pub(crate) async fn prepare(
     let (host, source_image) = source
         .split_once('/')
         .ok_or_else(|| invalid(worker, "Image registry is missing"))?;
-    let (_, digest) = source_image
-        .split_once("@sha256:")
-        .filter(|(repository, digest)| {
-            !repository.is_empty()
-                && repository.split('/').all(|part| {
-                    !part.is_empty()
-                        && part != "."
-                        && part != ".."
-                        && part
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-                })
-                && digest.len() == 64
-                && digest.bytes().all(|b| b.is_ascii_hexdigit())
-        })
-        .ok_or_else(|| invalid(worker, "Bounded registry import requires a SHA-256 digest"))?;
+    let valid_repository = |repository: &str| {
+        !repository.is_empty()
+            && repository.split('/').all(|part| {
+                !part.is_empty()
+                    && part != "."
+                    && part != ".."
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            })
+    };
+    // A Worker build names its image `repository:tag`. The import is by
+    // digest, so a tag is resolved in the manager registry before it runs.
+    enum SourceReference {
+        Digest(String),
+        Tag(String),
+    }
+    let (source_repository, reference) =
+        if let Some((repository, digest)) = source_image.split_once("@sha256:") {
+            if !valid_repository(repository)
+                || digest.len() != 64
+                || !digest.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err(invalid(
+                    worker,
+                    "Bounded registry import requires a SHA-256 digest",
+                ));
+            }
+            (repository, SourceReference::Digest(digest.to_string()))
+        } else {
+            let (repository, tag) = source_image.rsplit_once(':').ok_or_else(|| {
+                invalid(
+                    worker,
+                    "Bounded registry import requires a SHA-256 digest or a tag",
+                )
+            })?;
+            if !valid_repository(repository)
+                || tag.is_empty()
+                || tag.len() > 128
+                || tag.contains('/')
+                || !tag
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            {
+                return Err(invalid(worker, "Image tag is invalid"));
+            }
+            (repository, SourceReference::Tag(tag.to_string()))
+        };
     let manager = ctx
         .deployment_config
         .manager_url
@@ -330,6 +362,30 @@ pub(crate) async fn prepare(
             "Worker ID cannot form an immutable registry repository",
         ));
     }
+    let digest = match reference {
+        SourceReference::Digest(digest) => digest,
+        SourceReference::Tag(tag) => {
+            let resolved = ctx
+                .service_provider
+                .resolve_registry_manifest_digest(
+                    &format!("https://{host}"),
+                    source_repository,
+                    &tag,
+                    &credential.token,
+                )
+                .await?;
+            resolved
+                .strip_prefix("sha256:")
+                .filter(|digest| {
+                    digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+                .map(str::to_string)
+                .ok_or_else(|| invalid(worker, "The registry returned an invalid image digest"))?
+        }
+    };
+    // The import names the digest it resolved, so a tag that moves meanwhile
+    // cannot change what is imported.
+    let source_image = format!("{source_repository}@sha256:{digest}");
     let repository = format!("runtime/{}", worker.id);
     let parameters = serde_json::from_value(json!({"source":{"sourceImage":source_image,"registryUri":host,"credentials":{"username":"deployment","password":credential.token}},"untaggedTargetRepositories":[repository],"mode":"NoForce"}))
         .map_err(|_| invalid(worker, "Cannot encode registry import"))?;
@@ -398,6 +454,22 @@ mod tests {
     /// Imports one image with the setup pull identity saved as `stored`,
     /// while ARM reports the identity as `live`, the way the real API does.
     fn import(stored: &str, live: &str) -> (Result<Option<Duration>>, Option<ImportedImage>) {
+        import_source(
+            stored,
+            live,
+            &format!("test-manager.alien.dev/app@sha256:{DIGEST}"),
+            false,
+        )
+    }
+
+    /// [`import`] of an arbitrary source image. `resolves_tag` arms the manager
+    /// registry lookup that turns the tag `app:v1` into [`DIGEST`].
+    fn import_source(
+        stored: &str,
+        live: &str,
+        image: &str,
+        resolves_tag: bool,
+    ) -> (Result<Option<Duration>>, Option<ImportedImage>) {
         let live = live.to_string();
         let mut identities = MockManagedIdentityApi::new();
         identities
@@ -460,6 +532,17 @@ mod tests {
         provider
             .expect_get_azure_container_registry_client()
             .returning(move |_| Ok(registries.clone()));
+        if resolves_tag {
+            provider
+                .expect_resolve_registry_manifest_digest()
+                .withf(|origin, repository, reference, token| {
+                    origin == "https://test-manager.alien.dev"
+                        && repository == "app"
+                        && reference == "v1"
+                        && token == "pull-token"
+                })
+                .returning(|_, _, _, _| Ok(format!("sha256:{DIGEST}")));
+        }
         provider
             .expect_runtime_registry_pull_credential()
             .returning(|_| {
@@ -470,7 +553,7 @@ mod tests {
             });
         let worker = Worker::new("api".to_string())
             .code(WorkerCode::Image {
-                image: format!("test-manager.alien.dev/app@sha256:{DIGEST}"),
+                image: image.to_string(),
             })
             .permissions("default-profile".to_string())
             .build();
@@ -566,6 +649,24 @@ mod tests {
             );
             assert_eq!(saved.registry_id, registry_id());
         }
+    }
+
+    /// A Worker build names its image `repository:tag`. The import is by digest,
+    /// so the tag is resolved in the manager registry first, and the import
+    /// names exactly that digest.
+    #[test]
+    fn import_resolves_a_tagged_image_to_its_digest() {
+        let (result, saved) = import_source(
+            &identity_id("resourceGroups"),
+            &identity_id("resourcegroups"),
+            "test-manager.alien.dev/app:v1",
+            true,
+        );
+        assert_eq!(result.unwrap(), Some(Duration::from_secs(5)));
+        assert_eq!(
+            saved.unwrap().image,
+            format!("setupacr.azurecr.io/runtime/api@sha256:{DIGEST}")
+        );
     }
 
     /// Ignoring case must not accept a different identity.
