@@ -322,16 +322,20 @@ fn stack_boundary(
             );
         }
     }
-    // A service account's role carries the stack-wide grants it stored. One stored with an
-    // older definition than the catalog's needs exactly that definition, which the required
-    // boundary compiles; the installed ceiling keeps rendering today's catalog.
+    // A service account's role carries the stack-wide grants it stored. A catalog set stored
+    // with an older definition than the catalog's needs exactly that definition, which the
+    // required boundary compiles; the installed ceiling keeps rendering today's catalog. Sets
+    // the stack defines itself are not in the catalog and never reach the boundary, so they
+    // are skipped here as well.
     if matches!(catalog, CatalogSets::UsedBy(_)) {
         for (_, entry) in stack.resources() {
             let Some(account) = entry.config.downcast_ref::<ServiceAccount>() else {
                 continue;
             };
             for set in &account.stack_permission_sets {
-                if is_catalog_definition(set) || set.platforms.aws.is_none() {
+                let stored_differs =
+                    get_permission_set(&set.id).is_some_and(|catalog| catalog != set);
+                if !stored_differs || set.platforms.aws.is_none() {
                     continue;
                 }
                 let grant_context = resolve_context(&account.id, "*")?;
