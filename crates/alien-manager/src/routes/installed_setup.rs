@@ -209,63 +209,53 @@ async fn apply_report(
     // With no release waiting there is no update to authorize, so nothing in
     // the release is needed: an idle sync only records the Helm release name.
     let Some(waiting) = deployment.desired_release_id.as_deref() else {
-        return record_match(state, subject, deployment, report).await;
-    };
-
-    let release = state
-        .release_store
-        .get_release(subject, &report.release_id)
-        .await?;
-    let Some(release) = release else {
-        return record_refusal(
-            state,
-            subject,
-            deployment,
-            report,
-            format!(
-                "Release {} is unknown. Upgrade to the chart version the deployment is waiting for.",
-                report.release_id
-            ),
-        )
-        .await;
-    };
-
-    let target = match prepare_target(&release, deployment, settings, stack_state).await {
-        Ok(target) => target,
-        Err(error) => {
-            return record_refusal(state, subject, deployment, report, error.to_string()).await
-        }
+        return record_match(state, subject, deployment, report, true).await;
     };
 
     // Whether a chart can carry the waiting release depends on the release,
     // not on which chart reported, so it is recorded from the waiting
-    // release's own target. A change is written alone; the report repeats on
-    // the next sync and is handled against the updated record.
-    let waiting_target = if report.release_id == waiting {
-        Some(target.clone())
-    } else {
-        target_of_release(state, subject, deployment, settings, stack_state, waiting).await
-    };
-    if let Some(waiting_target) = waiting_target {
-        let required = metadata
-            .prepared_stack
-            .as_ref()
-            .and_then(|baseline| {
-                changes_needing_cloud_setup(baseline, &waiting_target, deployment.base_platform)
-            })
-            .map(|reason| alien_core::CloudSetupRequired {
-                release_id: waiting.to_string(),
-                reason,
-            });
-        if required != metadata.cloud_setup_required {
-            let mut next = metadata.clone();
-            next.cloud_setup_required = required;
-            return write(state, subject, deployment, report, next, false).await;
-        }
+    // release's own target. A waiting release that is gone or cannot be
+    // prepared carries no verdict. A change is written alone; the report
+    // repeats on the next sync and is handled against the updated record.
+    let waiting_target =
+        target_of_release(state, subject, deployment, settings, stack_state, waiting).await;
+    let required = waiting_target
+        .as_ref()
+        .ok()
+        .and_then(|waiting_target| {
+            let baseline = metadata.prepared_stack.as_ref()?;
+            changes_needing_cloud_setup(baseline, waiting_target, deployment.base_platform)
+        })
+        .map(|reason| alien_core::CloudSetupRequired {
+            release_id: waiting.to_string(),
+            reason,
+        });
+    if required != metadata.cloud_setup_required {
+        let mut next = metadata.clone();
+        next.cloud_setup_required = required;
+        return write(state, subject, deployment, report, next, false).await;
     }
 
+    let target = if report.release_id == waiting {
+        waiting_target
+    } else {
+        target_of_release(
+            state,
+            subject,
+            deployment,
+            settings,
+            stack_state,
+            &report.release_id,
+        )
+        .await
+    };
+    let target = match target {
+        Ok(target) => target,
+        Err(reason) => return record_refusal(state, subject, deployment, report, reason).await,
+    };
+
     match decide(deployment, report, &target) {
-        ReportDecision::NoOp => record_match(state, subject, deployment, report).await,
+        ReportDecision::NoOp => record_match(state, subject, deployment, report, false).await,
         ReportDecision::Refuse(reason) => {
             record_refusal(state, subject, deployment, report, reason).await
         }
@@ -293,9 +283,8 @@ async fn apply_report(
     }
 }
 
-/// The stack `release_id` prepares to for this deployment, or nothing when the
-/// release is gone or cannot be prepared. A release that cannot be prepared
-/// leaves what is recorded as it is; the next sync tries again.
+/// The stack `release_id` prepares to for this deployment, or the reason it
+/// cannot be prepared.
 async fn target_of_release(
     state: &AppState,
     subject: &Subject,
@@ -303,43 +292,46 @@ async fn target_of_release(
     settings: &alien_core::StackSettings,
     stack_state: &alien_core::StackState,
     release_id: &str,
-) -> Option<Stack> {
-    let release = match state.release_store.get_release(subject, release_id).await {
-        Ok(Some(release)) => release,
-        Ok(None) => return None,
-        Err(error) => {
-            warn!(deployment_id = %deployment.id, %error, "Could not read the waiting release");
-            return None;
-        }
+) -> Result<Stack, String> {
+    let release = state
+        .release_store
+        .get_release(subject, release_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(release) = release else {
+        return Err(format!(
+            "Release {release_id} is unknown. Upgrade to the chart version the deployment is waiting for."
+        ));
     };
-    match prepare_target(&release, deployment, settings, stack_state).await {
-        Ok(target) => Some(target),
-        Err(error) => {
-            warn!(deployment_id = %deployment.id, %error, "Could not prepare the waiting release");
-            None
-        }
-    }
+    prepare_target(&release, deployment, settings, stack_state)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// The chart matches what runs, or no update waits: a stale refusal no longer
-/// applies, and the Helm release the report names is recorded. Writes only
-/// when one of those changed.
+/// applies, and the Helm release the report names is recorded. With no release
+/// waiting (`no_release_waits`) the cloud setup verdict no longer applies
+/// either; otherwise it stays, as it belongs to the waiting release. Writes
+/// only when something changed.
 async fn record_match(
     state: &AppState,
     subject: &Subject,
     deployment: &DeploymentRecord,
     report: &InstalledSetup,
+    no_release_waits: bool,
 ) -> Result<bool, AlienError> {
     let Some(metadata) = deployment.runtime_metadata.as_ref() else {
         return Ok(false);
     };
     let mut next = metadata.clone();
     next.setup_report_refusal = None;
-    next.cloud_setup_required = None;
+    if no_release_waits {
+        next.cloud_setup_required = None;
+    }
     let release_changed = record_release(&mut next, report);
     if release_changed
         || metadata.setup_report_refusal.is_some()
-        || metadata.cloud_setup_required.is_some()
+        || (no_release_waits && metadata.cloud_setup_required.is_some())
     {
         return write(state, subject, deployment, report, next, false).await;
     }
@@ -886,11 +878,20 @@ pub(super) mod tests {
         assert!(!wrote);
     }
 
-    /// A stale chart reports while the waiting release adds a cloud resource:
-    /// the manager records, from the waiting release itself, that a chart
-    /// upgrade cannot carry it, and does not record it twice.
-    #[tokio::test]
-    async fn the_waiting_release_decides_whether_a_chart_can_carry_it() {
+    struct Fixture {
+        state: AppState,
+        subject: Subject,
+        record: DeploymentRecord,
+        installed_release: String,
+        waiting_release: String,
+        written: std::sync::Arc<std::sync::Mutex<Vec<alien_core::RuntimeMetadata>>>,
+        _temp: tempfile::TempDir,
+    }
+
+    /// A deployment on release R1 whose prepared stack matches R1, waiting for
+    /// a release that adds a cloud resource. The store records every metadata
+    /// write and then fails, so a test sees exactly what would be written.
+    async fn waiting_fixture() -> Fixture {
         use crate::traits::{CreateReleaseParams, ReleaseStore};
         use std::sync::{Arc, Mutex};
 
@@ -978,18 +979,81 @@ pub(super) mod tests {
             },
             ..Subject::system()
         };
-        // The installed chart still reports the old release.
-        let mut stale = report(&installed_release);
-        stale.release_name = None;
-        handle_installed_setup(&state, &subject, &record, &stale).await;
+        Fixture {
+            state,
+            subject,
+            record,
+            installed_release,
+            waiting_release,
+            written,
+            _temp: temp,
+        }
+    }
 
-        let written = written.lock().expect("log");
+    /// A stale chart reports while the waiting release adds a cloud resource:
+    /// the manager records, from the waiting release itself, that a chart
+    /// upgrade cannot carry it.
+    #[tokio::test]
+    async fn the_waiting_release_decides_whether_a_chart_can_carry_it() {
+        let f = waiting_fixture().await;
+        // The installed chart still reports the old release.
+        let mut stale = report(&f.installed_release);
+        stale.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &stale).await;
+
+        let written = f.written.lock().expect("log");
         assert_eq!(written.len(), 1, "one write records the verdict");
         let required = written[0]
             .cloud_setup_required
             .as_ref()
             .expect("the verdict is recorded");
-        assert_eq!(required.release_id, waiting_release);
+        assert_eq!(required.release_id, f.waiting_release);
         assert!(required.reason.contains("archive"), "{}", required.reason);
+    }
+
+    /// The verdict is recorded; the installed chart keeps reporting what runs.
+    /// Every later sync leaves the record alone: no write, no cleared verdict.
+    #[tokio::test]
+    async fn a_recorded_verdict_stays_while_the_release_still_waits() {
+        let mut f = waiting_fixture().await;
+        f.record
+            .runtime_metadata
+            .as_mut()
+            .expect("metadata")
+            .cloud_setup_required = Some(alien_core::CloudSetupRequired {
+            release_id: f.waiting_release.clone(),
+            reason: "This release adds or changes 'archive', which lives in your cloud account"
+                .to_string(),
+        });
+        let mut installed = report(&f.installed_release);
+        installed.release_name = None;
+        for _ in 0..2 {
+            let wrote = handle_installed_setup(&f.state, &f.subject, &f.record, &installed).await;
+            assert!(!wrote);
+        }
+        assert!(
+            f.written.lock().expect("log").is_empty(),
+            "a settled verdict is not written again"
+        );
+    }
+
+    /// The waiting release is gone: the verdict recorded for it no longer
+    /// applies and is cleared.
+    #[tokio::test]
+    async fn a_verdict_for_a_release_that_cannot_be_prepared_is_cleared() {
+        let mut f = waiting_fixture().await;
+        let metadata = f.record.runtime_metadata.as_mut().expect("metadata");
+        metadata.cloud_setup_required = Some(alien_core::CloudSetupRequired {
+            release_id: "rel_gone".to_string(),
+            reason: "stale".to_string(),
+        });
+        f.record.desired_release_id = Some("rel_gone".to_string());
+        let mut installed = report(&f.installed_release);
+        installed.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &installed).await;
+
+        let written = f.written.lock().expect("log");
+        assert_eq!(written.len(), 1);
+        assert!(written[0].cloud_setup_required.is_none());
     }
 }

@@ -18,7 +18,7 @@ K="kubectl --context $CTX -n $NS"
 echo "work directory: $W"
 
 cleanup() {
-  pkill -f "$MANAGER_BIN" 2>/dev/null || true
+  [ -z "${MANAGER_PID:-}" ] || kill "$MANAGER_PID" 2>/dev/null || true
   [ "${KEEP:-}" = 1 ] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -50,7 +50,8 @@ state-dir = "$W/data"
 [operator]
 image = "alien-operator:e2e"
 T
-(cd "$W" && nohup "$MANAGER_BIN" -c manager.toml > manager.log 2>&1 &)
+(cd "$W" && exec "$MANAGER_BIN" -c manager.toml > manager.log 2>&1) &
+MANAGER_PID=$!
 for _ in $(seq 30); do curl -sf $M/health >/dev/null && break; sleep 1; done
 TOKEN=$(grep -o 'ax_admin_[0-9a-f]*' "$W/manager.log" | head -1)
 [ -n "$TOKEN" ] || fail "manager did not print an admin token"
@@ -137,10 +138,15 @@ eventually "waiting for release 4" "d.get('desiredReleaseId')=='$R4'"
 upgrade "$(chart 4 "$R4" fp-4 execution)"
 eventually "cloud resource change refused with the cloud setup message" \
   "'lives in your cloud account' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
+eventually "the waiting release is recorded as needing the cloud setup" \
+  "(m.get('cloudSetupRequired') or {}).get('releaseId')=='$R4'"
+holds "that verdict stays while the release waits" "(m.get('cloudSetupRequired') or {}).get('releaseId')=='$R4'"
 
 # --- case: the chart for the waiting release completes the update --------------------
 R5=$(release execution,reader)
 eventually "waiting for release 5" "d.get('desiredReleaseId')=='$R5'"
+eventually "the verdict for release 4 is cleared once release 5 waits" "not m.get('cloudSetupRequired')"
+BEFORE_R5=$(helm --kube-context $CTX history app -n $NS -o json | python3 -c "import sys,json;print(max(r['revision'] for r in json.load(sys.stdin)))")
 upgrade "$(chart 5 "$R5" fp-5 execution,reader)"
 eventually "helm upgrade completes the setup update" \
   "d['status']=='running' and d.get('currentReleaseId')=='$R5'"
@@ -149,14 +155,14 @@ $K get sa app-reader-sa >/dev/null || fail "the new service account was not crea
 # --- case: a chart-only bump mints nothing ----------------------------------------------
 M0=$(mints); POD=$($K get pods -l app.kubernetes.io/name=app -o name | head -1)
 B=$W/charts/bump; rm -rf "$B"; mkdir -p "$B"; cp -r "$W/charts/5-fp-5/app" "$B/app"
-sed -i 's/^version: 1.0.5/version: 1.0.5-1/' "$B/app/Chart.yaml"; helm package "$B/app" -d "$B" >/dev/null
+sed 's/^version: 1.0.5/version: 1.0.5-1/' "$B/app/Chart.yaml" > "$B/Chart.yaml.new" && mv "$B/Chart.yaml.new" "$B/app/Chart.yaml"; helm package "$B/app" -d "$B" >/dev/null
 upgrade "$B/app-1.0.5-1.tgz" --wait
 sleep 20
 [ "$(mints)" = "$M0" ] || fail "a chart-only bump minted a grant"
 echo "PASS: chart-only bump mints nothing"
 
 # --- case: rollback after success mints nothing -------------------------------------------
-helm --kube-context $CTX rollback app 2 -n $NS --wait >/dev/null
+helm --kube-context $CTX rollback app "$BEFORE_R5" -n $NS --wait >/dev/null
 holds "rollback after success keeps the deployment running" "d['status']=='running'"
 [ "$(mints)" = "$M0" ] || fail "a rollback minted a grant"
 
@@ -170,8 +176,9 @@ eventually "chart from another install channel refused" \
 # --- case: rollback after the grant is minted leaves the update waiting ---------------------------
 P6=$(chart 6 "$R6" fp-6 execution,reader,writer)
 upgrade "$P6" &
+UPGRADE_PID=$!
 for _ in $(seq 120); do [ "$(field "bool(m.get('setupUpdateAuthorization'))")" = True ] && break; sleep 1; done
-wait || true
+wait "$UPGRADE_PID" || true
 helm --kube-context $CTX rollback app -n $NS --wait >/dev/null
 holds "the grant does not apply to the rolled-back chart" "d['status']!='running' or d.get('currentReleaseId')!='$R6'"
 upgrade "$P6"
