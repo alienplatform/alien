@@ -340,6 +340,14 @@ impl InfrastructureDependenciesMutation {
                 ]
             }
 
+            (Platform::Azure, "redis") => vec![
+                ResourceRef::new(alien_core::ServiceActivation::RESOURCE_TYPE, "enable-cache"),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-network",
+                ),
+            ],
+
             (Platform::Azure, "postgres") => vec![
                 ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,
@@ -373,6 +381,20 @@ impl InfrastructureDependenciesMutation {
                 })
                 .into_iter()
                 .collect(),
+            (Platform::Gcp, "redis") => vec![
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-memorystore",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-network-connectivity",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-service-consumer-management",
+                ),
+            ],
             (Platform::Gcp, "postgres") => vec![
                 ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,
@@ -637,6 +659,59 @@ mod tests {
                     .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")),
                 "Redis must wait for the network on {platform:?}"
             );
+        }
+    }
+
+    // Redis creation must wait for the APIs and resource providers it uses, or it races their
+    // activation on a project that has not enabled them yet.
+    #[tokio::test]
+    async fn redis_waits_for_its_service_activations_on_gcp_and_azure() {
+        let cases: [(Platform, &[&str]); 2] = [
+            (
+                Platform::Gcp,
+                &[
+                    "enable-memorystore",
+                    "enable-network-connectivity",
+                    "enable-service-consumer-management",
+                ],
+            ),
+            (Platform::Azure, &["enable-cache", "enable-network"]),
+        ];
+        for (platform, activations) in cases {
+            let stack = Stack::new("test".to_string())
+                .add(
+                    Network::new("default-network".to_string())
+                        .settings(NetworkSettings::UseDefault)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::Redis::new("cache".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = crate::runner::PreflightRunner::new()
+                .apply_mutations(stack, &StackState::new(platform), &config)
+                .await
+                .unwrap();
+            for activation in activations {
+                assert!(
+                    result.resources["cache"]
+                        .dependencies
+                        .contains(&ResourceRef::new(
+                            alien_core::ServiceActivation::RESOURCE_TYPE,
+                            *activation
+                        )),
+                    "Redis must wait for {activation} on {platform:?}"
+                );
+            }
+            assert!(crate::compile_time::validate_stack_dependencies(&result).success);
         }
     }
 
