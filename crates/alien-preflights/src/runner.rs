@@ -1564,6 +1564,81 @@ mod setup_update_authorization_tests {
 
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
+    async fn unmatched_setup_authorization_names_the_failed_compare() {
+        let old = empty_stack();
+        let target = Stack::new("stack".to_string())
+            .add(
+                alien_core::Storage::new("evidence".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let approved_elsewhere = Stack::new("stack".to_string())
+            .add(
+                alien_core::Storage::new("other".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        let config = deployment_config();
+        let run = |authorization: SetupUpdateAuthorization| {
+            let (runner, target, old, state, config, client) =
+                (&runner, &target, &old, &state, &config, &client);
+            async move {
+                runner
+                    .run_deployment_time_preflights(
+                        target.clone(),
+                        state,
+                        config,
+                        client,
+                        Some(old),
+                        Some(&authorization),
+                        None,
+                    )
+                    .await
+                    .expect_err("an authorization for other changes does not cover these")
+            }
+        };
+
+        // The setup that recorded this authorization installed a different target.
+        let mut other_target = authorization(&old);
+        other_target.target_frozen_digest = approved_elsewhere.setup_update_digest();
+        let error = run(other_target).await;
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(error.message.contains("evidence"), "{}", error.message);
+        assert!(
+            error.message.contains(&format!(
+                "target: computed {}, recorded {}",
+                target.setup_update_digest(),
+                approved_elsewhere.setup_update_digest()
+            )),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("baseline:"), "{}", error.message);
+
+        // The setup started from a different installed stack.
+        let mut other_baseline = authorization(&target);
+        other_baseline.baseline_frozen_digest = approved_elsewhere.setup_update_digest();
+        let error = run(other_baseline).await;
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(
+            error.message.contains(&format!(
+                "baseline: computed {}, recorded {}",
+                old.setup_update_digest(),
+                approved_elsewhere.setup_update_digest()
+            )),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("target:"), "{}", error.message);
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
     async fn permission_updates_require_exact_setup_authority() {
         let baseline = empty_stack();
         let mut target = baseline.clone();
