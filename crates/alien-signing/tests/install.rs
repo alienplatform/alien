@@ -688,6 +688,20 @@ fn bindings_come_from_the_install_not_the_control_plane() {
         )),
         "SIGNING_WORKLOAD_REFUSED"
     );
+    // A cache endpoint follows the same rule: no names to derive it from, so a worker bound to
+    // one is refused by name until the install or a signed config supplies the endpoint.
+    let cache = BTreeMap::from([("cache".to_string(), "redis".to_string())]);
+    let derived = binding_env(&cache, &context).unwrap();
+    assert!(derived.values.is_empty());
+    assert_eq!(derived.unresolved, cache);
+    assert_eq!(
+        code(resolve_bindings(
+            derived,
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )),
+        "SIGNING_WORKLOAD_REFUSED"
+    );
     // A derived value can't be overridden by config.
     let uploads = binding_env(&release.workloads[0].bindings, &context).unwrap();
     let overridden = resolve_bindings(
