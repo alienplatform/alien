@@ -538,6 +538,10 @@ fn generate_auto_management_profile(
         }
         if platform == Platform::Aws {
             permission_set_ids.insert("worker/dispatch-command".to_string());
+            // Installed with setup so a worker added later needs no setup update.
+            if config.stack_settings.telemetry.is_enabled() {
+                permission_set_ids.insert(METRICS_READ_PERMISSION_SET_ID.to_string());
+            }
         }
     }
 
@@ -671,6 +675,16 @@ fn generate_auto_management_profile(
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.telemetry.is_enabled() {
             permission_set_ids.insert(format!("{}/telemetry", permission_resource_type));
+        }
+
+        // Infrastructure metrics for new AWS installs. Updating an install that lacks it is a
+        // setup update on purpose: the grant is not a migration grant (see
+        // PermissionProfilesUnchangedCheck), so the manager never gains it silently.
+        if platform == Platform::Aws
+            && resource_type == "worker"
+            && config.stack_settings.telemetry.is_enabled()
+        {
+            permission_set_ids.insert(METRICS_READ_PERMISSION_SET_ID.to_string());
         }
 
         // Add command dispatch permissions for workers with commands_enabled = true.
@@ -930,6 +944,7 @@ fn add_cloud_heartbeat_permission(
 
 /// Lets the AWS Key controller probe a customer key's availability.
 pub(crate) const KEY_AVAILABILITY_PERMISSION_SET_ID: &str = "key/availability";
+const METRICS_READ_PERMISSION_SET_ID: &str = "observe/metrics-read";
 
 /// Management's use of a volume key: it creates, grows, restores and deletes the volumes but
 /// never decrypts with the key. The node that attaches a volume holds `key/native-volume`.
@@ -1257,6 +1272,118 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    fn worker_stack() -> Stack {
+        Stack::new("example".to_string())
+            .add(
+                Worker::new("api".to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("test".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    fn grants_metrics_read(stack: &Stack) -> bool {
+        stack.management().profile().is_some_and(|profile| {
+            profile
+                .0
+                .get("*")
+                .into_iter()
+                .flatten()
+                .any(|grant| grant.id() == METRICS_READ_PERMISSION_SET_ID)
+        })
+    }
+
+    #[tokio::test]
+    async fn infrastructure_metrics_read_is_part_of_aws_setup_with_telemetry_and_a_worker() {
+        let granted = |platform: Platform,
+                       telemetry: TelemetryMode,
+                       setup: alien_core::SetupManagement,
+                       stack: Stack| async move {
+            let mut config = deployment_config_for_management_permission_test();
+            config.stack_settings.telemetry = telemetry;
+            config.stack_settings.setup_management = setup;
+            let prepared = ManagementPermissionProfileMutation
+                .mutate(stack, &StackState::new(platform), &config)
+                .await
+                .expect("management profile");
+            grants_metrics_read(&prepared)
+        };
+        let manual = alien_core::SetupManagement::Manual;
+        let automatic = alien_core::SetupManagement::Automatic;
+
+        assert!(granted(Platform::Aws, TelemetryMode::Auto, manual, worker_stack()).await);
+        assert!(
+            granted(
+                Platform::Aws,
+                TelemetryMode::Auto,
+                automatic,
+                worker_stack()
+            )
+            .await
+        );
+        assert!(
+            granted(
+                Platform::Aws,
+                TelemetryMode::ApprovalRequired,
+                manual,
+                worker_stack()
+            )
+            .await
+        );
+        assert!(!granted(Platform::Aws, TelemetryMode::Off, manual, worker_stack()).await);
+        assert!(!granted(Platform::Aws, TelemetryMode::Off, automatic, worker_stack()).await);
+        assert!(!granted(Platform::Gcp, TelemetryMode::Auto, manual, worker_stack()).await);
+        assert!(!granted(Platform::Azure, TelemetryMode::Auto, manual, worker_stack()).await);
+        let no_worker = || Stack::new("example".to_string()).build();
+        assert!(
+            !granted(Platform::Aws, TelemetryMode::Auto, manual, no_worker()).await,
+            "no worker, no Lambda metrics to read"
+        );
+        assert!(
+            granted(Platform::Aws, TelemetryMode::Auto, automatic, no_worker()).await,
+            "automatic setup installs what a later worker needs"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_install_without_the_metrics_grant_gets_a_setup_update_not_a_silent_grant() {
+        let config = deployment_config_for_management_permission_test();
+        let new_stack = ManagementPermissionProfileMutation
+            .mutate(worker_stack(), &StackState::new(Platform::Aws), &config)
+            .await
+            .expect("management profile");
+        assert!(grants_metrics_read(&new_stack));
+
+        let mut installed = new_stack.clone();
+        let ManagementPermissions::Extend(profile) = &mut installed.permissions.management else {
+            panic!("expected an extended management profile");
+        };
+        profile
+            .0
+            .get_mut("*")
+            .expect("stack-wide grants")
+            .retain(|grant| grant.id() != METRICS_READ_PERMISSION_SET_ID);
+        assert!(!grants_metrics_read(&installed));
+
+        let check = crate::compatibility::PermissionProfilesUnchangedCheck;
+        assert!(
+            check.management_needs_setup(&installed, &new_stack, &config),
+            "the new grant must reach the install through setup"
+        );
+        assert!(
+            !check.management_needs_setup(&new_stack, &new_stack, &config),
+            "an install that already has it needs nothing"
+        );
+        assert!(
+            !check.management_needs_setup(&new_stack, &installed, &config),
+            "dropping it again only narrows"
+        );
     }
 
     #[tokio::test]
