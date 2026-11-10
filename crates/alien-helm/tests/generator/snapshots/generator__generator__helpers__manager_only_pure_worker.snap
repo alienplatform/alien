@@ -989,6 +989,15 @@ different namespaces of one cluster from colliding. */ -}}
   {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
 {{- end -}}
 {{- $name := include "deployment.fullname" . -}}
+{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not .Values.management.existingSecret.name) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
+  {{- /* An enrolled Operator runs on the key stored in its volume, so an
+  upgrade needs no code. A new installation with no credential would crash-loop. */ -}}
+  {{- $installedSecret := lookup "v1" "Secret" .Release.Namespace $name -}}
+  {{- $installedClaim := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (default (printf "%s-runtime-data" $name) $storage.existingClaim) -}}
+  {{- if not (or .Release.IsUpgrade $installedSecret $installedClaim) -}}
+    {{- fail "This is a new installation, and no enrollment code or token was given. Check the kube context and namespace, or get a new enrollment code." -}}
+  {{- end -}}
+{{- end -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace $name -}}
 {{- if $installed -}}
   {{- $claim := default (printf "%s-runtime-data" $name) $storage.existingClaim -}}

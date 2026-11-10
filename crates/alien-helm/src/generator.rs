@@ -9777,6 +9777,69 @@ mod tests {
         }
     }
 
+    /// A new installation with no enrollment code, token or existing Secret
+    /// would start an Operator with no credential and crash-loop until Helm
+    /// times out. The chart refuses it, and says why. An upgrade, or an
+    /// installation with a credential, still renders.
+    #[test]
+    fn a_new_installation_without_a_credential_is_refused() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let without_code = enrolled.replace(
+            "  enrollmentCode: 'ax_enroll_example'\n",
+            "  enrollmentCode: ''\n",
+        );
+        assert_ne!(without_code, enrolled, "the values carried the code");
+
+        // New installation, nothing to authenticate with: refused.
+        let refused = crate::test_utils::helm_template(&chart.files, Some(without_code.as_str()));
+        assert!(
+            refused.stderr.contains(
+                "This is a new installation, and no enrollment code or token was given."
+            ),
+            "{}",
+            refused.stderr
+        );
+
+        // With a code, with a token, and as an upgrade, it renders.
+        crate::test_utils::helm_template(&chart.files, Some(enrolled.as_str()))
+            .assert_ok("new installation with a code");
+        let with_token = without_code.replace("  token: ''", "  token: 'ax_deploy_example'");
+        assert_ne!(with_token, without_code);
+        crate::test_utils::helm_template(&chart.files, Some(with_token.as_str()))
+            .assert_ok("new installation with a token");
+        crate::test_utils::helm_template_as_upgrade(&chart.files, Some(without_code.as_str()))
+            .assert_ok("upgrade without a code");
+    }
+
     /// An upgrade of an enrolled Operator carries no enrollment code and no
     /// token. The Operator then runs on the daily key stored in its runtime
     /// volume, so the chart must not point it at a credential file that holds
@@ -9818,7 +9881,8 @@ mod tests {
             "  enrollmentCode: ''\n",
         );
         assert_ne!(upgrade, enrolled, "the values carried the code");
-        let rendered = crate::test_utils::helm_template(&chart.files, Some(upgrade.as_str()));
+        let rendered =
+            crate::test_utils::helm_template_as_upgrade(&chart.files, Some(upgrade.as_str()));
         rendered.assert_ok("upgrade without a code");
         let docs = parse_manifest_docs(&rendered.stdout);
         let operator = docs_by_kind(&docs, "Deployment")
