@@ -97,6 +97,26 @@ impl RecoveryCode {
             .join("-")
     }
 
+    /// Whether `typed` is the last four characters of the code, read as
+    /// [`parse`](Self::parse) reads them. Those characters are part of the
+    /// check, not of the secret, so asking for them proves the admin saw the
+    /// code without typing it back.
+    pub fn ends_with(&self, typed: &str) -> bool {
+        let typed: Vec<char> = typed
+            .chars()
+            .filter(|character| *character != '-' && !character.is_whitespace())
+            .collect();
+        if typed.len() != 4 {
+            return false;
+        }
+        let shown = self.display().replace('-', "");
+        let tail = &shown.as_bytes()[shown.len() - 4..];
+        typed
+            .iter()
+            .zip(tail)
+            .all(|(character, expected)| decode_char(*character) == decode_char(*expected as char))
+    }
+
     /// The recovery key of `project`.
     pub fn key(&self, project: &str) -> Result<SecretKey> {
         let okm = hkdf_sha256(&self.0, format!("recovery\u{0}{project}").as_bytes())?;
@@ -230,6 +250,26 @@ mod tests {
             code.key("prj_a").unwrap().public_key(),
             code.key("prj_b").unwrap().public_key()
         );
+    }
+
+    #[test]
+    fn the_last_four_characters_are_checked_as_typed() {
+        let code = RecoveryCode([7u8; SECRET_BYTES]);
+        let other = RecoveryCode([9u8; SECRET_BYTES]);
+        let shown = code.display();
+        let tail = &shown[shown.len() - 4..];
+        let other_shown = other.display();
+        assert_ne!(tail, &other_shown[other_shown.len() - 4..]);
+        assert_ne!(tail, &shown[..4]);
+
+        assert!(code.ends_with(tail));
+        assert!(code.ends_with(&tail.to_lowercase()));
+        assert!(code.ends_with(&format!("  {tail}\n")));
+        assert!(!code.ends_with(""));
+        assert!(!code.ends_with(&shown[shown.len() - 3..]));
+        assert!(!code.ends_with(&shown[shown.len() - 6..]));
+        assert!(!code.ends_with(&shown[..4]));
+        assert!(!code.ends_with(&other_shown[other_shown.len() - 4..]));
     }
 
     #[test]

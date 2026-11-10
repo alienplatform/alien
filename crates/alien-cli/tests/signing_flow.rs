@@ -2,7 +2,8 @@
 //! on SQLite as the manager, the `alien` binary in a terminal, and device keys
 //! in a TPM (the swtpm simulator in CI).
 //!
-//! Alice's first release turns signing on. A second "first release" from
+//! Alice runs `alien devices init`, the only thing that turns signing on: a
+//! release before it makes no signing request. A second `devices init` from
 //! another clone is refused with who turned it on. Bob asks to be trusted; a
 //! wrong pairing code is refused and the right one approved. CI is added and
 //! signs a release. Bob is removed and can't sign. Alice's laptop is lost and
@@ -310,6 +311,23 @@ impl World {
             // The CLI prints a prompt just before it turns echo off for a
             // hidden one, and turning echo off drops what was typed ahead.
             std::thread::sleep(Duration::from_millis(500));
+            // The recovery code is random: its last four characters are read
+            // from what the CLI showed.
+            let answer = if answer.contains("{recovery-tail}") {
+                let shown = String::from_utf8_lossy(&seen.lock().unwrap()).replace('\r', "");
+                let code = line_after(&shown, "Recovery code (shown once");
+                let tail: String = code
+                    .chars()
+                    .rev()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                answer.replace("{recovery-tail}", &tail)
+            } else {
+                answer.to_string()
+            };
             stdin.write_all(answer.as_bytes()).unwrap();
             stdin.flush().unwrap();
         }
@@ -567,21 +585,32 @@ async fn signing_from_first_release_to_recovery() {
     let alice = world.person("alice");
     let app = world.checkout("app");
 
-    // CI with no .alien/signing.json releases unsigned and never creates a list.
+    // A release with no .alien/signing.json is unsigned and makes no signing
+    // request, from a script, from CI and from a terminal alike: it never
+    // creates a list.
+    let hint = "not signed: this repo has no .alien/signing.json; `alien devices init` turns signing on for the project";
     let output = ok(world.run(&alice, &app, RELEASE));
-    assert!(
-        output.contains("not signed: this repo has no .alien/signing.json"),
-        "{output}"
-    );
+    assert!(output.contains(hint), "{output}");
+    assert!(lists(&world.manager).await.is_empty());
+    let output = ok(world.run_in_terminal(&alice, &app, RELEASE, &[]));
+    assert!(output.contains(hint), "{output}");
+    assert!(!output.contains("Recovery code"), "{output}");
+    assert!(!output.contains("TPM PIN"), "{output}");
+    assert!(lists(&world.manager).await.is_empty());
+    assert!(!app.join(".alien/signing.json").exists());
+
+    // `devices init` needs a terminal.
+    let output = failed(world.run(&alice, &app, &["devices", "init"]));
+    assert!(output.contains("run it in a terminal"), "{output}");
     assert!(lists(&world.manager).await.is_empty());
 
-    // Alice closes the terminal input at the recovery code: nothing is
+    // Alice closes the terminal input at the confirmation: nothing is
     // published or written, since the code was never confirmed saved.
     let output = failed(world.run_in_terminal(
         &alice,
         &app,
-        RELEASE,
-        &[("Press Enter once saved", "\u{4}")],
+        &["devices", "init"],
+        &[("last 4 characters", "\u{4}")],
     ));
     assert!(
         output.contains("The recovery code wasn't confirmed"),
@@ -590,13 +619,44 @@ async fn signing_from_first_release_to_recovery() {
     assert!(lists(&world.manager).await.is_empty());
     assert!(!app.join(".alien/signing.json").exists());
 
-    // Alice's first release in a terminal turns signing on.
-    let output =
-        ok(world.run_in_terminal(&alice, &app, RELEASE, &[("Press Enter once saved", "\n")]));
+    // Three wrong answers are the same.
+    let output = failed(world.run_in_terminal(
+        &alice,
+        &app,
+        &["devices", "init"],
+        &[
+            ("last 4 characters", "0000\n"),
+            ("last 4 characters", "0000\n"),
+            ("last 4 characters", "0000\n"),
+        ],
+    ));
+    assert!(
+        output.contains("Those aren't the last 4 characters of the code above."),
+        "{output}"
+    );
+    assert!(
+        output.contains("The recovery code wasn't confirmed"),
+        "{output}"
+    );
+    assert!(lists(&world.manager).await.is_empty());
+    assert!(!app.join(".alien/signing.json").exists());
+
+    // Alice turns signing on with the last four characters of the code she saved.
+    let output = ok(world.run_in_terminal(
+        &alice,
+        &app,
+        &["devices", "init"],
+        &[("last 4 characters", "{recovery-tail}\n")],
+    ));
     assert!(
         output.contains("Signing is now on for default. This machine is its first trusted device."),
         "{output}"
     );
+    assert!(
+        output.contains("Existing deployments stay unprotected."),
+        "{output}"
+    );
+    assert!(output.contains("alien devices add-ci"), "{output}");
     let recovery_code = line_after(&output, "Recovery code (shown once");
     // Progress redraws by erasing its last lines: the code must still be on
     // the screen when the release is done.
@@ -605,15 +665,6 @@ async fn signing_from_first_release_to_recovery() {
         output.contains("Wrote .alien/signing.json — commit it."),
         "{output}"
     );
-    assert!(
-        output.contains("Setup as the control plane hosts it · registers through stack outputs · managed by any managing role"),
-        "{output}"
-    );
-    assert!(
-        output.contains("Releasing to production · 0 protected deployments will run it"),
-        "{output}"
-    );
-    assert!(output.contains("TPM PIN to sign ▸"), "{output}");
     let pin: serde_json::Value =
         serde_json::from_slice(&std::fs::read(app.join(".alien/signing.json")).unwrap()).unwrap();
     let fingerprint = pin["fingerprint"].as_str().unwrap().to_string();
@@ -624,6 +675,25 @@ async fn signing_from_first_release_to_recovery() {
     );
     let v1 = chain(&world.manager, &fingerprint).await;
     assert_eq!(v1.current().version, 1);
+    // Running it again changes nothing.
+    let again = ok(world.run_in_terminal(&alice, &app, &["devices", "init"], &[]));
+    assert!(
+        again.contains("Signing is already on for default"),
+        "{again}"
+    );
+    assert_eq!(lists(&world.manager).await.len(), 1);
+
+    // From now on her releases are signed.
+    let output = ok(world.run_in_terminal(&alice, &app, RELEASE, &[]));
+    assert!(
+        output.contains("Setup as the control plane hosts it · registers through stack outputs · managed by any managing role"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Releasing to production · 0 protected deployments will run it"),
+        "{output}"
+    );
+    assert!(output.contains("TPM PIN to sign ▸"), "{output}");
     let alice_id = device("alice");
     let alice_id = alice_id.as_str();
     let bob_id = device("bob");
@@ -646,19 +716,29 @@ async fn signing_from_first_release_to_recovery() {
         Some(alice_id)
     );
 
-    // A second first release, from a clone without the pin, loses the race.
+    // A second `devices init`, from a clone without the pin, loses the race.
     let dave = world.person("dave");
     let other = world.checkout("other-clone");
-    let output = ok(world.run_in_terminal(&dave, &other, RELEASE, &[]));
+    let output = failed(world.run_in_terminal(&dave, &other, &["devices", "init"], &[]));
     assert!(
-        output.contains("signing was already turned on for default by alice@example.com — pull .alien/signing.json"),
+        output.contains("Signing was already turned on for default by alice@example.com; pull .alien/signing.json"),
         "{output}"
     );
-    assert!(output.contains("pull .alien/signing.json"), "{output}");
     assert!(!output.contains("Recovery code"), "{output}");
     assert!(!other.join(".alien/signing.json").exists());
     assert_eq!(lists(&world.manager).await.len(), 1);
-    assert_eq!(newest_release(&world.manager, &fingerprint).await, None);
+    // His release from that clone is unsigned, and says how to start.
+    let output = ok(world.run_in_terminal(&dave, &other, RELEASE, &[]));
+    assert!(
+        output.contains("not signed: this repo has no .alien/signing.json"),
+        "{output}"
+    );
+    assert_eq!(
+        newest_release(&world.manager, &fingerprint)
+            .await
+            .as_deref(),
+        Some(alice_id)
+    );
 
     // Bob, a teammate, asks to be trusted; his release goes out unsigned.
     let bob = world.person("bob");

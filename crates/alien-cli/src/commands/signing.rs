@@ -25,7 +25,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json};
 use crate::signing::api::{self, ListPublished, PendingChange, SigningApi};
-use crate::signing::release::{added_signers, RECOVERY_SIGNER};
+use crate::signing::release::{self, added_signers, Enabled, RECOVERY_SIGNER};
 use crate::signing::{
     kind_name, next_list, pairing_code, same_code, sign_envelope, signer_with_key, verified_chain,
     RepoSigning, SigningHome, StatementSigner, LIST_WARNING_DAYS, REPO_SIGNING_FILE,
@@ -82,6 +82,12 @@ impl DevicesArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevicesCommand {
+    /// Turn signing on for the project: this device becomes its first trusted device
+    Init {
+        /// The project, when the directory isn't linked to one.
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Show the trusted devices, the recovery key and the fingerprint
     List,
     /// Stop trusting a device, such as a lost laptop
@@ -118,7 +124,7 @@ fn repo(dir: &Path) -> Result<RepoSigning> {
     RepoSigning::read(dir)?.ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "This repo has no {REPO_SIGNING_FILE}. The first `alien release` from a laptop turns signing on and writes it; if a teammate did, pull it."
+                "This repo has no {REPO_SIGNING_FILE}. Run `alien devices init` to turn signing on; if a teammate did, pull it."
             ),
         })
     })
@@ -483,8 +489,104 @@ fn prompt(text: &str) -> Result<String> {
     Ok(line.trim().to_string())
 }
 
+/// `alien devices init`: the only way signing starts for a project. Releases
+/// without `.alien/signing.json` stay unsigned and never reach the signing
+/// routes.
+async fn init(ctx: &ExecutionMode, project: Option<&str>) -> Result<()> {
+    if !can_prompt() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "`alien devices init` shows a recovery code and asks for part of it back; run it in a terminal".to_string(),
+        }));
+    }
+    let dir = current_dir()?;
+    if let Some(pin) = RepoSigning::read(&dir)? {
+        println!(
+            "Signing is already on for {}: {REPO_SIGNING_FILE} pins {}.",
+            pin.project,
+            display_fingerprint(&pin.fingerprint)
+        );
+        return Ok(());
+    }
+    let (project_id, _link) = ctx.resolve_project(project, false).await?;
+    let api = SigningApi::from_context(ctx).await?;
+    match release::enable(&api, &dir, &project_id).await? {
+        None => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "This control plane doesn't support signed releases yet, so signing was not turned on".to_string(),
+        })),
+        Some(Enabled::AlreadyOn { by }) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Signing was already turned on for {project_id} by {by}; pull {REPO_SIGNING_FILE}"
+            ),
+        })),
+        Some(Enabled::On { .. }) => {
+            show_protected_groups(ctx, &project_id).await;
+            println!("Next:");
+            println!("  alien devices add-ci OWNER/REPO   let GitHub Actions sign releases");
+            println!("  alien approve                     trust a teammate's device after they run `alien release`");
+            println!("  alien release                     sign and publish a release");
+            Ok(())
+        }
+    }
+}
+
+/// Which deployment groups protect their new deployments, and what that
+/// leaves alone. Only informational: signing is already on when it runs.
+async fn show_protected_groups(ctx: &ExecutionMode, project_id: &str) {
+    println!("Existing deployments stay unprotected.");
+    if !ctx.is_platform() {
+        println!();
+        return;
+    }
+    match protecting_groups(ctx, project_id).await {
+        Ok(groups) if groups.is_empty() => {
+            println!("No deployment group protects its new deployments.");
+        }
+        Ok(groups) => {
+            println!(
+                "New deployments follow signed releases in: {}.",
+                groups.join(", ")
+            );
+            println!("Turn it off per group in the dashboard.");
+        }
+        Err(error) => {
+            println!(
+                "Could not list the deployment groups that protect new deployments: {}",
+                error.message
+            );
+        }
+    }
+    println!();
+}
+
+/// Names of the project's deployment groups whose new deployments start
+/// protected.
+async fn protecting_groups(ctx: &ExecutionMode, project_id: &str) -> Result<Vec<String>> {
+    let mut query = api::project_query(ctx, project_id).await?;
+    query.push(("limit".to_string(), "100".to_string()));
+    let mut groups = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page_query = query.clone();
+        if let Some(cursor) = &cursor {
+            page_query.push(("cursor".to_string(), cursor.clone()));
+        }
+        let page = api::get_json(ctx, "/v1/deployment-groups", &page_query).await?;
+        for item in page["items"].as_array().into_iter().flatten() {
+            let protects = item["protectNewDeployments"].as_bool() == Some(true);
+            if let (true, Some(name)) = (protects, item["name"].as_str()) {
+                groups.push(name.to_string());
+            }
+        }
+        cursor = page["nextCursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            return Ok(groups);
+        }
+    }
+}
+
 pub async fn devices_task(args: DevicesArgs, ctx: ExecutionMode) -> Result<()> {
     match args.command.unwrap_or(DevicesCommand::List) {
+        DevicesCommand::Init { project } => init(&ctx, project.as_deref()).await,
         DevicesCommand::List => list(&ctx, args.json).await,
         DevicesCommand::Remove { name } => remove(&ctx, &name).await,
         DevicesCommand::AddCi { repository } => add_ci(&ctx, &repository).await,

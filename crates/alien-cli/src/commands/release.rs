@@ -6,6 +6,7 @@ use crate::signing::{
     self,
     api::SigningApi,
     release::{ReleaseSigner, SigningPlan},
+    RepoSigning,
 };
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
@@ -693,6 +694,19 @@ async fn plan_signing(
             promoted: !args.no_promote,
             json: args.json,
             quiet: true,
+        });
+    }
+    // Signing starts only with `alien devices init`, which writes the pin. Without it the
+    // release is unsigned exactly as it was before signing existed, and asks the control
+    // plane nothing about it: any protected install refuses an unsigned release itself.
+    if RepoSigning::read(dir)?.is_none() {
+        return Ok(SigningState {
+            plan: SigningPlan::Unsigned(signing::release::signing_off_hint()),
+            protected: 0,
+            channel,
+            promoted: !args.no_promote,
+            json: args.json,
+            quiet: false,
         });
     }
     let api = SigningApi::from_context(ctx).await?;

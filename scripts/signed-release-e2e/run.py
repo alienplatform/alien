@@ -11,8 +11,8 @@ the cluster.
     python3 scripts/signed-release-e2e/run.py --mode unprotected
 
 Signing is set up the way a team sets it up. A TPM simulator (swtpm) holds the
-developer's device key. The first `alien release` in a terminal turns signing
-on, and `alien devices add-ci` (with a stand-in `gh`) makes the CI key. Every
+developer's device key. `alien devices init` in a terminal turns signing on,
+and `alien devices add-ci` (with a stand-in `gh`) makes the CI key. Every
 later release is signed by the CI key through the real CLI.
 
 `protected` installs the Operator from the signed chart the release carries
@@ -223,7 +223,8 @@ class Suite:
 
     def terminal(self, args, answers=(), who="alice", timeout=900):
         """`alien` in a terminal (`script` gives it one). For each
-        `(prompt, answer)`, wait for the prompt, then type the answer.
+        `(prompt, answer)`, wait for the prompt, then type the answer. An
+        answer can be a function of what the terminal has shown so far.
         Returns the exit status and everything the terminal showed."""
         line = shlex.join([str(self.alien), *map(str, args)])
         child = subprocess.Popen(
@@ -254,6 +255,8 @@ class Suite:
             # The CLI prints a hidden prompt just before turning echo off, which
             # drops what was typed ahead.
             time.sleep(0.5)
+            if callable(answer):
+                answer = answer(seen.decode(errors="replace").replace("\r", ""))
             child.stdin.write(answer.encode())
             child.stdin.flush()
         try:
@@ -384,13 +387,25 @@ esac
         self.alien = self.work / "alien"
         shutil.copy2(self.binaries / "alien", self.alien)
 
+    @staticmethod
+    def recovery_tail(shown):
+        """The last four characters of the recovery code the terminal showed."""
+        after = shown.split("Recovery code (shown once", 1)[1].split("\n", 1)[1]
+        code = re.search(r"\b([0-9A-Z]{4}(?:-[0-9A-Z]{4}){7})\b", after)
+        if code is None:
+            raise RuntimeError(f"no recovery code in:\n{shown}")
+        return code.group(1)[-4:] + "\n"
+
     def turn_signing_on(self):
-        """The developer's first release in a terminal turns signing on; then
-        CI is added, and signs everything after."""
+        """The developer runs `alien devices init` in a terminal, which turns
+        signing on; then CI is added, and signs everything after."""
         self.start_tpm()
         secret = self.fake_gh()
-        log("the developer's first release turns signing on")
-        self.release("release-0", who="alice")
+        log("the developer turns signing on with `alien devices init`")
+        status, output = self.terminal(["devices", "init"], [("characters of the code to confirm", self.recovery_tail)])
+        self.save("signing/init.txt", output)
+        if status != 0:
+            raise RuntimeError(f"devices init failed:\n{output}")
         pin = json.loads((self.app / ".alien/signing.json").read_text())
         self.fingerprint = pin["fingerprint"]
         log(f"signing fingerprint {self.fingerprint}")
@@ -500,10 +515,7 @@ esac
         before = self.release_ids()
         args = ["release", "--platforms", "kubernetes", "--targets", self.targets, "--no-git"]
         if who == "alice":
-            # The very first release shows the recovery code and waits for a
-            # confirmation that it was saved.
-            first = not (self.app / ".alien/signing.json").exists()
-            status, output = self.terminal(args, [("Press Enter once saved", "\n")] if first else [])
+            status, output = self.terminal(args)
             if status != 0:
                 raise RuntimeError(f"alien release failed:\n{output}")
         else:

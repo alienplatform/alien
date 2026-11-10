@@ -1,11 +1,13 @@
 //! Signing a release: deciding whether this release can be signed here,
-//! turning signing on for a project on its first release, filing a trust
-//! request for a device the list doesn't hold yet, and building the
+//! turning signing on for a project (only `alien devices init` does), filing
+//! a trust request for a device the list doesn't hold yet, and building the
 //! `release/v2` statements.
 //!
 //! A release that can't be signed goes out unsigned with one line saying
 //! why. The caller fails it only when the channel has protected deployments,
-//! because those would refuse it.
+//! because those would refuse it. A project that never ran `alien devices
+//! init` has no `.alien/signing.json`: its releases are unsigned and make no
+//! signing request.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -60,9 +62,16 @@ pub enum SigningPlan {
     Requested(String),
 }
 
+/// Why a repository without `.alien/signing.json` releases unsigned.
+pub fn signing_off_hint() -> String {
+    format!(
+        "this repo has no {REPO_SIGNING_FILE}; `alien devices init` turns signing on for the project"
+    )
+}
+
 /// Decide how this release is signed. `interactive` is a person at a
-/// terminal: only then is a list created or a trust request filed, and only
-/// with a hardware key.
+/// terminal: only then is a trust request filed, and only with a hardware
+/// key. A repository without the signing pin never reaches the control plane.
 pub async fn plan(
     api: &SigningApi,
     dir: &Path,
@@ -72,24 +81,7 @@ pub async fn plan(
     let home = SigningHome::current()?;
     let ci = ci_key()?;
     let Some(repo) = RepoSigning::read(dir)? else {
-        if ci.is_some() || !interactive {
-            return Ok(unsigned(format!("this repo has no {REPO_SIGNING_FILE}")));
-        }
-        // Before the hardware key asks for a PIN: a control plane that can't store signer lists
-        // makes the release unsigned whatever the device does.
-        let Some(lists) = api.signer_lists_if_supported(project).await? else {
-            return Ok(unsigned(
-                "the control plane doesn't support signed releases yet",
-            ));
-        };
-        let Some((record, key)) = home.device_or_create()? else {
-            return Ok(unsigned("this device has no hardware key to sign with"));
-        };
-        let device = StatementSigner::Device {
-            id: record.signer_id.clone(),
-            key,
-        };
-        return turn_on(api, dir, project, &lists, &record, device).await;
+        return Ok(unsigned(signing_off_hint()));
     };
     let chain = match verified_chain(api, &repo).await {
         Ok(chain) => chain,
@@ -162,22 +154,49 @@ fn unsigned(reason: impl Into<String>) -> SigningPlan {
     SigningPlan::Unsigned(reason.into())
 }
 
-/// The first release of a project: create list version 1 with this device
-/// as admin and a fresh recovery key, store it, pin it in the repository,
-/// and show the recovery code once.
-async fn turn_on(
-    api: &SigningApi,
-    dir: &Path,
-    project: &str,
-    lists: &[SignedStatement],
-    record: &super::DeviceRecord,
-    device: StatementSigner,
-) -> Result<SigningPlan> {
+/// What `alien devices init` did.
+pub enum Enabled {
+    /// Signing is on: version 1 of the list is stored and pinned in the
+    /// repository.
+    On {
+        /// The fingerprint of version 1, which is the pin.
+        fingerprint: String,
+    },
+    /// Someone else turned it on first; this is who.
+    AlreadyOn {
+        /// The label of version 1's first admin.
+        by: String,
+    },
+}
+
+/// Turn signing on for `project`: create list version 1 with this device as
+/// admin and a fresh recovery key, show the recovery code once and have the
+/// admin type its last four characters back, store the list and pin it in
+/// the repository. Nothing is published before the code is confirmed. `None`
+/// when the control plane has no signer list route: it can't have protected
+/// installs either.
+pub async fn enable(api: &SigningApi, dir: &Path, project: &str) -> Result<Option<Enabled>> {
+    // Before the hardware key asks for a PIN: a control plane that can't store signer lists
+    // makes signing impossible whatever the device does.
+    let Some(lists) = api.signer_lists_if_supported(project).await? else {
+        return Ok(None);
+    };
     // Someone already turned signing on: say who (the first admin of
     // version 1) without showing a code that would never be used.
     if let Some(first) = lists.first() {
-        return Ok(already_on(project, &first_admin(first)));
+        return Ok(Some(Enabled::AlreadyOn {
+            by: first_admin(first),
+        }));
     }
+    let Some((record, key)) = SigningHome::current()?.device_or_create()? else {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: "This device has no hardware key to sign with".to_string(),
+        }));
+    };
+    let device = StatementSigner::Device {
+        id: record.signer_id.clone(),
+        key,
+    };
     let code = RecoveryCode::generate().context(ErrorData::SigningFailed {
         message: "Could not create the recovery code".to_string(),
     })?;
@@ -226,7 +245,7 @@ async fn turn_on(
     let opened = statement.open().context(ErrorData::SigningFailed {
         message: "Could not read the new device list".to_string(),
     })?;
-    let chain = SignerChain::from_statements(
+    SignerChain::from_statements(
         &fingerprint(&opened.digest),
         std::slice::from_ref(&statement),
         Utc::now(),
@@ -239,38 +258,15 @@ async fn turn_on(
         Backend::Tpm | Backend::Yubikey => "this machine",
     };
     println!();
-    println!(
-        "  Signing is now on for {project}. {} is its first trusted device.",
-        capitalize(this)
-    );
-    println!();
     println!("  Recovery code (shown once — save it in your password manager):");
     println!("    {}", code.display());
-    print!("  It restores signing if {this} is lost.  Press Enter once saved ▸ ");
-    std::io::stdout()
-        .flush()
-        .into_alien_error()
-        .context(ErrorData::CliInteractionFailed {
-            message: "Failed to show the recovery code".to_string(),
-        })?;
-    let mut line = String::new();
-    let read = std::io::stdin()
-        .read_line(&mut line)
-        .into_alien_error()
-        .context(ErrorData::CliInteractionFailed {
-            message: "Failed to read the confirmation".to_string(),
-        })?;
-    if read == 0 {
-        println!();
-        return Err(AlienError::new(ErrorData::CliInteractionFailed {
-            message: "The recovery code wasn't confirmed, so signing was not turned on and nothing was released. Run the release again.".to_string(),
-        }));
-    }
+    println!("  It restores signing if {this} is lost.");
+    confirm_recovery_code(&code)?;
     match api.publish_signer_list(project, &statement).await? {
         ListPublished::Stored => {}
         ListPublished::AlreadyOn { enabled_by } => {
             println!("  That recovery code was not used; discard it.");
-            return Ok(already_on(project, &enabled_by));
+            return Ok(Some(Enabled::AlreadyOn { by: enabled_by }));
         }
     }
     let repo = RepoSigning {
@@ -278,19 +274,52 @@ async fn turn_on(
         project: project.to_string(),
     };
     repo.write(dir)?;
+    println!();
+    println!(
+        "  Signing is now on for {project}. {} is its first trusted device.",
+        capitalize(this)
+    );
     println!("  Wrote {REPO_SIGNING_FILE} — commit it.");
     println!("  Fingerprint {}", display_fingerprint(&repo.fingerprint));
     println!();
-    Ok(SigningPlan::Sign(Box::new(ReleaseSigner {
-        signer: device,
-        chain,
-    })))
+    Ok(Some(Enabled::On {
+        fingerprint: repo.fingerprint,
+    }))
 }
 
-fn already_on(project: &str, enabled_by: &str) -> SigningPlan {
-    unsigned(format!(
-        "signing was already turned on for {project} by {enabled_by} — pull {REPO_SIGNING_FILE}"
-    ))
+/// How many times the admin may mistype the last four characters.
+const CONFIRMATION_TRIES: usize = 3;
+
+/// Ask for the last four characters of `code`, so signing is never turned on
+/// for a code nobody saved.
+fn confirm_recovery_code(code: &RecoveryCode) -> Result<()> {
+    for _ in 0..CONFIRMATION_TRIES {
+        print!("  Type the last 4 characters of the code to confirm it is saved ▸ ");
+        std::io::stdout()
+            .flush()
+            .into_alien_error()
+            .context(ErrorData::CliInteractionFailed {
+                message: "Failed to ask for the recovery code confirmation".to_string(),
+            })?;
+        let mut line = String::new();
+        let read = std::io::stdin()
+            .read_line(&mut line)
+            .into_alien_error()
+            .context(ErrorData::CliInteractionFailed {
+                message: "Failed to read the confirmation".to_string(),
+            })?;
+        if read == 0 {
+            break;
+        }
+        if code.ends_with(&line) {
+            return Ok(());
+        }
+        println!("  Those aren't the last 4 characters of the code above.");
+    }
+    println!();
+    Err(AlienError::new(ErrorData::CliInteractionFailed {
+        message: "The recovery code wasn't confirmed, so signing was not turned on. Run `alien devices init` again.".to_string(),
+    }))
 }
 
 /// Who turned signing on: the label (or id) of version 1's device admin.
@@ -797,13 +826,43 @@ mod tests {
         assert!(component_changes(&next, &next).is_empty());
     }
 
-    /// A control plane from before signed releases has no signer list route.
-    /// The first release goes out unsigned with the reason instead of failing,
-    /// writes no repository pin, and is decided before the device is touched,
-    /// so nobody is asked for a hardware key's PIN for a release that can't be
-    /// signed. (This test reaches no hardware: the decision comes first.)
+    /// A repository without the signing pin releases unsigned and never
+    /// reaches the control plane: no signer list route is read, whatever
+    /// the terminal or the device. (The mock server fails the test if any
+    /// request arrives.)
     #[tokio::test]
-    async fn a_control_plane_without_signing_gets_an_unsigned_release_before_any_pin() {
+    async fn a_repository_without_the_pin_releases_unsigned_without_any_signing_request() {
+        let server = httpmock::MockServer::start_async().await;
+        let any = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500).body("must not be called");
+            })
+            .await;
+        let api = SigningApi::new(reqwest::Client::new(), server.base_url());
+        let dir = tempfile::tempdir().unwrap();
+
+        for interactive in [true, false] {
+            match plan(&api, dir.path(), "shop", interactive).await.unwrap() {
+                SigningPlan::Unsigned(reason) => assert_eq!(
+                    reason,
+                    "this repo has no .alien/signing.json; `alien devices init` turns signing on for the project"
+                ),
+                _ => panic!("expected an unsigned release"),
+            }
+        }
+
+        any.assert_hits_async(0).await;
+        assert!(RepoSigning::read(dir.path()).unwrap().is_none());
+    }
+
+    /// A control plane from before signed releases has no signer list route.
+    /// `alien devices init` finds that out before the device is touched, so
+    /// nobody is asked for a hardware key's PIN for signing that can't work,
+    /// and writes no repository pin. (This test reaches no hardware: the
+    /// decision comes first.)
+    #[tokio::test]
+    async fn init_on_a_control_plane_without_signing_turns_nothing_on_before_any_pin() {
         let server = httpmock::MockServer::start_async().await;
         let lists = server
             .mock_async(|when, then| {
@@ -815,21 +874,12 @@ mod tests {
         let api = SigningApi::new(reqwest::Client::new(), server.base_url());
         let dir = tempfile::tempdir().unwrap();
 
-        let decided = plan(&api, dir.path(), "shop", true).await.unwrap();
+        assert!(enable(&api, dir.path(), "shop").await.unwrap().is_none());
 
         lists.assert_async().await;
-        match decided {
-            SigningPlan::Unsigned(reason) => {
-                assert_eq!(
-                    reason,
-                    "the control plane doesn't support signed releases yet"
-                )
-            }
-            _ => panic!("expected an unsigned release"),
-        }
         assert!(RepoSigning::read(dir.path()).unwrap().is_none());
 
-        // Any other failure still stops the release.
+        // Any other failure still stops it.
         let server = httpmock::MockServer::start_async().await;
         server
             .mock_async(|when, then| {
@@ -838,6 +888,6 @@ mod tests {
             })
             .await;
         let api = SigningApi::new(reqwest::Client::new(), server.base_url());
-        assert!(plan(&api, dir.path(), "shop", true).await.is_err());
+        assert!(enable(&api, dir.path(), "shop").await.is_err());
     }
 }
