@@ -424,3 +424,30 @@ async fn deployment_that_finishes_installing_takes_the_release_published_meanwhi
     assert_eq!(f.desired(&pinned).await, (None, "running".to_string()));
     assert_eq!(f.desired(&staging).await, (None, "running".to_string()));
 }
+
+#[tokio::test]
+async fn deployment_installing_a_release_the_channel_rolled_back_from_is_sent_back() {
+    let f = Fixture::new().await;
+    let r1 = f.publish(DEFAULT_CHANNEL).await;
+    let r2 = f.publish(DEFAULT_CHANNEL).await;
+    let a = f.provisioning_deployment("a", &r2).await;
+
+    // The channel goes back to r1 while a is still installing r2. The
+    // roll-out skips a because it is not settled.
+    f.channels
+        .set_channel_release(DEFAULT_CHANNEL, &r1)
+        .await
+        .unwrap();
+    f.channels
+        .roll_out_channel(DEFAULT_CHANNEL, &r1)
+        .await
+        .unwrap();
+    assert_eq!(f.desired(&a).await.0.as_deref(), Some(r2.as_str()));
+
+    // Finishing on r2 sends it to the release the channel points at now.
+    f.report_running(&a, &r2).await;
+    assert_eq!(
+        f.desired(&a).await,
+        (Some(r1.clone()), "update-pending".to_string())
+    );
+}
