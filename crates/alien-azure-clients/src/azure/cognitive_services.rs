@@ -258,6 +258,35 @@ impl AzureCognitiveServicesClient {
         )
     }
 
+    /// Follows a `nextLink` only on the management endpoint, so the bearer token is never
+    /// sent to another host.
+    fn same_origin_next_link(&self, link: String, location: &str) -> Result<String> {
+        let endpoint = url::Url::parse(&self.base.build_url("", None))
+            .into_alien_error()
+            .context(ErrorData::InvalidClientConfig {
+                message: "Azure management endpoint is not a valid URL".to_string(),
+                errors: None,
+            })?;
+        let next = url::Url::parse(&link)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure ListCognitiveServicesUsages for {location} returned an invalid nextLink"
+                ),
+                field_name: Some("nextLink".to_string()),
+            })?;
+        if next.origin() != endpoint.origin() {
+            return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure ListCognitiveServicesUsages for {location} returned a nextLink on another host: {}",
+                    next.origin().ascii_serialization()
+                ),
+                field_name: Some("nextLink".to_string()),
+            }));
+        }
+        Ok(link)
+    }
+
     fn deployment_url(
         &self,
         resource_group_name: &str,
@@ -581,14 +610,14 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
                     .await
                     .into_alien_error()
                     .context(ErrorData::HttpResponseError {
-                    message: format!(
+                        message: format!(
                         "Azure ListCognitiveServicesUsages: failed to read response for {location}"
                     ),
-                    url: url.clone(),
-                    http_status: status,
-                    http_request_text: None,
-                    http_response_text: None,
-                })?;
+                        url: url.clone(),
+                        http_status: status,
+                        http_request_text: None,
+                        http_response_text: None,
+                    })?;
             let page: CognitiveServicesUsagePage = serde_json::from_str(&body)
                 .into_alien_error()
                 .context(ErrorData::HttpResponseError {
@@ -601,7 +630,10 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
                 http_response_text: Some(body),
             })?;
             usages.extend(page.value);
-            next_url = page.next_link;
+            next_url = page
+                .next_link
+                .map(|link| self.same_origin_next_link(link, location))
+                .transpose()?;
         }
 
         Ok(usages)
@@ -660,6 +692,41 @@ mod tests {
         );
         assert_eq!(usages[0].limit, 50.0);
         assert_eq!(usages[1].current_value, 3.0);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_usage_next_link_on_another_host() {
+        use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+        use httpmock::{Method::GET, MockServer};
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let server = MockServer::start_async().await;
+        let other_host = MockServer::start_async().await;
+        let leaked = other_host
+            .mock_async(|when, then| {
+                when.method(GET).path("/second");
+                then.status(200).json_body(json!({"value": []}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).header_exists("authorization");
+                then.status(200).json_body(json!({
+                    "value": [],
+                    "nextLink": format!("{}/second", other_host.base_url())
+                }));
+            })
+            .await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".into(), server.base_url())]),
+        });
+        let error = AzureCognitiveServicesClient::new(Client::new(), AzureTokenCache::new(config))
+            .list_usages("eastus")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("another host"), "{error}");
+        assert_eq!(leaked.hits_async().await, 0);
     }
 
     #[test]

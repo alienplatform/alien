@@ -411,13 +411,21 @@ impl AzureAiController {
         }
         // Units held by deployments this account already has were counted as used by
         // Azure. A retry replaces them, so they are free again for this deployment.
-        let existing: std::collections::HashMap<String, i32> = cognitive_client
+        // Without that list a retry could look out of quota, so ignore the quota then.
+        let existing: std::collections::HashMap<String, i32> = match cognitive_client
             .list_deployments(resource_group_name, account_name)
             .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|deployment| Some((deployment.name?, deployment.sku?.capacity)))
-            .collect();
+        {
+            Ok(deployments) => deployments
+                .into_iter()
+                .filter_map(|deployment| Some((deployment.name?, deployment.sku?.capacity)))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(id = %config.id, %error, "Azure model deployments could not be listed; deployments ask for the default capacity");
+                free_units.clear();
+                std::collections::HashMap::new()
+            }
+        };
 
         // Decide every capacity before creating anything, so a model with no free
         // quota fails the deploy without leaving some deployments behind.
@@ -688,12 +696,13 @@ impl AzureAiController {
                 ObservedHealth::Healthy
             },
             lifecycle: ProviderLifecycleState::Running,
-            message: if partial {
-                Some("Some model availability could not be observed".to_string())
-            } else if self.capacity_warnings.is_empty() {
-                None
-            } else {
-                Some(self.capacity_warnings.join(" "))
+            message: {
+                let mut lines = Vec::new();
+                if partial {
+                    lines.push("Some model availability could not be observed".to_string());
+                }
+                lines.extend(self.capacity_warnings.iter().cloned());
+                (!lines.is_empty()).then(|| lines.join(" "))
             },
             stale: false,
             partial,
@@ -1136,6 +1145,9 @@ mod tests {
         usages: Vec<(String, f64, f64)>,
         usages_unreadable: bool,
         existing: Vec<(String, i32)>,
+        deployments_unreadable: bool,
+        /// The deployment list stops working once the first deployment is created.
+        list_fails_after_puts: bool,
         puts: std::sync::Mutex<Vec<(String, i32)>>,
     }
 
@@ -1192,6 +1204,17 @@ mod tests {
                     });
                     let fake_existing = fake.clone();
                     api.expect_list_deployments().returning(move |_, _| {
+                        if fake_existing.deployments_unreadable
+                            || (fake_existing.list_fails_after_puts
+                                && !fake_existing.puts.lock().unwrap().is_empty())
+                        {
+                            return Err(AlienError::new(
+                                CloudClientErrorData::RemoteAccessDenied {
+                                    resource_type: "deployments".to_string(),
+                                    resource_name: "my-ai-account".to_string(),
+                                },
+                            ));
+                        }
                         Ok(fake_existing
                             .existing
                             .iter()
@@ -1311,6 +1334,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_capacity_warning_survives_a_failed_availability_read() {
+        let mut fake = FakeAzure::uniform(1000.0, 0.0);
+        for usage in &mut fake.usages {
+            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+                *usage = (usage.0.clone(), 100.0, 90.0);
+            }
+        }
+        fake.list_fails_after_puts = true;
+        let fake = Arc::new(fake);
+        let (executor, result) = deploy_models(&fake).await;
+        result.unwrap();
+
+        let heartbeat = executor.last_heartbeats().last().unwrap();
+        let ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(data)) = &heartbeat.data else {
+            panic!("expected an Azure AI heartbeat");
+        };
+        assert!(data.status.partial);
+        let message = data.status.message.as_deref().unwrap();
+        assert!(message.contains("could not be observed"), "{message}");
+        assert!(message.contains("10 of 50"), "{message}");
+    }
+
+    #[tokio::test]
     async fn no_free_quota_fails_before_creating_any_deployment() {
         let mut fake = FakeAzure::uniform(1000.0, 0.0);
         for usage in &mut fake.usages {
@@ -1342,6 +1388,25 @@ mod tests {
             }
         }
         fake.existing = vec![("gpt-4.1".to_string(), 50)];
+        let fake = Arc::new(fake);
+        let (executor, result) = deploy_models(&fake).await;
+        result.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(fake.put_capacity("gpt-4.1"), Some(50));
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_deployment_list_does_not_fail_a_retry_for_quota() {
+        // The account holds all 50 units in gpt-4.1 itself, but the list that would
+        // show that is unreadable. The quota must not be used to refuse the deploy.
+        let mut fake = FakeAzure::uniform(1000.0, 0.0);
+        for usage in &mut fake.usages {
+            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+                *usage = (usage.0.clone(), 50.0, 50.0);
+            }
+        }
+        fake.deployments_unreadable = true;
         let fake = Arc::new(fake);
         let (executor, result) = deploy_models(&fake).await;
         result.unwrap();
