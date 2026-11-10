@@ -533,7 +533,15 @@ impl PreflightRunner {
                             "setup update authorization does not match this update"
                         );
                         if let Some(installed) = old_stack {
-                            log_setup_owned_differences(installed, target);
+                            let differences = SetupOwnedDifferences::between(installed, target);
+                            info!(
+                                added = ?differences.added,
+                                removed = ?differences.removed,
+                                changed = ?differences.changed,
+                                changed_profiles = ?differences.changed_profiles,
+                                management_changed = differences.management_changed,
+                                "setup-owned entries and permission profiles that differ between the installed and target stacks"
+                            );
                         }
                         authorization_mismatch = Some(description);
                     }
@@ -746,62 +754,69 @@ fn setup_update_authorization_mismatches(
     mismatches
 }
 
-/// Logs which setup-owned entries differ between the installed stack and the target, by ID only,
-/// and whether the permissions differ. The recorded authorization holds only digests, so this
+/// What differs between the installed stack and the target in the inputs of their setup update
+/// digests, by ID and profile name only. The recorded authorization holds only digests, so this
 /// is the closest view of what changed without logging configuration values.
-fn log_setup_owned_differences(old_stack: &Stack, target_stack: &Stack) {
-    let installed = old_stack.setup_owned_entry_digests();
-    let target = target_stack.setup_owned_entry_digests();
-    let added: Vec<&str> = target
-        .keys()
-        .filter(|id| !installed.contains_key(*id))
-        .map(String::as_str)
-        .collect();
-    let removed: Vec<&str> = installed
-        .keys()
-        .filter(|id| !target.contains_key(*id))
-        .map(String::as_str)
-        .collect();
-    let changed: Vec<&str> = installed
-        .iter()
-        .filter(|(id, digest)| target.get(*id).is_some_and(|other| other != *digest))
-        .map(|(id, _)| id.as_str())
-        .collect();
-    // Compare as JSON, as the digest does: key order is ignored, list order is not.
-    let json = |profile: Option<&alien_core::permissions::PermissionProfile>| {
-        profile.map(|profile| {
-            serde_json::to_value(profile).expect("permission profiles always serialize to JSON")
-        })
-    };
-    let changed_profiles: Vec<&str> = old_stack
-        .permissions
-        .profiles
-        .keys()
-        .chain(
-            target_stack
-                .permissions
-                .profiles
-                .keys()
-                .filter(|name| !old_stack.permissions.profiles.contains_key(*name)),
-        )
-        .filter(|name| {
-            json(old_stack.permissions.profiles.get(*name))
-                != json(target_stack.permissions.profiles.get(*name))
-        })
-        .map(String::as_str)
-        .collect();
-    let management_changed = serde_json::to_value(&old_stack.permissions.management)
-        .expect("management permissions always serialize to JSON")
-        != serde_json::to_value(&target_stack.permissions.management)
-            .expect("management permissions always serialize to JSON");
-    info!(
-        ?added,
-        ?removed,
-        ?changed,
-        ?changed_profiles,
-        management_changed,
-        "setup-owned entries and permission profiles that differ between the installed and target stacks"
-    );
+#[derive(Debug, PartialEq, Eq)]
+struct SetupOwnedDifferences {
+    added: Vec<String>,
+    removed: Vec<String>,
+    changed: Vec<String>,
+    changed_profiles: Vec<String>,
+    management_changed: bool,
+}
+
+impl SetupOwnedDifferences {
+    fn between(old_stack: &Stack, target_stack: &Stack) -> Self {
+        let installed = old_stack.setup_owned_entry_digests();
+        let target = target_stack.setup_owned_entry_digests();
+        let added = target
+            .keys()
+            .filter(|id| !installed.contains_key(*id))
+            .cloned()
+            .collect();
+        let removed = installed
+            .keys()
+            .filter(|id| !target.contains_key(*id))
+            .cloned()
+            .collect();
+        let changed = installed
+            .iter()
+            .filter(|(id, digest)| target.get(*id).is_some_and(|other| other != *digest))
+            .map(|(id, _)| id.clone())
+            .collect();
+        // Compare as JSON, as the digest does: key order is ignored, list order is not.
+        let json = |profile: Option<&alien_core::permissions::PermissionProfile>| {
+            profile.map(|profile| {
+                serde_json::to_value(profile).expect("permission profiles always serialize to JSON")
+            })
+        };
+        let (installed_profiles, target_profiles) = (
+            &old_stack.permissions.profiles,
+            &target_stack.permissions.profiles,
+        );
+        let changed_profiles = installed_profiles
+            .keys()
+            .chain(
+                target_profiles
+                    .keys()
+                    .filter(|name| !installed_profiles.contains_key(*name)),
+            )
+            .filter(|name| json(installed_profiles.get(*name)) != json(target_profiles.get(*name)))
+            .cloned()
+            .collect();
+        let management_changed = serde_json::to_value(&old_stack.permissions.management)
+            .expect("management permissions always serialize to JSON")
+            != serde_json::to_value(&target_stack.permissions.management)
+                .expect("management permissions always serialize to JSON");
+        Self {
+            added,
+            removed,
+            changed,
+            changed_profiles,
+            management_changed,
+        }
+    }
 }
 
 impl Default for PreflightRunner {
@@ -2023,6 +2038,114 @@ mod setup_update_authorization_tests {
             .expect_err("an authorization for another grant does not cover this one");
             assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{platform:?}");
         }
+    }
+
+    #[test]
+    fn setup_owned_differences_name_ids_and_profiles_only() {
+        let installed = Stack::new("stack".to_string())
+            .permission(
+                "kept",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .permission(
+                "widened",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .permission(
+                "dropped",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .add(
+                alien_core::Storage::new("kept-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("changed-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("removed-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("live-store".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let target = Stack::new("stack".to_string())
+            .permission(
+                "kept",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .permission(
+                "widened",
+                PermissionProfile::new().resource("kept-store", ["storage/data-write"]),
+            )
+            .permission(
+                "added",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .add(
+                alien_core::Storage::new("kept-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("changed-store".into())
+                    .versioning(true)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("added-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("live-store".into())
+                    .versioning(true)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert_eq!(
+            SetupOwnedDifferences::between(&installed, &target),
+            SetupOwnedDifferences {
+                added: vec!["added-store".to_string()],
+                removed: vec!["removed-store".to_string()],
+                changed: vec!["changed-store".to_string()],
+                changed_profiles: vec![
+                    "widened".to_string(),
+                    "dropped".to_string(),
+                    "added".to_string(),
+                ],
+                management_changed: false,
+            }
+        );
+
+        let mut managed = installed.clone();
+        managed.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+        );
+        assert_eq!(
+            SetupOwnedDifferences::between(&installed, &managed),
+            SetupOwnedDifferences {
+                added: vec![],
+                removed: vec![],
+                changed: vec![],
+                changed_profiles: vec![],
+                management_changed: true,
+            }
+        );
+        assert_eq!(
+            SetupOwnedDifferences::between(&installed, &installed),
+            SetupOwnedDifferences {
+                added: vec![],
+                removed: vec![],
+                changed: vec![],
+                changed_profiles: vec![],
+                management_changed: false,
+            }
+        );
     }
 
     #[test]
