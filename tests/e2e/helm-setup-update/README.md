@@ -33,7 +33,8 @@ tests/e2e/helm-setup-update/run.sh
 ```
 
 Environment: `ALIEN_MANAGER_BIN`, `ALIEN_OPERATOR_BIN` (default
-`target/debug/...`), `KIND_CLUSTER` (default `helm-setup-update`),
+`target/debug/...`), `KIND_CLUSTER` (default `helm-setup-update`; the script exits if a cluster
+with that name already exists, and deletes only a cluster it created),
 `KEEP=1` to keep the cluster and manager after the run. The script builds an
 operator image, loads it into the cluster, and removes everything it created
 unless `KEEP=1`. It prints `PASS`/`FAIL` per case and exits non-zero on the

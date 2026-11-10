@@ -168,7 +168,7 @@ fn changes_needing_cloud_setup(
 
 /// Handles a report from the Operator of `deployment`. A report that cannot be
 /// acted on never fails the sync that carried it. Returns whether the stored
-/// deployment changed, so the caller re-reads it only then.
+/// deployment may differ from `deployment`, so the caller re-reads it only then.
 pub(super) async fn handle_installed_setup(
     state: &AppState,
     subject: &Subject,
@@ -523,7 +523,9 @@ async fn write(
         // Nothing was written; the report repeats on the next sync.
         Err(error) if error.code == "DEPLOYMENT_CHANGED_CONCURRENTLY" => {
             info!(deployment_id = %deployment.id, "Deployment changed while handling the setup report; the next report retries");
-            Ok(false)
+            // Nothing was written, but the stored record is newer than the
+            // caller's copy, so the caller must re-read it.
+            Ok(true)
         }
         Err(error) => Err(error),
     }
@@ -892,6 +894,10 @@ pub(super) mod tests {
     /// a release that adds a cloud resource. The store records every metadata
     /// write and then fails, so a test sees exactly what would be written.
     async fn waiting_fixture() -> Fixture {
+        waiting_fixture_with(false).await
+    }
+
+    async fn waiting_fixture_with(conflict: bool) -> Fixture {
         use crate::traits::{CreateReleaseParams, ReleaseStore};
         use std::sync::{Arc, Mutex};
 
@@ -958,7 +964,14 @@ pub(super) mod tests {
             .expect_update_imported_stack_state()
             .returning(move |_, _, params| {
                 sink.lock().expect("log").push(params.runtime_metadata);
-                Err(crate::error::ErrorData::internal("stop").into_generic())
+                Err(if conflict {
+                    AlienError::new(crate::error::ErrorData::DeploymentChangedConcurrently {
+                        deployment_id: "dep_1".to_string(),
+                    })
+                    .into_generic()
+                } else {
+                    crate::error::ErrorData::internal("stop").into_generic()
+                })
             });
         let state = crate::routes::sync::tests::test_app_state(
             temp.path(),
@@ -1055,5 +1068,23 @@ pub(super) mod tests {
         let written = f.written.lock().expect("log");
         assert_eq!(written.len(), 1);
         assert!(written[0].cloud_setup_required.is_none());
+    }
+
+    /// A write that loses to a concurrent change wrote nothing, but the record
+    /// is no longer the one the sync read. The caller must re-read it, or it
+    /// would copy the stale metadata (including a grant a concurrent writer
+    /// just stored) into the Operator's state report.
+    #[tokio::test]
+    async fn a_write_that_loses_a_race_tells_the_caller_to_reread() {
+        let f = waiting_fixture_with(true).await;
+        let mut stale = report(&f.installed_release);
+        stale.release_name = None;
+        let changed = handle_installed_setup(&f.state, &f.subject, &f.record, &stale).await;
+        assert_eq!(
+            f.written.lock().expect("log").len(),
+            1,
+            "the write was attempted"
+        );
+        assert!(changed, "the stored record moved, so it must be re-read");
     }
 }

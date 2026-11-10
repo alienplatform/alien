@@ -17,15 +17,23 @@ export HELM_EXPERIMENTAL_OCI=1
 K="kubectl --context $CTX -n $NS"
 echo "work directory: $W"
 
+CREATED=
 cleanup() {
+  [ "${KEEP:-}" = 1 ] && return
   [ -z "${MANAGER_PID:-}" ] || kill "$MANAGER_PID" 2>/dev/null || true
-  [ "${KEEP:-}" = 1 ] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
+  # Only delete a cluster this run created.
+  [ -z "$CREATED" ] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 fail() { echo "FAIL: $*"; echo "--- manager log tail"; tail -30 "$W/manager.log"; exit 1; }
 
 # --- cluster, operator image, manager -------------------------------------
-kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" >/dev/null
+if kind get clusters | grep -qx "$CLUSTER"; then
+  echo "cluster $CLUSTER already exists; set KIND_CLUSTER to a new name" >&2
+  exit 1
+fi
+kind create cluster --name "$CLUSTER" >/dev/null
+CREATED=1
 mkdir -p "$W/img" && cp "$OPERATOR_BIN" "$W/img/alien-operator"
 # A debug build's symbols do not fit the chart's 512Mi memory limit.
 strip "$W/img/alien-operator"
@@ -177,7 +185,9 @@ eventually "chart from another install channel refused" \
 P6=$(chart 6 "$R6" fp-6 execution,reader,writer)
 upgrade "$P6" &
 UPGRADE_PID=$!
-for _ in $(seq 120); do [ "$(field "bool(m.get('setupUpdateAuthorization'))")" = True ] && break; sleep 1; done
+GRANTED=
+for _ in $(seq 120); do [ "$(field "bool(m.get('setupUpdateAuthorization'))")" = True ] && { GRANTED=1; break; }; sleep 1; done
+[ -n "$GRANTED" ] || fail "no grant was issued for the rollback case"
 wait "$UPGRADE_PID" || true
 helm --kube-context $CTX rollback app -n $NS --wait >/dev/null
 holds "the grant does not apply to the rolled-back chart" "d['status']!='running' or d.get('currentReleaseId')!='$R6'"
