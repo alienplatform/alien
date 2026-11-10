@@ -7,6 +7,7 @@ pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod azure_setup_owned;
 pub mod gcp_runtime;
+pub mod gcp_setup_owned;
 mod labels;
 
 pub use aws_boundary::{
@@ -46,4 +47,9 @@ pub use gcp_runtime::{
     custom_role_permission_set_prefix, custom_role_prefix, legacy_custom_role_namespace_for_prefix,
     GcpBindingResourceKind, GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding,
     GcpIamBindings, GcpIamCondition, GcpRuntimePermissionsGenerator,
+};
+pub use gcp_setup_owned::{
+    gcp_project_iam_write_role, gcp_project_role_grant_conditions, gcp_runtime_roles,
+    strip_gcp_management_iam_writes, GcpRuntimeRoles, GCP_PROJECT_IAM_WRITE,
+    GCP_ROLES_PER_GRANT_CONDITION, GCP_ROLE_DEFINITION_WRITES,
 };

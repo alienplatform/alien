@@ -31,7 +31,7 @@ use hcl::{
 /// Namespace the generator puts in role IDs, replaced in the rendered module
 /// by `local.gcp_custom_role_prefix`. It is 18 characters, the longest real
 /// namespace, so generated suffixes leave room for every real one.
-const CUSTOM_ROLE_NAMESPACE_PLACEHOLDER: &str = "local_resource_pre";
+pub(crate) const CUSTOM_ROLE_NAMESPACE_PLACEHOLDER: &str = "local_resource_pre";
 
 /// Downcast `ctx.resource.config` to the typed resource definition or
 /// return a typed `UnexpectedResourceType` error.
@@ -320,7 +320,10 @@ pub fn emit_custom_roles_for_bindings(
     Ok(custom_roles)
 }
 
-fn emit_selected_custom_roles(fragment: &mut TfFragment, custom_roles: &[GcpCustomRole]) {
+pub(crate) fn emit_selected_custom_roles(
+    fragment: &mut TfFragment,
+    custom_roles: &[GcpCustomRole],
+) {
     for custom_role in custom_roles {
         let role_label = custom_role_label(custom_role);
         let role_id = custom_role_id_template(custom_role);

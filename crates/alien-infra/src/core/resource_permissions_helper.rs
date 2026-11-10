@@ -47,6 +47,33 @@ fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
 
 const GCP_CUSTOM_ROLE_UPDATE_MASK: &str = "includedPermissions,title,description,stage";
 
+/// A failed GCP role or project IAM write, with `context`. A refused one also carries
+/// [`ErrorData::ManagementPermissionMissing`], which waits for setup to run again instead of
+/// failing: setup creates the roles the runtime binds and admits their grants, so a refusal means
+/// the installed setup did not provide for this one, such as a grant a newer release added.
+pub(crate) fn gcp_role_write_error(
+    error: AlienError<CloudClientErrorData>,
+    resource_id: &str,
+    operation: &str,
+    action: &str,
+    context: ErrorData,
+) -> AlienError<ErrorData> {
+    if matches!(
+        error.error,
+        Some(CloudClientErrorData::RemoteAccessDenied { .. })
+    ) {
+        error
+            .context(ErrorData::ManagementPermissionMissing {
+                resource_id: resource_id.to_string(),
+                operation: operation.to_string(),
+                action: action.to_string(),
+            })
+            .context(context)
+    } else {
+        error.context(context)
+    }
+}
+
 /// Converge one GCP custom role on `custom_role`, reusing its ID in whatever
 /// state GCP holds it.
 ///
@@ -124,10 +151,16 @@ async fn ensure_gcp_custom_role(
             }));
         }
         Err(e) => {
-            return Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create custom role '{}'", custom_role.role_id),
-                resource_id: Some(permission_set_id.to_string()),
-            }))
+            return Err(gcp_role_write_error(
+                e,
+                permission_set_id,
+                &format!("create custom role '{}'", custom_role.role_id),
+                "iam.roles.create",
+                ErrorData::CloudPlatformError {
+                    message: format!("Failed to create custom role '{}'", custom_role.role_id),
+                    resource_id: Some(permission_set_id.to_string()),
+                },
+            ))
         }
     };
 
@@ -184,12 +217,23 @@ async fn converge_gcp_custom_role(
     if existing.deleted.unwrap_or(false) {
         // Undelete restores the role as it was when deleted; the patch below
         // brings it to the current permissions.
-        iam.undelete_role(custom_role.name.clone()).await.context(
-            ErrorData::CloudPlatformError {
-                message: format!("Failed to undelete custom role '{}'", custom_role.role_id),
-                resource_id: Some(permission_set_id.to_string()),
-            },
-        )?;
+        iam.undelete_role(custom_role.name.clone())
+            .await
+            .map_err(|error| {
+                gcp_role_write_error(
+                    error,
+                    permission_set_id,
+                    &format!("undelete custom role '{}'", custom_role.role_id),
+                    "iam.roles.undelete",
+                    ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to undelete custom role '{}'",
+                            custom_role.role_id
+                        ),
+                        resource_id: Some(permission_set_id.to_string()),
+                    },
+                )
+            })?;
         info!(role_id = %custom_role.role_id, "Undeleted GCP custom role for reuse");
     } else if gcp_custom_role_matches(&existing, &desired) {
         info!(
@@ -206,9 +250,17 @@ async fn converge_gcp_custom_role(
         Some(GCP_CUSTOM_ROLE_UPDATE_MASK.to_string()),
     )
     .await
-    .context(ErrorData::CloudPlatformError {
-        message: format!("Failed to update custom role '{}'", custom_role.role_id),
-        resource_id: Some(permission_set_id.to_string()),
+    .map_err(|error| {
+        gcp_role_write_error(
+            error,
+            permission_set_id,
+            &format!("update custom role '{}'", custom_role.role_id),
+            "iam.roles.update",
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to update custom role '{}'", custom_role.role_id),
+                resource_id: Some(permission_set_id.to_string()),
+            },
+        )
     })?;
     Ok(())
 }
@@ -3277,6 +3329,57 @@ mod tests {
         ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
             .await
             .expect("a missing role should be created");
+    }
+
+    /// Setup creates the roles the runtime binds, and management holds no role writes. A role the
+    /// installed setup did not create waits for setup to run again instead of failing.
+    #[tokio::test]
+    async fn gcp_custom_role_refused_to_management_waits_for_setup() {
+        let denied = || {
+            AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                resource_type: "role".to_string(),
+                resource_name: "role_acme_storage_data_write".to_string(),
+            })
+        };
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .returning(move |_, _| Err(denied()));
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("management may not create a role");
+        assert!(crate::error::requires_setup_rerun(&error));
+        assert!(!error.retryable);
+        let generic = error.clone().into_generic();
+        let missing = std::iter::successors(Some(&generic), |e| e.source.as_deref())
+            .find(|e| e.code == "MANAGEMENT_PERMISSION_MISSING")
+            .expect("the refusal names the missing management permission");
+        assert!(
+            missing.message.contains("iam.roles.create"),
+            "{}",
+            missing.message
+        );
+
+        // Any other failure keeps its own meaning.
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role().times(1).returning(|_, _| {
+            Err(AlienError::new(CloudClientErrorData::HttpRequestFailed {
+                message: "connection reset".to_string(),
+            }))
+        });
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("a failed create fails");
+        assert!(!crate::error::requires_setup_rerun(&error));
     }
 
     #[test]

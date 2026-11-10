@@ -4,9 +4,10 @@ use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        binding_label_for_role, downcast, emit_custom_roles_for_bindings, gate_bindings,
-        permission_context, push_iam_member, required_label, role_expression_for_binding,
-        service_account_id_template, service_account_member_for_label,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings,
+        emit_selected_custom_roles, gate_bindings, permission_context, push_iam_member,
+        required_label, role_expression_for_binding, service_account_id_template,
+        service_account_member_for_label, CUSTOM_ROLE_NAMESPACE_PLACEHOLDER,
     },
     expr,
 };
@@ -14,9 +15,13 @@ use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSet,
     PermissionSetReference, RemoteStackManagement, Result,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    generators::{
+        gcp_project_iam_write_role, gcp_project_role_grant_conditions, gcp_runtime_roles,
+        strip_gcp_management_iam_writes, GcpBindingTargetScope, GcpIamBinding,
+        GcpRuntimePermissionsGenerator,
+    },
     BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
@@ -57,12 +62,13 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
 
         let member = service_account_member_for_label(label);
         let context = permission_context(label, ctx.stack.id());
+        let mut project_iam_write = false;
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(ctx, profile) {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
-                    emit_management_identity_bindings(
+                    project_iam_write |= emit_management_identity_bindings(
                         &mut fragment,
                         label,
                         &member,
@@ -89,7 +95,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                     let resource_context = context
                         .clone()
                         .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
-                    emit_management_identity_bindings(
+                    project_iam_write |= emit_management_identity_bindings(
                         &mut fragment,
                         &binding_label,
                         &member,
@@ -107,6 +113,10 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                     }
                 }
             }
+        }
+
+        if project_iam_write {
+            emit_runtime_project_role_grants(&mut fragment, ctx, label, &member, &context)?;
         }
 
         super::federation::emit(&mut fragment, label, &RemoteStackManagement::RESOURCE_TYPE);
@@ -148,22 +158,21 @@ fn emit_management_identity_bindings(
     context: &PermissionContext,
     binding_target: BindingTarget,
     include_project_bindings: bool,
-) -> Result<()> {
+) -> Result<bool> {
     if permission_set.platforms.gcp.is_none() {
-        return Ok(());
+        return Ok(false);
     }
 
     let generator = GcpRuntimePermissionsGenerator::new();
-    let grant_plan = generator
+    let mut grant_plan = generator
         .generate_grant_plan(permission_set, binding_target, context)
-        .map_err(|err| {
-            AlienError::new(ErrorData::GenericError {
-                message: format!(
-                    "failed to generate GCP remote management IAM grant plan for '{}': {}",
-                    permission_set.id, err
-                ),
-            })
+        .context(ErrorData::GenericError {
+            message: format!(
+                "failed to generate GCP remote management IAM grant plan for '{}'",
+                permission_set.id
+            ),
         })?;
+    let project_iam_write = strip_gcp_management_iam_writes(&mut grant_plan);
     let mut bindings = if include_project_bindings {
         grant_plan.bindings_for_target(GcpBindingTargetScope::Project)
     } else {
@@ -184,6 +193,51 @@ fn emit_management_identity_bindings(
         )?;
     }
 
+    Ok(project_iam_write)
+}
+
+/// Create every custom role the runtime binds, and bind management's project IAM write only under
+/// conditions that admit those roles and the predefined roles the runtime binds.
+fn emit_runtime_project_role_grants(
+    fragment: &mut TfFragment,
+    ctx: &EmitContext<'_>,
+    label: &str,
+    member: &Expression,
+    context: &PermissionContext,
+) -> Result<()> {
+    let runtime = gcp_runtime_roles(ctx.stack, context).context(ErrorData::GenericError {
+        message: "failed to resolve the GCP roles the runtime binds".to_string(),
+    })?;
+    emit_selected_custom_roles(fragment, &runtime.custom_roles);
+
+    let write_role = gcp_project_iam_write_role(context);
+    emit_selected_custom_roles(fragment, std::slice::from_ref(&write_role));
+    let role_label = binding_label_for_role(&write_role.name, std::slice::from_ref(&write_role))?;
+    // Role names carry the namespace placeholder; the condition needs them as Terraform renders
+    // the role ids.
+    let placeholder = format!("role_{CUSTOM_ROLE_NAMESPACE_PLACEHOLDER}_");
+    for (index, mut condition) in gcp_project_role_grant_conditions(&runtime.project_roles)
+        .into_iter()
+        .enumerate()
+    {
+        condition.expression = condition
+            .expression
+            .replace(&placeholder, "role_${local.gcp_custom_role_prefix}_");
+        push_iam_member(
+            fragment,
+            &format!("{role_label}_{label}_binding_{index}"),
+            role_expression_for_binding(&write_role.name, std::slice::from_ref(&write_role))?,
+            member,
+            &GcpIamBinding {
+                role: write_role.name.clone(),
+                members: Vec::new(),
+                target: GcpBindingTargetScope::Project,
+                target_resource_name: None,
+                resource_kind: None,
+                condition: Some(condition),
+            },
+        )?;
+    }
     Ok(())
 }
 

@@ -1,7 +1,9 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{GcpCustomRoleNaming, ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    gcp_role_write_error, GcpCustomRoleNaming, ResourceControllerContext, ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     GcpServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, PermissionSet, Platform,
@@ -525,12 +527,20 @@ impl GcpServiceAccountController {
         rm_client
             .set_project_iam_policy(project_id.clone(), new_policy, None)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to bind stack roles to service account '{}' at project level",
-                    service_account_email
-                ),
-                resource_id: Some(config.id.clone()),
+            .map_err(|error| {
+                gcp_role_write_error(
+                    error,
+                    &config.id,
+                    "bind the service account's roles on the project",
+                    "resourcemanager.projects.setIamPolicy",
+                    ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to bind stack roles to service account '{}' at project level",
+                            service_account_email
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    },
+                )
             })?;
 
         info!(
@@ -762,12 +772,20 @@ impl GcpServiceAccountController {
         rm_client
             .set_project_iam_policy(project_id.clone(), current_policy, None)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to unbind stack roles from service account '{}' at project level",
-                    service_account_email
-                ),
-                resource_id: Some(config.id.clone()),
+            .map_err(|error| {
+                gcp_role_write_error(
+                    error,
+                    &config.id,
+                    "remove the service account's roles from the project",
+                    "resourcemanager.projects.setIamPolicy",
+                    ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to unbind stack roles from service account '{}' at project level",
+                            service_account_email
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    },
+                )
             })?;
 
         info!(
