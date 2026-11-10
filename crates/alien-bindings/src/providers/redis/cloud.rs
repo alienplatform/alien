@@ -479,6 +479,9 @@ mod tests {
                     .await
                     .unwrap_err();
             assert_eq!(error.code, "REDIS_CREDENTIAL_RESOLUTION_FAILED");
+            // A fresh IAM grant takes minutes to apply, so a denial must stay retryable for
+            // the caller (same as Postgres secret reads).
+            assert!(error.retryable);
         }
 
         #[tokio::test]
