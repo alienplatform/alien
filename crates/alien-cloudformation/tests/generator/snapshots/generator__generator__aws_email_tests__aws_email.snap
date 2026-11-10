@@ -159,7 +159,6 @@ Resources:
           Resource: '*'
         - Action:
           - bedrock-mantle:CreateInference
-          - bedrock-mantle:ListModels
           - bedrock:InvokeModel
           - bedrock:InvokeModelWithResponseStream
           Effect: Allow
@@ -771,7 +770,7 @@ Outputs:
         - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
         - '"]},{"Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
         - Fn::Sub: ${AWS::StackName}
-        - '"}},"Effect":"Allow","NotAction":"iam:*","Resource":"*"},{"Action":["bedrock-mantle:CreateInference","bedrock-mantle:ListModels","bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Effect":"Allow","Resource":["'
+        - '"}},"Effect":"Allow","NotAction":"iam:*","Resource":"*"},{"Action":["bedrock-mantle:CreateInference","bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Effect":"Allow","Resource":["'
         - Fn::Sub: arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/default
         - '","'
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
