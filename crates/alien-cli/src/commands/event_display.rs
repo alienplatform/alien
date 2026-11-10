@@ -170,6 +170,7 @@ fn event_title(data: &Value, state: &Value) -> String {
             "Release Updated".to_string()
         }
         ("DeploymentReleased", _) => "Initial Release".to_string(),
+        ("DeploymentStatusChanged", _) => status_change_title(data),
         ("DeploymentFailed", _) => "Deployment Failed".to_string(),
         ("DeploymentDegraded", _) => "Deployment Degraded".to_string(),
         ("DeploymentRecovered", _) => "Deployment Recovered".to_string(),
@@ -184,6 +185,17 @@ fn event_title(data: &Value, state: &Value) -> String {
         ("DeploymentVolumeRestoreRequested", _) => "Volume Restore Requested".to_string(),
         ("DeploymentDeletionRequested", _) => "Deployment Deletion Requested".to_string(),
         _ => humanize_event_type(event_type),
+    }
+}
+
+fn status_change_title(data: &Value) -> String {
+    let previous = data.get("previousStatus").and_then(Value::as_str);
+    match (previous, data.get("status").and_then(Value::as_str)) {
+        (_, Some("waiting-for-secrets")) => "Waiting For Secrets".to_string(),
+        (Some("waiting-for-secrets"), Some("updating")) => "Update Resumed".to_string(),
+        (_, Some("updating")) => "Update Started".to_string(),
+        (Some("updating" | "waiting-for-secrets"), Some("running")) => "Update Ended".to_string(),
+        _ => "Status Changed".to_string(),
     }
 }
 
@@ -236,6 +248,13 @@ fn event_details(data: &Value, state: &Value) -> String {
             (Some(resource), Some(ordinal), Some(snapshot)) => {
                 format!("{resource} replica {ordinal} from {snapshot}")
             }
+            _ => String::new(),
+        },
+        "DeploymentStatusChanged" => match (
+            data.get("previousStatus").and_then(Value::as_str),
+            data.get("status").and_then(Value::as_str),
+        ) {
+            (Some(previous), Some(current)) => format!("{previous} → {current}"),
             _ => String::new(),
         },
         "DeploymentDeleted" => "Resources torn down".to_string(),
