@@ -526,7 +526,7 @@ async fn status_report(
     };
     if !deleting {
         if let Err(error) = reconcile_report(
-            state,
+            &state,
             &held_values,
             &subject,
             &deployment.id,
@@ -575,7 +575,7 @@ async fn status_report(
         && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
     {
         if let Err(error) = reconcile_report(
-            state,
+            &state,
             &held_values,
             &subject,
             &deployment.id,
