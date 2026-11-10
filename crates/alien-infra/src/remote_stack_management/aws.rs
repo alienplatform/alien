@@ -69,9 +69,10 @@ pub struct AwsRemoteStackManagementController {
     /// controllers from before revisions were recorded.
     #[serde(default)]
     pub(crate) management_permissions_revision: Option<String>,
-    /// Reads of the install's signing settings in a row that AWS could not answer.
+    /// Reads of the install's signing settings in a row that AWS could not answer. Named so a
+    /// user's retry of a failed step starts counting again.
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub(crate) signing_read_failures: u32,
+    pub(crate) wait_for_signing_read_iterations: u32,
 }
 
 fn is_zero(count: &u32) -> bool {
@@ -177,8 +178,11 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if !refuse_a_config_without_the_installs_signing(ctx, &mut self.signing_read_failures)
-            .await?
+        if !refuse_a_config_without_the_installs_signing(
+            ctx,
+            &mut self.wait_for_signing_read_iterations,
+        )
+        .await?
         {
             return Ok(HandlerAction::Continue {
                 state: ApplyingManagementPermissions,
@@ -269,8 +273,11 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        if !refuse_a_config_without_the_installs_signing(ctx, &mut self.signing_read_failures)
-            .await?
+        if !refuse_a_config_without_the_installs_signing(
+            ctx,
+            &mut self.wait_for_signing_read_iterations,
+        )
+        .await?
         {
             return Ok(HandlerAction::Continue {
                 state: UpdateStart,
@@ -1435,7 +1442,7 @@ impl AwsRemoteStackManagementController {
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
             management_permissions_revision: None,
-            signing_read_failures: 0,
+            wait_for_signing_read_iterations: 0,
             permissions_boundary_arn: None,
             permissions_boundary_document: None,
             _internal_stay_count: None,
