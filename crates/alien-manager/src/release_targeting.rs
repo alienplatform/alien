@@ -140,6 +140,15 @@ pub async fn retarget_if_settled(
     if target == current {
         return Ok(());
     }
+    // A routing change since the choice was read means it may be stale. A store
+    // that keeps routing next to the deployments checks it again in the write
+    // itself; for any other store this is the only check, and a change landing
+    // between it and the write still goes through.
+    if let (Some(channels), Some(chosen)) = (channels, &selection.routing) {
+        if channels.deployment_routing(&record.id).await? != *chosen {
+            return Ok(());
+        }
+    }
     if deployment_store
         .retarget_settled_deployment(subject, &record.id, &current, &target, selection.routing)
         .await?

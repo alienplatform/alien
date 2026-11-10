@@ -41,7 +41,8 @@ impl Fixture {
         let path = dir.path().join("manager.db");
         std::mem::forget(dir);
         let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
-        let deployments = SqliteDeploymentStore::new(db.clone());
+        // As the standalone manager builds it: routing is in the same database.
+        let deployments = SqliteDeploymentStore::new(db.clone()).with_routing_in_db();
         let group_id = deployments
             .create_deployment_group(
                 &admin(),
@@ -739,8 +740,11 @@ async fn a_custom_channel_store_with_its_own_routing_still_catches_up() {
         .await
         .unwrap()
         .unwrap();
+    // The deployment store is not told routing is in its database, as when the
+    // channel store is a custom one.
+    let deployments = SqliteDeploymentStore::new(f.db.clone());
     retarget_if_settled(
-        &f.deployments,
+        &deployments,
         &f.releases,
         Some(&custom),
         &admin(),
@@ -753,4 +757,53 @@ async fn a_custom_channel_store_with_its_own_routing_still_catches_up() {
         f.desired(&a).await,
         (Some(r2), "update-pending".to_string())
     );
+}
+
+#[tokio::test]
+async fn the_store_refuses_a_retarget_chosen_from_routing_that_changed() {
+    let f = Fixture::new().await;
+    let r1 = f.release().await;
+    let r2 = f.publish(DEFAULT_CHANNEL).await;
+    let a = f.running_deployment("a").await;
+    f.db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET current_release_id = ?1 WHERE id = ?2",
+            (r1.as_str(), a.as_str()),
+        )
+        .await
+        .unwrap();
+    f.channels.create_channel("empty", None).await.unwrap();
+    let chosen = f.channels.deployment_routing(&a).await.unwrap();
+    f.channels
+        .set_deployment_routing(
+            &a,
+            &DeploymentRouting {
+                channel: "empty".to_string(),
+                pinned_release_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // The write arrives after the move, with the routing the choice was read from.
+    let queued = f
+        .deployments
+        .retarget_settled_deployment(&admin(), &a, &r1, &r2, Some(chosen.clone()))
+        .await
+        .unwrap();
+    assert!(!queued);
+    assert_eq!(f.desired(&a).await, (None, "running".to_string()));
+
+    // With the routing it still has, the same write is accepted.
+    f.channels
+        .set_deployment_routing(&a, &chosen)
+        .await
+        .unwrap();
+    assert!(f
+        .deployments
+        .retarget_settled_deployment(&admin(), &a, &r1, &r2, Some(chosen))
+        .await
+        .unwrap());
 }

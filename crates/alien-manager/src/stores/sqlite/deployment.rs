@@ -40,6 +40,9 @@ fn import_source_to_string(source: &ImportSourceKind) -> String {
 
 pub struct SqliteDeploymentStore {
     db: Arc<SqliteDatabase>,
+    /// Whether deployment routing (channels and pins) lives in this database,
+    /// so a write can check it in the same statement.
+    routing_in_db: bool,
 }
 
 /// A setup reservation whose installer has not registered yet. The manager has
@@ -254,7 +257,19 @@ impl SqliteDeploymentStore {
     }
 
     pub fn new(db: Arc<SqliteDatabase>) -> Self {
-        Self { db }
+        Self {
+            db,
+            routing_in_db: false,
+        }
+    }
+
+    /// Declare that the release channel store keeps routing in this database
+    /// (the SQLite channel store on the same `db`). A retarget then checks
+    /// routing in the same statement that queues it; otherwise the caller's
+    /// own check before the write is all there is.
+    pub fn with_routing_in_db(mut self) -> Self {
+        self.routing_in_db = true;
+        self
     }
 
     /// Release Local push execution claims after the caller exclusively owns the stopped database.
@@ -1482,8 +1497,9 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<bool, AlienError> {
         // Conditional on the row still being settled with nothing queued, so an
         // update that started since the report was read is never overridden,
-        // and on the routing the target was chosen from being unchanged, so a
-        // channel or pin change made since then is not overridden either.
+        // and, when routing lives in this database, on the routing the target was
+        // chosen from being unchanged, so a channel or pin change made since then
+        // is not overridden either.
         let sql = {
             let mut query = Query::update();
             query
@@ -1495,7 +1511,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .and_where(Expr::col(Deployments::Status).eq("running"))
                 .and_where(Expr::col(Deployments::DesiredReleaseId).is_null())
                 .and_where(Expr::col(Deployments::CurrentReleaseId).eq(current_release_id));
-            if let Some(routing) = &routing {
+            if let Some(routing) = routing.as_ref().filter(|_| self.routing_in_db) {
                 query.and_where(Expr::cust_with_values(
                     "id IN (SELECT d.id FROM deployments d
                             LEFT JOIN deployment_channels c ON c.deployment_id = d.id
