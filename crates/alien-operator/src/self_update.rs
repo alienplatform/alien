@@ -100,7 +100,7 @@ pub async fn refresh_pull_secret(state: &OperatorState) -> Result<()> {
 /// `true` when every pull Secret of the Operator holds its credential, or none
 /// is known to need it.
 async fn refresh_pull_secrets(state: &OperatorState) -> Result<bool> {
-    if state.db.read_daily_identity().await?.is_none() {
+    if state.db.read_enrolled_daily_identity().await?.is_none() {
         return Ok(false);
     }
     let configured = state.config.registry_secret.as_deref();

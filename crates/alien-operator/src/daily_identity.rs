@@ -759,11 +759,11 @@ fn failed(message: &str) -> AlienError<ErrorData> {
 /// Obtain the exact-purpose credential for one operator request. Legacy mode
 /// remains explicit while installations migrate.
 pub(crate) async fn has_runtime_identity(db: &OperatorDb) -> Result<bool> {
-    Ok(db.read_daily_identity().await?.is_some())
+    Ok(db.read_enrolled_daily_identity().await?.is_some())
 }
 
 pub(crate) async fn request_token(state: &crate::OperatorState, purpose: Value) -> Result<String> {
-    if state.db.read_daily_identity().await?.is_none() {
+    if state.db.read_enrolled_daily_identity().await?.is_none() {
         return state
             .config
             .sync
@@ -931,7 +931,7 @@ async fn request_credentials(
     purpose: Value,
 ) -> Result<Arc<alien_client_core::runtime_credentials::RuntimeCredentials>> {
     let identity = db
-        .read_daily_identity()
+        .read_enrolled_daily_identity()
         .await?
         .ok_or_else(|| failed("Component identity is required"))?;
     let (manager_url, audience, deployment_id) = (
@@ -1006,7 +1006,7 @@ pub(crate) async fn send_manager_request(
 ) -> Result<reqwest::Response> {
     let (client, request) = builder.build_split();
     let mut request = request.map_err(|_| failed("Cannot construct manager request"))?;
-    if state.db.read_daily_identity().await?.is_none() {
+    if state.db.read_enrolled_daily_identity().await?.is_none() {
         // A legacy Operator's client already carries its sync token.
         return client
             .execute(request)
@@ -2220,11 +2220,16 @@ mod lost_enrollment_tests {
             .await
             .expect_err("the reply was lost");
 
+        // Until the enrollment is confirmed the Operator is in token mode: a
+        // saved candidate is no identity to authenticate with.
+        assert!(!has_runtime_identity(&db).await.unwrap());
+
         let identity = DailyIdentity::new(db.clone()).unwrap();
         let enrolled = identity
             .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
             .await
             .expect("the saved key proves the installed enrollment");
+        assert!(has_runtime_identity(&db).await.unwrap());
         assert!(enrolled);
         let saved = db.read_daily_identity().await.unwrap().unwrap();
         assert_eq!(saved.deployment_id, "deployment-one");

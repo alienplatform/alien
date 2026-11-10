@@ -736,7 +736,7 @@ pub(super) async fn enrich_config(
     // it after the first rollout, and a command receiver built before
     // capability files gets the commands key the manager supplies instead.
     if config.runtime_identity_audience.is_none() {
-        if let Some(identity) = db.read_daily_identity().await? {
+        if let Some(identity) = db.read_enrolled_daily_identity().await? {
             super::sync::sanitize_identity_config(
                 &mut config,
                 &identity.manager_url,

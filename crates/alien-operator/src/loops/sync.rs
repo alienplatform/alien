@@ -487,7 +487,7 @@ async fn sync_with_manager(
 
     let identity = state
         .db
-        .read_daily_identity()
+        .read_enrolled_daily_identity()
         .await?
         .map(|identity| (identity.manager_url, identity.audience));
     if let (Some((manager_url, audience)), Some(target)) =

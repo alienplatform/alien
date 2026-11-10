@@ -182,6 +182,19 @@ impl OperatorDb {
         read_json(&conn, "daily_identity").await
     }
 
+    /// The daily identity, once its enrollment is confirmed. A candidate key
+    /// saved before then (its enrollment answer was lost) is no identity to
+    /// authenticate with, so every caller that asks "is this Operator enrolled"
+    /// reads it through here and stays in token mode until it is confirmed.
+    pub(crate) async fn read_enrolled_daily_identity(
+        &self,
+    ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
+        Ok(self
+            .read_daily_identity()
+            .await?
+            .filter(|identity| !identity.deployment_id.is_empty()))
+    }
+
     pub(crate) async fn write_daily_identity(
         &self,
         state: &crate::daily_identity::DailyIdentityState,

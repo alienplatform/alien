@@ -296,7 +296,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     // already set wins.
     db.install_digest_key().await?;
 
-    let service_provider = if db.read_daily_identity().await?.is_some()
+    let service_provider = if db.read_enrolled_daily_identity().await?.is_some()
         && (service_provider.is_none() || local_bindings.is_some())
     {
         let provider = if let Some(local) = local_bindings.clone() {
