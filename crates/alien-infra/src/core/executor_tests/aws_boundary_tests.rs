@@ -925,3 +925,101 @@ async fn boundaries_installed_with_copied_prefixed_grants_still_cover_the_stack(
     executor.step(state.clone()).await.unwrap();
     executor.refresh(state).await.unwrap();
 }
+
+/// An update that has finished leaves the account it replaced in `previous_config`. The role
+/// carries what the update applied, so the check judges `config`; the replaced definition,
+/// here a stack-wide `postgres/data-access` stored before its read gained the stack tag
+/// condition, must not be asked of the boundary. While an update is in flight or after it
+/// failed, the role may still carry the replaced definition, and that one is judged.
+#[tokio::test]
+async fn a_running_account_is_judged_by_its_config_and_an_unfinished_update_by_the_one_it_replaced()
+{
+    let (_, current, config) = fixture();
+    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let profile = PermissionProfile::new().global(["postgres/data-access"]);
+    let account = |definition: fn(&mut Value)| {
+        let mut account =
+            ServiceAccount::from_permission_profile("application-sa".to_string(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap();
+        let mut stored = serde_json::to_value(&account.stack_permission_sets[0]).unwrap();
+        definition(&mut stored);
+        account.stack_permission_sets[0] = serde_json::from_value(stored).unwrap();
+        account
+    };
+    fn today(_: &mut Value) {}
+    fn before_the_tag_condition(definition: &mut Value) {
+        let mut removed = 0;
+        for entry in definition["platforms"]["aws"].as_array_mut().unwrap() {
+            for scope in ["stack", "resource"] {
+                let binding = entry["binding"][scope].as_object_mut().unwrap();
+                removed += usize::from(binding.remove("condition").is_some());
+            }
+        }
+        assert_eq!(removed, 2, "today's read is conditioned in both scopes");
+    }
+    let prepared = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(account(today), ResourceLifecycle::Frozen)
+        .permission("application", profile.clone())
+        .build();
+    let with_account =
+        |status: ResourceStatus, config: fn(&mut Value), previous: Option<fn(&mut Value)>| {
+            let mut state = current.clone();
+            let mut saved = StackResourceState::new_pending(
+                "service-account".to_string(),
+                Resource::new(account(config)),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            saved.status = status;
+            saved.previous_config = previous.map(|previous| Resource::new(account(previous)));
+            state.resources.insert("application-sa".to_string(), saved);
+            state
+        };
+    let executor = executor(&prepared, &config, InitialSetupAuthority::ImportedHandoff);
+
+    // The replaced definition is outside the installed boundary.
+    let applied_before = with_account(ResourceStatus::Running, before_the_tag_condition, None);
+    let error =
+        validate_installed_aws_permissions_boundary(&prepared, &applied_before, &client, &config)
+            .expect_err("the boundary allows the secret read only with the stack tag condition");
+    assert!(error
+        .to_string()
+        .contains("does not cover this stack's runtime permissions"));
+
+    // The update to today's definition finished, and its replaced account stayed behind.
+    for status in [ResourceStatus::Running, ResourceStatus::RefreshFailed] {
+        let finished = with_account(status, today, Some(before_the_tag_condition));
+        validate_installed_aws_permissions_boundary(&prepared, &finished, &client, &config)
+            .unwrap_or_else(|error| {
+                panic!("a {status:?} account is judged by what it applied: {error}")
+            });
+    }
+    let finished = with_account(
+        ResourceStatus::Running,
+        today,
+        Some(before_the_tag_condition),
+    );
+    executor.step(finished.clone()).await.unwrap();
+    executor.refresh(finished).await.unwrap();
+
+    // An update in flight or failed may not have replaced the role yet.
+    for status in [ResourceStatus::Updating, ResourceStatus::UpdateFailed] {
+        let unfinished = with_account(status, today, Some(before_the_tag_condition));
+        let error =
+            validate_installed_aws_permissions_boundary(&prepared, &unfinished, &client, &config)
+                .expect_err("an unfinished update is judged by the account it replaced");
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{status:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("does not cover this stack's runtime permissions"),
+            "{status:?}: {error}"
+        );
+    }
+}
