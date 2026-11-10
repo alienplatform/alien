@@ -491,6 +491,7 @@ impl PreflightRunner {
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
         // Drop the comparison projection before later awaits so it does not enlarge
         // the deployment future and exhaust the runner's worker stack.
+        let mut authorization_mismatch: Option<String> = None;
         let (direct_setup, imported_setup_authorized) = {
             let direct_setup =
                 setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
@@ -522,7 +523,29 @@ impl PreflightRunner {
                     )?
                 }
                 (_, Some(target), Some(authorization)) => {
-                    setup_update_authorization_matches(old_stack, target, authorization)
+                    let mismatches =
+                        setup_update_authorization_mismatches(old_stack, target, authorization);
+                    if !mismatches.is_empty() {
+                        let description = mismatches.join("; ");
+                        info!(
+                            release_id = %authorization.release_id,
+                            mismatches = %description,
+                            "setup update authorization does not match this update"
+                        );
+                        if let Some(installed) = old_stack {
+                            let differences = SetupOwnedDifferences::between(installed, target);
+                            info!(
+                                added = ?differences.added,
+                                removed = ?differences.removed,
+                                changed = ?differences.changed,
+                                changed_profiles = ?differences.changed_profiles,
+                                management_changed = differences.management_changed,
+                                "setup-owned entries and permission profiles that differ between the installed and target stacks"
+                            );
+                        }
+                        authorization_mismatch = Some(description);
+                    }
+                    authorization_mismatch.is_none()
                 }
                 _ => false,
             };
@@ -588,15 +611,19 @@ impl PreflightRunner {
                 // independently required Frozen handoff behind a generic error.
                 // Intrinsically invalid releases still fail ordinary validation.
                 if !compatibility_summary.success && compile_checks_succeeded {
-                    return Err(AlienError::new(ErrorData::SetupRequired {
-                        message: compatibility_summary
-                            .results
-                            .iter()
-                            .chain(all_results.iter())
-                            .flat_map(|result| result.errors.iter().cloned())
-                            .collect::<Vec<_>>()
-                            .join("; "),
-                    }));
+                    let mut message = compatibility_summary
+                        .results
+                        .iter()
+                        .chain(all_results.iter())
+                        .flat_map(|result| result.errors.iter().cloned())
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    if let Some(mismatch) = &authorization_mismatch {
+                        message.push_str(&format!(
+                            "; the recorded setup update authorization does not cover this update ({mismatch})"
+                        ));
+                    }
+                    return Err(AlienError::new(ErrorData::SetupRequired { message }));
                 }
                 all_results.extend(compatibility_summary.results);
             } else if compile_checks_succeeded
@@ -699,14 +726,97 @@ fn without_declined_live_resources(
     Ok(projected)
 }
 
-fn setup_update_authorization_matches(
+/// The compares of a recorded setup update authorization that fail for this update, each naming
+/// the compare and its computed and recorded digests. Empty when the authorization matches.
+fn setup_update_authorization_mismatches(
     old_stack: Option<&Stack>,
     target_stack: &Stack,
     authorization: &alien_core::SetupUpdateAuthorization,
-) -> bool {
-    old_stack.is_some_and(|old_stack| {
-        old_stack.setup_update_digest() == authorization.baseline_frozen_digest
-    }) && target_stack.setup_update_digest() == authorization.target_frozen_digest
+) -> Vec<String> {
+    let mut mismatches = Vec::new();
+    match old_stack.map(Stack::setup_update_digest) {
+        None => mismatches.push("baseline: no installed stack to compare".to_string()),
+        Some(computed) if computed != authorization.baseline_frozen_digest => {
+            mismatches.push(format!(
+                "baseline: computed {computed}, recorded {}",
+                authorization.baseline_frozen_digest
+            ))
+        }
+        Some(_) => {}
+    }
+    let computed = target_stack.setup_update_digest();
+    if computed != authorization.target_frozen_digest {
+        mismatches.push(format!(
+            "target: computed {computed}, recorded {}",
+            authorization.target_frozen_digest
+        ));
+    }
+    mismatches
+}
+
+/// What differs between the installed stack and the target in the inputs of their setup update
+/// digests, by ID and profile name only. The recorded authorization holds only digests, so this
+/// is the closest view of what changed without logging configuration values.
+#[derive(Debug, PartialEq, Eq)]
+struct SetupOwnedDifferences {
+    added: Vec<String>,
+    removed: Vec<String>,
+    changed: Vec<String>,
+    changed_profiles: Vec<String>,
+    management_changed: bool,
+}
+
+impl SetupOwnedDifferences {
+    fn between(old_stack: &Stack, target_stack: &Stack) -> Self {
+        let installed = old_stack.setup_owned_entry_digests();
+        let target = target_stack.setup_owned_entry_digests();
+        let added = target
+            .keys()
+            .filter(|id| !installed.contains_key(*id))
+            .cloned()
+            .collect();
+        let removed = installed
+            .keys()
+            .filter(|id| !target.contains_key(*id))
+            .cloned()
+            .collect();
+        let changed = installed
+            .iter()
+            .filter(|(id, digest)| target.get(*id).is_some_and(|other| other != *digest))
+            .map(|(id, _)| id.clone())
+            .collect();
+        // Compare as JSON, as the digest does: key order is ignored, list order is not.
+        let json = |profile: Option<&alien_core::permissions::PermissionProfile>| {
+            profile.map(|profile| {
+                serde_json::to_value(profile).expect("permission profiles always serialize to JSON")
+            })
+        };
+        let (installed_profiles, target_profiles) = (
+            &old_stack.permissions.profiles,
+            &target_stack.permissions.profiles,
+        );
+        let changed_profiles = installed_profiles
+            .keys()
+            .chain(
+                target_profiles
+                    .keys()
+                    .filter(|name| !installed_profiles.contains_key(*name)),
+            )
+            .filter(|name| json(installed_profiles.get(*name)) != json(target_profiles.get(*name)))
+            .cloned()
+            .collect();
+        let management_changed = serde_json::to_value(&old_stack.permissions.management)
+            .expect("management permissions always serialize to JSON")
+            != serde_json::to_value(&target_stack.permissions.management)
+                .expect("management permissions always serialize to JSON");
+        Self {
+            added,
+            removed,
+            changed,
+            changed_profiles,
+            management_changed,
+        }
+    }
 }
 
 impl Default for PreflightRunner {
@@ -1564,6 +1674,81 @@ mod setup_update_authorization_tests {
 
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
+    async fn unmatched_setup_authorization_names_the_failed_compare() {
+        let old = empty_stack();
+        let target = Stack::new("stack".to_string())
+            .add(
+                alien_core::Storage::new("evidence".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let approved_elsewhere = Stack::new("stack".to_string())
+            .add(
+                alien_core::Storage::new("other".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        let config = deployment_config();
+        let run = |authorization: SetupUpdateAuthorization| {
+            let (runner, target, old, state, config, client) =
+                (&runner, &target, &old, &state, &config, &client);
+            async move {
+                runner
+                    .run_deployment_time_preflights(
+                        target.clone(),
+                        state,
+                        config,
+                        client,
+                        Some(old),
+                        Some(&authorization),
+                        None,
+                    )
+                    .await
+                    .expect_err("an authorization for other changes does not cover these")
+            }
+        };
+
+        // The setup that recorded this authorization installed a different target.
+        let mut other_target = authorization(&old);
+        other_target.target_frozen_digest = approved_elsewhere.setup_update_digest();
+        let error = run(other_target).await;
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(error.message.contains("evidence"), "{}", error.message);
+        assert!(
+            error.message.contains(&format!(
+                "target: computed {}, recorded {}",
+                target.setup_update_digest(),
+                approved_elsewhere.setup_update_digest()
+            )),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("baseline:"), "{}", error.message);
+
+        // The setup started from a different installed stack.
+        let mut other_baseline = authorization(&target);
+        other_baseline.baseline_frozen_digest = approved_elsewhere.setup_update_digest();
+        let error = run(other_baseline).await;
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(
+            error.message.contains(&format!(
+                "baseline: computed {}, recorded {}",
+                old.setup_update_digest(),
+                approved_elsewhere.setup_update_digest()
+            )),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("target:"), "{}", error.message);
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
     async fn permission_updates_require_exact_setup_authority() {
         let baseline = empty_stack();
         let mut target = baseline.clone();
@@ -1856,32 +2041,142 @@ mod setup_update_authorization_tests {
     }
 
     #[test]
+    fn setup_owned_differences_name_ids_and_profiles_only() {
+        let installed = Stack::new("stack".to_string())
+            .permission(
+                "kept",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .permission(
+                "widened",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .permission(
+                "dropped",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .add(
+                alien_core::Storage::new("kept-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("changed-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("removed-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("live-store".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let target = Stack::new("stack".to_string())
+            .permission(
+                "kept",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .permission(
+                "widened",
+                PermissionProfile::new().resource("kept-store", ["storage/data-write"]),
+            )
+            .permission(
+                "added",
+                PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+            )
+            .add(
+                alien_core::Storage::new("kept-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("changed-store".into())
+                    .versioning(true)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("added-store".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("live-store".into())
+                    .versioning(true)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert_eq!(
+            SetupOwnedDifferences::between(&installed, &target),
+            SetupOwnedDifferences {
+                added: vec!["added-store".to_string()],
+                removed: vec!["removed-store".to_string()],
+                changed: vec!["changed-store".to_string()],
+                changed_profiles: vec![
+                    "widened".to_string(),
+                    "dropped".to_string(),
+                    "added".to_string(),
+                ],
+                management_changed: false,
+            }
+        );
+
+        let mut managed = installed.clone();
+        managed.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("kept-store", ["storage/data-read"]),
+        );
+        assert_eq!(
+            SetupOwnedDifferences::between(&installed, &managed),
+            SetupOwnedDifferences {
+                added: vec![],
+                removed: vec![],
+                changed: vec![],
+                changed_profiles: vec![],
+                management_changed: true,
+            }
+        );
+        assert_eq!(
+            SetupOwnedDifferences::between(&installed, &installed),
+            SetupOwnedDifferences {
+                added: vec![],
+                removed: vec![],
+                changed: vec![],
+                changed_profiles: vec![],
+                management_changed: false,
+            }
+        );
+    }
+
+    #[test]
     fn setup_authority_requires_exact_baseline_and_target_revisions() {
         let stack = empty_stack();
+        let digest = stack.setup_update_digest();
         let mut authority = authorization(&stack);
-        assert!(setup_update_authorization_matches(
-            Some(&stack),
-            &stack,
-            &authority
-        ));
+        assert_eq!(
+            setup_update_authorization_mismatches(Some(&stack), &stack, &authority),
+            Vec::<String>::new()
+        );
 
         authority.baseline_frozen_digest = "different".to_string();
-        assert!(!setup_update_authorization_matches(
-            Some(&stack),
-            &stack,
-            &authority
-        ));
+        assert_eq!(
+            setup_update_authorization_mismatches(Some(&stack), &stack, &authority),
+            vec![format!("baseline: computed {digest}, recorded different")]
+        );
 
         authority = authorization(&stack);
         authority.target_frozen_digest = "different".to_string();
-        assert!(!setup_update_authorization_matches(
-            Some(&stack),
-            &stack,
-            &authority
-        ));
-        assert!(!setup_update_authorization_matches(
-            None, &stack, &authority
-        ));
+        assert_eq!(
+            setup_update_authorization_mismatches(Some(&stack), &stack, &authority),
+            vec![format!("target: computed {digest}, recorded different")]
+        );
+        assert_eq!(
+            setup_update_authorization_mismatches(None, &stack, &authority),
+            vec![
+                "baseline: no installed stack to compare".to_string(),
+                format!("target: computed {digest}, recorded different"),
+            ]
+        );
     }
 
     #[cfg(feature = "runtime-checks")]
