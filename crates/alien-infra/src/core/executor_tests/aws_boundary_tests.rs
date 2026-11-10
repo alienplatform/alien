@@ -1032,4 +1032,9 @@ async fn a_running_account_is_judged_by_its_config_and_an_unfinished_update_by_t
     assert!(error
         .to_string()
         .contains("does not cover this stack's runtime permissions"));
+
+    // A deleted account has no role left; it is recreated from the desired account.
+    let deleted = with_account(ResourceStatus::Deleted, before_the_tag_condition, None);
+    validate_installed_aws_permissions_boundary(&prepared, &deleted, &client, &config)
+        .expect("a deleted account is judged as desired, not by its stale saved config");
 }
