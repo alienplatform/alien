@@ -45,6 +45,8 @@ alien-local = { workspace = true }
 # Client config extensions (always available — needed for cross-account credential resolution)
 alien-client-config = { workspace = true }
 alien-aws-clients = { workspace = true }
+# Cloud metrics pulled from provider APIs (CloudWatch first)
+alien-observer = { workspace = true, features = ["aws"] }
 alien-azure-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 
@@ -101,7 +103,7 @@ aegis = { workspace = true, optional = true }
 
 # Telemetry parsing
 prost = { workspace = true }
-opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs"] }
+opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs", "metrics"] }
 prost-types = { workspace = true }
 
 # Binary data
@@ -122,6 +124,7 @@ fs2 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-client-core = { workspace = true }
 alien-bindings = { workspace = true, features = ["kubernetes"] }
 alien-manager-api = { workspace = true }
 alien-tunnel = { workspace = true, features = ["manager", "operator"] }
