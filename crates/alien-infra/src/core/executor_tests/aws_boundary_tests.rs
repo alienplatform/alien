@@ -1022,4 +1022,14 @@ async fn a_running_account_is_judged_by_its_config_and_an_unfinished_update_by_t
             "{status:?}: {error}"
         );
     }
+
+    // A deletion that failed leaves the role with what it applied, broader than today's.
+    let delete_failed = with_account(ResourceStatus::DeleteFailed, before_the_tag_condition, None);
+    let error =
+        validate_installed_aws_permissions_boundary(&prepared, &delete_failed, &client, &config)
+            .expect_err("a failed deletion is judged by the account it applied");
+    assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+    assert!(error
+        .to_string()
+        .contains("does not cover this stack's runtime permissions"));
 }
