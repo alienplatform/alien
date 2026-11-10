@@ -261,6 +261,36 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// This process does not serve the sandbox's route at that address yet: after a manager
+    /// restart the sandbox's next tick serves it again.
+    #[error(
+        code = "SANDBOX_ROUTE_NOT_SERVED",
+        message = "Sandbox '{sandbox}' has no route served at '{base_url}' in this process yet",
+        retryable = "true",
+        internal = "false"
+    )]
+    SandboxRouteNotServed {
+        /// Sandbox whose route was expected
+        sandbox: String,
+        /// Address the route was expected at
+        base_url: String,
+    },
+
+    /// Forwarding a sandbox's route to Docker's host gateway failed, for example because the
+    /// gateway port is still held.
+    #[error(
+        code = "SANDBOX_ROUTE_FORWARD_FAILED",
+        message = "Failed to forward sandbox route '{base_url}' to Docker's host gateway: {reason}",
+        retryable = "true",
+        internal = "false"
+    )]
+    SandboxRouteForwardFailed {
+        /// Address of the route being forwarded
+        base_url: String,
+        /// Why the forward failed
+        reason: String,
+    },
+
     /// A sandbox session operation failed.
     #[error(
         code = "SANDBOX_SESSION_FAILED",

@@ -6,7 +6,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{path::PathBuf, time::Duration};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::container::local_utils;
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
@@ -137,6 +137,90 @@ fn local_health_check_port(config: &Container, ports: &[u16]) -> Result<Option<u
 /// Manages containerized workloads on the Local platform using Docker.
 /// Unlike cloud platforms, containers run directly
 /// via the Docker daemon.
+/// The Local sandboxes this container links, with the loopback route each one serves, read from
+/// the sandboxes' own state so a route is only ever forwarded for the sandbox that serves it.
+/// A linked sandbox whose state cannot be read, or that serves no route, is left out with a
+/// warning: the container then cannot reach it until its next tick finds the route.
+fn linked_sandbox_routes(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Container,
+) -> Vec<(String, String)> {
+    // Keyed by sandbox, so a sandbox linked more than once is forwarded once
+    let mut routes = std::collections::BTreeMap::new();
+    for link in config
+        .links
+        .iter()
+        .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
+    {
+        match ctx.require_dependency::<crate::sandbox::LocalSandboxController>(link) {
+            Ok(sandbox) => match sandbox.route_url {
+                Some(route) => {
+                    routes.insert(link.id.clone(), route);
+                }
+                None => warn!(
+                    container_id = %config.id,
+                    sandbox = %link.id,
+                    "linked sandbox serves no route yet; not forwarding it to the container"
+                ),
+            },
+            Err(error) => warn!(
+                container_id = %config.id,
+                sandbox = %link.id,
+                %error,
+                "could not read the linked sandbox's state; not forwarding its route to the container"
+            ),
+        }
+    }
+    routes.into_iter().collect()
+}
+
+/// Makes a linked sandbox's route reachable from containers. A route this process has not served
+/// again yet (after a manager restart, before the sandbox's next tick) is a dependency that is not
+/// ready, so the executor waits for it instead of failing the container; a failed forward keeps
+/// its own retryability.
+async fn forward_linked_sandbox(container_id: &str, sandbox: &str, route: &str) -> Result<()> {
+    let forwarded = alien_local::SandboxRoute::forward_to_containers(sandbox, route).await;
+    let not_served = matches!(
+        &forwarded,
+        Err(error) if matches!(error.error, Some(alien_local::ErrorData::SandboxRouteNotServed { .. }))
+    );
+    if not_served {
+        forwarded.context(ErrorData::DependencyNotReady {
+            resource_id: container_id.to_string(),
+            dependency_id: sandbox.to_string(),
+        })
+    } else {
+        forwarded.context(ErrorData::CloudPlatformError {
+            message: format!("make linked sandbox '{sandbox}' reachable from the container"),
+            resource_id: Some(container_id.to_string()),
+        })
+    }
+}
+
+/// Consecutive Ready ticks on which a container's linked sandbox route could not be forwarded,
+/// by (container, sandbox). A failure or two is a manager restart the sandbox has not caught up
+/// with; more is worth a warning.
+static FORWARD_FAILURES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<(String, String), u32>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Failures in a row after which a Ready tick's failed forward is logged as a warning.
+const FORWARD_FAILURES_BEFORE_WARNING: u32 = 3;
+
+/// Records one Ready tick's forward outcome and returns the failures in a row, 0 on success.
+fn record_forward_outcome(container_id: &str, sandbox: &str, failed: bool) -> u32 {
+    let mut failures = FORWARD_FAILURES.lock().expect("no panic holds this lock");
+    let key = (container_id.to_string(), sandbox.to_string());
+    if failed {
+        let count = failures.entry(key).or_insert(0);
+        *count += 1;
+        *count
+    } else {
+        failures.remove(&key);
+        0
+    }
+}
+
 #[controller]
 pub struct LocalContainerController {
     /// Container info after starting
@@ -203,6 +287,7 @@ impl LocalContainerController {
             container_path: "/tmp".to_string(),
             resource_id: "tmp".to_string(),
             shared_with_host_workloads: false,
+            read_only: false,
         });
 
         for link in &config.links {
@@ -220,6 +305,7 @@ impl LocalContainerController {
                                 container_path: format!("/mnt/storage/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
                                 shared_with_host_workloads: true,
+                                read_only: false,
                             });
                         }
                     }
@@ -233,6 +319,7 @@ impl LocalContainerController {
                                 container_path: format!("/mnt/kv/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
                                 shared_with_host_workloads: true,
+                                read_only: false,
                             });
                         }
                     }
@@ -246,6 +333,7 @@ impl LocalContainerController {
                                 container_path: format!("/mnt/vault/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
                                 shared_with_host_workloads: true,
+                                read_only: false,
                             });
                         }
                     }
@@ -266,6 +354,10 @@ impl LocalContainerController {
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();
+        // The bindings of linked Local sandboxes as the controller resolved them, before any
+        // deployment variable is added. Only these get a host token file mounted: a variable
+        // shaped like a sandbox binding would otherwise mount any host file it names.
+        let sandbox_bindings = local_utils::linked_sandbox_bindings(&config.links, &env_vars);
 
         for var in applicable_secret_environment_variables(
             &config.id,
@@ -313,6 +405,17 @@ impl LocalContainerController {
                     })
                 })?;
             env_vars.extend(entry);
+        }
+
+        // A linked Local sandbox is reached over the host gateway with a mounted token file
+        local_utils::mount_local_sandboxes_for_container(
+            &config.id,
+            sandbox_bindings,
+            &mut env_vars,
+            &mut bind_mounts,
+        )?;
+        for (sandbox, route) in linked_sandbox_routes(ctx, config) {
+            forward_linked_sandbox(&config.id, &sandbox, &route).await?;
         }
 
         // Rewrite binding env vars to use container paths instead of host paths
@@ -516,6 +619,22 @@ impl LocalContainerController {
                 state: StartingContainer,
                 suggested_delay: None,
             });
+        }
+
+        // A manager restart drops the gateway forwards while this container keeps running, and
+        // its health may depend on reaching the sandbox, so they are restored before the check.
+        // Each tick re-asserts them (a no-op while they stand); a route its sandbox has not served
+        // again yet is retried on the next tick rather than failing the container.
+        for (sandbox, route) in linked_sandbox_routes(ctx, config) {
+            let outcome = forward_linked_sandbox(&config.id, &sandbox, &route).await;
+            let failures = record_forward_outcome(&config.id, &sandbox, outcome.is_err());
+            if let Err(error) = outcome {
+                if failures >= FORWARD_FAILURES_BEFORE_WARNING {
+                    warn!(container_id = %config.id, %sandbox, %route, %error, failures, "linked sandbox route still not forwarded");
+                } else {
+                    debug!(container_id = %config.id, %sandbox, %route, %error, "linked sandbox route not forwarded yet");
+                }
+            }
         }
 
         let health_result = if let Some(health) = &config.health_check {
@@ -1275,3 +1394,7 @@ mod tests {
 #[cfg(all(test, unix))]
 #[path = "local_tmp_tests.rs"]
 mod tmp_tests;
+
+#[cfg(all(test, unix))]
+#[path = "local_sandbox_link_tests.rs"]
+mod sandbox_link_tests;
