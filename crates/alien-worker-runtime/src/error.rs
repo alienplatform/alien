@@ -282,6 +282,18 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// The runtime could not get log export credentials from its manager.
+    #[error(
+        code = "TELEMETRY_CREDENTIALS_FAILED",
+        message = "Could not get log export credentials: {message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    TelemetryCredentialsFailed {
+        /// Why the credentials could not be obtained
+        message: String,
+    },
+
     /// Generic runtime error for uncommon cases.
     #[error(
         code = "RUNTIME_ERROR",

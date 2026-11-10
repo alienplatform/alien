@@ -4154,6 +4154,7 @@ fn rebuilt_injected_config() -> DeploymentConfig {
     config.deployment_token = Some("deployment-token".to_string());
     config.monitoring = Some(alien_core::OtlpConfig {
         logs_endpoint: "https://manager.example/v1/logs".to_string(),
+        credentials: None,
         logs_auth_header: "authorization=Bearer deployment-token".to_string(),
         metrics_endpoint: Some("https://manager.example/v1/metrics".to_string()),
         metrics_auth_header: None,
@@ -5228,6 +5229,7 @@ async fn a_changed_value_saved_with_the_old_hash_is_rolled() {
 fn monitoring_with_header(header: &str) -> alien_core::OtlpConfig {
     alien_core::OtlpConfig {
         logs_endpoint: "https://manager.test/v1/logs".to_string(),
+        credentials: None,
         logs_auth_header: header.to_string(),
         metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
         metrics_auth_header: None,

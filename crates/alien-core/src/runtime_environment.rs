@@ -13,6 +13,9 @@ pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
 pub const ENV_ALIEN_RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
+/// JSON `{"url": ..., "audience": ...}`: where a Worker's runtime trades proof of its cloud
+/// identity for short-lived log export credentials. Read by the runtime only.
+pub const ENV_ALIEN_TELEMETRY_CREDENTIALS: &str = "ALIEN_TELEMETRY_CREDENTIALS";
 pub const ENV_ALIEN_SECRETS: &str = "ALIEN_SECRETS";
 /// Opaque deployment-managed revision that rolls workloads when referenced
 /// secret values change without exposing secret-derived data in the spec.
@@ -491,6 +494,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_RESOURCE_ID
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS
+                | ENV_ALIEN_TELEMETRY_CREDENTIALS
                 | ENV_ALIEN_SECRET_ENV_REVISION
                 | ENV_ALIEN_SECRETS
         )

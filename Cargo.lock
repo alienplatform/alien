@@ -1627,6 +1627,7 @@ dependencies = [
 name = "alien-worker-runtime"
 version = "3.3.59"
 dependencies = [
+ "alien-aws-clients",
  "alien-bindings",
  "alien-commands",
  "alien-core",
@@ -1660,6 +1661,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "opentelemetry-appender-tracing",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "pin-project-lite",

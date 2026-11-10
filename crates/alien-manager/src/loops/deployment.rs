@@ -1968,6 +1968,7 @@ fn build_monitoring_config(
 
     (otlp_enabled && !telemetry_off).then(|| alien_core::OtlpConfig {
         logs_endpoint: format!("{}/v1/logs", config.base_url()),
+        credentials: None,
         logs_auth_header: format!("authorization=Bearer {}", token),
         metrics_endpoint: None,
         metrics_auth_header: None,

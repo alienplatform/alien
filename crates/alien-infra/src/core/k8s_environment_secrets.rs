@@ -1039,6 +1039,7 @@ mod tests {
         )
         .with_monitoring(OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer logs".to_string(),
             metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
             metrics_auth_header: None,
