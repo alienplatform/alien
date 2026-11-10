@@ -350,6 +350,10 @@ struct AlienSecretsConfig {
 ///   the keys are listed in ALIEN_SECRETS and alien-worker-runtime loads the
 ///   actual values from the "secrets" vault at startup.
 ///
+/// Variables without `target_resources` are for the stack's own workloads. They are not
+/// injected into containers Alien adds itself (the sandbox egress gateway), so changing
+/// one does not restart them. A variable that names such a container still reaches it.
+///
 /// `SecretsVaultMutation` links the secrets vault only to Worker wrappers that
 /// can consume vault pointers. Native-projected workloads use the deployment
 /// environment snapshot directly and receive no workload vault grant.
@@ -376,6 +380,12 @@ pub fn inject_environment_variables(
         platform,
         deployer_reports,
     );
+    let alien_added_resources: Vec<String> = stack
+        .resources
+        .keys()
+        .filter(|id| alien_core::sandbox_egress::is_managed_gateway(stack, id))
+        .cloned()
+        .collect();
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -383,13 +393,17 @@ pub fn inject_environment_variables(
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
+            let alien_added = alien_added_resources.contains(resource_name);
             let deployer_secrets: Vec<DeployerSecretEnv> = deployer_environment
                 .iter()
-                .filter(|(_, targets)| alien_core::targets_resource(targets, resource_name))
+                .filter(|(_, targets)| {
+                    alien_core::env_delivered_to_resource(targets, resource_name, alien_added)
+                })
                 .map(|(variable, _)| variable.clone())
                 .collect();
             inject_into_compute_resource(
                 resource_name,
+                alien_added,
                 resource_entry,
                 snapshot,
                 platform,
@@ -612,6 +626,7 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 ///   them natively (see `alien_core::SecretDelivery`).
 fn inject_into_compute_resource(
     resource_name: &str,
+    alien_added: bool,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
@@ -620,6 +635,7 @@ fn inject_into_compute_resource(
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
             resource_name,
+            alien_added,
             ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
@@ -632,6 +648,7 @@ fn inject_into_compute_resource(
     {
         inject_into_environment(
             resource_name,
+            alien_added,
             ComputeKind::Container,
             &mut container.environment,
             snapshot,
@@ -641,6 +658,7 @@ fn inject_into_compute_resource(
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
             resource_name,
+            alien_added,
             ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
@@ -659,6 +677,7 @@ fn inject_into_compute_resource(
 
 fn inject_into_environment(
     resource_name: &str,
+    alien_added: bool,
     kind: ComputeKind,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
@@ -671,7 +690,9 @@ fn inject_into_environment(
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
         .iter()
-        .filter(|v| alien_core::targets_resource(&v.target_resources, resource_name))
+        .filter(|v| {
+            alien_core::env_delivered_to_resource(&v.target_resources, resource_name, alien_added)
+        })
         .filter(|v| !deployer_secrets.iter().any(|secret| secret.name == v.name))
         .collect();
 
@@ -2036,6 +2057,7 @@ mod tests {
         };
         inject_into_environment(
             "api",
+            false,
             ComputeKind::Worker,
             &mut worker.environment,
             &make_snapshot(&[("PLAIN_VAR", "plain")], &[]),
@@ -2624,21 +2646,22 @@ mod tests {
                 idle_pause_seconds: None,
             })
             .build();
-        let gateway =
-            alien_core::Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
-                .code(alien_core::ContainerCode::Image {
-                    image: "test:latest".to_string(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.25".to_string(),
-                    desired: "0.25".to_string(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "256Mi".to_string(),
-                    desired: "256Mi".to_string(),
-                })
-                .permissions("default".to_string())
-                .build();
+        let gateway = alien_core::Container::new(
+            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+        )
+        .code(alien_core::ContainerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.25".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "256Mi".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
         for (id, config) in [
             ("subject".to_string(), Resource::new(sandbox)),
             (

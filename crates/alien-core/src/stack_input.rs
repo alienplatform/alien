@@ -72,6 +72,19 @@ pub fn targets_resource(target_resources: &Option<Vec<String>>, resource_id: &st
     }
 }
 
+/// Whether an environment variable is delivered to `resource_id`.
+///
+/// This is [`targets_resource`], except that a resource Alien adds itself (the sandbox
+/// egress gateway, `alien_added`) only receives a variable that names it. Untargeted
+/// variables are for the stack's own workloads.
+pub fn env_delivered_to_resource(
+    target_resources: &Option<Vec<String>>,
+    resource_id: &str,
+    alien_added: bool,
+) -> bool {
+    targets_resource(target_resources, resource_id) && !(alien_added && target_resources.is_none())
+}
+
 /// Environment variable handling for a stack input mapping.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
