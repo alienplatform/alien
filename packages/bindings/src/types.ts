@@ -477,6 +477,35 @@ export type CommandFrame =
   | { kind: "stdout" | "stderr"; seq: number; data: Buffer }
   | { kind: "exit"; exitCode: number; truncated: boolean }
 
+/** A signal for an interactive command. It reaches the command's whole process group. */
+export type CommandSignal =
+  | "interrupt"
+  | "terminate"
+  | "kill"
+  | "hangup"
+  | "quit"
+  | "user1"
+  | "user2"
+
+/**
+ * A running command you can write to and signal while reading its output.
+ *
+ * Iterate it for output exactly as `runCommand`'s frames: output arrives as the program writes
+ * it, so a prompt with no newline after it arrives while the program waits, and the last frame is
+ * the one terminal frame. Leaving the loop early ends the command.
+ */
+export interface InteractiveCommand extends AsyncIterable<CommandFrame> {
+  /** Writes to stdin. Resolves once the sandbox has handed the bytes to the program, so a
+   * program that is not reading holds the write rather than the bytes piling up in between. */
+  write(data: Buffer | string): Promise<void>
+  /** End of input. Closing again, or after the command ended, is not an error. */
+  closeStdin(): Promise<void>
+  /** Signals the command's process group. Rejects once the command has ended. */
+  signal(signal: CommandSignal): Promise<void>
+  /** Ends the command by releasing its output. Idempotent. */
+  close(): Promise<void>
+}
+
 /** What a command needs to run. */
 export interface RunCommandOptions {
   /**
@@ -579,6 +608,15 @@ export interface Sandbox {
     command: string,
     options: RunCommandOptions,
   ): AsyncIterable<CommandFrame>
+  /**
+   * Starts a command you can drive over stdin, resolving once it is running. Requires
+   * `interactiveCommands`. For REPLs, language servers and tool protocols.
+   */
+  runInteractive(
+    sandboxId: string,
+    command: string,
+    options: RunCommandOptions,
+  ): Promise<InteractiveCommand>
   /**
    * Starts a command as a job and resolves with its id. Requires `jobs`.
    *

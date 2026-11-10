@@ -138,29 +138,91 @@ pub async fn stream(
     output_cap: usize,
     frames: mpsc::Sender<Frame>,
 ) {
-    if let Err(error) = request.validate() {
-        let _ = frames
-            .send(Frame::Error {
-                code: "requestInvalid".to_string(),
-                message: error.to_string(),
-            })
-            .await;
-        return;
-    }
+    let (child, _registration) = match spawn(request, working_directory, identity, false) {
+        Ok(spawned) => spawned,
+        Err(frame) => {
+            let _ = frames.send(frame).await;
+            return;
+        }
+    };
 
-    let Ok(mut command) = sandbox_process::spawn_sandboxed(
-        &request.command[0],
-        &request.command[1..].to_vec(),
-        &request.env,
-    ) else {
-        let _ = frames
-            .send(Frame::Error {
+    pump(
+        child,
+        Duration::from_millis(request.timeout_ms),
+        output_cap,
+        sandbox_process::Framing::Lines,
+        frames,
+        None::<fn()>,
+    )
+    .await;
+}
+
+/// Streams a spawned child's frames to `frames` until the terminal one, killing the child if the
+/// receiver goes away. `exited`, when given, runs once the child has exited and before it is
+/// reaped, ahead of the terminal frame.
+pub(crate) async fn pump(
+    child: tokio::process::Child,
+    timeout: Duration,
+    output_cap: usize,
+    framing: sandbox_process::Framing,
+    frames: mpsc::Sender<Frame>,
+    exited: Option<impl FnOnce() + Send>,
+) {
+    // The framing itself is shared with the GCP binding, which runs commands through a launcher
+    // CLI rather than in-guest. Only the wire type differs, and it differs here.
+    let (raw, mut incoming) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+    let produce = sandbox_process::stream_framed(child, timeout, output_cap, framing, raw, exited);
+
+    // `incoming` is moved in so it is dropped the moment forwarding stops. Holding it would
+    // leave the producer writing into a channel nobody reads, which is exactly the runaway a
+    // departed caller is supposed to end.
+    // The caller leaving is watched directly, not only noticed on the next failed send: a
+    // command that prints nothing never produces a frame to fail on, so without `closed()` it
+    // would run to its deadline for a receiver that is already gone.
+    let forward = async move {
+        loop {
+            tokio::select! {
+                frame = incoming.recv() => match frame {
+                    Some(frame) => {
+                        if frames.send(Frame::from(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                () = frames.closed() => break,
+            }
+        }
+    };
+
+    tokio::join!(produce, forward);
+}
+
+/// Validates a request and spawns its command under `identity`, or returns the frame that says
+/// why it did not run.
+///
+/// `piped_stdin` gives the command a pipe for stdin instead of null. Only an interactive command
+/// asks for one: anything else would hold its deadline open on a read nobody answers.
+pub(crate) fn spawn(
+    request: &ExecRequest,
+    working_directory: Option<&std::path::Path>,
+    identity: ExecIdentity,
+    piped_stdin: bool,
+) -> std::result::Result<(tokio::process::Child, crate::children::Registration), Frame> {
+    request.validate().map_err(|error| Frame::Error {
+        code: "requestInvalid".to_string(),
+        message: error.to_string(),
+    })?;
+
+    let mut command =
+        sandbox_process::spawn_sandboxed(&request.command[0], &request.command[1..], &request.env)
+            .map_err(|_| Frame::Error {
                 code: "spawnFailed".to_string(),
                 message: "command could not be prepared".to_string(),
-            })
-            .await;
-        return;
-    };
+            })?;
+    if piped_stdin {
+        command.stdin(std::process::Stdio::piped());
+    }
 
     command
         .env("ALIEN_SANDBOX_EXEC_UID", identity.uid.to_string())
@@ -195,15 +257,11 @@ pub async fn stream(
 
         // Allocated here rather than in the closure: between `fork` and `exec` nothing may
         // allocate, and the whole path has to be a plain pointer by then.
-        let Ok(directory) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
-            let _ = frames
-                .send(Frame::Error {
-                    code: "requestInvalid".to_string(),
-                    message: "the working directory contains a NUL byte".to_string(),
-                })
-                .await;
-            return;
-        };
+        let directory =
+            std::ffi::CString::new(directory.as_os_str().as_bytes()).map_err(|_| Frame::Error {
+                code: "requestInvalid".to_string(),
+                message: "the working directory contains a NUL byte".to_string(),
+            })?;
 
         unsafe {
             command.pre_exec(move || {
@@ -217,52 +275,10 @@ pub async fn stream(
         }
     }
 
-    let (child, _registration) = match crate::children::spawn(&mut command) {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = frames
-                .send(Frame::Error {
-                    code: "spawnFailed".to_string(),
-                    message: error.to_string(),
-                })
-                .await;
-            return;
-        }
-    };
-
-    // The framing itself is shared with the GCP binding, which runs commands through a launcher
-    // CLI rather than in-guest. Only the wire type differs, and it differs here.
-    let (raw, mut incoming) = mpsc::channel(FRAME_CHANNEL_DEPTH);
-    let produce = sandbox_process::stream(
-        child,
-        Duration::from_millis(request.timeout_ms),
-        output_cap,
-        raw,
-    );
-
-    // `incoming` is moved in so it is dropped the moment forwarding stops. Holding it would
-    // leave the producer writing into a channel nobody reads, which is exactly the runaway a
-    // departed caller is supposed to end.
-    // The caller leaving is watched directly, not only noticed on the next failed send: a
-    // command that prints nothing never produces a frame to fail on, so without `closed()` it
-    // would run to its deadline for a receiver that is already gone.
-    let forward = async move {
-        loop {
-            tokio::select! {
-                frame = incoming.recv() => match frame {
-                    Some(frame) => {
-                        if frames.send(Frame::from(frame)).await.is_err() {
-                            break;
-                        }
-                    }
-                    None => break,
-                },
-                () = frames.closed() => break,
-            }
-        }
-    };
-
-    tokio::join!(produce, forward);
+    crate::children::spawn(&mut command).map_err(|error| Frame::Error {
+        code: "spawnFailed".to_string(),
+        message: error.to_string(),
+    })
 }
 
 impl From<sandbox_process::ProcessFrame> for Frame {

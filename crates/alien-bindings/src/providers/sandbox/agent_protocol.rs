@@ -30,6 +30,8 @@ pub use alien_core::sandbox_image::AGENT_PORT;
 const RUN_COMMAND: &str = "sandbox.runCommand";
 
 const JOB_START: &str = "sandbox.jobStart";
+pub(super) const RUN_INTERACTIVE: &str = "sandbox.runInteractive";
+pub(super) const SIGNAL: &str = "sandbox.interactive.signal";
 const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 
@@ -279,7 +281,7 @@ pub async fn cancel_job<T: AgentTransport + ?Sized>(
 }
 
 /// The body `/v1/exec` and `/v1/jobs/start` both take.
-fn exec_body(request: &RunCommandRequest) -> Result<serde_json::Value> {
+pub(super) fn exec_body(request: &RunCommandRequest) -> Result<serde_json::Value> {
     // Checked after conversion, not on the Duration: a sub-millisecond timeout is non-zero here
     // and floors to `timeoutMs: 0`, which the agent then refuses as invalid.
     if timeout_millis(request.timeout) == 0 {
@@ -374,9 +376,15 @@ fn timeout_millis(timeout: Duration) -> u64 {
 /// have started the command — and past the headers it certainly did — so a repeat could run it
 /// twice, and the refusal must not carry the retry signal.
 pub(super) fn unanswered(operation: &str, reason: &str) -> ErrorData {
-    // Both take a command the agent may already be running, so an unanswered one leaves the
-    // outcome unestablished. Every other operation is idempotent and safe to send again.
-    if operation == RUN_COMMAND || operation == JOB_START {
+    // These may already have acted: the first three start a command the agent may already be
+    // running, and a signal may already have been delivered, where a second interrupt is not the
+    // same request as the first. An unanswered one leaves the outcome unestablished, and is not
+    // sent again. Every other operation is idempotent and safe to send again.
+    if operation == RUN_COMMAND
+        || operation == JOB_START
+        || operation == RUN_INTERACTIVE
+        || operation == SIGNAL
+    {
         return ErrorData::SandboxOutcomeUnknown {
             operation: operation.to_string(),
             reason: reason.to_string(),
@@ -419,8 +427,18 @@ pub(super) async fn send_raw(
 
 /// Read an error without letting a proxy's response consume unbounded memory or time.
 /// An incomplete body cannot establish whether a command was executed.
-pub(super) async fn error_body(mut response: reqwest::Response, operation: &str) -> Result<String> {
-    const MAX_ERROR_BODY: usize = 4096;
+pub(super) async fn error_body(response: reqwest::Response, operation: &str) -> Result<String> {
+    let body = bounded_body(response, operation).await?;
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// Reads a short answer's whole body within the response deadline, refusing one larger than any
+/// the agent sends. A body that stalls or overflows reads as the agent not having answered.
+pub(super) async fn bounded_body(
+    mut response: reqwest::Response,
+    operation: &str,
+) -> Result<Vec<u8>> {
+    const MAX_BODY: usize = 4096;
     let status = response.status();
     let read = async {
         let mut body = Vec::new();
@@ -433,17 +451,17 @@ pub(super) async fn error_body(mut response: reqwest::Response, operation: &str)
                 &format!("{operation} returned {status} and its body could not be read"),
             ))?
         {
-            if chunk.len() > MAX_ERROR_BODY - body.len() {
+            if chunk.len() > MAX_BODY - body.len() {
                 return Err(AlienError::new(unanswered(
                     operation,
                     &format!(
-                        "{operation} returned {status} and its body exceeded {MAX_ERROR_BODY} bytes"
+                        "{operation} returned {status} and its body exceeded {MAX_BODY} bytes"
                     ),
                 )));
             }
             body.extend_from_slice(&chunk);
         }
-        Ok(String::from_utf8_lossy(&body).into_owned())
+        Ok(body)
     };
     tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, read)
         .await
@@ -493,7 +511,7 @@ pub(super) async fn check_response(
 /// `timeout` is the command's own, and the whole body is bounded by it plus
 /// [`TERMINAL_FRAME_GRACE`]: a healthy agent ends every command at that deadline and writes a
 /// terminal frame, so a body still open past it belongs to a sandbox that is no longer running.
-fn frame_stream(
+pub(super) fn frame_stream(
     response: reqwest::Response,
     provider: &'static str,
     timeout: Duration,

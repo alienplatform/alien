@@ -1301,6 +1301,59 @@ pub enum CommandOutput {
     },
 }
 
+/// The signal names an interactive command accepts.
+pub use alien_core::sandbox_signal::CommandSignal;
+
+/// The input half of an interactive command: its stdin and its signals.
+///
+/// Shared, so a caller can write from one task while another reads output. Writes from several
+/// tasks at once are applied in the order they take the handle, each one whole.
+#[async_trait]
+pub trait CommandInput: Send + Sync + std::fmt::Debug {
+    /// Writes bytes to the command's stdin.
+    ///
+    /// Returns once the sandbox has handed every byte to the command's stdin pipe, which is the
+    /// backpressure: a command that is not reading holds the write rather than the bytes piling up
+    /// in between. A lost answer is retried without writing anything twice.
+    ///
+    /// A write that is cancelled, or fails, may already have delivered part of its bytes. The next
+    /// write then fails with `stdinInterrupted`, sending nothing, and the one after continues the
+    /// stream from what the command actually took. Nothing is ever skipped or sent twice.
+    async fn write(&self, data: &[u8]) -> Result<()>;
+
+    /// Closes stdin, so a program reading to end of input sees it and finishes. Closing again, or
+    /// after the command has ended, is not an error.
+    async fn close_stdin(&self) -> Result<()>;
+
+    /// Sends a signal to the command's process group. Once the command has been reaped this fails
+    /// with `commandNotRunning`, even before its terminal frame has been read: a signal never
+    /// reaches a process that is not the command.
+    async fn signal(&self, signal: CommandSignal) -> Result<()>;
+}
+
+/// A running interactive command. Requires `interactiveCommands`.
+///
+/// `output` is the same stream `run_command` returns: frames as the command writes them, with
+/// backpressure, then exactly one terminal item. Output is framed per write rather than per line,
+/// so a prompt with no newline after it reaches the caller while the program waits on it.
+/// Dropping `output` ends the command, as it does for `run_command`; dropping `input` only drops
+/// a handle, and stdin stays open until it is closed or the command ends.
+pub struct InteractiveCommand {
+    /// stdin and signals
+    pub input: Arc<dyn CommandInput>,
+    /// stdout, stderr and the terminal item
+    pub output: futures::stream::BoxStream<'static, Result<CommandOutput>>,
+}
+
+impl std::fmt::Debug for InteractiveCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InteractiveCommand")
+            .field("input", &self.input)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The id a started job answers to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -1448,6 +1501,27 @@ pub trait Sandbox: Binding {
         sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
+
+    /// Starts a command the caller can write to and signal while it runs. Requires
+    /// `interactiveCommands`.
+    ///
+    /// The request's timeout bounds the command as it does for `run_command`. The call returns
+    /// once the command has started, so the first write cannot arrive before it exists. A start
+    /// that goes unanswered is `SANDBOX_OUTCOME_UNKNOWN`, as for `run_command`.
+    async fn run_interactive(
+        &self,
+        _sandbox_id: &str,
+        _request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::OperationNotSupported {
+                operation: "sandbox.runInteractive".to_string(),
+                reason: "this sandbox backend has no interactive commands; check the \
+                         interactiveCommands capability before calling"
+                    .to_string(),
+            },
+        ))
+    }
 
     /// Starts a command as a job, which outlives the call that started it. Requires `jobs`.
     ///
