@@ -81,27 +81,11 @@ pub enum ErrorData {
         label: String,
     },
 
-    /// A protected install's management identity would receive a predefined role that is not on
-    /// the list of roles it may hold.
-    #[error(
-        code = "PROTECTED_MANAGEMENT_ROLE_REFUSED",
-        message = "Permission set '{permission_set_id}' grants '{role}', which a protected install's management identity may not hold: it is not one of the predefined roles the built-in permission sets use, and a predefined role can't be narrowed to leave out what only the verifier may do",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 400
-    )]
-    ProtectedManagementRoleRefused {
-        /// Permission set holding the role
-        permission_set_id: String,
-        /// The refused predefined role
-        role: String,
-    },
-
-    /// A stack-defined grant to a protected install's management identity would reach what only
-    /// the verifier or setup may do.
+    /// A grant to a protected install's management identity is not on the allow-list for its
+    /// cloud.
     #[error(
         code = "PROTECTED_MANAGEMENT_ACTION_REFUSED",
-        message = "Permission set '{permission_set_id}' grants '{action}' to the management identity, which on a protected install could {reason}. Remove it from the stack's management permissions.",
+        message = "Permission set '{permission_set_id}' grants '{action}' to the management identity, which a protected install does not allow: it is not covered by the allow-list at {allow_list}. Remove it from the permission set, or add a line with a reason to that file if it cannot change what runs or reach signing secrets.",
         retryable = "false",
         internal = "false",
         http_status_code = 400
@@ -111,8 +95,8 @@ pub enum ErrorData {
         permission_set_id: String,
         /// The refused action pattern, permission or role
         action: String,
-        /// What the grant would allow
-        reason: String,
+        /// The allow-list file that would have to cover it
+        allow_list: String,
     },
 
     /// Required variable not found in permission context.

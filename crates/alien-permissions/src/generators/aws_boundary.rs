@@ -20,7 +20,8 @@ use crate::{
 
 use super::{
     aws_boundary_coverage::action_patterns_overlap,
-    verifier_owned::{aws_stack_grant_refusal, is_stack_defined_set},
+    protected_allowlist::{AllowListCloud, Kind as AllowListKind},
+    verifier_owned::is_stack_defined_set,
     AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
 
@@ -918,9 +919,9 @@ pub(super) fn include_role_statement(
 /// The actions an Allow statement grants the rendered identity: on a protected install's
 /// management identity, all but what only the verifier may do. Denies are kept whole.
 ///
-/// A grant of a set the stack defines is refused when it reaches IAM writes or role assumption
-/// (see [`aws_stack_grant_refusal`]): the exact-name filter can't drop a wildcard, and the
-/// limits bind only the management role itself.
+/// What a set the stack defines grants must also be on the AWS allow-list, or rendering is
+/// refused: the exact-name filter can't drop a wildcard, and the limits bind only the
+/// management role itself.
 pub(super) fn protected_management_actions<'a>(
     permission_set: &PermissionSet,
     allow: bool,
@@ -931,22 +932,13 @@ pub(super) fn protected_management_actions<'a>(
     if !allow || !context.signing_protected {
         return Ok(actions);
     }
+    let kept = super::verifier_owned::aws_management_actions(&actions, binding);
     if is_stack_defined_set(permission_set) {
-        for action in actions.iter() {
-            if let Some(reason) = aws_stack_grant_refusal(action) {
-                return Err(AlienError::new(
-                    ErrorData::ProtectedManagementActionRefused {
-                        permission_set_id: permission_set.id.clone(),
-                        action: action.clone(),
-                        reason: reason.to_string(),
-                    },
-                ));
-            }
+        for action in &kept {
+            AllowListCloud::Aws.require(&permission_set.id, AllowListKind::Action, action)?;
         }
     }
-    Ok(Cow::Owned(super::verifier_owned::aws_management_actions(
-        &actions, binding,
-    )))
+    Ok(Cow::Owned(kept))
 }
 
 /// Older setups have no boundary policy or adoption grant. Only omit the catalog's

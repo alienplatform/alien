@@ -2,7 +2,8 @@ use crate::{
     error::{ErrorData, Result},
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        verifier_owned::{gcp_allowed_predefined_role, gcp_verifier_owned},
+        protected_allowlist::{AllowListCloud, Kind as AllowListKind},
+        verifier_owned::{gcp_verifier_owned, is_stack_defined_set},
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -214,7 +215,7 @@ impl GcpRuntimePermissionsGenerator {
             let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
                 continue;
             };
-            let permissions = granted_permissions(permissions, context);
+            let permissions = granted_permissions(permission_set, permissions, context)?;
             if permissions.is_empty() {
                 continue;
             }
@@ -368,13 +369,12 @@ impl GcpRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
-                    if context.signing_protected && !gcp_allowed_predefined_role(predefined_role) {
-                        return Err(alien_error::AlienError::new(
-                            ErrorData::ProtectedManagementRoleRefused {
-                                permission_set_id: permission_set.id.clone(),
-                                role: predefined_role.clone(),
-                            },
-                        ));
+                    if context.signing_protected {
+                        AllowListCloud::Gcp.require(
+                            &permission_set.id,
+                            AllowListKind::Role,
+                            predefined_role,
+                        )?;
                     }
                     bindings.push(GcpIamBinding {
                         role: predefined_role.clone(),
@@ -394,7 +394,7 @@ impl GcpRuntimePermissionsGenerator {
             let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
                 continue;
             };
-            let permissions = granted_permissions(permissions, context);
+            let permissions = granted_permissions(permission_set, permissions, context)?;
             if permissions.is_empty() {
                 continue;
             }
@@ -479,12 +479,30 @@ impl GcpRuntimePermissionsGenerator {
 /// The permissions of a catalog entry the rendered identity receives: all of them, except that a
 /// protected install's management identity never receives what only the verifier may do. The
 /// entry keeps its role ID either way, so a role loses permissions instead of being replaced.
-fn granted_permissions(permissions: &[String], context: &PermissionContext) -> Vec<String> {
-    permissions
+///
+/// What a set the stack defines grants must also be on the GCP allow-list, or rendering is
+/// refused. Predefined roles are checked against the same file for every set, since a role can't
+/// be narrowed permission by permission.
+fn granted_permissions(
+    permission_set: &PermissionSet,
+    permissions: &[String],
+    context: &PermissionContext,
+) -> Result<Vec<String>> {
+    let kept: Vec<String> = permissions
         .iter()
         .filter(|permission| !(context.signing_protected && gcp_verifier_owned(permission)))
         .cloned()
-        .collect()
+        .collect();
+    if context.signing_protected && is_stack_defined_set(permission_set) {
+        for permission in &kept {
+            AllowListCloud::Gcp.require(
+                &permission_set.id,
+                AllowListKind::Permission,
+                permission,
+            )?;
+        }
+    }
+    Ok(kept)
 }
 
 /// Secrets named `signed-…` hold a protected install's inputs; only setup writes them. On a

@@ -1,8 +1,7 @@
-//! What a stack may add to a protected install's management identity. The limits on a protected
-//! install bind the management identity itself, so a grant that lets it mint a role, assume
-//! another role or run a command on a machine would let it act without them. The built-in sets are
-//! reviewed together with the limits and render as before; a set the stack defines is refused when
-//! one of its actions reaches such a grant. An unprotected install keeps every grant it had.
+//! What a protected install's management identity may be granted. Each cloud has an allow-list
+//! file next to the permission sets; a grant it doesn't cover is refused when it is rendered, with
+//! an error that names the action and the file. This holds for a wildcard too: `iam:*` is refused
+//! because it covers actions that aren't listed. An unprotected install keeps every grant it had.
 
 mod common;
 
@@ -86,14 +85,43 @@ fn render_aws_template(set: &PermissionSet, protected: bool) -> alien_permission
         .map(|_| ())
 }
 
+const ALLOW_LIST_AWS: &str = "crates/alien-permissions/protected-management/aws.allow";
+const ALLOW_LIST_AZURE: &str = "crates/alien-permissions/protected-management/azure.allow";
+const ALLOW_LIST_GCP: &str = "crates/alien-permissions/protected-management/gcp.allow";
+
+fn assert_refused(
+    error: &alien_error::AlienError<alien_permissions::ErrorData>,
+    action: &str,
+    allow_list: &str,
+) {
+    assert_eq!(
+        error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED",
+        "{action}: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains(&format!("'{action}'")),
+        "{action}: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains(allow_list),
+        "{action}: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("orders/extra-management"),
+        "{action}: {}",
+        error.message
+    );
+}
+
 #[test]
-fn an_aws_stack_grant_that_reaches_iam_writes_or_role_assumption_is_refused() {
+fn an_aws_stack_grant_outside_the_allow_list_is_refused() {
     for action in [
         "iam:*",
         "iam:CreateRole",
         "iam:AttachRolePolicy",
-        "iam:PutRolePolicy",
-        "iam:UpdateAssumeRolePolicy",
         "iam:PassRole",
         "iam:Create*",
         "iam:*Role*",
@@ -104,30 +132,23 @@ fn an_aws_stack_grant_that_reaches_iam_writes_or_role_assumption_is_refused() {
         "*:AssumeRole",
         "sts:*",
         "sts:AssumeRole",
-        "sts:Assume*",
         "sts:AssumeRoleWithWebIdentity",
-        "STS:assumerole",
+        "cloudformation:*",
+        "cloudformation:UpdateStack",
+        "cloudformation:CreateStack",
+        "s3:*",
+        "s3:Put*",
+        "s3:PutBucketPolicy",
+        "ssm:SendCommand",
     ] {
         let set = aws_set(&["s3:GetObject", action]);
         let error = render_aws(&set, true)
             .expect_err(&format!("{action} must be refused on a protected install"));
-        assert_eq!(
-            error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED",
-            "{action}"
-        );
-        assert!(
-            error.message.contains(action),
-            "{action}: {}",
-            error.message
-        );
-        assert!(error.message.contains("orders/extra-management"));
+        assert_refused(&error, action, ALLOW_LIST_AWS);
 
         let error = render_aws_template(&set, true)
             .expect_err(&format!("{action} must be refused in the setup template"));
-        assert_eq!(
-            error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED",
-            "{action}"
-        );
+        assert_refused(&error, action, ALLOW_LIST_AWS);
 
         let unprotected = render_aws(&set, false).expect("an unprotected install is unchanged");
         assert!(
@@ -139,19 +160,32 @@ fn an_aws_stack_grant_that_reaches_iam_writes_or_role_assumption_is_refused() {
 }
 
 #[test]
-fn an_aws_stack_grant_of_reads_and_other_services_is_kept() {
-    let set = aws_set(&[
-        "s3:*",
+fn an_aws_stack_grant_on_the_allow_list_still_renders() {
+    let actions = [
+        "s3:GetObject",
+        "s3:Get*",
         "iam:GetRole",
         "iam:List*",
-        "iam:SimulatePrincipalPolicy",
         "sts:GetCallerIdentity",
         "ec2:Describe*",
-    ]);
-    let granted = render_aws(&set, true).expect("reads and other services render");
-    for action in ["s3:*", "iam:GetRole", "iam:List*", "sts:GetCallerIdentity"] {
+        "dynamodb:Query",
+        "s3:PutObject",
+        "sqs:SendMessage",
+        "kms:GenerateDataKey*",
+    ];
+    let set = aws_set(&actions);
+    let granted = render_aws(&set, true).expect("allow-listed actions render");
+    for action in actions {
         assert!(granted.iter().any(|kept| kept == action), "{action}");
     }
+    render_aws_template(&set, true).expect("allow-listed actions render in the setup template");
+}
+
+#[test]
+fn an_aws_stack_grant_of_what_only_the_verifier_may_do_is_dropped_not_granted() {
+    let set = aws_set(&["s3:GetObject", "lambda:UpdateFunctionCode"]);
+    let granted = render_aws(&set, true).expect("the verifier-owned action is dropped");
+    assert_eq!(granted, ["s3:GetObject"]);
 }
 
 #[test]
@@ -265,33 +299,64 @@ fn render_azure(set: &PermissionSet, protected: bool) -> alien_permissions::Resu
         .collect())
 }
 
+fn render_azure_data(
+    set: &PermissionSet,
+    protected: bool,
+) -> alien_permissions::Result<Vec<String>> {
+    let plan = AzureRuntimePermissionsGenerator::new().generate_grant_plan(
+        set,
+        BindingTarget::Stack,
+        &azure_context(protected),
+    )?;
+    Ok(plan
+        .custom_roles
+        .into_iter()
+        .flat_map(|role| role.role_definition.data_actions)
+        .collect())
+}
+
+const GROUP_SCOPE: &str = "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}";
+
+fn azure_data_set(data_actions: &[&str]) -> PermissionSet {
+    stack_set(
+        "azure",
+        json!({ "dataActions": data_actions }),
+        json!({
+            "stack": { "scope": GROUP_SCOPE },
+            "resource": { "scope": GROUP_SCOPE },
+        }),
+    )
+}
+
+fn azure_role_set(roles: &[&str]) -> PermissionSet {
+    stack_set(
+        "azure",
+        json!({ "predefinedRoles": roles }),
+        json!({
+            "stack": { "scope": GROUP_SCOPE },
+            "resource": { "scope": GROUP_SCOPE },
+        }),
+    )
+}
+
 #[test]
-fn an_azure_stack_grant_that_reaches_a_verifier_action_is_refused() {
+fn an_azure_stack_grant_outside_the_allow_list_is_refused() {
     for action in [
-        "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/runCommand/action",
-        "Microsoft.Compute/virtualMachines/runCommand/action",
         "Microsoft.Compute/*/action",
         "Microsoft.Compute/virtualMachineScaleSets/*/runCommand/action",
         "Microsoft.Compute/*",
-        "Microsoft.App/jobs/start/action",
-        "Microsoft.App/containerApps/revisions/*/action",
         "Microsoft.App/*",
-        "microsoft.managedidentity/userassignedidentities/assign/action",
+        "Microsoft.KeyVault/*",
+        "Microsoft.KeyVault/vaults/*",
+        "Microsoft.Network/virtualNetworks/write",
         "*/action",
+        "*/read*",
         "*",
     ] {
         let set = azure_set(&["Microsoft.Storage/storageAccounts/read", action]);
         let error = render_azure(&set, true)
             .expect_err(&format!("{action} must be refused on a protected install"));
-        assert_eq!(
-            error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED",
-            "{action}"
-        );
-        assert!(
-            error.message.contains(action),
-            "{action}: {}",
-            error.message
-        );
+        assert_refused(&error, action, ALLOW_LIST_AZURE);
 
         let unprotected = render_azure(&set, false).expect("an unprotected install is unchanged");
         assert!(
@@ -302,20 +367,129 @@ fn an_azure_stack_grant_that_reaches_a_verifier_action_is_refused() {
 }
 
 #[test]
-fn an_azure_stack_grant_that_reaches_no_verifier_action_is_kept() {
+fn an_azure_stack_grant_of_what_only_the_verifier_may_do_is_dropped_not_granted() {
+    let set = azure_set(&[
+        "Microsoft.Storage/storageAccounts/read",
+        "Microsoft.Compute/virtualMachines/runCommand/action",
+        "Microsoft.App/jobs/start/action",
+        "Microsoft.KeyVault/vaults/secrets/write",
+        "Microsoft.KeyVault/vaults/write",
+        "Microsoft.Authorization/roleAssignments/write",
+        "microsoft.managedidentity/userassignedidentities/assign/action",
+    ]);
+    let granted = render_azure(&set, true).expect("the verifier-owned actions are dropped");
+    assert_eq!(granted, ["Microsoft.Storage/storageAccounts/read"]);
+}
+
+#[test]
+fn an_azure_stack_grant_on_the_allow_list_still_renders() {
     let set = azure_set(&[
         "Microsoft.Storage/storageAccounts/read",
         "Microsoft.Compute/virtualMachineScaleSets/read",
-        "Microsoft.Network/virtualNetworks/write",
         "Microsoft.App/containerApps/revisions/read",
     ]);
-    let granted = render_azure(&set, true).expect("these render");
-    assert!(granted
-        .iter()
-        .any(|action| action == "Microsoft.Network/virtualNetworks/write"));
-    assert!(granted
-        .iter()
-        .any(|action| action == "Microsoft.Storage/storageAccounts/read"));
+    let granted = render_azure(&set, true).expect("reads render");
+    assert_eq!(
+        granted,
+        [
+            "Microsoft.App/containerApps/revisions/read",
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Storage/storageAccounts/read",
+        ]
+    );
+}
+
+#[test]
+fn an_azure_data_action_outside_the_allow_list_is_refused_whichever_set_grants_it() {
+    for action in [
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/delete",
+        "Microsoft.KeyVault/vaults/secrets/*",
+        "Microsoft.KeyVault/vaults/*",
+        "Microsoft.KeyVault/*",
+        "Microsoft.Storage/*",
+        "*",
+    ] {
+        let set = azure_data_set(&[
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            action,
+        ]);
+        let error = render_azure_data(&set, true)
+            .expect_err(&format!("{action} must be refused on a protected install"));
+        assert_refused(&error, action, ALLOW_LIST_AZURE);
+        render_azure_data(&set, false).expect("an unprotected install is unchanged");
+    }
+}
+
+#[test]
+fn an_azure_data_action_on_the_allow_list_still_renders() {
+    let set = azure_data_set(&[
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+    ]);
+    let granted = render_azure_data(&set, true).expect("allow-listed data actions render");
+    assert_eq!(
+        granted,
+        [
+            "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+        ]
+    );
+}
+
+/// The vault grants setup adds for every vault in the stack reach management as `[mgmt]` roles
+/// that the runtime assigns where a vault is created, including the signing vault: a role
+/// assignment condition can't name the scope. So a built-in set's secret write is refused too.
+#[test]
+fn the_built_in_vault_secret_write_is_refused_for_the_management_identity() {
+    let vault_write = get_permission_set("vault/data-write").expect("built-in set");
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let error = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(vault_write, target, &azure_context(true))
+            .expect_err("a protected install's management can't write vault secrets");
+        assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
+        assert!(
+            error
+                .message
+                .contains("Microsoft.KeyVault/vaults/secrets/setSecret/action"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains(ALLOW_LIST_AZURE),
+            "{}",
+            error.message
+        );
+        AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(vault_write, target, &azure_context(false))
+            .expect("an unprotected install is unchanged");
+    }
+}
+
+#[test]
+fn an_azure_predefined_role_outside_the_allow_list_is_refused() {
+    for role in [
+        "Key Vault Contributor",
+        "Key Vault Secrets User",
+        "Managed Identity Contributor",
+        "Network Contributor",
+        "AcrPush",
+    ] {
+        let set = azure_role_set(&[role]);
+        let error = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(&set, BindingTarget::Stack, &azure_context(true))
+            .expect_err(&format!("{role} must be refused on a protected install"));
+        assert_refused(&error, role, ALLOW_LIST_AZURE);
+    }
+    let set = azure_role_set(&["Reader"]);
+    let plan = AzureRuntimePermissionsGenerator::new()
+        .generate_grant_plan(&set, BindingTarget::Stack, &azure_context(true))
+        .expect("an allow-listed role renders");
+    assert_eq!(plan.bindings.len(), 1);
+    assert_eq!(plan.bindings[0].role_name, "Reader");
 }
 
 fn gcp_context(protected: bool) -> PermissionContext {
@@ -348,7 +522,7 @@ fn render_gcp(
 }
 
 #[test]
-fn a_gcp_predefined_role_outside_the_allowed_list_is_refused() {
+fn a_gcp_predefined_role_outside_the_allow_list_is_refused() {
     for role in [
         "roles/editor",
         "roles/owner",
@@ -360,19 +534,67 @@ fn a_gcp_predefined_role_outside_the_allowed_list_is_refused() {
         "roles/run.admin",
         "roles/osconfig.guestPolicyAdmin",
         "roles/compute.osAdminLogin",
+        "roles/secretmanager.admin",
         "roles/some.roleAddedToGcpLater",
     ] {
         let set = gcp_set(json!({ "predefinedRoles": [role] }));
         let error = render_gcp(&set, true)
             .expect_err(&format!("{role} must be refused on a protected install"));
-        assert_eq!(error.code, "PROTECTED_MANAGEMENT_ROLE_REFUSED", "{role}");
-        assert!(error.message.contains(role), "{role}: {}", error.message);
+        assert_refused(&error, role, ALLOW_LIST_GCP);
         render_gcp(&set, false).expect("an unprotected install is unchanged");
     }
 
     let set = gcp_set(json!({ "predefinedRoles": ["roles/storage.objectViewer"] }));
     let (roles, _) = render_gcp(&set, true).expect("an allowed role renders");
     assert_eq!(roles, ["roles/storage.objectViewer"]);
+}
+
+#[test]
+fn a_gcp_stack_permission_outside_the_allow_list_is_refused() {
+    for permission in [
+        "iam.serviceAccounts.actAs",
+        "iam.serviceAccounts.getAccessToken",
+        "iam.roles.create",
+        "secretmanager.versions.add",
+        "compute.instances.create",
+        "compute.projects.setCommonInstanceMetadata",
+        "run.services.update",
+        "storage.buckets.delete",
+        "*.create",
+        "iam.*",
+        "*",
+    ] {
+        let set = gcp_set(json!({ "permissions": ["storage.objects.get", permission] }));
+        let result = render_gcp(&set, true);
+        if alien_permissions::generators::gcp_verifier_owned(permission) {
+            let (_, permissions) = result.expect("a verifier-owned permission is dropped");
+            assert_eq!(permissions, ["storage.objects.get"], "{permission}");
+        } else {
+            let error = result.expect_err(&format!("{permission} must be refused"));
+            assert_refused(&error, permission, ALLOW_LIST_GCP);
+        }
+        render_gcp(&set, false).expect("an unprotected install is unchanged");
+    }
+}
+
+#[test]
+fn a_gcp_stack_permission_on_the_allow_list_still_renders() {
+    let set = gcp_set(json!({ "permissions": [
+        "storage.objects.get",
+        "storage.objects.list",
+        "pubsub.topics.publish",
+        "logging.logEntries.create",
+    ] }));
+    let (_, permissions) = render_gcp(&set, true).expect("allow-listed permissions render");
+    assert_eq!(
+        permissions,
+        [
+            "logging.logEntries.create",
+            "pubsub.topics.publish",
+            "storage.objects.get",
+            "storage.objects.list",
+        ]
+    );
 }
 
 #[test]
@@ -395,7 +617,7 @@ fn every_predefined_role_the_catalog_grants_is_allowed_or_deliberately_refused()
             "roles/iam.serviceAccountTokenCreator",
             "roles/run.jobsExecutorWithOverrides",
         ],
-        "a new built-in role must be added to the allowed list or refused here on purpose"
+        "a new built-in role must be added to the allow-list or refused here on purpose"
     );
 }
 
@@ -413,7 +635,6 @@ fn gcp_os_login_and_os_config_writes_are_left_out_of_a_protected_role() {
         "oslogin.sshPublicKeys.create",
         "osconfig.patchJobs.get",
         "osconfig.guestPolicies.list",
-        "oslogin.users.getLoginProfile",
     ] }));
     let (_, permissions) = render_gcp(&set, true).expect("renders");
     assert_eq!(
@@ -421,7 +642,6 @@ fn gcp_os_login_and_os_config_writes_are_left_out_of_a_protected_role() {
         [
             "osconfig.guestPolicies.list",
             "osconfig.patchJobs.get",
-            "oslogin.users.getLoginProfile",
             "storage.objects.get",
         ]
     );

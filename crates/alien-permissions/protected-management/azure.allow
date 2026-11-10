@@ -1,0 +1,56 @@
+# What a protected Azure install accepts in the management roles.
+#
+# Azure's deny settings refuse writes and deletes at the install's resource group, but not an
+# `/action` and not the data plane, so what management's roles may name is limited here.
+#
+# - `action`: control-plane actions. Checked for permission sets the stack defines (not the
+#   built-in set of their id); the built-in sets are reviewed separately and filtered by the
+#   verifier-owned list.
+# - `data`: data-plane actions. Checked for every permission set rendered into a management role,
+#   built-in or not, whether setup creates the role or the runtime assigns it. The runtime's
+#   role-assignment condition can't name the scope it assigns at, so a role it may assign can
+#   land on the signing vault, whose secrets hold the ledger and the signed inputs.
+# - `role`: predefined roles, exact names. Checked for permission sets the stack defines.
+#
+# Format: `<kind> <pattern or name>  # reason`. A requested pattern is covered when this file's
+# pattern matches it with the requested pattern's own `*` and `?` taken as literal characters,
+# so `*/read` covers `Microsoft.Storage/storageAccounts/read` but not `Microsoft.Storage/*`.
+# Every line needs a reason. Key Vault secret reads and writes and certificate writes are
+# deliberately absent: a vault's secrets hold the signing ledger and the signed inputs.
+
+action */read                    # reads; no read changes a resource
+
+data Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read    # reads blobs
+data Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write   # writes blobs
+data Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete  # deletes blobs
+data Microsoft.Storage/storageAccounts/tableServices/tables/entities/read    # reads table entities
+data Microsoft.Storage/storageAccounts/tableServices/tables/entities/write   # writes table entities
+data Microsoft.Storage/storageAccounts/tableServices/tables/entities/delete  # deletes table entities
+data Microsoft.Storage/storageAccounts/tableServices/tables/entities/add/action     # adds a table entity
+data Microsoft.Storage/storageAccounts/tableServices/tables/entities/update/action  # updates a table entity
+data Microsoft.ServiceBus/namespaces/messages/send/action     # sends a queue message
+data Microsoft.ServiceBus/namespaces/messages/receive/action  # receives a queue message
+data Microsoft.KeyVault/vaults/secrets/readMetadata/action    # lists secret metadata
+data Microsoft.KeyVault/vaults/keys/read                      # reads key metadata
+data Microsoft.KeyVault/vaults/keys/encrypt/action            # encrypts with an existing key
+data Microsoft.KeyVault/vaults/keys/decrypt/action            # decrypts with an existing key
+data Microsoft.App/sandboxGroups/diskimages/read              # sandbox images (built-in sandbox sets)
+data Microsoft.App/sandboxGroups/diskimages/write             # sandbox images (built-in sandbox sets)
+data Microsoft.App/sandboxGroups/diskimages/delete            # sandbox images (built-in sandbox sets)
+data Microsoft.App/sandboxGroups/sandboxes/read               # sandboxes (built-in sandbox sets)
+data Microsoft.App/sandboxGroups/sandboxes/count/read         # sandboxes (built-in sandbox sets)
+data Microsoft.App/sandboxGroups/sandboxes/write              # sandboxes (built-in sandbox sets)
+data Microsoft.App/sandboxGroups/sandboxes/delete             # sandboxes (built-in sandbox sets)
+
+role Reader                              # reads the group
+role Key Vault Reader                    # reads vault metadata; no secret values
+role Monitoring Reader                   # reads metrics
+role Storage Blob Data Reader            # reads blobs
+role Storage Blob Data Contributor       # blob data; account settings are control-plane actions
+role Storage Table Data Reader           # reads table entities
+role Storage Table Data Contributor      # table data
+role Azure Service Bus Data Receiver     # receives queue messages
+role Azure Service Bus Data Sender       # sends queue messages
+role AcrPull                             # pulls images
+role Cognitive Services User             # calls an AI deployment
+role Cognitive Services OpenAI User      # calls an AI deployment

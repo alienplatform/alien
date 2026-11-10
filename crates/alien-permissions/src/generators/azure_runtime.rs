@@ -2,9 +2,9 @@ use crate::{
     error::{ErrorData, Result},
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        protected_allowlist::{AllowListCloud, Kind as AllowListKind},
         verifier_owned::{
-            azure_changes_what_runs, azure_stack_grant_reaches_verifier_action,
-            azure_verifier_owned_action, is_stack_defined_set,
+            azure_changes_what_runs, azure_verifier_owned_action, is_stack_defined_set,
         },
     },
     variables::VariableInterpolator,
@@ -402,7 +402,11 @@ impl AzureRuntimePermissionsGenerator {
                 all_actions.extend(granted_actions(permission_set, actions, context)?);
             }
             if let Some(data_actions) = &platform_permission.grant.data_actions {
-                all_data_actions.extend(data_actions.clone());
+                all_data_actions.extend(granted_data_actions(
+                    permission_set,
+                    data_actions,
+                    context,
+                )?);
             }
 
             // Interpolate variables in the scope
@@ -509,6 +513,13 @@ impl AzureRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for role_name in predefined_roles {
+                    if context.signing_protected && is_stack_defined_set(permission_set) {
+                        AllowListCloud::Azure.require(
+                            &permission_set.id,
+                            AllowListKind::Role,
+                            role_name,
+                        )?;
+                    }
                     let role_definition_id =
                         self.predefined_role_definition_id(role_name, context)?;
                     bindings.push(AzureRoleBinding {
@@ -611,11 +622,15 @@ impl AzureRuntimePermissionsGenerator {
                 .unwrap_or_default(),
             context,
         )?;
-        let mut data_actions = platform_permission
-            .grant
-            .data_actions
-            .clone()
-            .unwrap_or_default();
+        let mut data_actions = granted_data_actions(
+            permission_set,
+            platform_permission
+                .grant
+                .data_actions
+                .as_deref()
+                .unwrap_or_default(),
+            context,
+        )?;
         actions.sort();
         actions.dedup();
         data_actions.sort();
@@ -798,31 +813,43 @@ impl Default for AzureRuntimePermissionsGenerator {
 /// itself, but Azure doesn't carry it to the resources in the group, so the roles must leave
 /// those writes out.
 ///
-/// A set the stack defines is refused instead when one of its action patterns reaches what only
-/// the verifier may do: a wildcard such as `Microsoft.Compute/*/action` would carry a run
-/// command, which no deny setting refuses.
+/// What a set the stack defines grants must also be on the Azure allow-list, or rendering is
+/// refused: a wildcard such as `Microsoft.Compute/*/action` would carry a run command, which no
+/// deny setting refuses.
 fn granted_actions(
     permission_set: &PermissionSet,
     actions: &[String],
     context: &PermissionContext,
 ) -> Result<Vec<String>> {
+    let kept = kept_actions(actions, context);
     if context.signing_protected && is_stack_defined_set(permission_set) {
-        if let Some(action) = actions
+        // A wildcard the filter would drop is still refused: the stack asked for more than the
+        // allow-list covers. Only a named action that the filter removes is dropped quietly.
+        for action in actions
             .iter()
-            .find(|action| azure_stack_grant_reaches_verifier_action(action))
+            .filter(|action| action.contains(['*', '?']) || kept.contains(action))
         {
-            return Err(alien_error::AlienError::new(
-                ErrorData::ProtectedManagementActionRefused {
-                    permission_set_id: permission_set.id.clone(),
-                    action: action.clone(),
-                    reason: "run a command on a machine, start a job with its own containers or \
-                             change which revision serves"
-                        .to_string(),
-                },
-            ));
+            AllowListCloud::Azure.require(&permission_set.id, AllowListKind::Action, action)?;
         }
     }
-    Ok(kept_actions(actions, context))
+    Ok(kept)
+}
+
+/// The data actions of an entry the rendered identity receives. A protected install's
+/// management identity receives only the data actions on the Azure allow-list, whichever set
+/// grants them: setup's deny settings don't reach the data plane, and a data action such as
+/// writing a Key Vault secret could change the signing ledger or a signed input.
+fn granted_data_actions(
+    permission_set: &PermissionSet,
+    data_actions: &[String],
+    context: &PermissionContext,
+) -> Result<Vec<String>> {
+    if context.signing_protected {
+        for action in data_actions {
+            AllowListCloud::Azure.require(&permission_set.id, AllowListKind::DataAction, action)?;
+        }
+    }
+    Ok(data_actions.to_vec())
 }
 
 fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {

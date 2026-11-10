@@ -280,7 +280,6 @@ fn emit_protection(
             })
         })?;
     let excluded_actions = deny_excluded_actions(roles)?;
-    refuse_management_secret_writes(roles)?;
     let verifier = format!("{label}_verifier");
     fragment.resource_blocks.push(resource_block(
         "azurerm_user_assigned_identity",
@@ -762,32 +761,6 @@ fn emit_verifier_grants(
         ],
     ));
     Ok(())
-}
-
-/// Key Vault secret writes at the group or subscription would reach the signing vault, whose data plane the
-/// deny doesn't cover.
-fn refuse_management_secret_writes(roles: &AzureManagementRoles) -> Result<()> {
-    let writes: Vec<&String> = roles
-        .roles
-        .iter()
-        .flat_map(|role| role.data_actions.iter())
-        .filter(|action| {
-            let action = action.to_ascii_lowercase();
-            action.starts_with("microsoft.keyvault/vaults/secrets/")
-                && !action.ends_with("/readmetadata/action")
-                || action == "microsoft.keyvault/vaults/*"
-                || action == "*"
-        })
-        .collect();
-    if writes.is_empty() {
-        return Ok(());
-    }
-    Err(alien_error::AlienError::new(ErrorData::OperationNotSupported {
-        operation: "protect this Azure install".to_string(),
-        reason: format!(
-            "the management identity would hold {writes:?} on every Key Vault in the group, including the one holding the signing ledger"
-        ),
-    }))
 }
 
 /// The writes and deletes the management roles grant that change only infrastructure running no

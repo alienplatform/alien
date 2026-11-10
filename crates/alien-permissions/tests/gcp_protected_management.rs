@@ -243,7 +243,7 @@ fn protected_management_is_never_bound_to_an_impersonation_role() {
             &context(true),
         )
         .expect_err("a token creator binding lets management act as any service account");
-    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ROLE_REFUSED");
+    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
     assert!(GcpRuntimePermissionsGenerator::new()
         .generate_grant_plan(
             get_permission_set("service-account/impersonate").expect("registered set"),
