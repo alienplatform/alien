@@ -13,9 +13,9 @@ use crate::{
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 use alien_core::{
     Ai, AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, Key,
-    ManagementConfig, PermissionProfile, PermissionSetReference, Platform, RemoteStackManagement,
-    Resource, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus, ServiceAccount,
-    SetupManagement, Stack, StackResourceState, StackState, Storage,
+    ManagementConfig, PermissionProfile, PermissionSet, PermissionSetReference, Platform,
+    RemoteStackManagement, Resource, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
+    ServiceAccount, SetupManagement, Stack, StackResourceState, StackState, Storage,
 };
 use alien_permissions::PermissionContext;
 use serde_json::{json, Value};
@@ -606,6 +606,66 @@ async fn a_stack_wide_grant_is_judged_by_what_the_installed_service_account_carr
         )
         .unwrap();
     }
+}
+
+// A stack can define its own grant and give it to a service account, like a role the account
+// assumes elsewhere. Setup's boundary renders only the catalog, so it has never carried such a
+// grant, and the check must not require it: every later release of the stack would otherwise
+// need setup again.
+#[tokio::test]
+async fn a_stack_defined_account_grant_is_not_required_of_the_boundary() {
+    let (_, current, config) = fixture();
+    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let defined: PermissionSet = serde_json::from_value(json!({
+        "id": "custom/assume-target-role",
+        "description": "Assumes the management role in target accounts",
+        "platforms": {
+            "aws": [{
+                "grant": { "actions": ["sts:AssumeRole"] },
+                "binding": { "stack": { "resources": ["arn:aws:iam::*:role/*-management"] } }
+            }]
+        }
+    }))
+    .unwrap();
+    assert!(alien_permissions::get_permission_set(&defined.id).is_none());
+    let account = ServiceAccount::new("target-sa".to_string())
+        .stack_permission_set(defined)
+        .build();
+    let profile = PermissionProfile::new().resource("target-sa", ["service-account/impersonate"]);
+    let stack = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(account.clone(), ResourceLifecycle::Frozen)
+        .permission("manager", profile)
+        .build();
+
+    // Setup installed the account and rendered the boundary for this stack.
+    let mut state = current.clone();
+    let mut saved = StackResourceState::new_pending(
+        "service-account".to_string(),
+        Resource::new(account),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    saved.status = ResourceStatus::Running;
+    state.resources.insert("target-sa".to_string(), saved);
+    let context = permission_context(&state.resource_prefix);
+    installed(&mut state)["permissionsBoundaryDocument"] =
+        aws_permissions_boundary_for_stack(&stack, &state, &context).unwrap();
+    assert!(
+        !installed(&mut state)["permissionsBoundaryDocument"]
+            .to_string()
+            .contains("sts:AssumeRole"),
+        "setup's boundary renders only catalog grants"
+    );
+
+    validate_installed_aws_permissions_boundary(&stack, &state, &client, &config)
+        .expect("a stack-defined account grant is not required of the boundary");
+    let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    executor.step(state.clone()).await.unwrap();
+    executor.refresh(state).await.unwrap();
 }
 
 #[tokio::test]
