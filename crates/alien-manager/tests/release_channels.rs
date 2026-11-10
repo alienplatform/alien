@@ -605,3 +605,152 @@ async fn a_retarget_is_dropped_when_the_deployment_moves_to_another_channel_mean
     assert_eq!(record.desired_release_id, None);
     let _ = r2;
 }
+
+/// Channel store that keeps routing itself, as a custom store with its own
+/// database would, while sharing release and channel records with the SQLite
+/// store.
+struct OwnRouting {
+    inner: SqliteReleaseChannelStore,
+    routing: std::sync::Mutex<HashMap<String, DeploymentRouting>>,
+}
+
+#[async_trait::async_trait]
+impl ReleaseChannelStore for OwnRouting {
+    async fn list_channels(
+        &self,
+    ) -> Result<Vec<alien_manager::traits::ReleaseChannelRecord>, alien_error::AlienError> {
+        self.inner.list_channels().await
+    }
+
+    async fn get_channel(
+        &self,
+        name: &str,
+    ) -> Result<Option<alien_manager::traits::ReleaseChannelRecord>, alien_error::AlienError> {
+        self.inner.get_channel(name).await
+    }
+
+    async fn create_channel(
+        &self,
+        name: &str,
+        release_id: Option<&str>,
+    ) -> Result<alien_manager::traits::ReleaseChannelRecord, alien_error::AlienError> {
+        self.inner.create_channel(name, release_id).await
+    }
+
+    async fn delete_channel(&self, name: &str) -> Result<bool, alien_error::AlienError> {
+        self.inner.delete_channel(name).await
+    }
+
+    async fn set_channel_release(
+        &self,
+        name: &str,
+        release_id: &str,
+    ) -> Result<alien_manager::traits::ReleaseChannelRecord, alien_error::AlienError> {
+        self.inner.set_channel_release(name, release_id).await
+    }
+
+    async fn deployment_routing(
+        &self,
+        deployment_id: &str,
+    ) -> Result<DeploymentRouting, alien_error::AlienError> {
+        Ok(self
+            .routing
+            .lock()
+            .unwrap()
+            .get(deployment_id)
+            .cloned()
+            .unwrap_or(DeploymentRouting {
+                channel: DEFAULT_CHANNEL.to_string(),
+                pinned_release_id: None,
+            }))
+    }
+
+    async fn set_deployment_routing(
+        &self,
+        deployment_id: &str,
+        routing: &DeploymentRouting,
+    ) -> Result<(), alien_error::AlienError> {
+        self.routing
+            .lock()
+            .unwrap()
+            .insert(deployment_id.to_string(), routing.clone());
+        Ok(())
+    }
+
+    async fn count_following(&self, channel: &str) -> Result<u64, alien_error::AlienError> {
+        self.inner.count_following(channel).await
+    }
+
+    async fn roll_out_channel(
+        &self,
+        channel: &str,
+        release_id: &str,
+    ) -> Result<(), alien_error::AlienError> {
+        self.inner.roll_out_channel(channel, release_id).await
+    }
+
+    async fn roll_out_deployment(
+        &self,
+        deployment_id: &str,
+        release_id: &str,
+    ) -> Result<(), alien_error::AlienError> {
+        self.inner
+            .roll_out_deployment(deployment_id, release_id)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_custom_channel_store_with_its_own_routing_still_catches_up() {
+    let f = Fixture::new().await;
+    let r1 = f.release().await;
+    let r2 = f.release().await;
+    f.channels.create_channel("staging", None).await.unwrap();
+    f.channels
+        .set_channel_release("staging", &r2)
+        .await
+        .unwrap();
+    let a = f.running_deployment("a").await;
+    f.db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET current_release_id = ?1 WHERE id = ?2",
+            (r1.as_str(), a.as_str()),
+        )
+        .await
+        .unwrap();
+
+    // The deployment follows staging in the custom store; the SQLite
+    // deployment table knows nothing about it.
+    let custom = OwnRouting {
+        inner: SqliteReleaseChannelStore::new(f.db.clone()),
+        routing: std::sync::Mutex::new(HashMap::from([(
+            a.clone(),
+            DeploymentRouting {
+                channel: "staging".to_string(),
+                pinned_release_id: None,
+            },
+        )])),
+    };
+    let mut record = f
+        .deployments
+        .get_deployment(&admin(), &a)
+        .await
+        .unwrap()
+        .unwrap();
+    retarget_if_settled(
+        &f.deployments,
+        &f.releases,
+        Some(&custom),
+        &admin(),
+        &mut record,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        f.desired(&a).await,
+        (Some(r2), "update-pending".to_string())
+    );
+}
