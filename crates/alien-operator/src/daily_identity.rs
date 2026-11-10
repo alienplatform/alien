@@ -68,6 +68,11 @@ pub(crate) struct DailyIdentity {
     db: Arc<OperatorDb>,
     operation: Arc<Mutex<()>>,
     client: Client,
+    /// Set when an enrollment request may have reached the manager without its
+    /// answer reaching this Operator: a transport failure, a server error or an
+    /// unreadable answer. The saved candidate key is then the only way to
+    /// finish the enrollment, so it is kept.
+    enrollment_uncertain: std::sync::atomic::AtomicBool,
 }
 
 impl DailyIdentity {
@@ -82,6 +87,7 @@ impl DailyIdentity {
             db: db.clone(),
             operation: db.daily_identity_operation.clone(),
             client,
+            enrollment_uncertain: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -206,13 +212,29 @@ impl DailyIdentity {
             .as_ref()
             .map(|pending| pending.key.as_str())
             .unwrap_or(&state.current);
-        let response = self
-            .post(
+        let response = match self
+            .post_outcome(
                 &state,
                 "enroll",
                 json!({"code":code,"initialKeyHash":key_hash(candidate)}),
             )
-            .await?;
+            .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(status)) => {
+                if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
+                    self.mark_enrollment_uncertain();
+                }
+                return Err(failed(&format!(
+                    "Component identity request refused (HTTP {})",
+                    status.as_u16()
+                )));
+            }
+            Err(error) => {
+                self.mark_enrollment_uncertain();
+                return Err(error);
+            }
+        };
         let verified_deployment = response
             .get("deploymentId")
             .and_then(Value::as_str)
@@ -286,6 +308,14 @@ impl DailyIdentity {
         deployment_id: &str,
         token: &str,
     ) -> Result<bool> {
+        self.enrollment_uncertain
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .finish_installed_enrollment(manager_url, deployment_id)
+            .await?
+        {
+            return Ok(true);
+        }
         let mut endpoint =
             reqwest::Url::parse(manager_url).map_err(|_| failed("Invalid manager URL"))?;
         endpoint
@@ -336,10 +366,91 @@ impl DailyIdentity {
             })
             .await;
         if let Err(error) = enrolled {
-            self.db.clear_unenrolled_daily_identity().await?;
+            // After an uncertain answer the manager may have installed the
+            // key, and the saved candidate is what proves it. Only a refusal
+            // the manager confirmed leaves nothing to keep.
+            if !self
+                .enrollment_uncertain
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                self.db.clear_unenrolled_daily_identity().await?;
+            }
             return Err(error);
         }
         Ok(true)
+    }
+
+    fn mark_enrollment_uncertain(&self) {
+        self.enrollment_uncertain
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// An earlier attempt may have enrolled with the manager and lost the
+    /// answer, leaving only its candidate key saved. The manager then refuses
+    /// another token-made code, since the deployment has a key, but it accepts
+    /// the candidate if it installed it. Prove it through the identity
+    /// exchange and finish the enrollment. Returns `false` when there is no
+    /// candidate, or the manager confirms it never installed it (the candidate
+    /// is dropped and a new enrollment can start). An unreachable manager is an
+    /// error and keeps the candidate.
+    async fn finish_installed_enrollment(
+        &self,
+        manager_url: &str,
+        deployment_id: &str,
+    ) -> Result<bool> {
+        let _operation = self.operation.lock().await;
+        let Some(mut state) = self.db.read_daily_identity().await? else {
+            return Ok(false);
+        };
+        if !state.deployment_id.is_empty() {
+            return Ok(false);
+        }
+        if state.manager_url != manager_url {
+            self.db.clear_unenrolled_daily_identity().await?;
+            return Ok(false);
+        }
+        let probe = self
+            .post_outcome(
+                &state,
+                "exchange",
+                json!({"deploymentId":deployment_id,"purpose":{"type":"telemetry"},"proof":{"type":"dailyKey","key":state.current}}),
+            )
+            .await?;
+        match probe {
+            Ok(response) => {
+                let expires_at = response_expiry(&response)?;
+                if response
+                    .get("token")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                    || expires_at > Utc::now() + chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
+                {
+                    return Err(failed(
+                        "Saved enrollment key did not obtain bounded authority",
+                    ));
+                }
+                // The deadline of the key itself is not known here. Treat it as
+                // due, so the first use rotates it, which the manager allows
+                // until a week after it ended.
+                state.deployment_id = deployment_id.to_owned();
+                state.expires_at = Utc::now();
+                state.enrolled_code_hash = None;
+                state.pending_enrollment = None;
+                state.previous = None;
+                state.pending = None;
+                state.pending_started_at = None;
+                self.db.persist_enrolled_identity(&state).await?;
+                Ok(true)
+            }
+            Err(status) if matches!(status.as_u16(), 401 | 403 | 404) => {
+                self.db.clear_unenrolled_daily_identity().await?;
+                Ok(false)
+            }
+            Err(status) => Err(failed(&format!(
+                "Saved enrollment key could not be verified (HTTP {})",
+                status.as_u16()
+            ))),
+        }
     }
 
     async fn sync_token(
@@ -1997,5 +2108,138 @@ mod grace_tests {
             .expect_err("both keys are past the grace");
         assert_eq!(manager.rotations.load(Ordering::SeqCst), 0);
         assert_eq!(manager.key.lock().await.0, key_hash(&key("2")));
+    }
+}
+
+/// Enrollment with the deployment token, where the manager installs the key
+/// and the reply is lost.
+#[cfg(test)]
+mod lost_enrollment_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    const LOST: u8 = 0;
+    const REFUSED: u8 = 1;
+
+    #[derive(Clone)]
+    struct EnrollManager {
+        /// Hash of the key the manager installed, once it has one.
+        installed: Arc<Mutex<Option<String>>>,
+        /// What the next `enroll` answer is, after the key is installed (or not).
+        answer: Arc<AtomicU8>,
+    }
+
+    async fn issue_code(
+        axum::extract::State(manager): axum::extract::State<EnrollManager>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if manager.installed.lock().await.is_some() {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                axum::Json(json!({"code": "ENROLLMENT_KEY_EXISTS", "message": "key exists"})),
+            )
+                .into_response();
+        }
+        axum::Json(json!({"code": "ax_enroll_fixture", "managerAudience": "manager-one"}))
+            .into_response()
+    }
+
+    async fn enroll(
+        axum::extract::State(manager): axum::extract::State<EnrollManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if manager.answer.load(Ordering::SeqCst) == REFUSED {
+            return axum::http::StatusCode::BAD_REQUEST.into_response();
+        }
+        *manager.installed.lock().await = Some(body["initialKeyHash"].as_str().unwrap().to_owned());
+        http::Response::builder()
+            .status(200)
+            .body(axum::body::Body::from_stream(futures::stream::once(
+                async {
+                    Err::<axum::body::Bytes, _>(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        "fixture response lost",
+                    ))
+                },
+            )))
+            .unwrap()
+    }
+
+    async fn exchange(
+        axum::extract::State(manager): axum::extract::State<EnrollManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let installed = manager.installed.lock().await;
+        if installed.as_deref() != body["proof"]["key"].as_str().map(key_hash).as_deref() {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        axum::Json(json!({
+            "token": "ax_cap_v1_fixture",
+            "expiresAt": Utc::now() + chrono::Duration::minutes(5),
+        }))
+        .into_response()
+    }
+
+    async fn fixture(answer: u8) -> (Arc<OperatorDb>, String, EnrollManager, tempfile::TempDir) {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let manager = EnrollManager {
+            installed: Arc::new(Mutex::new(None)),
+            answer: Arc::new(AtomicU8::new(answer)),
+        };
+        let app = axum::Router::new()
+            .route(
+                "/v1/deployments/deployment-one/enrollment-code",
+                axum::routing::post(issue_code),
+            )
+            .route("/v1/identity/enroll", axum::routing::post(enroll))
+            .route("/v1/identity/exchange", axum::routing::post(exchange))
+            .with_state(manager.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        (db, url, manager, directory)
+    }
+
+    /// The manager installed the key and its reply was lost. The next start
+    /// cannot get another code, since the deployment has a key, but it holds
+    /// the key and proves it to the manager, which finishes the enrollment.
+    #[tokio::test]
+    async fn a_lost_enrollment_reply_is_finished_by_proving_the_saved_key() {
+        let (db, url, _manager, _directory) = fixture(LOST).await;
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+
+        identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .expect_err("the reply was lost");
+
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        let enrolled = identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .expect("the saved key proves the installed enrollment");
+        assert!(enrolled);
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(saved.deployment_id, "deployment-one");
+        assert!(saved.current.starts_with("ax_day_v1_"));
+    }
+
+    /// A refusal the manager confirms leaves no half-made identity behind.
+    #[tokio::test]
+    async fn a_refused_enrollment_clears_the_candidate_key() {
+        let (db, url, _manager, _directory) = fixture(REFUSED).await;
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .expect_err("the manager refuses the enrollment");
+        assert!(db.read_daily_identity().await.unwrap().is_none());
     }
 }

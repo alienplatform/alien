@@ -563,6 +563,7 @@ async fn run_operator_cli(
     if args.identity_enrollment_code_file.is_none() && args.manager_audience.is_none() {
         enroll_with_deployment_token(
             &db,
+            args.platform,
             effective_sync_url.as_deref(),
             effective_sync_token.as_deref(),
             args.sync_token_revision,
@@ -570,8 +571,11 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
+    // A key saved before its enrollment finished is no identity yet.
     let sync_config = if args.identity_enrollment_code_file.is_some()
-        || stored_identity.is_some()
+        || stored_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.deployment_id.is_empty())
         || args.manager_audience.is_some()
     {
         let manager_url = effective_sync_url
@@ -930,10 +934,17 @@ async fn run_operator_cli(
 /// runs on its daily key. Without a code from the manager it keeps the token.
 async fn enroll_with_deployment_token(
     db: &std::sync::Arc<crate::db::OperatorDb>,
+    platform: Platform,
     sync_url: Option<&str>,
     configured_token: Option<&str>,
     sync_token_revision: u64,
 ) -> Result<()> {
+    // Workloads on Local have no credential path once the Operator is
+    // enrolled: a Container is refused for lack of access to a credential file.
+    // Local is for development, so it keeps its token.
+    if platform == Platform::Local {
+        return Ok(());
+    }
     if db
         .read_daily_identity()
         .await?
@@ -966,7 +977,10 @@ async fn enroll_with_deployment_token(
         }
         Ok(false) => info!("   Manager issued no enrollment code; using the deployment token"),
         Err(error) => {
-            warn!(error = %error, "Enrollment with the deployment token failed; using the token")
+            // A key saved after an uncertain answer is kept, so the next start
+            // can prove it. The Operator runs on its token meanwhile.
+            warn!(error = %error, "Enrollment with the deployment token failed; using the token");
+            return Ok(());
         }
     }
     // Drop a key left by an earlier attempt that stopped halfway, so the
@@ -1744,6 +1758,63 @@ mod tests {
     use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
     use clap::Parser;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Counts the enrollment-code requests an Operator makes with its token.
+    async fn manager_counting_code_requests(
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = hits.clone();
+        let app = axum::Router::new().route(
+            "/v1/deployments/dep_local/enrollment-code",
+            axum::routing::post(move || {
+                let counted = counted.clone();
+                async move {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    axum::http::StatusCode::NOT_FOUND
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, hits)
+    }
+
+    /// An Operator on Local keeps its deployment token: workloads there have no
+    /// credential path once the Operator is enrolled (a Container fails with
+    /// "Local container credential file access is not configured"), so it must
+    /// not enroll on a later restart. Other platforms still ask for a code.
+    #[tokio::test]
+    async fn a_local_operator_does_not_enroll_with_its_token() {
+        for (platform, expected_requests) in [(Platform::Local, 0), (Platform::Kubernetes, 1)] {
+            let (url, hits) = manager_counting_code_requests().await;
+            let directory = tempfile::tempdir().unwrap();
+            let db = std::sync::Arc::new(
+                crate::db::OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                    .await
+                    .unwrap(),
+            );
+            db.set_deployment_id("dep_local").await.unwrap();
+            super::enroll_with_deployment_token(
+                &db,
+                platform,
+                Some(&url),
+                Some("ax_deploy_fixture"),
+                0,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                expected_requests,
+                "{platform}"
+            );
+            assert!(
+                db.read_daily_identity().await.unwrap().is_none(),
+                "{platform}"
+            );
+        }
+    }
 
     #[test]
     fn rotation_accepts_both_deployment_token_formats_but_excludes_setup_and_admin_tokens() {
