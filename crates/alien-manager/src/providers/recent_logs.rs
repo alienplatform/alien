@@ -56,6 +56,14 @@ impl TelemetryBackend for RecentLogsBackend {
         }
         self.inner.ingest(signal, caller, data).await
     }
+
+    async fn ingest_cloud_metrics(
+        &self,
+        caller: &TelemetryCaller,
+        data: bytes::Bytes,
+    ) -> Result<(), AlienError> {
+        self.inner.ingest_cloud_metrics(caller, data).await
+    }
 }
 
 /// Decode an OTLP/protobuf logs export into buffer entries.

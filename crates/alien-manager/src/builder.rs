@@ -875,15 +875,16 @@ impl AlienManagerBuilder {
             .log_buffer
             .unwrap_or_else(|| Arc::new(crate::dev::LogBuffer::new()));
 
-        let cloud_metrics = self.cloud_metrics_interval.map(|interval| {
-            Arc::new(crate::loops::CloudMetricsLoop::new(
+        let cloud_metrics = match self.cloud_metrics_interval {
+            Some(interval) => Some(Arc::new(crate::loops::CloudMetricsLoop::new(
                 deployment_store.clone(),
                 credential_resolver.clone(),
                 telemetry_backend.clone(),
-                Arc::new(crate::loops::AwsCloudWatchProvider),
+                Arc::new(crate::loops::AwsCloudWatchProvider::new()?),
                 interval,
-            ))
-        });
+            ))),
+            None => None,
+        };
 
         let config = Arc::new(self.config);
         let value_access = self.value_store.as_ref().map(|_| {
