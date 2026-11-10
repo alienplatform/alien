@@ -5,8 +5,12 @@ manager: a release adds a frozen resource, the deployment pauses, and an
 ordinary `helm upgrade` (or `helm template | kubectl apply`) to the chart for
 that release completes the update.
 
+Every chart is the one the manager serves for a release, with the setup it
+carries; only the install-channel case rewrites the setup target.
+
 Cases, each asserted against the deployment the manager stores:
 
+- a retry without a chart upgrade leaves the update waiting and mints nothing;
 - a chart for an older release than the one waiting is refused, with the
   release to use;
 - a chart for a release that adds a cloud resource is refused (cloud setup
@@ -15,8 +19,8 @@ Cases, each asserted against the deployment the manager stores:
 - a chart-only version bump with the same setup mints nothing;
 - `helm rollback` after success mints nothing and the deployment keeps running;
 - a chart built for another install channel is refused;
-- a rollback after the grant was minted leaves the update waiting, and the
-  upgrade to the right chart completes it;
+- a rollback, after the grant was minted, to a chart with a different setup
+  leaves the update waiting, and the upgrade to the right chart completes it;
 - `helm template --no-hooks | kubectl apply` completes the update;
 - the older-Helm fallback (`helm get values -o yaml > current.yaml`, then
   `-f current.yaml`) completes the update.
