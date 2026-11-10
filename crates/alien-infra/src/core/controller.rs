@@ -634,6 +634,30 @@ impl ResourceControllerContext<'_> {
     pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {
         self.heartbeat_collector.emit(heartbeat);
     }
+
+    /// The deployment's environment variables that are delivered to `resource_id`. The gateway
+    /// Alien adds for an internet sandbox only gets the ones that name it: a variable with no
+    /// target is for the stack's own workloads.
+    pub fn environment_variables_for(
+        &self,
+        resource_id: &str,
+    ) -> Vec<alien_core::EnvironmentVariable> {
+        let alien_added =
+            alien_core::sandbox_egress::is_managed_gateway(self.desired_stack, resource_id);
+        self.deployment_config
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|variable| {
+                alien_core::env_delivered_to_resource(
+                    &variable.target_resources,
+                    resource_id,
+                    alien_added,
+                )
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default)]

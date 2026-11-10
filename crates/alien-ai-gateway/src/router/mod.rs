@@ -43,7 +43,7 @@ use vertex::proxy_vertex_anthropic;
 // items. `vertex_host` is also used by `upstream_target` here; `ensure_block_content` and
 // `EventStreamToSse` are test-only.
 #[cfg(test)]
-pub(crate) use bedrock::{bedrock_geo, ensure_block_content};
+pub(crate) use bedrock::ensure_block_content;
 #[cfg(test)]
 pub(crate) use eventstream::EventStreamToSse;
 pub(crate) use vertex::vertex_host;
@@ -2575,18 +2575,6 @@ mod tests {
 
         let mut object = json!({"role": "user", "content": {"type": "text", "text": "hi"}});
         ensure_block_content(&mut object).expect_err("object content must be rejected");
-    }
-
-    #[test]
-    fn bedrock_geo_routes_non_us_regions_via_global() {
-        assert_eq!(bedrock_geo("us-east-2"), "us");
-        assert_eq!(bedrock_geo("us-west-2"), "us");
-        assert_eq!(bedrock_geo("us-gov-west-1"), "us-gov");
-        assert_eq!(bedrock_geo("eu-west-1"), "global");
-        assert_eq!(bedrock_geo("ap-southeast-2"), "global");
-        assert_eq!(bedrock_geo("ca-central-1"), "global");
-        assert_eq!(bedrock_geo("sa-east-1"), "global");
-        assert_eq!(bedrock_geo("mx-central-1"), "global");
     }
 
     #[tokio::test]

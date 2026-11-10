@@ -2,16 +2,77 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, InitialSetupAuthority, Platform, ReleaseInfo, ResourceLifecycle,
-    ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
+    ComputeClusterOutputs, InitialSetupAuthority, Platform, ReleaseInfo, ResourceHeartbeat,
+    ResourceLifecycle, ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
+    sync::Mutex,
+    time::{Duration, Instant},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// How often an update re-reads the resources it is not touching.
+const UNTOUCHED_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// When each deployment's untouched resources were last read, by resource prefix. It lives in
+/// the process, not the deployment state: after a restart the next step reads them once more,
+/// which costs one extra read and nothing else.
+static UNTOUCHED_HEARTBEATS: Mutex<BTreeMap<String, Instant>> = Mutex::new(BTreeMap::new());
+
+/// Claims the right to read the untouched resources of one deployment. True at most once per
+/// interval.
+fn untouched_heartbeat_due(resource_prefix: &str) -> bool {
+    let now = Instant::now();
+    let mut last_read = UNTOUCHED_HEARTBEATS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    last_read.retain(|_, read_at| now.duration_since(*read_at) < UNTOUCHED_HEARTBEAT_INTERVAL * 20);
+    match last_read.get(resource_prefix) {
+        Some(read_at) if now.duration_since(*read_at) < UNTOUCHED_HEARTBEAT_INTERVAL => false,
+        _ => {
+            last_read.insert(resource_prefix.to_string(), now);
+            true
+        }
+    }
+}
+
+/// Heartbeats for the running resources an update leaves alone. The update's own step only
+/// runs the resources it changes, so without this a resource that is healthy and unchanged goes
+/// silent for as long as the update takes (a wait for a secret can take days) and then reads as
+/// stale or down. A read that fails is left out: it must not hold up the update.
+///
+/// What the controllers of the resources that were read remember between reads is kept in
+/// `stack_state`, so a controller that repeats a slow lookup every 15 minutes does not repeat it
+/// on every read. A read that fails leaves `stack_state` as it was.
+async fn untouched_heartbeats(
+    executor: &StackExecutor,
+    stack_state: &mut StackState,
+    already_reported: &[ResourceHeartbeat],
+) -> Vec<ResourceHeartbeat> {
+    if !untouched_heartbeat_due(&stack_state.resource_prefix) {
+        return vec![];
+    }
+    let already_run: Vec<String> = already_reported
+        .iter()
+        .map(|heartbeat| heartbeat.resource_id.clone())
+        .collect();
+    let observation = match executor
+        .observe_running(stack_state.clone(), &already_run)
+        .await
+    {
+        Ok(observation) => observation,
+        Err(error) => {
+            warn!(%error, "Could not read the running resources an update leaves alone");
+            return vec![];
+        }
+    };
+    *stack_state = observation.state;
+    observation.heartbeats
+}
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
     platform == Platform::Machines
@@ -424,7 +485,7 @@ pub async fn handle_updating(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for updating".to_string(),
         })
@@ -542,6 +603,17 @@ pub async fn handle_updating(
         debug!("Secrets already synced, continuing with update");
     }
 
+    let executor = StackExecutor::builder(&target_stack, client_config)
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(service_provider)
+        .build()
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to create stack executor for update".to_string(),
+        })?;
+
     // A required deployer secret the customer has not written blocks every
     // workload start. Nothing is deployed until it is; the reports above say
     // what is missing and where it goes.
@@ -559,6 +631,8 @@ pub async fn handle_updating(
             .join(", ");
         info!(%summary, "Waiting for deployer secrets before starting workloads");
 
+        let heartbeats = untouched_heartbeats(&executor, &mut stack_state, &[]).await;
+        next.stack_state = Some(stack_state);
         next.status = DeploymentStatus::WaitingForSecrets;
         next.error =
             Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
@@ -567,7 +641,7 @@ pub async fn handle_updating(
             state: next,
             suggested_delay_ms: Some(30_000),
             update_heartbeat: false,
-            heartbeats: vec![],
+            heartbeats,
             observed_inventory_batches: vec![],
         });
     }
@@ -575,17 +649,6 @@ pub async fn handle_updating(
     // earlier step no longer describes this deployment. Clear it here: a step
     // that is still in progress carries the previous error forward otherwise.
     next.error = None;
-
-    let executor = StackExecutor::builder(&target_stack, client_config)
-        .deployment_config(&config)
-        .resume_unchanged_failed_resources(true)
-        .running_resource_policy(RunningResourcePolicy::OptIn)
-        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
-        .service_provider(service_provider)
-        .build()
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to create stack executor for update".to_string(),
-        })?;
 
     // Captured before stepping: completion is judged over exactly what this executor
     // reconciles, so the two cannot disagree about which resources are in scope.
@@ -635,6 +698,10 @@ pub async fn handle_updating(
     let result = if waiting_for_machines {
         info!("Machines update is waiting for the first machine to join");
 
+        let mut heartbeats = step_result.heartbeats;
+        let untouched =
+            untouched_heartbeats(&executor, &mut step_result.next_state, &heartbeats).await;
+        heartbeats.extend(untouched);
         next.status = DeploymentStatus::WaitingForMachines;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
@@ -644,7 +711,7 @@ pub async fn handle_updating(
             state: next,
             suggested_delay_ms: Some(30_000),
             update_heartbeat: false,
-            heartbeats: step_result.heartbeats,
+            heartbeats,
             observed_inventory_batches: vec![],
         }
     } else if stack_status == StackStatus::Running {
@@ -796,6 +863,10 @@ pub async fn handle_updating(
         }
     } else {
         // Still in progress
+        let mut heartbeats = step_result.heartbeats;
+        let untouched =
+            untouched_heartbeats(&executor, &mut step_result.next_state, &heartbeats).await;
+        heartbeats.extend(untouched);
         next.status = DeploymentStatus::Updating;
         next.stack_state = Some(step_result.next_state);
         next.runtime_metadata = Some(runtime_metadata);
@@ -806,7 +877,7 @@ pub async fn handle_updating(
             // suggest no delay; without a floor that is a hot loop against cloud APIs.
             suggested_delay_ms: step_result.suggested_delay_ms.or(Some(5_000)),
             update_heartbeat: false,
-            heartbeats: step_result.heartbeats,
+            heartbeats,
             observed_inventory_batches: vec![],
         }
     };
