@@ -67,16 +67,15 @@ pub(crate) async fn prepare(
     let Some(resource) = registries.next() else {
         return Ok(None);
     };
-    // A registry created before setup owned a pull identity has none of its
-    // fields. Such a setup also keeps the stored pull until a setup update.
+    // A registry created before setup owned a pull identity and grant has
+    // neither reference. Such a setup keeps the stored pull until a setup
+    // update, whether or not its payload named the pull principal.
     let saved_registry = resource
         .internal_state
         .clone()
         .and_then(|state| serde_json::from_value::<AzureArtifactRegistryController>(state).ok());
     if saved_registry.as_ref().is_some_and(|registry| {
-        registry.pull_identity_resource_id.is_none()
-            && registry.pull_principal_id.is_none()
-            && registry.pull_role_assignment_id.is_none()
+        registry.pull_identity_resource_id.is_none() && registry.pull_role_assignment_id.is_none()
     }) {
         return Ok(None);
     }
@@ -590,9 +589,11 @@ mod tests {
                 resource_group_name: Some("setup-rg".into()),
                 login_server: Some("setupacr.azurecr.io".into()),
                 subscription_id: Some(SUBSCRIPTION.into()),
-                pull_identity_resource_id: Some(stored.into()),
+                // An empty `stored` is an older setup: a principal, and neither
+                // the identity nor the role assignment reference.
+                pull_identity_resource_id: (!stored.is_empty()).then(|| stored.into()),
                 pull_principal_id: Some(PRINCIPAL.into()),
-                pull_role_assignment_id: Some(assignment_id()),
+                pull_role_assignment_id: (!stored.is_empty()).then(assignment_id),
                 ..Default::default()
             })
             .unwrap(),
@@ -601,7 +602,7 @@ mod tests {
         let mut saved = None;
         let result = executor.with_context(|ctx| block_on(prepare(&mut saved, &worker, ctx)));
         let imports = imports.lock().unwrap();
-        if result.is_ok() {
+        if matches!(result, Ok(Some(_))) {
             assert_eq!(imports.len(), 1);
             let (group, name, parameters) = &imports[0];
             assert_eq!((group.as_str(), name.as_str()), ("setup-rg", "setupacr"));
@@ -667,6 +668,34 @@ mod tests {
             saved.unwrap().image,
             format!("setupacr.azurecr.io/runtime/api@sha256:{DIGEST}")
         );
+    }
+
+    /// An older setup supplies the pull principal but not the identity or the
+    /// role assignment. Whatever the principal says, it keeps the stored pull
+    /// until a setup update, as a setup with no pull fields at all does.
+    #[test]
+    fn an_older_setup_with_only_a_pull_principal_keeps_the_legacy_pull() {
+        let old_payload = json!({
+            "registryName": "setupacr",
+            "resourceGroup": "setup-rg",
+            "loginServer": "setupacr.azurecr.io",
+            "subscriptionId": SUBSCRIPTION,
+            "pushPrincipalId": PRINCIPAL,
+            "pullPrincipalId": PRINCIPAL,
+        });
+        let data: alien_core::import::data::AzureArtifactRegistryImportData =
+            serde_json::from_value(old_payload).expect("an older payload still imports");
+        assert!(data.pull_identity_resource_id.is_none());
+        assert!(data.pull_role_assignment_id.is_none());
+
+        let (result, saved) = import_source(
+            "",
+            &identity_id("resourcegroups"),
+            &format!("test-manager.alien.dev/app@sha256:{DIGEST}"),
+            false,
+        );
+        assert_eq!(result.unwrap(), None, "no import, no setup-update error");
+        assert!(saved.is_none());
     }
 
     /// Ignoring case must not accept a different identity.
