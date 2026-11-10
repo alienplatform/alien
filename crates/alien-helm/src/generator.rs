@@ -6861,6 +6861,8 @@ spec:
             {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            - name: OPERATOR_DATA_PERSISTENT
+              value: {{ .Values.runtime.data.persistence.enabled | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
             {{- if .Values.management.enrollmentCode }}
             - name: OPERATOR_ENROLLMENT_CODE_FILE
@@ -9855,9 +9857,9 @@ mod tests {
         // New installation, nothing to authenticate with: refused.
         let refused = crate::test_utils::helm_template(&chart.files, Some(without_code.as_str()));
         assert!(
-            refused.stderr.contains(
-                "This is a new installation, and no enrollment code or token was given."
-            ),
+            refused
+                .stderr
+                .contains("This is a new installation, and no enrollment code or token was given."),
             "{}",
             refused.stderr
         );
@@ -9911,7 +9913,11 @@ mod tests {
         .expect("enrolled values should render");
         let with_pull = |values: &str| {
             if values.contains("\n  image:\n") {
-                values.replacen("\n  image:\n", "\n  image:\n    pullWithManagementToken: true\n", 1)
+                values.replacen(
+                    "\n  image:\n",
+                    "\n  image:\n    pullWithManagementToken: true\n",
+                    1,
+                )
             } else {
                 values.replacen(
                     "\nruntime:\n",
@@ -9943,13 +9949,15 @@ mod tests {
                 .expect("Operator Deployment")
                 .clone();
             let pod = &operator["spec"]["template"]["spec"];
-            let referenced = pod["imagePullSecrets"].as_sequence().is_some_and(|secrets| {
-                secrets.iter().any(|secret| {
-                    secret["name"]
-                        .as_str()
-                        .is_some_and(|name| name.ends_with("-registry"))
-                })
-            });
+            let referenced = pod["imagePullSecrets"]
+                .as_sequence()
+                .is_some_and(|secrets| {
+                    secrets.iter().any(|secret| {
+                        secret["name"]
+                            .as_str()
+                            .is_some_and(|name| name.ends_with("-registry"))
+                    })
+                });
             let env_names: Vec<String> = pod["containers"][0]["env"]
                 .as_sequence()
                 .unwrap()
@@ -9973,6 +9981,54 @@ mod tests {
             (true, true, true),
             "the pull Secret, the Pod reference and the Operator's Secret setting stay"
         );
+    }
+
+    /// The Operator enrolls itself only where its daily key survives a Pod
+    /// replacement, so the chart tells it whether its data directory persists.
+    #[test]
+    fn the_operator_is_told_whether_its_data_directory_persists() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let values = |persistence: &str| {
+            format!(
+                "management:\n  token: ax_deploy_example\n  deploymentId: dep_example\nruntime:\n  data:\n    persistence:\n      enabled: {persistence}\n"
+            )
+        };
+        for (persistence, expected) in [("true", "true"), ("false", "false")] {
+            let values = values(persistence);
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values.as_str()));
+            rendered.assert_ok("operator values");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|deployment| {
+                    deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                        == Some("operator")
+                })
+                .expect("Operator Deployment");
+            let env: std::collections::HashMap<&str, &str> = operator["spec"]["template"]["spec"]
+                ["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter_map(|variable| {
+                    Some((variable["name"].as_str()?, variable["value"].as_str()?))
+                })
+                .collect();
+            assert_eq!(
+                env.get("OPERATOR_DATA_PERSISTENT"),
+                Some(&expected),
+                "persistence {persistence}"
+            );
+        }
     }
 
     /// An upgrade of an enrolled Operator carries no enrollment code and no

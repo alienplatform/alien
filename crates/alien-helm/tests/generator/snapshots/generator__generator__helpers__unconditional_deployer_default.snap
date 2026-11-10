@@ -2013,6 +2013,8 @@ spec:
             {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            - name: OPERATOR_DATA_PERSISTENT
+              value: {{ .Values.runtime.data.persistence.enabled | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
             {{- if .Values.management.enrollmentCode }}
             - name: OPERATOR_ENROLLMENT_CODE_FILE

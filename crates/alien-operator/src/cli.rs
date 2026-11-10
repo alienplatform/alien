@@ -201,6 +201,12 @@ pub struct Args {
     #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
     pub tunnel_enabled: bool,
 
+    /// Whether `DATA_DIR` survives a Pod replacement. The chart sets it from
+    /// `runtime.data.persistence.enabled`. Unset, as an older chart leaves it,
+    /// counts as persistent.
+    #[arg(long, env = "OPERATOR_DATA_PERSISTENT", action = clap::ArgAction::Set)]
+    pub data_persistent: Option<bool>,
+
     /// This Operator's own Deployment; set to let the Operator move itself to
     /// the image the manager targets.
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
@@ -564,6 +570,7 @@ async fn run_operator_cli(
         enroll_with_deployment_token(
             &db,
             args.platform,
+            args.data_persistent,
             effective_sync_url.as_deref(),
             effective_sync_token.as_deref(),
             args.sync_token_revision,
@@ -935,6 +942,7 @@ async fn run_operator_cli(
 async fn enroll_with_deployment_token(
     db: &std::sync::Arc<crate::db::OperatorDb>,
     platform: Platform,
+    data_persistent: Option<bool>,
     sync_url: Option<&str>,
     configured_token: Option<&str>,
     sync_token_revision: u64,
@@ -943,6 +951,12 @@ async fn enroll_with_deployment_token(
     // enrolled: a Container is refused for lack of access to a credential file.
     // Local is for development, so it keeps its token.
     if platform == Platform::Local {
+        return Ok(());
+    }
+    // A key saved in a temporary directory is lost with the Pod, and once the
+    // manager revokes the token nothing else can enroll the replacement. A
+    // chart that does not say (an older one) counts as persistent.
+    if data_persistent == Some(false) {
         return Ok(());
     }
     if db
@@ -1798,6 +1812,7 @@ mod tests {
             super::enroll_with_deployment_token(
                 &db,
                 platform,
+                None,
                 Some(&url),
                 Some("ax_deploy_fixture"),
                 0,
@@ -1812,6 +1827,39 @@ mod tests {
             assert!(
                 db.read_daily_identity().await.unwrap().is_none(),
                 "{platform}"
+            );
+        }
+    }
+
+    /// A daily key saved in a temporary directory is lost with the Pod, and
+    /// once the manager revokes the deployment token nothing else can enroll
+    /// the replacement. So an Operator on temporary storage keeps its token.
+    /// One whose chart says nothing (older charts) or says persistent enrolls.
+    #[tokio::test]
+    async fn an_operator_on_temporary_storage_does_not_enroll_with_its_token() {
+        for (persistent, expected_requests) in [(Some(false), 0), (Some(true), 1), (None, 1)] {
+            let (url, hits) = manager_counting_code_requests().await;
+            let directory = tempfile::tempdir().unwrap();
+            let db = std::sync::Arc::new(
+                crate::db::OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                    .await
+                    .unwrap(),
+            );
+            db.set_deployment_id("dep_local").await.unwrap();
+            super::enroll_with_deployment_token(
+                &db,
+                Platform::Kubernetes,
+                persistent,
+                Some(&url),
+                Some("ax_deploy_fixture"),
+                0,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                expected_requests,
+                "{persistent:?}"
             );
         }
     }
