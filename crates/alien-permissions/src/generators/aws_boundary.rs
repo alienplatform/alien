@@ -148,8 +148,11 @@ impl CatalogSets<'_> {
 ///
 /// A set is used when any of these holds:
 /// - a permission profile names it;
-/// - a service account in the stack captured it. Preflight mutations add runtime baselines,
-///   such as `worker/execute`, only to the service account and not to its profile;
+/// - a service account in the stack captured it, as a resource grant or as a stack-wide grant
+///   whose stored definition is today's. Preflight mutations add runtime baselines, such as
+///   `worker/execute`, only to the service account and not to its profile. A stack-wide grant
+///   stored with an older definition is compiled from that definition instead (see
+///   `stack_boundary`), since the account's role is written from it;
 /// - the stack has a resource of the set's type (its ID without the operation, such as `ai`
 ///   or `experimental/aws-opensearch`). Remote bindings attach the set of the resource they
 ///   bind, so they never name a type the stack lacks.
@@ -169,8 +172,12 @@ fn stack_uses_catalog_set(stack: &Stack, id: &str) -> bool {
                 account
                     .stack_permission_sets
                     .iter()
-                    .chain(account.resource_permission_sets.values().flatten())
-                    .any(|set| set.id == id)
+                    .any(|set| set.id == id && is_catalog_definition(set))
+                    || account
+                        .resource_permission_sets
+                        .values()
+                        .flatten()
+                        .any(|set| set.id == id)
             })
     });
     let resource_of_its_type = id.rsplit_once('/').is_none_or(|(resource_type, _)| {
@@ -179,6 +186,11 @@ fn stack_uses_catalog_set(stack: &Stack, id: &str) -> bool {
             .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
     });
     named_by_profile || captured_by_service_account || resource_of_its_type
+}
+
+/// Whether `set` is the catalog's current definition of its ID.
+fn is_catalog_definition(set: &PermissionSet) -> bool {
+    get_permission_set(&set.id) == Some(set)
 }
 
 fn stack_boundary(
@@ -301,6 +313,33 @@ fn stack_boundary(
                 &mut statements,
                 &mut inline_grants,
             );
+        }
+    }
+    // A service account's role carries the stack-wide grants it stored. One stored with an
+    // older definition than the catalog's needs exactly that definition, which the required
+    // boundary compiles; the installed ceiling keeps rendering today's catalog.
+    if matches!(catalog, CatalogSets::UsedBy(_)) {
+        for (_, entry) in stack.resources() {
+            let Some(account) = entry.config.downcast_ref::<ServiceAccount>() else {
+                continue;
+            };
+            for set in &account.stack_permission_sets {
+                if is_catalog_definition(set) || set.platforms.aws.is_none() {
+                    continue;
+                }
+                let grant_context = resolve_context(&account.id, "*")?;
+                collect_resolved_grants(
+                    &PermissionSetReference::from_name(set.id.clone()),
+                    &format!("service account '{}' stored ({})", account.id, set.id),
+                    generator
+                        .generate_policy(set, BindingTarget::Stack, &grant_context)?
+                        .statement,
+                    grant_context.resource_name.as_deref(),
+                    &mut exact_resources,
+                    &mut statements,
+                    &mut inline_grants,
+                );
+            }
         }
     }
     render_boundary(

@@ -425,6 +425,36 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
     executor_without_ai.step(older.clone()).await.unwrap();
     executor_without_ai.refresh(older.clone()).await.unwrap();
 
+    // A service account stored with the older ai/invoke definition asks only for what that
+    // definition grants, which the older boundary covers.
+    let mut stored = ServiceAccount::from_permission_profile(
+        "application-sa".to_string(),
+        &PermissionProfile::new().global(["ai/invoke"]),
+        |id| alien_permissions::get_permission_set(id).cloned(),
+    )
+    .unwrap();
+    let mut definition = serde_json::to_value(&stored.stack_permission_sets[0]).unwrap();
+    let mut stored_removed = 0;
+    for entry in definition["platforms"]["aws"].as_array_mut().unwrap() {
+        let actions = entry["grant"]["actions"].as_array_mut().unwrap();
+        let before = actions.len();
+        actions.retain(|action| action != ADDED);
+        stored_removed += before - actions.len();
+    }
+    assert_eq!(stored_removed, 1, "today's ai/invoke grants {ADDED} once");
+    stored.stack_permission_sets[0] = serde_json::from_value(definition).unwrap();
+    let with_older_service_account = Stack::new("boundary".to_string())
+        .add(management(), ResourceLifecycle::Frozen)
+        .add(stored, ResourceLifecycle::Frozen)
+        .build();
+    validate_installed_aws_permissions_boundary(
+        &with_older_service_account,
+        &older,
+        &client,
+        &config,
+    )
+    .expect("a service account stored with the older definition needs only that definition");
+
     for (scenario, stack) in &uses_ai {
         let error = validate_installed_aws_permissions_boundary(stack, &older, &client, &config)
             .expect_err(scenario);
