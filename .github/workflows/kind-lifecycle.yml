@@ -73,11 +73,21 @@ jobs:
         run: |
           cargo test --locked -p alien-operator --test dynamic_containers_kind --no-run
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
+          cargo test --locked -p alien-helm --test sandbox_allow_egress_kind --no-run
 
       - name: Start disposable Kubernetes cluster
         uses: helm/kind-action@v1.14.0
         with:
           cluster_name: alien-product-lifecycle
+
+      # Runs first: it is short, and it needs the cluster's default CNI (kindnet), which does
+      # not enforce NetworkPolicy.
+      - name: Sandbox allow egress is refused without NetworkPolicy enforcement
+        env:
+          ALIEN_RUN_ALLOW_EGRESS_KIND_E2E: "1"
+        run: |
+          cargo test --locked -p alien-helm --test sandbox_allow_egress_kind -- \
+            --ignored --nocapture --test-threads=1
 
       - name: Kubernetes compute pool dynamic container lifecycle
         env:

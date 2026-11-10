@@ -144,6 +144,170 @@ fn a_sandbox_allowing_egress_only_reaches_its_gateway() {
     assert_helm_valid(&chart, "sandbox_layer_allow");
 }
 
+/// Legacy `allow` has no gateway: the rendered NetworkPolicy alone keeps a session off node
+/// metadata, node credentials and private ranges. Evaluate the rendered policy the way the API
+/// server's peers do — a destination is reachable when some rule's ports match and some peer's
+/// `ipBlock` contains it outside every `except` — rather than looking for strings.
+#[test]
+fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
+    use std::net::IpAddr;
+
+    let stack = Stack::new("sandbox-legacy-allow".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(&chart.files, None);
+    rendered.assert_ok("legacy allow sandbox");
+    let documents = rendered_documents(&rendered);
+    let policy = documents
+        .iter()
+        .find(|doc| doc["kind"] == "NetworkPolicy" && doc["metadata"]["name"] == "alien-sbx-agent")
+        .expect("the session NetworkPolicy");
+    let rules = policy["spec"]["egress"]
+        .as_sequence()
+        .expect("allow lists egress rules");
+
+    let contains = |cidr: &str, ip: IpAddr| -> bool {
+        let (network, prefix) = cidr.split_once('/').expect("CIDR");
+        let prefix: u32 = prefix.parse().expect("prefix length");
+        match (network.parse::<IpAddr>().expect("network address"), ip) {
+            (IpAddr::V4(network), IpAddr::V4(ip)) => {
+                let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+                u32::from(network) & mask == u32::from(ip) & mask
+            }
+            (IpAddr::V6(network), IpAddr::V6(ip)) => {
+                let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+                u128::from(network) & mask == u128::from(ip) & mask
+            }
+            _ => false,
+        }
+    };
+    let reachable = |address: &str, protocol: &str, port: u64| -> bool {
+        let ip: IpAddr = address.parse().expect("test address");
+        rules.iter().any(|rule| {
+            let ports_match = match rule["ports"].as_sequence() {
+                None => true,
+                Some(ports) => ports.iter().any(|entry| {
+                    entry["protocol"].as_str().unwrap_or("TCP") == protocol
+                        && entry["port"].as_u64() == Some(port)
+                }),
+            };
+            ports_match
+                && rule["to"].as_sequence().is_some_and(|peers| {
+                    peers.iter().any(|peer| {
+                        let block = &peer["ipBlock"];
+                        block["cidr"]
+                            .as_str()
+                            .is_some_and(|cidr| contains(cidr, ip))
+                            && !block["except"].as_sequence().is_some_and(|excepts| {
+                                excepts.iter().any(|except| {
+                                    contains(except.as_str().expect("except CIDR"), ip)
+                                })
+                            })
+                    })
+                })
+        })
+    };
+
+    for address in [
+        "169.254.169.254", // instance metadata (AWS, GCP, Azure)
+        "169.254.170.2",   // ECS task credentials
+        "169.254.170.23",  // EKS Pod Identity agent
+        "169.254.20.10",   // node-local DNS cache, outside port 53
+        "168.63.129.16",   // Azure wire server
+        "100.64.0.10",     // shared address space: CGNAT, EKS custom pod networking
+        "100.127.255.254",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.1.1",
+        "127.0.0.1",
+        "0.0.0.1",
+        "192.0.0.170",
+        "198.18.0.1",
+        "198.19.255.254",
+        "224.0.0.251",
+        "240.0.0.1",
+        "255.255.255.255",
+        // No IPv6 is admitted: the AWS IPv6 metadata endpoint and public IPv6 alike.
+        "fd00:ec2::254",
+        "::1",
+        "fe80::1",
+        "2606:4700:4700::1111",
+    ] {
+        for (protocol, port) in [("TCP", 80), ("TCP", 443), ("UDP", 53), ("TCP", 53)] {
+            if address == "169.254.20.10" && port == 53 {
+                continue;
+            }
+            assert!(
+                !reachable(address, protocol, port),
+                "{address} {protocol}/{port} must be denied: {rules:#?}"
+            );
+        }
+    }
+    for (address, protocol, port) in [
+        ("8.8.8.8", "TCP", 443),
+        ("1.1.1.1", "UDP", 53),
+        ("203.0.114.1", "TCP", 22),
+        // NodeLocal DNSCache answers on a link-local address; DNS only.
+        ("169.254.20.10", "UDP", 53),
+        ("169.254.20.10", "TCP", 53),
+    ] {
+        assert!(
+            reachable(address, protocol, port),
+            "{address} {protocol}/{port} must stay reachable: {rules:#?}"
+        );
+    }
+    // The cluster resolver lives in a denied private range, so it is admitted by selector.
+    let kube_dns = rules
+        .iter()
+        .find(|rule| {
+            rule["to"].as_sequence().is_some_and(|peers| {
+                peers.iter().any(|peer| {
+                    peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]
+                        == "kube-system"
+                        && peer["podSelector"]["matchLabels"]["k8s-app"] == "kube-dns"
+                })
+            })
+        })
+        .expect("a rule admitting the cluster's DNS pods");
+    assert_eq!(
+        kube_dns["ports"],
+        serde_yaml::from_str::<serde_yaml::Value>(
+            "[{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]"
+        )
+        .unwrap()
+    );
+
+    // These denials are real only on a CNI that enforces NetworkPolicy, so installing and
+    // upgrading the chart first proves enforcement.
+    let probe = documents
+        .iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("an allow sandbox's install verifies NetworkPolicy enforcement");
+    assert_eq!(
+        probe["metadata"]["annotations"]["helm.sh/hook"],
+        "pre-install,pre-upgrade"
+    );
+}
+
 #[test]
 fn sandbox_management_gets_only_its_signing_secret() {
     use alien_core::{permissions::PermissionSetReference, PermissionProfile};
