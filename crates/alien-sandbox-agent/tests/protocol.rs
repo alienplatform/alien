@@ -30,6 +30,9 @@ const SESSION: &str = "session-1";
 
 /// The test process's own identity. Setting a uid to its own is permitted unprivileged, so the
 /// real drop path runs without needing root.
+/// What the test agent keeps of one `/v1/exec` stream.
+const OUTPUT_CAP: usize = 1 << 20;
+
 fn test_identity() -> ExecIdentity {
     unsafe {
         ExecIdentity {
@@ -59,10 +62,6 @@ impl Agent {
     }
 
     async fn start_with_authorization(authorization: Option<AgentAuthorization>) -> Self {
-        Self::start_with(authorization, 1 << 20).await
-    }
-
-    async fn start_with(authorization: Option<AgentAuthorization>, output_cap: usize) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path().canonicalize().expect("canonical root");
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
@@ -80,7 +79,7 @@ impl Agent {
                 },
             }),
             exec_identity: test_identity(),
-            output_cap,
+            output_cap: OUTPUT_CAP,
             jobs: JobRegistry::new(),
             interactive: Default::default(),
             agent_binary: agent_binary(),
@@ -1494,10 +1493,7 @@ async fn an_interactive_command_answers_each_input_while_it_runs() {
 /// deadline has killed: sixteen such callers would otherwise refuse every later start.
 #[tokio::test]
 async fn a_command_killed_at_its_deadline_frees_its_id_while_its_stream_is_unread() {
-    // A cap far above what the channels and loopback buffers hold, so the output backs up and
-    // the terminal frame cannot be delivered. Under the default cap the whole output can fit in
-    // those buffers, and the stream would end without anyone reading it.
-    let agent = Agent::start_with(None, 256 << 20).await;
+    let agent = Agent::start().await;
     let unread = reqwest::Client::new()
         .post(format!("{}/v1/interactive", agent.base_url))
         .bearer_auth(agent.capability())
@@ -1522,6 +1518,33 @@ async fn a_command_killed_at_its_deadline_frees_its_id_while_its_stream_is_unrea
     assert_eq!(terminal["t"], "exit", "the freed id starts a new command");
     assert_eq!(terminal["code"], 0);
     drop(unread);
+}
+
+/// An interactive command's output is not capped as `/v1/exec`'s is: a REPL that went silent at a
+/// byte count would look hung while it ran on. Every byte past the agent's cap arrives, in order.
+#[tokio::test]
+async fn an_interactive_command_streams_past_the_output_cap() {
+    let agent = Agent::start().await;
+    // Past both this agent's cap and the 4 MiB a deployed agent keeps of one stream.
+    let total = (5 << 20) + 12_344;
+    let script = format!(
+        "i=0; while [ $i -lt {} ]; do printf '%07d\\n' $i; i=$((i+1)); done",
+        total / 8
+    );
+    let command = Interactive::start(&agent, "big-1", &["/bin/sh", "-c", &script]).await;
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["t"], "exit", "{terminal}");
+    assert_eq!(terminal["code"], 0);
+    assert_eq!(terminal["truncated"], false, "nothing was dropped");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), total / 8, "every line arrived");
+    assert!(
+        lines
+            .iter()
+            .enumerate()
+            .all(|(i, line)| *line == format!("{i:07}")),
+        "in order and intact"
+    );
 }
 
 /// A write that is retried — because its answer was lost — must be applied once, and a write that

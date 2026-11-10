@@ -675,12 +675,15 @@ async fn interactive_start(
             reservation.attach(child.stdin.take(), group).await;
 
             let timeout = std::time::Duration::from_millis(body.request.timeout_ms);
-            let output_cap = state.output_cap;
             tokio::spawn(async move {
                 exec::pump(
                     child,
                     timeout,
-                    output_cap,
+                    // No cap: an interactive command runs for as long as its caller drives it,
+                    // and a REPL whose output went silent at a byte count would look hung while
+                    // it ran on. Memory is already bounded, because the output is read only as
+                    // fast as the caller takes it.
+                    usize::MAX,
                     alien_core::sandbox_process::Framing::Chunks,
                     sender,
                     // The group is forgotten and the id freed once the command exits and before

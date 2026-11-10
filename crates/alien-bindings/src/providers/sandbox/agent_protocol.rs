@@ -31,6 +31,7 @@ const RUN_COMMAND: &str = "sandbox.runCommand";
 
 const JOB_START: &str = "sandbox.jobStart";
 pub(super) const RUN_INTERACTIVE: &str = "sandbox.runInteractive";
+pub(super) const SIGNAL: &str = "sandbox.interactive.signal";
 const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 
@@ -375,9 +376,15 @@ fn timeout_millis(timeout: Duration) -> u64 {
 /// have started the command — and past the headers it certainly did — so a repeat could run it
 /// twice, and the refusal must not carry the retry signal.
 pub(super) fn unanswered(operation: &str, reason: &str) -> ErrorData {
-    // Both take a command the agent may already be running, so an unanswered one leaves the
-    // outcome unestablished. Every other operation is idempotent and safe to send again.
-    if operation == RUN_COMMAND || operation == JOB_START || operation == RUN_INTERACTIVE {
+    // These may already have acted: the first three start a command the agent may already be
+    // running, and a signal may already have been delivered, where a second interrupt is not the
+    // same request as the first. An unanswered one leaves the outcome unestablished, and is not
+    // sent again. Every other operation is idempotent and safe to send again.
+    if operation == RUN_COMMAND
+        || operation == JOB_START
+        || operation == RUN_INTERACTIVE
+        || operation == SIGNAL
+    {
         return ErrorData::SandboxOutcomeUnknown {
             operation: operation.to_string(),
             reason: reason.to_string(),

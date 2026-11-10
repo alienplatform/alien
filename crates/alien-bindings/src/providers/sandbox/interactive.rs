@@ -19,7 +19,7 @@ use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::agent_protocol::{self, RUN_INTERACTIVE};
+use super::agent_protocol::{self, RUN_INTERACTIVE, SIGNAL};
 use crate::error::{ErrorData, Result};
 use crate::traits::{CommandInput, CommandSignal, InteractiveCommand, RunCommandRequest};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -34,7 +34,6 @@ const WRITE_ATTEMPTS: usize = 4;
 
 const WRITE_STDIN: &str = "sandbox.interactive.write";
 const CLOSE_STDIN: &str = "sandbox.interactive.closeStdin";
-const SIGNAL: &str = "sandbox.interactive.signal";
 
 /// One sandbox's agent, authorized for every request an interactive command makes.
 #[async_trait]
@@ -363,6 +362,9 @@ mod tests {
         /// for real.
         stalled_acks: AtomicUsize,
         stall_url: String,
+        /// Signal requests to send to a port nobody listens on, so an unanswered signal is
+        /// exercised for real.
+        unanswered_signals: AtomicUsize,
         _root: tempfile::TempDir,
     }
 
@@ -439,7 +441,9 @@ mod tests {
             method: reqwest::Method,
             path: &str,
         ) -> Result<reqwest::RequestBuilder> {
-            let base = if path == "/v1/interactive/stdin" && take_one(&self.unanswered_writes) {
+            let base = if path == "/v1/interactive/stdin" && take_one(&self.unanswered_writes)
+                || path == "/v1/interactive/signal" && take_one(&self.unanswered_signals)
+            {
                 "http://127.0.0.1:9".to_string()
             } else if path == "/v1/interactive/stdin" && take_one(&self.stalled_acks) {
                 self.stall_url.clone()
@@ -518,6 +522,7 @@ mod tests {
             unanswered_writes: AtomicUsize::new(unanswered_writes),
             stalled_acks: AtomicUsize::new(stalled_acks),
             stall_url,
+            unanswered_signals: AtomicUsize::new(0),
             _root: root,
         })
     }
@@ -684,6 +689,56 @@ mod tests {
         assert!(String::from_utf8_lossy(&stdout).ends_with("stopped\n"));
     }
 
+    /// A signal that goes unanswered may already have been delivered, and a second interrupt is not
+    /// the same request as the first: it is reported as an unknown outcome, never sent again.
+    #[tokio::test]
+    async fn an_unanswered_signal_is_reported_unknown_and_not_sent_again() {
+        let agent = agent(0).await;
+        agent.unanswered_signals.store(1, Ordering::SeqCst);
+        let mut command = run_interactive(
+            Arc::clone(&agent) as Arc<dyn BoundAgent>,
+            command(
+                "/bin/sh",
+                &[
+                    "-c",
+                    "trap 'echo interrupted' INT; echo up; read line; echo done",
+                ],
+            ),
+        )
+        .await
+        .expect("starts");
+        let mut stdout = Vec::new();
+        read_until(&mut command, &mut stdout, "up\n").await;
+
+        let error = command
+            .input
+            .signal(CommandSignal::Interrupt)
+            .await
+            .expect_err("the signal went unanswered");
+        assert!(
+            matches!(&error.error, Some(ErrorData::SandboxOutcomeUnknown { .. })),
+            "{error:?}"
+        );
+        assert!(!error.retryable, "an unanswered signal is not to be resent");
+        assert_eq!(
+            agent.unanswered_signals.load(Ordering::SeqCst),
+            0,
+            "it was sent once, to the unanswering address"
+        );
+
+        command.input.write(b"\n").await.expect("writes");
+        command.input.close_stdin().await.expect("closes");
+        assert!(matches!(
+            finish(command, &mut stdout).await,
+            CommandOutput::Exit { code: 0, .. }
+        ));
+        assert_eq!(
+            String::from_utf8_lossy(&stdout),
+            "up\ndone\n",
+            "the program never got the interrupt, which was never resent"
+        );
+    }
+
     /// An acknowledgement whose headers arrive and whose body never does is as unanswered as one
     /// that never arrives: the write is sent again within the response deadline instead of
     /// holding the input, and every later write and close behind it, for good. The agent applied
@@ -718,10 +773,18 @@ mod tests {
     #[tokio::test]
     async fn a_write_after_a_cancelled_one_reports_the_interruption_instead_of_losing_bytes() {
         let agent = agent(0).await;
-        // Counts only the second write's bytes, so a lost start shows as a short count.
+        let go = agent._root.path().join("go");
+        // Reads nothing until the test says so, however slow the machine, then counts only the
+        // second write's bytes, so a lost start shows as a short count.
         let command = run_interactive(
-            agent,
-            command("/bin/sh", &["-c", "sleep 0.5; tr -cd y | wc -c"]),
+            Arc::clone(&agent) as Arc<dyn BoundAgent>,
+            command(
+                "/bin/sh",
+                &[
+                    "-c",
+                    "while [ ! -e go ]; do sleep 0.05; done; tr -cd y | wc -c",
+                ],
+            ),
         )
         .await
         .expect("starts");
@@ -750,6 +813,7 @@ mod tests {
             "{error:?}"
         );
 
+        std::fs::write(&go, b"").expect("lets the program read");
         command
             .input
             .write(&second)

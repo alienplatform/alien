@@ -15,7 +15,8 @@ use std::path::PathBuf;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{ContainerCreateBody, HostConfig, NetworkCreateRequest, PortBinding};
 use bollard::query_parameters::{
-    CreateContainerOptions, CreateImageOptions, ListContainersOptions, RemoveContainerOptions,
+    CreateContainerOptions, CreateImageOptions, KillContainerOptions, ListContainersOptions,
+    RemoveContainerOptions,
 };
 use bollard::Docker;
 use futures::StreamExt;
@@ -432,6 +433,43 @@ impl LocalSandboxManager {
             Some(path) => resolve_dir_in_root(path)?,
             None => SESSION_ROOT.to_string(),
         };
+        // Docker inherits the container's resolved, non-root identity.
+        self.exec_attached(container_id, command, working_dir, env, None, false)
+            .await
+    }
+
+    /// Starts `command` as root with every capability, stdin attached, for the session's signal
+    /// shell.
+    ///
+    /// Root, because the session's own user can kill anything that runs as that user, including
+    /// a shell it was meant to be stopped by. Every capability, because the session drops them
+    /// all and root without `CAP_KILL` cannot signal another user's process. Only a fixed script
+    /// the manager wrote runs this way, reading only what the manager sends it.
+    pub async fn exec_privileged(
+        &self,
+        container_id: &str,
+        command: &[String],
+    ) -> Result<InteractiveExec> {
+        self.exec_attached(
+            container_id,
+            command,
+            SESSION_ROOT.to_string(),
+            &std::collections::BTreeMap::new(),
+            Some("0".to_string()),
+            true,
+        )
+        .await
+    }
+
+    async fn exec_attached(
+        &self,
+        container_id: &str,
+        command: &[String],
+        working_dir: String,
+        env: &std::collections::BTreeMap<String, String>,
+        user: Option<String>,
+        privileged: bool,
+    ) -> Result<InteractiveExec> {
         let exec = self
             .docker
             .create_exec(
@@ -446,7 +484,8 @@ impl LocalSandboxManager {
                             .map(|(name, value)| format!("{name}={value}"))
                             .collect(),
                     ),
-                    user: None,
+                    user,
+                    privileged: Some(privileged),
                     working_dir: Some(working_dir),
                     ..Default::default()
                 },
@@ -480,6 +519,29 @@ impl LocalSandboxManager {
             input,
             output,
         })
+    }
+
+    /// Kills every process in a session by killing its container, which has no restart policy
+    /// and so stays stopped. The last resort for a command that cannot be stopped from inside
+    /// it. A container that is already gone or stopped is the end this asks for.
+    pub async fn kill_session(&self, container_id: &str) -> Result<()> {
+        match self
+            .docker
+            .kill_container(container_id, None::<KillContainerOptions>)
+            .await
+        {
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404 | 409,
+                ..
+            }) => Ok(()),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(ErrorData::SandboxSessionFailed {
+                    session_id: container_id.to_string(),
+                    operation: "kill container".to_string(),
+                }),
+        }
     }
 
     /// The exit code of a finished exec, or `None` if Docker has none for it.
