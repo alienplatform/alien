@@ -2701,6 +2701,7 @@ fn add_standard_conditions(
                         .config
                         .downcast_ref::<alien_core::Postgres>()
                         .is_some()
+                        || entry.config.downcast_ref::<alien_core::Redis>().is_some()
                         // The verifier names the subnets functions and machines join.
                         || entry
                             .config

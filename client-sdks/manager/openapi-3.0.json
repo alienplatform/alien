@@ -5314,6 +5314,58 @@
           }
         }
       },
+      "AzureManagedRedisBinding": {
+        "type": "object",
+        "description": "Azure Managed Redis binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "databaseResourceId"
+        ],
+        "properties": {
+          "databaseResourceId": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "ARM resource ID of the database; its access key is read with `listKeys`\nat load time."
+          },
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "AzureManagedRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "clusterName",
+          "config",
+          "metrics"
+        ],
+        "properties": {
+          "clusterName": {
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/RedisObservedConfig"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/RedisMetricsSample"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          }
+        }
+      },
       "AzureManagementConfig": {
         "type": "object",
         "description": "Azure management configuration extracted from stack settings",
@@ -8290,6 +8342,58 @@
           }
         }
       },
+      "ElastiCacheRedisBinding": {
+        "type": "object",
+        "description": "AWS ElastiCache binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "passwordSecretArn"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "passwordSecretArn": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Secrets Manager ARN of the AUTH token; resolved at load time."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "ElasticacheRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "replicationGroupId",
+          "config",
+          "metrics"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/RedisObservedConfig"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/RedisMetricsSample"
+          },
+          "replicationGroupId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          }
+        }
+      },
       "EndpointAccess": {
         "type": "string",
         "description": "Reachability of the deployment's public endpoints, fixed at setup.",
@@ -8653,6 +8757,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/RedisBinding",
+                "description": "External Redis binding (operator-provided Redis-compatible server)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External Redis binding (operator-provided Redis-compatible server)"
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/ExternalAiBinding",
                 "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
               },
@@ -8761,6 +8888,46 @@
           "verify-full",
           "disable"
         ]
+      },
+      "ExternalRedisBinding": {
+        "type": "object",
+        "description": "Operator-provided server binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "password": {
+            "oneOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalPasswordSecretKeyRef"
+                  }
+                ]
+              }
+            ],
+            "description": "Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the\npassword from the Secret as an environment variable, which the SDK inserts after it\nparses the binding, so any character is safe."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "tls": {
+            "type": "boolean",
+            "description": "Connect over TLS. Defaults to true."
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
       },
       "FailureDomainSelection": {
         "type": "object",
@@ -12674,6 +12841,59 @@
           }
         }
       },
+      "LocalRedisBinding": {
+        "type": "object",
+        "description": "Local Valkey binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "password": {
+            "type": "string"
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "LocalRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version",
+          "processRunning"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "processRunning": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "LocalRuntimeEventSnapshot": {
         "type": "object",
         "required": [
@@ -13586,6 +13806,63 @@
           }
         }
       },
+      "MemorystoreRedisBinding": {
+        "type": "object",
+        "description": "GCP Memorystore binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "serverCaCertificates",
+          "instanceName"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "instanceName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Full instance name `projects/<project ID>/locations/<region>/instances/<id>`. The SDK\nreads the default user's token from Memorystore when it loads the binding."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "serverCaCertificates": {
+            "$ref": "#/components/schemas/BindingValue_Vec_String",
+            "description": "Instance CA certificates (PEM), including every root accepted during a rotation."
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "MemorystoreRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "instanceName",
+          "config",
+          "metrics"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/RedisObservedConfig"
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/RedisMetricsSample"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          }
+        }
+      },
       "MetricSample": {
         "type": "object",
         "required": [
@@ -13847,7 +14124,7 @@
               },
               "private_endpoint_subnet_name": {
                 "type": "string",
-                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused.",
+                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server or Azure Managed Redis). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres or Redis resource; otherwise unused.",
                 "nullable": true
               },
               "private_subnet_name": {
@@ -15468,6 +15745,258 @@
           }
         }
       },
+      "RedisBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ElastiCacheRedisBinding",
+                "description": "AWS ElastiCache for Valkey (primary endpoint + AUTH token secret ARN)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "elasticache"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS ElastiCache for Valkey (primary endpoint + AUTH token secret ARN)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MemorystoreRedisBinding",
+                "description": "GCP Memorystore for Valkey (PSC address + CA + secret name)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "memorystore"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Memorystore for Valkey (PSC address + CA + secret name)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureManagedRedisBinding",
+                "description": "Azure Managed Redis (private endpoint host + database resource ID)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "azure-managed-redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Managed Redis (private endpoint host + database resource ID)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalRedisBinding",
+                "description": "Operator-provided server (Kubernetes, on-prem, or cloud override)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "external"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Operator-provided server (Kubernetes, on-prem, or cloud override)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalRedisBinding",
+                "description": "Local Valkey container."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local Valkey container."
+          }
+        ],
+        "description": "Connection details for a Redis-compatible server, one variant per backend.\n\nService tags are unique across all binding enums (serde dispatches on\n`service` alone), so the key-value store's `redis` tag is not reused."
+      },
+      "RedisHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ElasticacheRedisHeartbeatData",
+                "description": "AWS ElastiCache for Valkey."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "elasticache"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS ElastiCache for Valkey."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MemorystoreRedisHeartbeatData",
+                "description": "GCP Memorystore for Valkey."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "memorystore"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Memorystore for Valkey."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureManagedRedisHeartbeatData",
+                "description": "Azure Managed Redis."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "azureManagedRedis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Managed Redis."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalRedisHeartbeatData",
+                "description": "Local Valkey container."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local Valkey container."
+          }
+        ],
+        "description": "Heartbeat data for a Redis resource. Everything comes from the cloud's\nmanagement and metrics APIs; the manager never opens a Redis connection."
+      },
+      "RedisHeartbeatStatus": {
+        "type": "object",
+        "description": "Same fields as every other resource heartbeat status.",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
       "RedisKvBinding": {
         "type": "object",
         "description": "Redis KV binding configuration",
@@ -15496,6 +16025,90 @@
                 "$ref": "#/components/schemas/BindingValue_String"
               }
             ]
+          }
+        }
+      },
+      "RedisMetricsSample": {
+        "type": "object",
+        "description": "One sample of the numbers that matter for a Redis server. A field is `None`\nwhen the cloud did not return that metric in the window.",
+        "properties": {
+          "connectedClients": {
+            "type": "number",
+            "format": "double",
+            "description": "Connected clients at the end of the window.",
+            "nullable": true
+          },
+          "evictions": {
+            "type": "number",
+            "format": "double",
+            "description": "Keys evicted during the sampled window.",
+            "nullable": true
+          },
+          "memoryUsedPercent": {
+            "type": "number",
+            "format": "double",
+            "description": "Memory used as a percentage of the configured maximum (0-100).",
+            "nullable": true
+          },
+          "replicationLagSeconds": {
+            "type": "number",
+            "format": "double",
+            "description": "Replication lag in seconds, when a replica exists.",
+            "nullable": true
+          }
+        }
+      },
+      "RedisObservedConfig": {
+        "type": "object",
+        "description": "Configuration the controller reads back from the cloud, to compare with the\ndesired configuration.",
+        "properties": {
+          "authEnabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "engineVersion": {
+            "type": "string",
+            "description": "Engine name and version as the cloud reports it.",
+            "nullable": true
+          },
+          "evictionPolicy": {
+            "type": "string",
+            "nullable": true
+          },
+          "nodeType": {
+            "type": "string",
+            "description": "Node type or SKU name.",
+            "nullable": true
+          },
+          "persistenceEnabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "publicNetworkAccess": {
+            "type": "boolean",
+            "description": "Azure only: true when the server accepts connections from the public internet.",
+            "nullable": true
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Replicas behind the primary.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "tlsEnabled": {
+            "type": "boolean",
+            "nullable": true
           }
         }
       },
@@ -17181,6 +17794,24 @@
                 "type": "string",
                 "enum": [
                   "postgres"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/RedisHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "redis"
                 ]
               }
             }

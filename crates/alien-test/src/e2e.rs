@@ -204,6 +204,8 @@ pub enum Binding {
     Vault,
     /// Managed Postgres database (Aurora, Cloud SQL, Flexible Server, embedded pgvector on Local)
     Postgres,
+    /// Managed Redis-compatible store (the Valkey image in Docker on Local), exercised with stock clients
+    Redis,
     /// Sandbox session: run a command, move a file in and out, terminate
     Sandbox,
     /// Message queue (SQS, Pub/Sub, Service Bus)
@@ -249,6 +251,7 @@ impl std::fmt::Display for Binding {
             Binding::Kv => write!(f, "kv"),
             Binding::Vault => write!(f, "vault"),
             Binding::Postgres => write!(f, "postgres"),
+            Binding::Redis => write!(f, "redis"),
             Binding::Sandbox => write!(f, "sandbox"),
             Binding::Queue => write!(f, "queue"),
             Binding::Worker => write!(f, "worker"),
@@ -329,6 +332,7 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             // Only the embedded Local controller ships in this repo, so Postgres is
             // exercised on Local only.
             bindings.push(Binding::Postgres);
+            bindings.push(Binding::Redis);
             // Same for Sandbox: no sandbox controller is registered here for any of this
             // suite's cloud targets, so Local is the only platform it can run on.
             bindings.push(Binding::Sandbox);
@@ -389,6 +393,9 @@ pub fn exclusion_reason(
                 && cfg!(target_os = "windows") =>
         {
             Some("Bun-on-Windows runtime issue: detached async tasks in waitUntil don't execute")
+        }
+        Binding::Redis if app != TestApp::ComprehensiveTs => {
+            Some("Redis check runs in the TypeScript comprehensive app, which carries the stock clients")
         }
         Binding::Ai if app == TestApp::ComprehensiveRust => {
             Some("AI binding check not implemented in the Rust test app")

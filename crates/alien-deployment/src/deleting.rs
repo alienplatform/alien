@@ -651,6 +651,7 @@ pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
                 | "queue"
                 | "vault"
                 | "postgres"
+                | "redis"
                 | "key"
                 | "experimental/aws-opensearch" => true,
                 "artifact-registry" => platform != Platform::Aws,

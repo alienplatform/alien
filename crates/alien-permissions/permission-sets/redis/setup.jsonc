@@ -1,0 +1,136 @@
+{
+  "id": "redis/setup",
+  "description": "Allows a CloudFormation or Terraform setup to create the Redis resource, on top of redis/provision. Only the setup identity holds it; no runtime role does.",
+  "platforms": {
+    "aws": [
+      {
+        // The CloudFormation secret is created with GenerateSecretString, which calls
+        // GetRandomPassword. AWS defines no resource type or condition key for it, so it can only
+        // be granted on "*". It returns a random string and reads or changes nothing.
+        "label": "generate-auth-token",
+        "description": "Generate the AUTH token of the setup-created replication group.",
+        "grant": {
+          "actions": ["secretsmanager:GetRandomPassword"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
+      {
+        // CloudFormation resolves the group's {{resolve:secretsmanager:...}} AuthToken with the
+        // caller's credentials, and the Terraform provider reads the secret version back on every
+        // refresh. Only the stack's own tagged AUTH secret can be read. redis/provision's
+        // tag-auth-secret keeps another stack's secret from being retagged first.
+        "label": "resolve-auth-token",
+        "description": "Read the setup-created AUTH token while the setup creates, updates or refreshes the group.",
+        "grant": {
+          "actions": ["secretsmanager:GetSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*-auth-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-auth-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "read-auth-secret-metadata",
+        "description": "Read the metadata and resource policy of the setup-created AUTH secret.",
+        "grant": {
+          "actions": ["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*-auth-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-auth-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The Terraform provider and CloudFormation read the group's security group back. AWS
+        // requires Resource "*" for these discovery APIs; they return metadata only.
+        "label": "read-security-groups",
+        "description": "Read security group state while the setup creates the Redis security group.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups", "ec2:DescribeSecurityGroupRules"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      }
+    ],
+    "gcp": [],
+    "azure": [
+      {
+        // The azurerm provider reads the default database's access keys on every refresh and
+        // keeps them in Terraform state, which is the setup operator's own. Scoped to this
+        // database; only the setup identity holds it.
+        "label": "refresh-managed-redis-database",
+        "description": "Let the Terraform setup refresh the Managed Redis database, which reads its access keys.",
+        "grant": {
+          "actions": ["Microsoft.Cache/redisEnterprise/databases/listKeys/action"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Cache/redisEnterprise/${resourceName}/databases/default"
+          }
+        }
+      },
+      {
+        // A customer-provided VNet is read as a data source; its subnets are read by redis/provision.
+        "label": "read-virtual-network",
+        "description": "Read the virtual network the private endpoint subnet belongs to.",
+        "grant": {
+          "actions": ["Microsoft.Network/virtualNetworks/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

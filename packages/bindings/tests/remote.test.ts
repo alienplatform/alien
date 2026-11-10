@@ -398,6 +398,7 @@ const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
   readFile: true,
   resume: true,
   runCommand: true,
+  runInteractive: true,
   startJob: true,
   terminate: true,
   writeFile: true,

@@ -1,0 +1,668 @@
+{
+  "id": "redis/provision",
+  "description": "Allows provisioning and destroying Redis (ElastiCache, Memorystore, Managed Redis)",
+  "platforms": {
+    "aws": [
+      // Every create path (runtime controller, CloudFormation, Terraform) tags the group in the
+      // create request, so the create binds on the request tag. CreateReplicationGroup is also
+      // authorized against the subnet group and parameter group it names (use-redis-groups), so
+      // those must carry this stack's tag too.
+      {
+        "label": "create-redis-group",
+        "description": "Create the replication group.",
+        "grant": {
+          "actions": ["elasticache:CreateReplicationGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-${resourceName}",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "create-redis-groups",
+        "description": "Create the cache subnet group and parameter group.",
+        "grant": {
+          "actions": ["elasticache:CreateCacheSubnetGroup", "elasticache:CreateCacheParameterGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // CloudFormation and the controller use a group within seconds of creating it, before
+      // ElastiCache sees the create-time tags, so the tag check is IfExists: a group tagged for
+      // another stack is still denied.
+      {
+        "label": "use-redis-groups",
+        "description": "Use, change and delete this application's cache subnet group and parameter group.",
+        "grant": {
+          "actions": [
+            "elasticache:CreateReplicationGroup",
+            "elasticache:ModifyReplicationGroup",
+            "elasticache:ModifyCacheParameterGroup",
+            "elasticache:ResetCacheParameterGroup",
+            "elasticache:ModifyCacheSubnetGroup",
+            "elasticache:DeleteCacheParameterGroup",
+            "elasticache:DeleteCacheSubnetGroup"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // The stack tag decides, not the name: a stack named `app` cannot reach `app-prod`'s group.
+      // ModifyReplicationGroup (node type, snapshot retention, AUTH token reset after a lost create
+      // response) never reads the token; it only sets one the controller just wrote to Secrets
+      // Manager.
+      {
+        "label": "manage-redis-group",
+        "description": "Change and delete this application's replication group.",
+        "grant": {
+          "actions": ["elasticache:ModifyReplicationGroup", "elasticache:DeleteReplicationGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-${resourceName}",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // A create that carries tags is also authorized as AddTagsToResource on the new, untagged
+      // object, so the existing-tag check is IfExists. An object tagged for another stack cannot be
+      // tagged, and no request can set the stack tag to another stack.
+      {
+        "label": "tag-redis-resources",
+        "description": "Tag the ElastiCache objects this application creates.",
+        "grant": {
+          "actions": ["elasticache:AddTagsToResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-${resourceName}",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // CloudFormation removes tags dropped from the template. The ownership tags can never be
+      // removed.
+      {
+        "label": "untag-redis-resources",
+        "description": "Remove tags from this application's ElastiCache objects.",
+        "grant": {
+          "actions": ["elasticache:RemoveTagsFromResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "ForAllValues:StringNotEquals": {
+                "aws:TagKeys": ["${stackTag}", "${resourceTag}", "${managedByTag}"]
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-${resourceName}",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              },
+              "ForAllValues:StringNotEquals": {
+                "aws:TagKeys": ["${stackTag}", "${resourceTag}", "${managedByTag}"]
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "read-redis-resources",
+        "description": "Read the replication group, its nodes, subnet group, parameter groups and tags.",
+        "grant": {
+          "actions": [
+            "elasticache:DescribeReplicationGroups",
+            "elasticache:DescribeCacheClusters",
+            "elasticache:DescribeCacheSubnetGroups",
+            "elasticache:DescribeCacheParameterGroups",
+            "elasticache:DescribeCacheParameters",
+            "elasticache:ListTagsForResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-${resourceName}",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      // Every create path tags the secret in the create request. A stack named `app` cannot create,
+      // overwrite or delete `app-prod`'s secret even though the name matches `app-*`. The management
+      // identity writes the token here but has no grant to read it (see redis/data-access).
+      {
+        "label": "create-auth-secret",
+        "description": "Create the AUTH-token secret with this stack's tags.",
+        "grant": {
+          "actions": ["secretsmanager:CreateSecret"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-auth-secret",
+        "description": "Overwrite and delete this stack's tagged AUTH-token secret.",
+        "grant": {
+          "actions": ["secretsmanager:DeleteSecret", "secretsmanager:PutSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // Creating the secret with tags is also authorized as TagResource, checked with the new tags
+      // as the secret's tags, so the existing-tag check needs no IfExists. An untagged secret or
+      // another stack's secret cannot be retagged and then read through a grant bound to the stack
+      // tag.
+      {
+        "label": "tag-auth-secret",
+        "description": "Tag the AUTH-token secret.",
+        "grant": {
+          "actions": ["secretsmanager:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              },
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // AWS authorizes CreateSecurityGroup against the target VPC as well as the new group, so the
+      // create cannot be tag-conditioned; the CreateTags-on-create grant below stamps the ownership
+      // tags so every later change is tag-scoped.
+      {
+        "label": "create-redis-security-group",
+        "description": "Create the dedicated Redis security group.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          }
+        }
+      },
+      {
+        "label": "tag-redis-security-group",
+        "description": "Stamp the ownership tags on the Redis security group at creation.",
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // The 6379-from-workloads rule and teardown only touch a security group this application
+      // already owns. Terraform also removes the default egress rule when it creates the group.
+      {
+        "label": "manage-redis-security-group",
+        "description": "Add and remove ingress and egress rules on, and delete, the security group owned by this application.",
+        "grant": {
+          "actions": [
+            "ec2:AuthorizeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupEgress",
+            "ec2:DeleteSecurityGroup"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // A same-named secret or security group that is not ours must be found and refused, never
+      // overwritten or adopted, so these reads have no ownership condition. They return metadata
+      // (tags, names), not secret values.
+      {
+        "label": "read-auth-secret-metadata",
+        "description": "Read the AUTH-token secret's tags to tell a secret this deployment owns from a same-named foreign one. Never reads a secret value.",
+        "grant": {
+          "actions": ["secretsmanager:DescribeSecret"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        // EC2 describe calls do not support resource-level scoping.
+        "label": "read-redis-security-groups",
+        "description": "Find the Redis security group by name, to recover it after a lost create response.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
+      // ElastiCache creates this account-level role on the first replication group. The role is
+      // shared across stacks, so restrict both its exact ARN and service.
+      {
+        "label": "create-elasticache-service-linked-role",
+        "description": "Allow ElastiCache to create its service-linked role in a new account.",
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticache.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "elasticache.amazonaws.com"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // Memorystore does not support IAM conditions on resource name or type (it is absent from the
+      // IAM conditions resource-attribute tables), so these grants are project-wide. The controller
+      // refuses to touch an instance that lacks this deployment's labels.
+      {
+        "label": "manage-memorystore-instance",
+        "description": "Create, update, read and delete the Memorystore instance and track its operations.",
+        "grant": {
+          "permissions": [
+            "memorystore.instances.create",
+            "memorystore.instances.update",
+            "memorystore.instances.delete",
+            "memorystore.instances.get",
+            "memorystore.instances.list",
+            "memorystore.operations.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // Private Service Connect: the policy lets Memorystore place its endpoint in the stack
+      // subnetwork. One policy per network is shared by every Redis in the stack and removed by the
+      // last one out. The policy resource supports no IAM conditions, so the grant is project-wide.
+      {
+        "label": "manage-service-connection-policy",
+        "description": "Create, read and delete the service connection policy that connects Memorystore to the stack network.",
+        "grant": {
+          "permissions": [
+            "networkconnectivity.serviceConnectionPolicies.create",
+            "networkconnectivity.serviceConnectionPolicies.get",
+            "networkconnectivity.serviceConnectionPolicies.list",
+            "networkconnectivity.serviceConnectionPolicies.delete",
+            "networkconnectivity.operations.get",
+            "compute.networks.get",
+            "compute.networks.use",
+            "compute.subnetworks.get",
+            "compute.subnetworks.use"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      // Cluster and database operations are scoped to the one cluster; Azure tracks their
+      // asynchronous status at location level, which needs resource-group scope and returns status
+      // only.
+      {
+        "label": "manage-managed-redis",
+        "description": "Create, update, read and delete the Managed Redis cluster and its database.",
+        "grant": {
+          "actions": [
+            "Microsoft.Cache/redisEnterprise/write",
+            "Microsoft.Cache/redisEnterprise/read",
+            "Microsoft.Cache/redisEnterprise/delete",
+            "Microsoft.Cache/redisEnterprise/databases/write",
+            "Microsoft.Cache/redisEnterprise/databases/read",
+            "Microsoft.Cache/redisEnterprise/databases/delete",
+            "Microsoft.Cache/redisEnterprise/privateEndpointConnectionsApproval/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Cache/redisEnterprise/${resourceName}"
+          }
+        }
+      },
+      {
+        "label": "read-managed-redis-operations",
+        "description": "Track asynchronous Managed Redis operations.",
+        "grant": {
+          "actions": [
+            "Microsoft.Cache/locations/operationResults/read",
+            "Microsoft.Cache/locations/operationsStatus/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // The private endpoint, the private DNS zone and its VNet link are the networking this
+      // resource owns. The zone is shared by every Redis in the resource group and removed by the
+      // last one out, so these act at resource-group scope. None of the actions exposes the access
+      // keys.
+      {
+        "label": "manage-redis-private-networking",
+        "description": "Create and delete the private endpoint, its DNS zone group, the private DNS zone and the zone's VNet link.",
+        "grant": {
+          "actions": [
+            "Microsoft.Network/privateEndpoints/write",
+            "Microsoft.Network/privateEndpoints/read",
+            "Microsoft.Network/privateEndpoints/delete",
+            "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/write",
+            "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/read",
+            "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/delete",
+            "Microsoft.Network/privateDnsZones/write",
+            "Microsoft.Network/privateDnsZones/read",
+            "Microsoft.Network/privateDnsZones/delete",
+            "Microsoft.Network/privateDnsZones/join/action",
+            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/write",
+            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/read",
+            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/delete",
+            "Microsoft.Network/virtualNetworks/join/action",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

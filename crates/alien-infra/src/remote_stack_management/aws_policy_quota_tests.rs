@@ -670,7 +670,7 @@ async fn an_update_from_the_earlier_layout_never_drops_a_deny() {
         .collect();
     assert!(!deny_statements.is_empty(), "the grant has Deny statements");
     let old = earlier_release_layout(statements);
-    assert_eq!(old.len(), 22, "earlier releases needed 22 policies");
+    assert_eq!(old.len(), 24, "earlier releases needed 24 policies");
 
     let account = Arc::new(Mutex::new(Account::default()));
     {

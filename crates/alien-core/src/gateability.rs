@@ -146,6 +146,7 @@ pub const MANIFEST_TYPES: &[&str] = &[
     "queue",
     "vault",
     "postgres",
+    "redis",
     "ai",
     "worker",
     "daemon",
@@ -176,6 +177,12 @@ mod tests {
         // and the missing emitter refuses the render, exactly as for an
         // ungated frozen postgres.
         assert!(gateability.live);
+    }
+
+    #[test]
+    fn redis_gates_like_postgres() {
+        assert_eq!(gate_refusal("redis", "cache"), None);
+        assert!(type_gateability("redis").live);
     }
 
     #[test]
@@ -244,6 +251,7 @@ mod tests {
             "vault",
             "ai",
             "postgres",
+            "redis",
             "worker",
             "daemon",
             "container",

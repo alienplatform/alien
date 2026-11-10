@@ -1,5 +1,5 @@
 //! `alien-bindings-node` — a napi-rs addon exposing `alien-bindings`
-//! storage / kv / queue / vault / container / postgres to JavaScript.
+//! storage / kv / queue / vault / container / postgres / redis to JavaScript.
 //!
 //! This crate is a pure argument/error translation layer. It contains no
 //! provider logic: every method marshals arguments across the JS boundary,
@@ -14,6 +14,7 @@ mod key;
 mod kv;
 mod postgres;
 mod queue;
+mod redis;
 #[cfg(feature = "platform-sdk")]
 mod remote_storage;
 mod sandbox;
@@ -32,6 +33,7 @@ pub use key::KeyHandle;
 pub use kv::KvHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
+pub use redis::{RedisConnectionJs, RedisHandle};
 #[cfg(feature = "platform-sdk")]
 pub use remote_storage::RemoteStorageHandle;
 pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxInstanceJs};
@@ -138,6 +140,17 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let postgres = inner.postgres(&name).await.map_err(map_alien_error)?;
         Ok(PostgresHandle::new(postgres))
+    }
+
+    /// Resolve the Redis binding named `name`.
+    ///
+    /// A cloud backend's password is read from its secret store here, so a
+    /// secret-resolution failure surfaces now, not on a later call.
+    #[napi]
+    pub async fn redis(&self, name: String) -> napi::Result<RedisHandle> {
+        let inner = self.inner.clone();
+        let redis = inner.redis(&name).await.map_err(map_alien_error)?;
+        Ok(RedisHandle::new(redis))
     }
 }
 

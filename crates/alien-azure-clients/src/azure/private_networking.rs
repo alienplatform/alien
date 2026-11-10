@@ -26,6 +26,12 @@ pub const POSTGRES_PRIVATE_DNS_ZONE: &str = "privatelink.postgres.database.azure
 /// when wiring a Private Endpoint to it.
 pub const POSTGRES_PRIVATE_LINK_GROUP_ID: &str = "postgresqlServer";
 
+/// The Private DNS zone Azure Managed Redis private endpoints resolve through.
+pub const REDIS_PRIVATE_DNS_ZONE: &str = "privatelink.redis.azure.net";
+
+/// The `groupIds` value that selects the Azure Managed Redis sub-resource.
+pub const REDIS_PRIVATE_LINK_GROUP_ID: &str = "redisEnterprise";
+
 // ─────────────────────────── Private Endpoint models ───────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -91,6 +97,10 @@ pub struct PrivateDnsZone {
     pub location: String,
     #[serde(default)]
     pub properties: PrivateDnsZoneProperties,
+    /// Ownership tags. Present on a read; written only by
+    /// `create_or_update_private_dns_zone_tagged`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -103,6 +113,7 @@ impl PrivateDnsZone {
         Self {
             location: "global".to_string(),
             properties: PrivateDnsZoneProperties::default(),
+            tags: None,
         }
     }
 }
@@ -227,6 +238,22 @@ pub trait PrivateNetworkingApi: Send + Sync + std::fmt::Debug {
         zone_name: &str,
     ) -> Result<OperationResult<()>>;
 
+    /// Same as `create_or_update_private_dns_zone`, and stamps `tags` on the zone so a later
+    /// reader can tell who created it.
+    async fn create_or_update_private_dns_zone_tagged(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+        tags: &std::collections::HashMap<String, String>,
+    ) -> Result<OperationResult<()>>;
+
+    /// Reads a zone, including its tags. A missing zone is a not-found error.
+    async fn get_private_dns_zone(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+    ) -> Result<PrivateDnsZone>;
+
     async fn delete_private_dns_zone(
         &self,
         resource_group: &str,
@@ -288,6 +315,42 @@ impl AzurePrivateNetworkingClient {
 
     fn subscription_id(&self) -> &str {
         &self.token_cache.config().subscription_id
+    }
+
+    async fn put_private_dns_zone(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+        tags: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<OperationResult<()>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &self.private_dns_zone_path(resource_group, zone_name),
+            Some(vec![("api-version", Self::PRIVATE_DNS_API_VERSION.into())]),
+        );
+        let mut zone = PrivateDnsZone::global();
+        zone.tags = tags;
+        let body = serde_json::to_string(&zone).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!("Failed to serialize Private DNS Zone: {zone_name}"),
+            },
+        )?;
+        let req = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(req, &token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdatePrivateDnsZone",
+                zone_name,
+            )
+            .await
     }
 
     fn private_endpoint_path(&self, resource_group: &str, name: &str) -> String {
@@ -414,6 +477,25 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         resource_group: &str,
         zone_name: &str,
     ) -> Result<OperationResult<()>> {
+        self.put_private_dns_zone(resource_group, zone_name, None)
+            .await
+    }
+
+    async fn create_or_update_private_dns_zone_tagged(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+        tags: &std::collections::HashMap<String, String>,
+    ) -> Result<OperationResult<()>> {
+        self.put_private_dns_zone(resource_group, zone_name, Some(tags.clone()))
+            .await
+    }
+
+    async fn get_private_dns_zone(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+    ) -> Result<PrivateDnsZone> {
         let token = self
             .token_cache
             .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
@@ -422,25 +504,26 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             &self.private_dns_zone_path(resource_group, zone_name),
             Some(vec![("api-version", Self::PRIVATE_DNS_API_VERSION.into())]),
         );
-        let zone = PrivateDnsZone::global();
-        let body = serde_json::to_string(&zone).into_alien_error().context(
-            ErrorData::SerializationError {
-                message: format!("Failed to serialize Private DNS Zone: {zone_name}"),
-            },
-        )?;
-        let req = AzureRequestBuilder::new(Method::PUT, url)
-            .content_type_json()
-            .content_length(&body)
-            .body(body)
+        let req = AzureRequestBuilder::new(Method::GET, url)
+            .content_length("")
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
-        self.base
-            .execute_request_with_long_running_support(
-                signed,
-                "CreateOrUpdatePrivateDnsZone",
-                zone_name,
-            )
+        let resp = self
+            .base
+            .execute_request(signed, "GetPrivateDnsZone", zone_name)
+            .await?;
+        let body = resp
+            .text()
             .await
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Azure GetPrivateDnsZone: failed to read body for {zone_name}"),
+            })?;
+        serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Azure GetPrivateDnsZone: JSON parse error for {zone_name}"),
+            })
     }
 
     async fn delete_private_dns_zone(

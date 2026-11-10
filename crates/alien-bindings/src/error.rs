@@ -633,6 +633,43 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A cloud Redis credential could not be read from the cloud (secret store or database
+    /// key listing). Retry metadata comes from the provider error being wrapped.
+    ///
+    /// `source_locator` is the secret name or database resource ID, never the credential.
+    #[error(
+        code = "REDIS_CREDENTIAL_RESOLUTION_FAILED",
+        message = "Failed to resolve the password for Redis binding '{binding_name}' from '{source_locator}': {reason}",
+        retryable = "inherit",
+        internal = "inherit",
+        http_status_code = 502
+    )]
+    RedisCredentialResolutionFailed {
+        /// Name of the Redis binding whose password could not be resolved
+        binding_name: String,
+        /// The secret or database that was read (never the value)
+        source_locator: String,
+        /// What went wrong while reading it
+        reason: String,
+    },
+
+    /// A cloud Redis credential was read but is not usable. Retrying cannot fix it.
+    #[error(
+        code = "REDIS_CREDENTIAL_INVALID",
+        message = "The credential for Redis binding '{binding_name}' read from '{source_locator}' is not usable: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    RedisCredentialInvalid {
+        /// Name of the Redis binding whose password was invalid
+        binding_name: String,
+        /// The secret or database that was read (never the value)
+        source_locator: String,
+        /// Why the value cannot be used as a password
+        reason: String,
+    },
+
     /// Resource not found in the cloud platform.
     #[error(
         code = "RESOURCE_NOT_FOUND",

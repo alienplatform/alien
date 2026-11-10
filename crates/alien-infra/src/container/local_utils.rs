@@ -9,7 +9,8 @@
 use crate::error::{ErrorData, Result};
 use alien_core::bindings::{
     binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, KvBinding,
-    PostgresBinding, QueueBinding, SandboxBinding, StorageBinding, VaultBinding, WorkerBinding,
+    PostgresBinding, QueueBinding, RedisBinding, SandboxBinding, StorageBinding, VaultBinding,
+    WorkerBinding,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::debug;
@@ -349,6 +350,46 @@ pub(super) fn rewrite_localhost_urls_for_container(
                 }
             }
         }
+
+        // Redis binding, after Postgres: both have an `external` variant, and an external
+        // Postgres binding must be rejected above rather than read as Redis. Like Postgres, the
+        // Local host is a bare `127.0.0.1`; an external Redis points at a real host.
+        if let Ok(mut binding) = serde_json::from_str::<RedisBinding>(binding_json) {
+            match binding {
+                RedisBinding::Local(ref mut local) => {
+                    let needs_rewrite = if let BindingValue::Value(ref host) = local.host {
+                        host == "127.0.0.1" || host == "localhost"
+                    } else {
+                        false
+                    };
+
+                    if needs_rewrite {
+                        local.host = BindingValue::value("host.docker.internal".to_string());
+                        let new_json = serde_json::to_string(&binding).into_alien_error().context(
+                            ErrorData::ResourceControllerConfigError {
+                                resource_id: binding_key.clone(),
+                                message: "Failed to serialize Redis binding".to_string(),
+                            },
+                        )?;
+
+                        debug!(
+                            resource = %binding_key,
+                            "Rewrote Redis localhost host for container"
+                        );
+                        *binding_json = new_json;
+                    }
+                    continue;
+                }
+                RedisBinding::External(_) => continue,
+                _ => {
+                    return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                        resource_id: binding_key,
+                        message: "Local platform containers cannot use cloud redis bindings"
+                            .to_string(),
+                    }));
+                }
+            }
+        }
     }
 
     Ok(())
@@ -471,7 +512,7 @@ pub(super) fn mount_local_sandboxes_for_container(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding, QueueBinding};
+    use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding, QueueBinding, RedisBinding};
 
     #[test]
     fn queue_network_binding_preserves_credentials_and_rewrites_only_loopback_host() {
@@ -730,5 +771,23 @@ mod tests {
             format!("{err:?}").contains("cannot use cloud postgres bindings"),
             "error should name the postgres rejection, got: {err:?}"
         );
+    }
+
+    #[test]
+    fn local_redis_binding_rewritten_for_container_keeps_password() {
+        let binding = RedisBinding::local("127.0.0.1", 6379, "default", "s3cr3t-pw");
+        let mut env =
+            serialize_binding_as_env_var("cache", &binding).expect("serialize local Redis binding");
+        let key = binding_env_var_name("cache");
+
+        rewrite_localhost_urls_for_container(&mut env).expect("rewrite should succeed");
+
+        let RedisBinding::Local(local) =
+            serde_json::from_str::<RedisBinding>(env.get(&key).unwrap()).unwrap()
+        else {
+            panic!("expected a Local Redis binding after rewrite");
+        };
+        assert!(matches!(&local.host, BindingValue::Value(host) if host == "host.docker.internal"));
+        assert!(env.get(&key).unwrap().contains("s3cr3t-pw"));
     }
 }

@@ -387,6 +387,47 @@ export interface Postgres {
   connection(): Promise<PostgresConnection>
 }
 
+/**
+ * TLS options for a Redis connection, usable as ioredis `tls` and node-redis
+ * `socket` TLS settings. Absent fields mean the system trust store and the dialed host.
+ */
+export interface RedisTlsOptions {
+  /** PEM-encoded CA certificates when the provider signs with its own CA. */
+  ca?: string[]
+  /** Name to verify the certificate against, when it differs from the host. */
+  servername?: string
+}
+
+/** Everything a Redis client needs to connect. The database is always 0. */
+export interface RedisConnection {
+  /**
+   * `redis://` (local) or `rediss://` URL with the username and password
+   * percent-encoded, so a generated password with URL-special characters stays intact.
+   */
+  url: string
+  host: string
+  port: number
+  username: string
+  /** Connection password, read from the cloud secret store when the binding resolved. */
+  password: string
+  /** Always 0. */
+  database: 0
+  /** `false` for the local developer server; otherwise TLS options for your client. */
+  tls: false | RedisTlsOptions
+}
+
+/**
+ * A resolved Redis binding. It exposes no operations: the application connects with its
+ * own Redis client (ioredis, node-redis, BullMQ) using these details.
+ */
+export interface Redis {
+  /**
+   * Resolve the connection details. A cloud backend's password is read from its secret
+   * store with the workload's own identity; call the factory again to pick up a rotation.
+   */
+  connection(): Promise<RedisConnection>
+}
+
 /** A resolved vault (secrets) binding. */
 export interface Vault {
   /** Get the secret named `name` as a string. */
@@ -476,6 +517,35 @@ export interface CreateSandboxOptions {
 export type CommandFrame =
   | { kind: "stdout" | "stderr"; seq: number; data: Buffer }
   | { kind: "exit"; exitCode: number; truncated: boolean }
+
+/** A signal for an interactive command. It reaches the command's whole process group. */
+export type CommandSignal =
+  | "interrupt"
+  | "terminate"
+  | "kill"
+  | "hangup"
+  | "quit"
+  | "user1"
+  | "user2"
+
+/**
+ * A running command you can write to and signal while reading its output.
+ *
+ * Iterate it for output exactly as `runCommand`'s frames: output arrives as the program writes
+ * it, so a prompt with no newline after it arrives while the program waits, and the last frame is
+ * the one terminal frame. Leaving the loop early ends the command.
+ */
+export interface InteractiveCommand extends AsyncIterable<CommandFrame> {
+  /** Writes to stdin. Resolves once the sandbox has handed the bytes to the program, so a
+   * program that is not reading holds the write rather than the bytes piling up in between. */
+  write(data: Buffer | string): Promise<void>
+  /** End of input. Closing again, or after the command ended, is not an error. */
+  closeStdin(): Promise<void>
+  /** Signals the command's process group. Rejects once the command has ended. */
+  signal(signal: CommandSignal): Promise<void>
+  /** Ends the command by releasing its output. Idempotent. */
+  close(): Promise<void>
+}
 
 /** What a command needs to run. */
 export interface RunCommandOptions {
@@ -579,6 +649,15 @@ export interface Sandbox {
     command: string,
     options: RunCommandOptions,
   ): AsyncIterable<CommandFrame>
+  /**
+   * Starts a command you can drive over stdin, resolving once it is running. Requires
+   * `interactiveCommands`. For REPLs, language servers and tool protocols.
+   */
+  runInteractive(
+    sandboxId: string,
+    command: string,
+    options: RunCommandOptions,
+  ): Promise<InteractiveCommand>
   /**
    * Starts a command as a job and resolves with its id. Requires `jobs`.
    *

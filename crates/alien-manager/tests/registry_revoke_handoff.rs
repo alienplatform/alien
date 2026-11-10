@@ -20,7 +20,7 @@ use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage
 use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
     BindingsProviderApi, Build, Container, CrossAccountAccess, CrossAccountPermissions, Kv,
-    Postgres, Queue, RepositoryResponse, Sandbox, ServiceAccount, Storage, Vault, Worker,
+    Postgres, Queue, Redis, RepositoryResponse, Sandbox, ServiceAccount, Storage, Vault, Worker,
 };
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
@@ -190,6 +190,10 @@ impl BindingsProviderApi for RegistryOnlyProvider {
     }
 
     async fn load_postgres(&self, binding_name: &str) -> BindingResult<Arc<dyn Postgres>> {
+        Err(not_configured(binding_name))
+    }
+
+    async fn load_redis(&self, binding_name: &str) -> BindingResult<Arc<dyn Redis>> {
         Err(not_configured(binding_name))
     }
 

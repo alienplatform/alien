@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bindings::{
     ArtifactRegistryBinding, BindingValue, ContainerAppsEnvironmentBinding, ExternalAiBinding,
-    KvBinding, PostgresBinding, QueueBinding, StorageBinding, VaultBinding,
+    KvBinding, PostgresBinding, QueueBinding, RedisBinding, StorageBinding, VaultBinding,
 };
 use crate::error::ErrorData;
 use crate::resource::ResourceOutputs;
@@ -40,6 +40,8 @@ pub enum ExternalBinding {
     ContainerAppsEnvironment(ContainerAppsEnvironmentBinding),
     /// External Postgres binding (operator-provided / BYO database)
     Postgres(PostgresBinding),
+    /// External Redis binding (operator-provided Redis-compatible server)
+    Redis(RedisBinding),
     /// External AI provider binding (BYO-key OpenAI/Anthropic, etc.)
     Ai(ExternalAiBinding),
 }
@@ -190,6 +192,19 @@ impl ExternalBindings {
         }
     }
 
+    /// Returns an error if the binding exists but is not a Redis type.
+    pub fn get_redis(&self, id: &str) -> crate::error::Result<Option<&RedisBinding>> {
+        match self.0.get(id) {
+            Some(ExternalBinding::Redis(b)) => Ok(Some(b)),
+            Some(other) => Err(AlienError::new(ErrorData::ExternalBindingTypeMismatch {
+                resource_id: id.to_string(),
+                expected: "redis".to_string(),
+                actual: other.binding_type().to_string(),
+            })),
+            None => Ok(None),
+        }
+    }
+
     /// Inserts an external binding for a resource.
     pub fn insert(&mut self, resource_id: impl Into<String>, binding: ExternalBinding) {
         self.0.insert(resource_id.into(), binding);
@@ -207,6 +222,7 @@ impl ExternalBinding {
             ExternalBinding::Vault(_) => "vault",
             ExternalBinding::ContainerAppsEnvironment(_) => "azure_container_apps_environment",
             ExternalBinding::Postgres(_) => "postgres",
+            ExternalBinding::Redis(_) => "redis",
             ExternalBinding::Ai(_) => "ai",
         }
     }
@@ -275,6 +291,7 @@ impl ExternalBinding {
             ExternalBinding::Vault(b) => serde_json::to_value(b),
             ExternalBinding::ContainerAppsEnvironment(b) => serde_json::to_value(b),
             ExternalBinding::Postgres(b) => serde_json::to_value(b),
+            ExternalBinding::Redis(b) => serde_json::to_value(b),
             ExternalBinding::Ai(b) => {
                 serde_json::to_value(crate::bindings::AiBinding::External(b.clone()))
             }
@@ -298,6 +315,7 @@ pub fn validate_binding_type(
         ("vault", ExternalBinding::Vault(_)) => true,
         ("azure_container_apps_environment", ExternalBinding::ContainerAppsEnvironment(_)) => true,
         ("postgres", ExternalBinding::Postgres(_)) => true,
+        ("redis", ExternalBinding::Redis(_)) => true,
         ("ai", ExternalBinding::Ai(_)) => true,
         _ => false,
     };

@@ -794,13 +794,16 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
     }
 }
 
+/// Whether setup creates a database that sits in the VPC (Postgres or Redis), which makes the
+/// network module also support the account's default VPC.
 fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
     ctx.stack.resources().any(|(_id, entry)| {
         entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-            && entry
+            && (entry
                 .config
                 .downcast_ref::<alien_core::Postgres>()
                 .is_some()
+                || entry.config.downcast_ref::<alien_core::Redis>().is_some())
     })
 }
 

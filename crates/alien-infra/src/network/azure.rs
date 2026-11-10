@@ -34,7 +34,7 @@ use alien_azure_clients::long_running_operation::OperationResult;
 use alien_core::{
     AzureVnetNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
     NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth, Platform, Postgres,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ProviderLifecycleState, Redis, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 use alien_error::{AlienError, Context};
@@ -102,13 +102,15 @@ fn emit_azure_network_heartbeat(
     });
 }
 
-/// A Postgres on Azure is reached through a Private Endpoint that must live in its
-/// own subnet, so its presence is what makes `private_endpoint_subnet_name`
-/// mandatory for a BYO-VNet.
-fn stack_contains_postgres(ctx: &ResourceControllerContext<'_>) -> bool {
-    ctx.desired_stack
-        .resources()
-        .any(|(_, entry)| entry.config.resource_type() == Postgres::RESOURCE_TYPE)
+/// A Postgres or Redis on Azure is reached through a Private Endpoint that must live in
+/// its own subnet, so either one makes `private_endpoint_subnet_name` mandatory for a
+/// BYO-VNet. A resource bound to an external server never gets a Private Endpoint from Alien.
+fn stack_needs_private_endpoint_subnet(ctx: &ResourceControllerContext<'_>) -> bool {
+    ctx.desired_stack.resources().any(|(id, entry)| {
+        let resource_type = entry.config.resource_type();
+        (resource_type == Postgres::RESOURCE_TYPE || resource_type == Redis::RESOURCE_TYPE)
+            && !ctx.deployment_config.external_bindings.has(id)
+    })
 }
 
 // =============================================================================================
@@ -385,12 +387,14 @@ impl AzureNetworkController {
                 );
 
                 // Fail loud rather than fall back to the Container Apps private subnet (see error).
-                if stack_contains_postgres(ctx) && private_endpoint_subnet_name.is_none() {
+                if stack_needs_private_endpoint_subnet(ctx)
+                    && private_endpoint_subnet_name.is_none()
+                {
                     return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                         resource_id: config.id.clone(),
-                        message: "BYO-VNet on Azure has a Postgres resource but no \
-                             privateEndpointSubnetName. A Postgres Flexible Server is reached \
-                             through a Private Endpoint that requires its own dedicated subnet \
+                        message: "BYO-VNet on Azure has a Postgres or Redis resource but no \
+                             privateEndpointSubnetName. A Postgres Flexible Server or an Azure \
+                             Managed Redis is reached through a Private Endpoint that requires its own dedicated subnet \
                              (the private subnet is the Container Apps infrastructure subnet and \
                              cannot be shared). Set privateEndpointSubnetName on the BYO-VNet \
                              configuration."
@@ -2114,7 +2118,9 @@ mod tests {
     };
     use alien_azure_clients::azure::network::MockNetworkApi;
     use alien_azure_clients::long_running_operation::OperationResult;
-    use alien_core::{Network, NetworkSettings, Platform, Postgres, ResourceStatus, StackSettings};
+    use alien_core::{
+        Network, NetworkSettings, Platform, Postgres, Redis, ResourceStatus, StackSettings,
+    };
     use std::sync::Arc;
 
     /// The Alien-managed VNet carves four non-overlapping /24s out of the /16, one
@@ -2213,6 +2219,92 @@ mod tests {
             error.to_string().contains("privateEndpointSubnetName"),
             "error should name the missing field, got: {error}"
         );
+    }
+
+    /// A Redis is reached through a Private Endpoint too, so a BYO-VNet without a PE subnet
+    /// fails the same way when the stack only has a Redis.
+    #[tokio::test]
+    async fn byo_vnet_with_redis_and_no_pe_subnet_fails_fast() {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(byo_network(None))
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .with_stack_resource(
+                Redis::new("cache".to_string()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build()
+            .await
+            .expect("executor should build");
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("create_start should fail fast without a PE subnet");
+
+        assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR");
+        assert!(error.to_string().contains("privateEndpointSubnetName"));
+    }
+
+    /// A Redis bound to an external server gets no Private Endpoint from Alien, so it must not
+    /// make the dedicated subnet mandatory.
+    #[tokio::test]
+    async fn byo_vnet_ignores_an_externally_bound_redis_when_checking_the_pe_subnet() {
+        let mut mock_network = MockNetworkApi::new();
+        mock_network.expect_get_virtual_network().returning(|_, _| {
+            Ok(VirtualNetwork {
+                location: Some("eastus".to_string()),
+                properties: Some(VirtualNetworkPropertiesFormat {
+                    address_space: Some(AddressSpace {
+                        address_prefixes: vec!["10.0.0.0/16".to_string()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        });
+        let mock_network = Arc::new(mock_network);
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_network_client()
+            .returning(move |_| Ok(mock_network.clone()));
+        let external: alien_core::bindings::RedisBinding =
+            serde_json::from_value(serde_json::json!({
+                "service": "external",
+                "host": "redis.example.com",
+                "port": 6379,
+                "username": "default",
+                "password": "secret"
+            }))
+            .unwrap();
+        let mut bindings = alien_core::ExternalBindings::new();
+        bindings.0.insert(
+            "cache".to_string(),
+            alien_core::ExternalBinding::Redis(external),
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(byo_network(None))
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(mock_provider))
+            .external_bindings(bindings)
+            .with_stack_resource(
+                Redis::new("cache".to_string()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("an externally bound Redis needs no PE subnet");
+        assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
     /// A BYO-VNet that names its PE subnet resolves to that subnet and proceeds,

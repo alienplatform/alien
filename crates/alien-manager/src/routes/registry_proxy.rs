@@ -2628,6 +2628,13 @@ mod tests {
             Err(route_test_error(binding_name))
         }
 
+        async fn load_redis(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Redis>> {
+            Err(route_test_error(binding_name))
+        }
+
         async fn load_queue(
             &self,
             binding_name: &str,

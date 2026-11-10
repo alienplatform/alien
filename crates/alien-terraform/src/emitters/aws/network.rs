@@ -238,10 +238,11 @@ fn stack_needs_default_network_data(ctx: &EmitContext<'_>) -> bool {
     stack_has_managed_eks(ctx)
         || ctx.stack.resources().any(|(_, entry)| {
             entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                && entry
+                && (entry
                     .config
                     .downcast_ref::<alien_core::Postgres>()
                     .is_some()
+                    || entry.config.downcast_ref::<alien_core::Redis>().is_some())
         })
 }
 

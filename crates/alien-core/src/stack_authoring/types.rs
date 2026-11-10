@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 
 use crate::resources::{
     Ai, ArtifactRegistry, AwsOpenSearch, Build, Container, Daemon, Email, Key, Kv, Postgres, Queue,
-    Sandbox, ServiceAccount, Storage, Vault, Worker,
+    Redis, Sandbox, ServiceAccount, Storage, Vault, Worker,
 };
 use crate::{Resource, ResourceDefinition, ResourceLifecycle};
 
@@ -104,6 +104,7 @@ pub static AUTHORABLE_TYPES: &[AuthorableType] = &[
     authorable!("vault", "vault", "Vault", Vault, Frozen, false),
     authorable!("key", "key", "Key", Key, Frozen, false),
     authorable!("postgres", "postgres", "Postgres", Postgres, Frozen, false),
+    authorable!("redis", "redis", "Redis", Redis, Frozen, false),
     authorable!("email", "email", "Email", Email, Frozen, false),
     authorable!("ai", "ai", "Ai", Ai, Frozen, false),
     authorable!("sandbox", "sandbox", "Sandbox", Sandbox, Frozen, false),

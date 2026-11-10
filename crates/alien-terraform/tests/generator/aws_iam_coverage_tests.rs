@@ -81,7 +81,7 @@ const FIXTURES: &[&[&str]] = &[
 /// CLI. A stand-in registered emitter grants each of their AWS sets here
 /// (`every_set_of_a_registered_emitters_family_renders`); the real emitter's own grants are
 /// sized where it is tested.
-const COVERED_BY_A_REGISTERED_EMITTER: &[&str] = &["compute-cluster", "postgres"];
+const COVERED_BY_A_REGISTERED_EMITTER: &[&str] = &["compute-cluster", "postgres", "redis"];
 
 /// Families whose every AWS set binds only to a resource of a type no AWS Terraform emitter in
 /// this crate renders, so no stack rendered here can grant them.

@@ -94,6 +94,51 @@ class PostgresConnection:
         return context
 
 
+@dataclass(frozen=True, repr=False)
+class RedisConnection:
+    url: str
+    host: str
+    port: int
+    username: str
+    password: str
+    tls: bool
+    ca_certificates: tuple[str, ...]
+    database: Literal[0] = 0
+
+    def __repr__(self) -> str:
+        return (
+            "RedisConnection("
+            f"host={self.host!r}, port={self.port!r}, username={self.username!r}, "
+            f"password='<redacted>', tls={self.tls!r}, ca_certificates={len(self.ca_certificates)})"
+        )
+
+    def ssl_context(self) -> ssl.SSLContext | None:
+        """Build a verifying TLS context, or ``None`` for the plaintext local server."""
+        if not self.tls:
+            return None
+        context = ssl.create_default_context()
+        for certificate in self.ca_certificates:
+            context.load_verify_locations(cadata=certificate)
+        return context
+
+    def redis_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments for ``redis.asyncio.Redis(**conn.redis_kwargs())``."""
+        kwargs: dict[str, Any] = {
+            "host": self.host,
+            "port": self.port,
+            "username": self.username,
+            "password": self.password,
+            "db": self.database,
+        }
+        if self.tls:
+            kwargs["ssl"] = True
+            kwargs["ssl_cert_reqs"] = "required"
+            kwargs["ssl_check_hostname"] = True
+            if self.ca_certificates:
+                kwargs["ssl_ca_data"] = "\n".join(self.ca_certificates)
+        return kwargs
+
+
 class Storage:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("storage", name)
@@ -333,6 +378,24 @@ class Postgres:
         )
 
 
+class Redis:
+    def __init__(self, name: str) -> None:
+        self._handle = _LazyHandle[Any]("redis", name)
+
+    @translate_errors
+    async def connection(self) -> RedisConnection:
+        value = (await self._handle.get()).connection()
+        return RedisConnection(
+            value.url,
+            value.host,
+            value.port,
+            value.username,
+            value.password,
+            value.tls,
+            tuple(value.ca_certificates),
+        )
+
+
 class Container:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("container", name)
@@ -487,6 +550,50 @@ class CommandStream(AsyncIterator[CommandFrame]):
         await self._handle.close()
 
 
+CommandSignal = Literal["interrupt", "terminate", "kill", "hangup", "quit", "user1", "user2"]
+
+
+class InteractiveCommand(AsyncIterator[CommandFrame]):
+    """A running command you can write to and signal while reading its output.
+
+    Iterate it for output frames exactly as a ``CommandStream``: output arrives as the program
+    writes it, so a prompt with no newline after it arrives while the program waits. ``write``
+    returns once the sandbox has handed the bytes to the program, which pushes back when the
+    program is not reading. ``close`` ends the command.
+    """
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+
+    def __aiter__(self) -> InteractiveCommand:
+        return self
+
+    @translate_errors
+    async def __anext__(self) -> CommandFrame:
+        value = await self._handle.next()
+        if value is None:
+            raise StopAsyncIteration
+        return _command_frame(value)
+
+    @translate_errors
+    async def write(self, data: bytes) -> None:
+        await self._handle.write(bytes(data))
+
+    @translate_errors
+    async def close_stdin(self) -> None:
+        """End of input. Closing again, or after the command ended, is not an error."""
+        await self._handle.close_stdin()
+
+    @translate_errors
+    async def signal(self, signal: CommandSignal) -> None:
+        """Signal the command's process group. Fails once the command has ended."""
+        await self._handle.signal(signal)
+
+    @translate_errors
+    async def close(self) -> None:
+        await self._handle.close()
+
+
 class SandboxAllowEgress(TypedDict):
     allow: list[str]
 
@@ -572,6 +679,23 @@ class Sandbox:
             sandbox_id, command, list(args), timeout_ms, cwd, dict(env) if env else None
         )
         return CommandStream(handle)
+
+    @translate_errors
+    async def run_interactive(
+        self,
+        sandbox_id: str,
+        command: str,
+        args: Sequence[str],
+        *,
+        timeout_ms: int,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> InteractiveCommand:
+        """Start a command you can drive over stdin. Requires ``interactiveCommands``."""
+        handle = await (await self._handle.get()).run_interactive(
+            sandbox_id, command, list(args), timeout_ms, cwd, dict(env) if env else None
+        )
+        return InteractiveCommand(handle)
 
     @translate_errors
     async def start_job(
@@ -663,6 +787,10 @@ def vault(name: str) -> Vault:
 
 def postgres(name: str) -> Postgres:
     return Postgres(name)
+
+
+def redis(name: str) -> Redis:
+    return Redis(name)
 
 
 def container(name: str) -> Container:

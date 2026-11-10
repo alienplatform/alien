@@ -19,7 +19,9 @@
 //! principals outside that prefix, which the key policy still trusts.
 
 use crate::{registry::permission_set_uses_aws_key_data, ErrorData, Result};
-use alien_core::{Container, PermissionSetReference, Postgres, ServiceAccount, Stack, Storage};
+use alien_core::{
+    Container, PermissionSetReference, Postgres, Redis, ServiceAccount, Stack, Storage,
+};
 use alien_error::AlienError;
 use serde_json::{json, Map, Value};
 
@@ -59,8 +61,9 @@ const KEY_USE_DENIED_ACTIONS: [&str; 4] = [
 
 /// AWS services that call KMS for the management role while it provisions
 /// volumes, databases and buckets that encrypt with a data-layer key.
-const NATIVE_ENCRYPTION_SERVICES: [&str; 3] = [
+const NATIVE_ENCRYPTION_SERVICES: [&str; 4] = [
     "ec2.*.amazonaws.com",
+    "elasticache.*.amazonaws.com",
     "rds.*.amazonaws.com",
     "s3.*.amazonaws.com",
 ];
@@ -244,6 +247,8 @@ pub fn key_has_native_service_use(stack: &Stack, key_id: &str) -> bool {
             storage.encryption_key.as_ref()
         } else if let Some(postgres) = entry.config.downcast_ref::<Postgres>() {
             postgres.encryption_key.as_ref()
+        } else if let Some(redis) = entry.config.downcast_ref::<Redis>() {
+            redis.encryption_key.as_ref()
         } else if let Some(container) = entry.config.downcast_ref::<Container>() {
             container
                 .persistent_storage
@@ -408,7 +413,7 @@ mod tests {
         let direct = statement(&policy, "DenyManagementKeyUse").unwrap();
         assert_eq!(
             direct["Condition"]["StringNotLike"],
-            json!({ "kms:ViaService": ["ec2.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"] })
+            json!({ "kms:ViaService": ["ec2.*.amazonaws.com", "elasticache.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"] })
         );
         let admin = statement(&policy, "DenyManagementKeyAdministration").unwrap();
         assert!(admin["Condition"].get("StringNotLike").is_none());
@@ -462,6 +467,35 @@ mod tests {
             vec!["manager-sa".to_string(), "wild-sa".to_string()]
         );
         assert!(!key_has_native_service_use(&stack, "secrets"));
+    }
+
+    #[test]
+    fn a_redis_encrypted_with_the_key_is_native_service_use() {
+        let stack = Stack::new("stack".to_string())
+            .add(
+                Key::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Redis::new("cache".to_string())
+                    .encryption_key(alien_core::ResourceRef::new(
+                        Key::RESOURCE_TYPE,
+                        "secrets".to_string(),
+                    ))
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        assert!(key_has_native_service_use(&stack, "secrets"));
+        assert!(!key_has_native_service_use(&stack, "other"));
+        // The key policy exempts calls made through ElastiCache, which is how the replication
+        // group is created with the key.
+        let policy = policy(true, &[]);
+        let direct = statement(&policy, "DenyManagementKeyUse").unwrap();
+        assert!(direct["Condition"]["StringNotLike"]["kms:ViaService"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("elasticache.*.amazonaws.com")));
     }
 
     #[test]

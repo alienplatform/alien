@@ -131,17 +131,59 @@ pub fn spawn_sandboxed(
     Ok(command)
 }
 
+/// How output is cut into frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framing {
+    /// One frame per line, so a log reads naturally frame by frame
+    Lines,
+    /// One frame per read, whatever it holds. An interactive program waits at a prompt with no
+    /// newline after it, and line framing would hold that prompt back until the program exits.
+    Chunks,
+}
+
 /// Streams a spawned child's output, sending frames as they are produced.
 ///
 /// `output_cap` bounds how many bytes of each stream are kept. Beyond it the process still runs
 /// to completion, because killing a command over a chatty log would be a surprising failure, but
 /// the extra output is dropped and the terminal frame says so.
 pub async fn stream(
-    mut child: Child,
+    child: Child,
     timeout: Duration,
     output_cap: usize,
     frames: mpsc::Sender<ProcessFrame>,
 ) {
+    stream_framed(
+        child,
+        timeout,
+        output_cap,
+        Framing::Lines,
+        frames,
+        None::<fn()>,
+    )
+    .await
+}
+
+/// [`stream`], with the framing chosen by the caller.
+///
+/// The child's stdin is the caller's: take it before calling to write to the process, or leave it
+/// null. Every other rule is the same, so the deadline and the departed-caller kill hold whatever
+/// the caller does with stdin.
+///
+/// `exited`, when given, runs once the child has exited and before it is reaped, and before the
+/// terminal frame is sent. A caller that signals the child's process group by number stops doing
+/// so there. Until the reap the exited child still holds its pid, so a signal sent before `exited`
+/// returns can only reach this command; after the reap the kernel may hand the number to another
+/// process, and the terminal frame can wait indefinitely on a slow reader. On the deadline and
+/// when the caller leaves, `exited` runs before the kill, for the same reason.
+pub async fn stream_framed(
+    mut child: Child,
+    timeout: Duration,
+    output_cap: usize,
+    framing: Framing,
+    frames: mpsc::Sender<ProcessFrame>,
+    exited: Option<impl FnOnce() + Send>,
+) {
+    let mut exited = exited;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
@@ -149,26 +191,16 @@ pub async fn stream(
     let truncated = AtomicBool::new(false);
     let read_error: Mutex<Option<String>> = Mutex::new(None);
 
+    let sink = Sink {
+        seq: &seq,
+        truncated: &truncated,
+        read_error: &read_error,
+        frames: &frames,
+    };
     let pump = async {
         let (stdout_connected, stderr_connected) = tokio::join!(
-            drain(
-                stdout,
-                ProcessStream::Stdout,
-                output_cap,
-                &seq,
-                &truncated,
-                &read_error,
-                &frames
-            ),
-            drain(
-                stderr,
-                ProcessStream::Stderr,
-                output_cap,
-                &seq,
-                &truncated,
-                &read_error,
-                &frames
-            ),
+            drain(stdout, ProcessStream::Stdout, framing, output_cap, &sink),
+            drain(stderr, ProcessStream::Stderr, framing, output_cap, &sink),
         );
         stdout_connected && stderr_connected
     };
@@ -187,6 +219,14 @@ pub async fn stream(
             }
             result = async {
                 connected = pump.await;
+                // Taken only once the wait is over: if the deadline or a departed caller ends
+                // this branch mid-wait, the hook is still there for the kill below to run first.
+                if exited.is_some() {
+                    exited_unreaped(&child).await;
+                    if let Some(exited) = exited.take() {
+                        exited();
+                    }
+                }
                 child.wait().await
             } => result,
         }
@@ -195,6 +235,9 @@ pub async fn stream(
 
     // The caller went away, so there is nobody to report to and no reason to keep running.
     if !connected {
+        if let Some(exited) = exited.take() {
+            exited();
+        }
         kill_all(&mut child).await;
         return;
     }
@@ -216,6 +259,9 @@ pub async fn stream(
             message: error.to_string(),
         },
         Err(_) => {
+            if let Some(exited) = exited.take() {
+                exited();
+            }
             kill_all(&mut child).await;
             ProcessFrame::Failed {
                 code: "timeoutExceeded",
@@ -224,7 +270,85 @@ pub async fn stream(
         }
     };
 
+    // Already run on every path that reaches here; kept for a wait that failed before it could.
+    if let Some(exited) = exited.take() {
+        exited();
+    }
     let _ = frames.send(terminal).await;
+}
+
+/// Waits until `child` has exited, leaving it unreaped.
+///
+/// An exited child that has not been reaped keeps its pid, and with it its process group's
+/// number, so nothing else can be given either. That is the window in which a caller can stop
+/// signalling the group by number with no chance of reaching another process.
+///
+/// The wait runs on a blocking thread, which outlives this future if it is dropped. On Linux it
+/// waits on a pidfd opened here, while the child is still unreaped, so the thread is tied to this
+/// child: it ends when the child exits or is reaped, never on a later process given its number.
+async fn exited_unreaped(child: &Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        #[cfg(target_os = "linux")]
+        let target = {
+            // SAFETY: `pidfd_open` takes a pid and flags and returns a new descriptor or -1. The
+            // child is unreaped, so the pid is still this child's.
+            let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+            if fd >= 0 {
+                // SAFETY: the descriptor was just returned to us and nothing else owns it.
+                let fd = unsafe {
+                    <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd as i32)
+                };
+                WaitTarget::PidFd(fd)
+            } else {
+                WaitTarget::Pid(pid)
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let target = WaitTarget::Pid(pid);
+
+        let _ = tokio::task::spawn_blocking(move || loop {
+            let (kind, id) = match &target {
+                #[cfg(target_os = "linux")]
+                WaitTarget::PidFd(fd) => (
+                    libc::P_PIDFD,
+                    std::os::fd::AsRawFd::as_raw_fd(fd) as libc::id_t,
+                ),
+                WaitTarget::Pid(pid) => (libc::P_PID, *pid as libc::id_t),
+            };
+            // SAFETY: `waitid` writes only into `info`, which lives for the call. `WNOWAIT` leaves
+            // the child waitable, so the reap that follows still collects its status.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result =
+                unsafe { libc::waitid(kind, id, &mut info, libc::WEXITED | libc::WNOWAIT) };
+            if result == 0
+                || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+            {
+                return;
+            }
+        })
+        .await;
+    }
+    #[cfg(not(unix))]
+    let _ = child;
+}
+
+/// What [`exited_unreaped`] waits on.
+#[cfg(unix)]
+enum WaitTarget {
+    /// A descriptor for the child itself, which no later process can take over
+    #[cfg(target_os = "linux")]
+    PidFd(std::os::fd::OwnedFd),
+    /// The child's number, where pidfds are not available
+    Pid(u32),
+}
+
+/// Where both streams' frames go, and the state they share.
+struct Sink<'a> {
+    seq: &'a AtomicU64,
+    truncated: &'a AtomicBool,
+    read_error: &'a Mutex<Option<String>>,
+    frames: &'a mpsc::Sender<ProcessFrame>,
 }
 
 /// Runs a child to completion and collects every frame.
@@ -247,22 +371,26 @@ pub async fn run(child: Child, timeout: Duration, output_cap: usize) -> Vec<Proc
     frames
 }
 
-/// Reads one stream to EOF, framing each line. Returns false if the caller went away.
+/// Reads one stream to EOF, framing each line or each read. Returns false if the caller went away.
 ///
-/// A truncated line still consumes a sequence number, so a gap tells the caller output was
+/// A truncated frame still consumes a sequence number, so a gap tells the caller output was
 /// dropped rather than hiding it.
 async fn drain<R>(
     stream: Option<R>,
     which: ProcessStream,
+    framing: Framing,
     output_cap: usize,
-    seq: &AtomicU64,
-    truncated: &AtomicBool,
-    read_error: &Mutex<Option<String>>,
-    frames: &mpsc::Sender<ProcessFrame>,
+    sink: &Sink<'_>,
 ) -> bool
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    let Sink {
+        seq,
+        truncated,
+        read_error,
+        frames,
+    } = sink;
     let Some(stream) = stream else {
         return true;
     };
@@ -275,11 +403,17 @@ where
         // Bounded per read: `output_cap` is checked only after a read returns, so an unbounded
         // `read_until` on output that never contains a newline grows this buffer until the
         // process is killed. A longer line is split, which the sequence numbers already express.
-        match (&mut reader)
-            .take(MAX_FRAME_BYTES)
-            .read_until(b'\n', &mut line)
-            .await
-        {
+        let mut bounded = (&mut reader).take(MAX_FRAME_BYTES);
+        let read = match framing {
+            Framing::Lines => bounded.read_until(b'\n', &mut line).await,
+            Framing::Chunks => {
+                line.resize(MAX_FRAME_BYTES as usize, 0);
+                let read = bounded.read(&mut line).await;
+                line.truncate(*read.as_ref().unwrap_or(&0));
+                read
+            }
+        };
+        match read {
             Ok(0) => return true,
             Err(error) => {
                 read_error
@@ -608,5 +742,230 @@ mod tests {
         assert!(matches!(first, ProcessFrame::Output { .. }));
 
         produce.abort();
+    }
+
+    fn interactive_child(script: &str) -> Child {
+        spawn("/bin/sh", &["-c".to_string(), script.to_string()])
+            .expect("command builds")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("command spawns")
+    }
+
+    /// The property chunk framing exists for: a program waiting at a prompt has written no
+    /// newline, and the prompt has to reach the caller while the program still waits. Line framing
+    /// fails this by holding the prompt until the program exits.
+    #[tokio::test]
+    async fn a_prompt_without_a_newline_arrives_while_the_program_waits() {
+        let mut child = interactive_child("printf '>>> '; read line; echo \"got $line\"");
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let produce = tokio::spawn(stream_framed(
+            child,
+            Duration::from_secs(30),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+            None::<fn()>,
+        ));
+
+        let prompt = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("the prompt must arrive while the program is still reading")
+            .expect("a frame");
+        assert!(
+            matches!(&prompt, ProcessFrame::Output { data, .. } if data == b">>> "),
+            "the prompt is delivered as written: {prompt:?}"
+        );
+
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(b"ping\n").await.expect("stdin accepts");
+        let mut frames = vec![prompt];
+        while let Some(frame) = receiver.recv().await {
+            frames.push(frame);
+        }
+        produce.await.expect("the producer does not panic");
+
+        assert_eq!(stdout_of(&frames), ">>> got ping\n");
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
+    }
+
+    /// Closing stdin is how a caller says "no more input", and a program reading to EOF must see
+    /// it and finish. A stdin left open would hold the command until its deadline.
+    #[tokio::test]
+    async fn closing_stdin_ends_a_program_that_reads_to_eof() {
+        let mut child = interactive_child("cat");
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let consume = tokio::spawn(run_framed(child, Duration::from_secs(30), Framing::Chunks));
+
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(b"one\ntwo").await.expect("stdin accepts");
+        drop(stdin);
+
+        let frames = tokio::time::timeout(Duration::from_secs(10), consume)
+            .await
+            .expect("EOF on stdin must end cat")
+            .expect("no panic");
+        assert_eq!(stdout_of(&frames), "one\ntwo");
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
+    }
+
+    async fn run_framed(child: Child, timeout: Duration, framing: Framing) -> Vec<ProcessFrame> {
+        let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let produce = stream_framed(child, timeout, 1 << 20, framing, sender, None::<fn()>);
+        let consume = async {
+            let mut frames = Vec::new();
+            while let Some(frame) = receiver.recv().await {
+                frames.push(frame);
+            }
+            frames
+        };
+        tokio::join!(produce, consume).1
+    }
+
+    /// The hook a caller uses to stop signalling a process group by number runs when the child
+    /// exits, not when the terminal frame is delivered: a reader that has stopped reading would
+    /// otherwise keep that number live long after the kernel may have reused it.
+    #[tokio::test]
+    async fn exited_runs_before_the_terminal_frame_reaches_a_stalled_reader() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let reaped = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&reaped);
+        let produce = tokio::spawn(stream_framed(
+            child(&["/bin/sh", "-c", "echo x"]),
+            Duration::from_secs(30),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+            Some(move || flag.store(true, Ordering::SeqCst)),
+        ));
+
+        // The output frame fills the channel, so the terminal frame cannot be sent until this
+        // test reads; the reap must already have been reported by then.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !reaped.load(Ordering::SeqCst) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the reap was not reported while the terminal frame waited on the reader"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            !produce.is_finished(),
+            "the terminal frame is still waiting"
+        );
+
+        let mut frames = Vec::new();
+        while let Some(frame) = receiver.recv().await {
+            frames.push(frame);
+        }
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
+    }
+
+    /// A command that closes its own output and runs past its deadline: the hook is waiting for
+    /// the exit when the deadline ends that wait, and must still run, before the kill reaps the
+    /// command, rather than be dropped with the wait.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn exited_still_runs_when_the_deadline_ends_its_wait() {
+        let child = child(&["/bin/sh", "-c", "exec >/dev/null 2>&1; exec sleep 30"]);
+        let pid = child.id().expect("a running child has a pid");
+        let (sender, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let state = std::sync::Arc::new(Mutex::new(None));
+        let seen = std::sync::Arc::clone(&state);
+        let produce = stream_framed(
+            child,
+            Duration::from_millis(500),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+            Some(move || {
+                *seen.lock().expect("no panic holds this lock") =
+                    Some(std::path::Path::new(&format!("/proc/{pid}")).exists());
+            }),
+        );
+        let consume = async {
+            let mut receiver = receiver;
+            let mut frames = Vec::new();
+            while let Some(frame) = receiver.recv().await {
+                frames.push(frame);
+            }
+            frames
+        };
+        let (_, frames) = tokio::join!(produce, consume);
+
+        assert_eq!(
+            *state.lock().expect("no panic holds this lock"),
+            Some(true),
+            "the hook ran, and ran while the command still held its pid"
+        );
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Failed {
+                code: "timeoutExceeded",
+                ..
+            }
+        ));
+    }
+
+    /// The hook runs while the exited child is still unreaped, so its pid, which is also its
+    /// process group's number, cannot have been handed to anything else. A signal sent under the
+    /// same lock the hook takes therefore reaches this command or nothing.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn exited_runs_while_the_child_still_holds_its_pid() {
+        let child = child(&["/bin/sh", "-c", "exit 4"]);
+        let pid = child.id().expect("a running child has a pid");
+        let (sender, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let state = std::sync::Arc::new(Mutex::new(None));
+        let seen = std::sync::Arc::clone(&state);
+        let produce = stream_framed(
+            child,
+            Duration::from_secs(30),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+            Some(move || {
+                let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+                // The state follows the command name's closing parenthesis.
+                let letter = stat.and_then(|stat| {
+                    stat.rsplit_once(") ")
+                        .and_then(|(_, rest)| rest.chars().next())
+                });
+                *seen.lock().expect("no panic holds this lock") = letter;
+            }),
+        );
+        let consume = async {
+            let mut receiver = receiver;
+            let mut frames = Vec::new();
+            while let Some(frame) = receiver.recv().await {
+                frames.push(frame);
+            }
+            frames
+        };
+        let (_, frames) = tokio::join!(produce, consume);
+
+        assert_eq!(
+            *state.lock().expect("no panic holds this lock"),
+            Some('Z'),
+            "when the hook ran the child had exited and was not yet reaped"
+        );
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 4, .. }
+        ));
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "the child is reaped by the time the stream ends"
+        );
     }
 }

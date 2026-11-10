@@ -24,6 +24,7 @@ const SANDBOX_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 const SANDBOX_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
+const REDIS_BINDING: &str = "alien-redis";
 const QUEUE_BINDING: &str = "alien-queue";
 const AI_BINDING: &str = "test-ai";
 
@@ -554,6 +555,44 @@ pub async fn check_vault(deployment: &TestDeployment) -> anyhow::Result<()> {
     }
 
     info!("Vault binding check passed");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Redis
+// ---------------------------------------------------------------------------
+
+/// Check the redis binding: resolve the connection, then run a command set with stock clients
+/// (ioredis, node-redis) and a BullMQ job round trip inside the deployed app.
+pub async fn check_redis(deployment: &TestDeployment) -> anyhow::Result<()> {
+    let url = deployment_url(deployment)?;
+    info!("Checking redis binding");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/redis-test/{}", url, REDIS_BINDING))
+        .send()
+        .await
+        .context("Redis test request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("Redis test returned {}: {}", status, body);
+    }
+
+    let data: BindingTestResponse = resp.json().await.context("Failed to parse redis response")?;
+    if !data.success {
+        bail!("Redis test reported failure");
+    }
+    if data.binding_name != REDIS_BINDING {
+        bail!(
+            "Redis test binding mismatch: expected {}, got {}",
+            REDIS_BINDING,
+            data.binding_name
+        );
+    }
+
+    info!("Redis binding check passed");
     Ok(())
 }
 

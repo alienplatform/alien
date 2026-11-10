@@ -127,6 +127,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:rds:${awsRegion}:${awsAccountId}:db:",
                             "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:",
                             "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:",
+                            "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:",
+                            "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:",
+                            "arn:aws:elasticache:${awsRegion}:${awsAccountId}:subnetgroup:",
+                            "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:",
                         ].iter().any(|prefix| {
                             arn.strip_prefix(prefix).is_some_and(|name| {
                                 name.starts_with("${stackPrefix}-")

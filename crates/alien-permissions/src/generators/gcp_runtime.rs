@@ -196,14 +196,10 @@ impl GcpRuntimePermissionsGenerator {
             })
         })?;
 
+        // An empty list is a deliberate "grants nothing on GCP" (for example the Redis
+        // management set), as opposed to a missing key, which means the platform is unsupported.
         if gcp_platform_permissions.is_empty() {
-            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
-                platform: "gcp".to_string(),
-                message: format!(
-                    "GCP permission set '{}' has no platform entries",
-                    permission_set.id
-                ),
-            }));
+            return Ok(Vec::new());
         }
 
         let mut roles: Vec<GcpCustomRole> = Vec::new();
@@ -303,14 +299,12 @@ impl GcpRuntimePermissionsGenerator {
             })
         })?;
 
+        // See `generate_custom_roles`: an empty list grants nothing.
         if gcp_platform_permissions.is_empty() {
-            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
-                platform: "gcp".to_string(),
-                message: format!(
-                    "GCP permission set '{}' has no platform entries",
-                    permission_set.id
-                ),
-            }));
+            return Ok(GcpGrantPlan {
+                bindings: Vec::new(),
+                custom_roles: Vec::new(),
+            });
         }
 
         let project = context.project_name.as_deref().unwrap_or("PROJECT_NAME");

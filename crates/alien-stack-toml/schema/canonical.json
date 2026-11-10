@@ -2310,6 +2310,56 @@
       },
       "type": "object"
     },
+    "Redis": {
+      "additionalProperties": false,
+      "properties": {
+        "encryptionKey": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceRef"
+            }
+          ]
+        },
+        "evictionPolicy": {
+          "$ref": "#/components/schemas/RedisEvictionPolicy"
+        },
+        "highAvailability": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "memory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "persistence": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "RedisEvictionPolicy": {
+      "enum": [
+        "noeviction",
+        "allkeys-lru",
+        "allkeys-lfu",
+        "allkeys-random",
+        "volatile-lru",
+        "volatile-lfu",
+        "volatile-random",
+        "volatile-ttl"
+      ],
+      "type": "string"
+    },
     "ResourceChoiceRange": {
       "additionalProperties": false,
       "properties": {
