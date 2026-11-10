@@ -621,6 +621,10 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
 struct ApiDeploymentGroup {
     id: String,
     project_id: String,
+    /// Set by the by-name call: `true` when that call inserted the group. A
+    /// manager that predates the field leaves it out.
+    #[serde(default)]
+    created: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -764,24 +768,37 @@ async fn create_self_deployment(
             .await?
         }
     };
-    let session = create_first_party_deployment_session(
-        &auth.client,
+    // Only a group that `ensure_self_deployment_group` just made is ours to
+    // remove. A group the user named was there before this run.
+    let made_group = if args.deployment_group.is_none() {
+        Some(deployment_group.created)
+    } else {
+        None
+    };
+    let create_response = match create_deployment_in_group(
+        &auth,
+        &workspace,
         &base_url,
-        workspace.query.as_deref(),
         &deployment_group.id,
-    )
-    .await?;
-
-    let create_response = create_first_party_deployment(
-        auth.sdk_client(),
-        &workspace.name,
-        &base_url,
-        &session.token,
         resolved_args,
         args,
         &project_id,
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(settle_group_after_refusal(
+                &auth.client,
+                &base_url,
+                workspace.query.as_deref(),
+                &deployment_group.id,
+                made_group,
+                error,
+            )
+            .await);
+        }
+    };
     let deployment_token = create_response.token.ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "Server did not return deployment token".to_string(),
@@ -944,6 +961,7 @@ async fn resolve_self_deployment_group(
         [group] => Ok(ApiDeploymentGroup {
             id: group.id.clone(),
             project_id: project_id.to_string(),
+            created: None,
         }),
         [] => Err(AlienError::new(ErrorData::ValidationError {
             field: "deployment-group".to_string(),
@@ -982,6 +1000,82 @@ async fn ensure_self_deployment_group(
             message: "Failed to ensure deployment group".to_string(),
         })?;
     parse_api_response(response, "Failed to ensure deployment group").await
+}
+
+async fn create_deployment_in_group(
+    auth: &crate::auth::AuthHttp,
+    workspace: &crate::execution_context::PlatformWorkspaceContext,
+    base_url: &str,
+    deployment_group_id: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<CreateDeploymentApiResponse> {
+    let session = create_first_party_deployment_session(
+        &auth.client,
+        base_url,
+        workspace.query.as_deref(),
+        deployment_group_id,
+    )
+    .await?;
+    create_first_party_deployment(
+        auth.sdk_client(),
+        &workspace.name,
+        base_url,
+        &session.token,
+        resolved_args,
+        args,
+        project_id,
+    )
+    .await
+}
+
+/// A refused create must not leave the group it made behind. `made_group` is
+/// `None` when the user chose the group, and otherwise what the by-name call
+/// said about creating it. The manager refuses to delete a group that has a
+/// deployment, so a create that got further than it looks is safe. A manager
+/// that does not say whether it made the group gets nothing deleted: the group
+/// id is in the error so the user can remove it.
+async fn settle_group_after_refusal(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    group_id: &str,
+    made_group: Option<Option<bool>>,
+    error: AlienError<ErrorData>,
+) -> AlienError<ErrorData> {
+    let note = match made_group {
+        None | Some(Some(false)) => return error,
+        Some(None) => format!(
+            "No deployment was created. Deployment group {group_id} may be empty; this manager did not say whether the run created it. Delete it with `alien deployment-groups delete {group_id}` if it is not needed."
+        ),
+        Some(Some(true)) => match delete_deployment_group(http_client, base_url, workspace, group_id).await {
+            Ok(()) => format!("No deployment was created. Deleted the empty deployment group {group_id} this run made."),
+            Err(delete_error) => format!(
+                "No deployment was created. Could not delete the empty deployment group {group_id} this run made ({delete_error}). Delete it with `alien deployment-groups delete {group_id}`."
+            ),
+        },
+    };
+    error.context(ErrorData::ConfigurationError { message: note })
+}
+
+async fn delete_deployment_group(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    group_id: &str,
+) -> Result<()> {
+    let path = format!("/v1/deployment-groups/{}", urlencoding::encode(group_id));
+    let url = api_url(base_url, &path, workspace)?;
+    let response = http_client
+        .delete(url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to delete deployment group".to_string(),
+        })?;
+    parse_empty_api_response(response, "Failed to delete deployment group").await
 }
 
 async fn create_first_party_deployment_session(
