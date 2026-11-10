@@ -5,7 +5,9 @@ use tracing::{info, warn};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::bedrock::{BedrockApi, FoundationModelAvailability};
+use alien_aws_clients::bedrock::{
+    BedrockApi, FoundationModelAvailability, InferenceProfileSummary,
+};
 use alien_core::{
     ai_catalog::{self, ClientApi},
     bindings::AiBinding,
@@ -81,6 +83,46 @@ fn classify_bedrock_availability(
     }
 }
 
+/// Claude is invoked through a geo inference profile (`us.anthropic.…`), not through the
+/// foundation model id that `GetFoundationModelAvailability` describes. A Claude model
+/// whose profile for this region isn't offered or isn't active can't be invoked, whatever
+/// the foundation-model record says.
+fn apply_inference_profile(
+    model: &ai_catalog::CatalogModel,
+    region: &str,
+    profiles: &[InferenceProfileSummary],
+    mut observed: AiModelAvailabilityObservation,
+) -> AiModelAvailabilityObservation {
+    let profile_id = ai_catalog::bedrock_inference_profile_id(region, model.upstream_id);
+    let invocable = profiles.iter().any(|profile| {
+        profile.inference_profile_id == profile_id && profile.status.as_deref() == Some("ACTIVE")
+    });
+    if invocable || observed.availability == AiModelAvailability::Unknown {
+        return observed;
+    }
+    observed.availability = AiModelAvailability::Blocked;
+    if !observed
+        .blockers
+        .contains(&AiAvailabilityBlocker::RegionUnavailable)
+    {
+        observed
+            .blockers
+            .push(AiAvailabilityBlocker::RegionUnavailable);
+    }
+    observed
+}
+
+/// Health is `Degraded` only when Alien could not look at a model. A model whose
+/// availability the provider's control plane cannot report (the bedrock-mantle GPT-5
+/// family) is not a gap in what Alien can see, so it doesn't count.
+fn observation_incomplete(availability: &AiAvailabilityObservation) -> bool {
+    availability.models.iter().any(|model| {
+        model
+            .blockers
+            .contains(&AiAvailabilityBlocker::ObservationFailed)
+    })
+}
+
 async fn observe_bedrock_availability(
     client: Arc<dyn BedrockApi>,
     region: &str,
@@ -112,6 +154,16 @@ async fn observe_bedrock_availability(
         });
         responses.extend(futures::future::join_all(requests).await);
     }
+    // Claude models are invoked through inference profiles. If the profile list can't be
+    // read (for example a management role set up before it was granted), their result
+    // stays what the foundation-model record says.
+    let profiles = match client.list_inference_profiles().await {
+        Ok(profiles) => Some(profiles),
+        Err(error) => {
+            warn!(%error, "Bedrock inference profile listing failed; Claude availability uses the foundation-model record only");
+            None
+        }
+    };
     let mut models: Vec<AiModelAvailabilityObservation> = mantle_only
         .into_iter()
         .map(|model| AiModelAvailabilityObservation {
@@ -128,7 +180,15 @@ async fn observe_bedrock_availability(
         })
         .collect();
     models.extend(responses.into_iter().map(|(model, result)| match result {
-        Ok(response) => classify_bedrock_availability(model, &response, tested_at),
+        Ok(response) => {
+            let observed = classify_bedrock_availability(model, &response, tested_at);
+            match &profiles {
+                Some(profiles) if model.provider_api == ai_catalog::ProviderApi::Anthropic => {
+                    apply_inference_profile(model, region, profiles, observed)
+                }
+                _ => observed,
+            }
+        }
         Err(error) => {
             warn!(model = model.public_id, %error, "Bedrock availability observation failed");
             AiModelAvailabilityObservation {
@@ -237,10 +297,7 @@ impl AwsAiController {
                 Some(region.clone()),
             )
         });
-        let partial = availability
-            .models
-            .iter()
-            .any(|model| model.availability == AiModelAvailability::Unknown);
+        let partial = observation_incomplete(&availability);
         let status = AiHeartbeatStatus {
             health: if partial {
                 ObservedHealth::Degraded
@@ -357,7 +414,8 @@ impl AwsAiController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_aws_clients::bedrock::BedrockAvailabilityStatus;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_aws_clients::bedrock::{BedrockAvailabilityStatus, MockBedrockApi};
 
     fn response(
         agreement: Option<&str>,
@@ -439,5 +497,235 @@ mod tests {
                 AiAvailabilityBlocker::RegionUnavailable,
             ]
         );
+    }
+
+    fn available() -> FoundationModelAvailability {
+        response(
+            Some("AVAILABLE"),
+            Some("AVAILABLE"),
+            Some("AUTHORIZED"),
+            Some("AVAILABLE"),
+        )
+    }
+
+    /// Every Claude model's profile for `us-west-2`, active.
+    fn all_claude_profiles() -> Vec<InferenceProfileSummary> {
+        claude_profiles(|_| true)
+    }
+
+    fn claude_profiles(
+        include: impl Fn(&ai_catalog::CatalogModel) -> bool,
+    ) -> Vec<InferenceProfileSummary> {
+        ai_catalog::models_for(Platform::Aws)
+            .into_iter()
+            .filter(|model| model.provider_api == ai_catalog::ProviderApi::Anthropic)
+            .filter(|model| include(model))
+            .map(|model| InferenceProfileSummary {
+                inference_profile_id: ai_catalog::bedrock_inference_profile_id(
+                    "us-west-2",
+                    model.upstream_id,
+                ),
+                status: Some("ACTIVE".to_string()),
+            })
+            .collect()
+    }
+
+    /// Steps the real `Ready` handler once against `bedrock` and returns its heartbeat.
+    async fn ready_heartbeat(bedrock: MockBedrockApi) -> AwsBedrockAiHeartbeatData {
+        let bedrock = Arc::new(bedrock);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_bedrock_client()
+            .returning(move |_| Ok(bedrock.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Ai::new("llm".to_string()).build())
+            .controller(AwsAiController {
+                state: AwsAiState::Ready,
+                region: Some("us-west-2".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        let [heartbeat] = executor.last_heartbeats() else {
+            panic!("Ready should emit one heartbeat");
+        };
+        let ResourceHeartbeatData::Ai(AiHeartbeatData::AwsBedrock(data)) = &heartbeat.data else {
+            panic!("unexpected heartbeat data");
+        };
+        data.clone()
+    }
+
+    /// GPT-5 models are served by bedrock-mantle and have no foundation-model record, so
+    /// their availability is always unknown. That must not make an account whose other
+    /// models all answer `Degraded`.
+    #[tokio::test]
+    async fn unknown_mantle_models_do_not_degrade_health() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock
+            .expect_get_foundation_model_availability()
+            .returning(|_| Ok(available()));
+        bedrock
+            .expect_list_inference_profiles()
+            .returning(|| Ok(all_claude_profiles()));
+
+        let data = ready_heartbeat(bedrock).await;
+
+        let mantle: Vec<_> = data
+            .availability
+            .models
+            .iter()
+            .filter(|model| model.availability == AiModelAvailability::Unknown)
+            .collect();
+        assert!(!mantle.is_empty(), "the catalog has mantle-served models");
+        assert!(mantle.iter().all(|model| model.blockers.is_empty()));
+        assert_eq!(data.status.health, ObservedHealth::Healthy);
+        assert!(!data.status.partial);
+        assert_eq!(data.status.message, None);
+    }
+
+    /// A model whose availability call failed is a real gap in what Alien can see.
+    #[tokio::test]
+    async fn a_failed_observation_still_degrades_health() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock
+            .expect_get_foundation_model_availability()
+            .returning(|_| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "foundation model".to_string(),
+                        resource_name: "any".to_string(),
+                    },
+                ))
+            });
+        bedrock
+            .expect_list_inference_profiles()
+            .returning(|| Ok(all_claude_profiles()));
+
+        let data = ready_heartbeat(bedrock).await;
+
+        assert_eq!(data.status.health, ObservedHealth::Degraded);
+        assert!(data.status.partial);
+        assert_eq!(
+            data.status.message.as_deref(),
+            Some("Some model availability could not be observed")
+        );
+    }
+
+    fn model<'a>(
+        data: &'a AwsBedrockAiHeartbeatData,
+        id: &str,
+    ) -> &'a AiModelAvailabilityObservation {
+        data.availability
+            .models
+            .iter()
+            .find(|model| model.public_model_id == id)
+            .unwrap_or_else(|| panic!("{id} is observed"))
+    }
+
+    /// Claude is invoked through its inference profile. A foundation-model record that says
+    /// AVAILABLE must not make a model look usable when the region offers no profile for it.
+    #[tokio::test]
+    async fn claude_without_an_invocable_profile_is_blocked() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock
+            .expect_get_foundation_model_availability()
+            .returning(|_| Ok(available()));
+        bedrock.expect_list_inference_profiles().returning(|| {
+            // No profile for Sonnet 5, and Opus 5's profile isn't active.
+            let mut profiles = claude_profiles(|model| {
+                !matches!(model.public_id, "claude-sonnet-5" | "claude-opus-5")
+            });
+            profiles.push(InferenceProfileSummary {
+                inference_profile_id: ai_catalog::bedrock_inference_profile_id(
+                    "us-west-2",
+                    "anthropic.claude-opus-5",
+                ),
+                status: Some("LEGACY".to_string()),
+            });
+            Ok(profiles)
+        });
+
+        let data = ready_heartbeat(bedrock).await;
+
+        for blocked in ["claude-sonnet-5", "claude-opus-5"] {
+            let observed = model(&data, blocked);
+            assert_eq!(
+                observed.availability,
+                AiModelAvailability::Blocked,
+                "{blocked}"
+            );
+            assert_eq!(
+                observed.blockers,
+                vec![AiAvailabilityBlocker::RegionUnavailable]
+            );
+        }
+        let haiku = model(&data, "claude-haiku-4.5");
+        assert_eq!(haiku.availability, AiModelAvailability::Available);
+        assert!(haiku.blockers.is_empty());
+        // A blocked model is reported, not a gap in what Alien can see.
+        assert_eq!(data.status.health, ObservedHealth::Healthy);
+    }
+
+    /// An account that has not accepted the Claude agreement keeps its agreement blocker
+    /// next to the profile result.
+    #[tokio::test]
+    async fn claude_keeps_the_agreement_blocker_alongside_the_profile_check() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock
+            .expect_get_foundation_model_availability()
+            .returning(|id| {
+                if id.starts_with("anthropic.") {
+                    Ok(response(
+                        Some("NOT_AVAILABLE"),
+                        Some("AVAILABLE"),
+                        Some("AUTHORIZED"),
+                        Some("AVAILABLE"),
+                    ))
+                } else {
+                    Ok(available())
+                }
+            });
+        bedrock
+            .expect_list_inference_profiles()
+            .returning(|| Ok(all_claude_profiles()));
+
+        let data = ready_heartbeat(bedrock).await;
+
+        let sonnet = model(&data, "claude-sonnet-5");
+        assert_eq!(sonnet.availability, AiModelAvailability::Blocked);
+        assert_eq!(
+            sonnet.blockers,
+            vec![AiAvailabilityBlocker::AgreementRequired]
+        );
+    }
+
+    /// A management role set up before it could list inference profiles still gets the
+    /// foundation-model result, and the resource is not reported degraded for it.
+    #[tokio::test]
+    async fn claude_falls_back_to_the_foundation_model_record_when_profiles_cannot_be_listed() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock
+            .expect_get_foundation_model_availability()
+            .returning(|_| Ok(available()));
+        bedrock.expect_list_inference_profiles().returning(|| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "inference profiles".to_string(),
+                    resource_name: "list".to_string(),
+                },
+            ))
+        });
+
+        let data = ready_heartbeat(bedrock).await;
+
+        assert_eq!(
+            model(&data, "claude-sonnet-5").availability,
+            AiModelAvailability::Available
+        );
+        assert_eq!(data.status.health, ObservedHealth::Healthy);
     }
 }

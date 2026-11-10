@@ -40,7 +40,11 @@ fn test_ai_heartbeat_can_resolve_gcp_project_number() {
 #[test]
 fn test_ai_invoke_lists_the_mantle_models_it_can_invoke() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
-    let aws = invoke.platforms.aws.as_ref().expect("ai/invoke must have an AWS grant");
+    let aws = invoke
+        .platforms
+        .aws
+        .as_ref()
+        .expect("ai/invoke must have an AWS grant");
 
     // The bedrock-mantle endpoint's model list (GET /models) is authorized as
     // ListModels on the project, so the grant that may invoke a project's models
@@ -48,11 +52,11 @@ fn test_ai_invoke_lists_the_mantle_models_it_can_invoke() {
     let mantle = aws
         .iter()
         .find(|entry| {
-            entry
-                .grant
-                .actions
-                .as_ref()
-                .is_some_and(|actions| actions.iter().any(|action| action == "bedrock-mantle:CreateInference"))
+            entry.grant.actions.as_ref().is_some_and(|actions| {
+                actions
+                    .iter()
+                    .any(|action| action == "bedrock-mantle:CreateInference")
+            })
         })
         .expect("ai/invoke must grant bedrock-mantle:CreateInference");
     let actions = mantle.grant.actions.as_ref().expect("checked above");
@@ -62,7 +66,10 @@ fn test_ai_invoke_lists_the_mantle_models_it_can_invoke() {
     );
     for binding in [&mantle.binding.stack, &mantle.binding.resource] {
         let resources = &binding.as_ref().expect("ai/invoke AWS bindings").resources;
-        let mantle_resources: Vec<_> = resources.iter().filter(|resource| resource.contains(":bedrock-mantle:")).collect();
+        let mantle_resources: Vec<_> = resources
+            .iter()
+            .filter(|resource| resource.contains(":bedrock-mantle:"))
+            .collect();
         assert_eq!(
             mantle_resources,
             ["arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"],
@@ -74,7 +81,11 @@ fn test_ai_invoke_lists_the_mantle_models_it_can_invoke() {
 #[test]
 fn test_ai_invoke_lists_the_bedrock_inference_profiles_it_can_invoke() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
-    let aws = invoke.platforms.aws.as_ref().expect("ai/invoke must have an AWS grant");
+    let aws = invoke
+        .platforms
+        .aws
+        .as_ref()
+        .expect("ai/invoke must have an AWS grant");
 
     // Claude models are invoked through inference profiles, so an app discovers
     // them with ListInferenceProfiles. AWS has no resource-level permissions for
@@ -97,7 +108,29 @@ fn test_ai_invoke_lists_the_bedrock_inference_profiles_it_can_invoke() {
     );
     for binding in [&listing.binding.stack, &listing.binding.resource] {
         let resources = &binding.as_ref().expect("ai/invoke AWS bindings").resources;
-        assert_eq!(resources, &["*"], "ListInferenceProfiles has no resource-level permissions");
+        assert_eq!(
+            resources,
+            &["*"],
+            "ListInferenceProfiles has no resource-level permissions"
+        );
+    }
+}
+
+/// The AWS AI health check lists the account's inference profiles to see whether Claude
+/// can be invoked from the region, with the management role that carries these sets.
+#[test]
+fn test_ai_health_sets_list_the_bedrock_inference_profiles() {
+    for id in ["ai/heartbeat", "ai/management"] {
+        let set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));
+        let aws = set.platforms.aws.as_ref().expect("an AWS grant");
+        let listed = aws.iter().any(|entry| {
+            entry.grant.actions.as_ref().is_some_and(|actions| {
+                actions
+                    .iter()
+                    .any(|action| action == "bedrock:ListInferenceProfiles")
+            })
+        });
+        assert!(listed, "{id} must grant bedrock:ListInferenceProfiles");
     }
 }
 

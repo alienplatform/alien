@@ -1,6 +1,7 @@
 //! AWS Bedrock: serve Claude through classic `InvokeModel`, normalizing the Anthropic
 //! Messages body to the pinned InvokeModel schema and decoding the event-stream reply.
 
+use alien_core::ai_catalog::bedrock_inference_profile_id;
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::body::{Body, Bytes};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -244,7 +245,7 @@ pub(crate) async fn proxy_bedrock_anthropic(
     } else {
         "invoke"
     };
-    let model_id = format!("{}.{}", bedrock_geo(region), upstream_id);
+    let model_id = bedrock_inference_profile_id(region, upstream_id);
     let base = route
         .upstream_base_override
         .clone()
@@ -389,23 +390,4 @@ pub(crate) fn ensure_block_content(message: &mut Value) -> Result<&mut Vec<Value
 /// Take a message's content as a block list, leaving the message with an empty one.
 fn take_content_blocks(message: &mut Value) -> Result<Vec<Value>> {
     Ok(std::mem::take(ensure_block_content(message)?))
-}
-
-/// The cross-region inference-profile geo prefix for a Bedrock region. Claude on
-/// Bedrock is invocable only through a geo profile (e.g. `us.anthropic.…`).
-///
-/// us / us-gov regions keep their own geo. Every other commercial region routes via
-/// the region-agnostic `global` profile: current-generation Claude models publish a
-/// `global.` inference profile invocable from any commercial region (verified against
-/// live Bedrock), and do NOT publish `eu.`/`apac.` profiles, so a per-continent
-/// prefix would build a non-existent id. (An older model that publishes only a `us.`
-/// profile, e.g. opus-4.1, stays us-region-only either way.)
-pub(crate) fn bedrock_geo(region: &str) -> &'static str {
-    if region.starts_with("us-gov-") {
-        "us-gov"
-    } else if region.starts_with("us-") {
-        "us"
-    } else {
-        "global"
-    }
 }
