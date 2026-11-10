@@ -98,6 +98,7 @@ NAMESPACE = "customer"
 RELEASE_NAME = "signed-e2e"
 CUSTOMER_DATABASE_URL = "postgres://db.customer.internal/app"
 PROJECT = "default"
+REPLAY_ATTACKS = ("older-signed-config", "config-without-base", "config-made-from-an-older-config")
 # The PIN the swtpm-backed device key is created with (read from the
 # environment by test builds of the CLI).
 DEVICE_PIN = "4321"
@@ -460,9 +461,14 @@ esac
                      key=lambda statement: statement["sequence"])
         return next(s["id"] for s in newest["body"]["signers"] if s["kind"] == "ci")
 
-    def signed_config(self, body, key=None, signer=None, install=None):
-        """A `config/v1` statement for this installation, signed by CI unless told otherwise."""
+    def signed_config(self, body, key=None, signer=None, install=None, base=None):
+        """A `config/v1` statement for this installation, signed by CI unless told otherwise.
+        `base` is the config it was made from, as `alien deployments set-inputs` names it."""
         signer = signer or self.ci_signer()
+        if base is not None:
+            payload = base64.b64decode(base["payload"])
+            body = {**body, "base": {"sequence": json.loads(payload)["sequence"],
+                                     "digest": "sha256:" + hashlib.sha256(payload).hexdigest()}}
         return sign_statement({
             "type": "config/v1", "project": PROJECT, "install": install or self.install_id(),
             "sequence": int(time.time() * 1000), "notAfter": None,
@@ -1106,7 +1112,7 @@ esac
 
         name = "signed-developer-input-update"
         log(f"{name}: the developer signs logLevel=error")
-        second = self.signed_config({"inputs": {"logLevel": "error"}})
+        second = self.signed_config({"inputs": {"logLevel": "error"}}, base=first)
         self.manager_post(f"/v1/deployments/{deployment}/config-statements", {"statement": second})
         try:
             wait_until("LOG_LEVEL=error", lambda: self.log_level() == "error", timeout=240)
@@ -1191,12 +1197,27 @@ esac
                 "summary": "the manager replays the developer's earlier config (logLevel=warn)",
                 "sync": [{"op": "delete", "path": ["signedConfig"]},
                          {"op": "set", "path": ["target"], "value": {**target, "signedConfig": older}}],
-                "refusal": r"refused the target.*the config has sequence.*already applied",
+                "refusal": r"refused the target.*(the config has sequence.*already applied"
+                           r"|doesn't say which config it was made from)",
+            },
+            {
+                "name": "config-without-base",
+                "summary": "the manager sends a newer config the developer signed without naming the config it was made from",
+                "sync": [{"op": "set", "path": ["signedConfig"], "value": self.signed_config(
+                    {"inputs": {"logLevel": "debug"}})}],
+                "refusal": r"refused the target.*doesn't say which config it was made from",
+            },
+            {
+                "name": "config-made-from-an-older-config",
+                "summary": "the manager sends a newer config made from the first config, which skips the one the install runs",
+                "sync": [{"op": "set", "path": ["signedConfig"], "value": self.signed_config(
+                    {"inputs": {"logLevel": "debug"}}, base=older)}],
+                "refusal": r"refused the target.*it was made from config sequence.*but this install runs",
             },
         ]
         level = self.log_level()
         for config in configs:
-            if config["name"] == "older-signed-config" and not replay:
+            if config["name"] in REPLAY_ATTACKS and not replay:
                 log(f"attack {config['name']}: not run, the newer signed config was never applied")
                 self.results.append({"attack": config["name"], "summary": config["summary"],
                                      "took_effect": None, "changed": [], "passed": False,
