@@ -252,7 +252,10 @@ impl SignalShell {
         started: &str,
     ) -> Result<(), ControlError> {
         let mut io = self.io.lock().await;
-        let Some(shell) = io.as_mut() else {
+        // Taken out while the request is in flight, and put back only once its answer is read. A
+        // call cancelled between the two drops the shell, which ends it, so its late answer is
+        // never read as the next request's.
+        let Some(mut shell) = io.take() else {
             return Err(ControlError::Failed(
                 "the container's signal shell has ended".to_string(),
             ));
@@ -260,20 +263,16 @@ impl SignalShell {
         let request = format!("{signal} {process_group} {started}\n");
         let answer = match tokio::time::timeout(SIGNAL_ANSWER_WAIT, shell.ask(&request)).await {
             Ok(Ok(answer)) => answer,
-            Ok(Err(reason)) => {
-                // Dropping its input ends the shell; the next request starts another.
-                *io = None;
-                return Err(ControlError::Failed(reason));
-            }
+            // Dropping its input ends the shell; the next request starts another.
+            Ok(Err(reason)) => return Err(ControlError::Failed(reason)),
             Err(_) => {
-                // A late answer would be read as the next request's, so this shell is done.
-                *io = None;
                 return Err(ControlError::Failed(format!(
                     "the container's signal shell did not answer within {}s",
                     SIGNAL_ANSWER_WAIT.as_secs()
-                )));
+                )))
             }
         };
+        *io = Some(shell);
         match answer.as_str() {
             "0" => Ok(()),
             "3" => Err(ControlError::NotRunning),
@@ -900,13 +899,20 @@ enum Stopped {
 async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Output) -> Stopped {
     let drain = async { while output.next().await.is_some() {} };
     tokio::pin!(drain);
-    let killed = tokio::select! {
-        () = &mut drain => return Stopped::Command,
-        killed = tokio::time::timeout(KILL_SETTLE, kill_group(manager, command, "KILL")) => killed,
+    let kill = tokio::time::timeout(KILL_SETTLE, kill_group(manager, command, "KILL"));
+    tokio::pin!(kill);
+    // The kill always runs to its answer: output that ends (a dropped attach connection, say)
+    // does not show that the command ended.
+    let mut drained = false;
+    let killed = loop {
+        tokio::select! {
+            killed = &mut kill => break killed,
+            () = &mut drain, if !drained => drained = true,
+        }
     };
     // Gone already counts: the group no longer exists, though its output may still be open.
     let signalled = matches!(killed, Ok(Ok(())) | Ok(Err(ControlError::NotRunning)));
-    if signalled && tokio::time::timeout(KILL_SETTLE, &mut drain).await.is_ok() {
+    if signalled && (drained || tokio::time::timeout(KILL_SETTLE, &mut drain).await.is_ok()) {
         return Stopped::Command;
     }
 
@@ -926,7 +932,9 @@ async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Out
     }
     // Nothing in the container runs now. Its output ends as Docker notices; past the wait it is
     // dropped rather than waited on.
-    let _ = tokio::time::timeout(KILL_SETTLE, &mut drain).await;
+    if !drained {
+        let _ = tokio::time::timeout(KILL_SETTLE, &mut drain).await;
+    }
     Stopped::Session
 }
 
