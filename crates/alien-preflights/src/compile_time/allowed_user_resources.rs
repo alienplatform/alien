@@ -45,6 +45,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             // by the ComputeClusterMutation when not declared.
             "compute-cluster",
             "postgres",
+            "redis",
             "ai",
             "email",
             "sandbox",
@@ -265,6 +266,24 @@ mod tests {
         let result = check.check(&stack, Platform::Aws).await.unwrap();
         assert!(result.success);
         assert!(result.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn allows_a_redis_resource_on_every_platform() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                alien_core::Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure, Platform::Local] {
+            let result = AllowedUserResourcesCheck
+                .check(&stack, platform)
+                .await
+                .unwrap();
+            assert!(result.success, "{platform:?}: {:?}", result.errors);
+        }
     }
 
     #[tokio::test]
