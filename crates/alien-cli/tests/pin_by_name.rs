@@ -107,9 +107,9 @@ fn pins_a_deployment_named_by_group_and_name() {
             "items": [
                 // A search match whose name is only similar must not be picked.
                 {"id": "dg_other00000000000000000000000", "name": "customers-eu",
-                 "externalId": null, "projectId": PROJECT, "workspaceId": WORKSPACE_ID,
+                 "externalId": null, "accessApprover": "customer", "projectId": PROJECT, "workspaceId": WORKSPACE_ID,
                  "maxDeployments": 100, "createdAt": "2026-01-01T00:00:00Z"},
-                {"id": GROUP_ID, "name": "customers", "externalId": null,
+                {"id": GROUP_ID, "name": "customers", "externalId": null, "accessApprover": "customer",
                  "projectId": PROJECT, "workspaceId": WORKSPACE_ID,
                  "maxDeployments": 100, "createdAt": "2026-01-01T00:00:00Z"}
             ],
