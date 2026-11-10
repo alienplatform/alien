@@ -6,7 +6,8 @@ use std::{
 };
 
 use alien_core::{
-    AwsBindingSpec, PermissionSet, PermissionSetReference, Stack, ALIEN_STACK_TAG_KEY,
+    AwsBindingSpec, PermissionSet, PermissionSetReference, ServiceAccount, Stack,
+    ALIEN_STACK_TAG_KEY,
 };
 
 use alien_error::AlienError;
@@ -145,25 +146,39 @@ impl CatalogSets<'_> {
 
 /// Whether a workload role written for `stack` can carry catalog set `id`.
 ///
-/// Workload roles come from permission profiles, which preflight mutations extend with the
-/// sets they need. A set is used when a profile names it, or when the stack has a resource of
-/// the set's type (its ID without the operation, such as `ai` or
-/// `experimental/aws-opensearch`): grants that apply to every resource of a type, such as
-/// remote bindings, name only resources the stack has.
+/// A set is used when any of these holds:
+/// - a permission profile names it;
+/// - a service account in the stack captured it. Preflight mutations add runtime baselines,
+///   such as `worker/execute`, only to the service account and not to its profile;
+/// - the stack has a resource of the set's type (its ID without the operation, such as `ai`
+///   or `experimental/aws-opensearch`). Remote bindings attach the set of the resource they
+///   bind, so they never name a type the stack lacks.
 fn stack_uses_catalog_set(stack: &Stack, id: &str) -> bool {
-    let Some((resource_type, _)) = id.rsplit_once('/') else {
-        return true;
-    };
-    stack
-        .resources()
-        .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
-        || stack.permission_profiles().values().any(|profile| {
-            profile
-                .0
-                .values()
-                .flatten()
-                .any(|reference| reference.id() == id)
-        })
+    let named_by_profile = stack.permission_profiles().values().any(|profile| {
+        profile
+            .0
+            .values()
+            .flatten()
+            .any(|reference| reference.id() == id)
+    });
+    let captured_by_service_account = stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<ServiceAccount>()
+            .is_some_and(|account| {
+                account
+                    .stack_permission_sets
+                    .iter()
+                    .chain(account.resource_permission_sets.values().flatten())
+                    .any(|set| set.id == id)
+            })
+    });
+    let resource_of_its_type = id.rsplit_once('/').is_none_or(|(resource_type, _)| {
+        stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
+    });
+    named_by_profile || captured_by_service_account || resource_of_its_type
 }
 
 fn stack_boundary(
@@ -680,7 +695,9 @@ fn render_boundary(
     );
     let policy = json!({"Version": "2012-10-17", "Statement": rendered});
     let size = minified_size(&policy);
-    if size > MANAGED_POLICY_LIMIT {
+    // Only an installed document is subject to IAM's limit. A required document is compared,
+    // never installed, and a size refusal there could not be cleared by rerunning setup.
+    if matches!(catalog, CatalogSets::All) && size > MANAGED_POLICY_LIMIT {
         return Err(AlienError::new(ErrorData::PermissionsBoundaryTooLarge {
             size,
             limit: MANAGED_POLICY_LIMIT,

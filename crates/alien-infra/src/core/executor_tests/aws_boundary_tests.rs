@@ -358,8 +358,55 @@ async fn new_external_grant_requires_setup_until_installed_document_is_replaced(
 #[tokio::test]
 async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
     const ADDED: &str = "bedrock-mantle:ListModels";
-    let (stack, mut state, config) = fixture();
-    let statements = installed(&mut state)["permissionsBoundaryDocument"]["Statement"]
+    let (stack, current, config) = fixture();
+    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let management = || RemoteStackManagement::new("management".to_string()).build();
+    // Each way a workload role can carry ai/invoke, without any of the others.
+    let uses_ai = [
+        (
+            "an AI resource with remote access",
+            Stack::new("boundary".to_string())
+                .add(management(), ResourceLifecycle::Frozen)
+                .add_with_remote_access(
+                    Ai::new("models".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build(),
+        ),
+        (
+            "a stack-wide ai/invoke grant",
+            Stack::new("boundary".to_string())
+                .add(management(), ResourceLifecycle::Frozen)
+                .permission(
+                    "application",
+                    PermissionProfile::new().global(["ai/invoke"]),
+                )
+                .build(),
+        ),
+        (
+            "a service account that captured ai/invoke",
+            Stack::new("boundary".to_string())
+                .add(management(), ResourceLifecycle::Frozen)
+                .add(
+                    ServiceAccount::from_permission_profile(
+                        "application-sa".to_string(),
+                        &PermissionProfile::new().global(["ai/invoke"]),
+                        |id| alien_permissions::get_permission_set(id).cloned(),
+                    )
+                    .unwrap(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+    ];
+    // A boundary installed with the current catalog covers every one of them.
+    for (scenario, stack) in &uses_ai {
+        validate_installed_aws_permissions_boundary(stack, &current, &client, &config)
+            .unwrap_or_else(|error| panic!("{scenario} with the current boundary: {error}"));
+    }
+
+    let mut older = current.clone();
+    let statements = installed(&mut older)["permissionsBoundaryDocument"]["Statement"]
         .as_array_mut()
         .unwrap();
     let mut removed = 0;
@@ -371,47 +418,25 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
         }
     }
     assert_eq!(removed, 1, "the full catalog boundary grants {ADDED} once");
-    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
 
-    validate_installed_aws_permissions_boundary(&stack, &state, &client, &config)
+    validate_installed_aws_permissions_boundary(&stack, &older, &client, &config)
         .expect("a stack without ai/invoke does not need the added action");
     let executor_without_ai = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
-    executor_without_ai.step(state.clone()).await.unwrap();
-    executor_without_ai.refresh(state.clone()).await.unwrap();
+    executor_without_ai.step(older.clone()).await.unwrap();
+    executor_without_ai.refresh(older.clone()).await.unwrap();
 
-    let with_resource = Stack::new("boundary".to_string())
-        .add(
-            RemoteStackManagement::new("management".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            Ai::new("models".to_string()).build(),
-            ResourceLifecycle::Live,
-        )
-        .permission(
-            "application",
-            PermissionProfile::new().resource("models", ["ai/invoke"]),
-        )
-        .build();
-    let with_global_grant = Stack::new("boundary".to_string())
-        .add(
-            RemoteStackManagement::new("management".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .permission(
-            "application",
-            PermissionProfile::new().global(["ai/invoke"]),
-        )
-        .build();
-    for (scenario, stack) in [
-        ("an AI resource", with_resource),
-        ("a stack-wide ai/invoke grant", with_global_grant),
-    ] {
-        let error = validate_installed_aws_permissions_boundary(&stack, &state, &client, &config)
+    for (scenario, stack) in &uses_ai {
+        let error = validate_installed_aws_permissions_boundary(stack, &older, &client, &config)
             .expect_err(scenario);
         assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{scenario}");
-        let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
-        assert_setup_required(&executor, &state, scenario).await;
+        assert!(
+            error
+                .to_string()
+                .contains("does not cover this stack's runtime permissions"),
+            "{scenario} must be refused for the missing action, got: {error}"
+        );
+        let executor = executor(stack, &config, InitialSetupAuthority::ImportedHandoff);
+        assert_setup_required(&executor, &older, scenario).await;
     }
 }
 
