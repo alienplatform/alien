@@ -23,8 +23,13 @@ use alien_error::AlienError;
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 
-/// The address NodeLocal DNSCache answers on. Under `allow` it is reachable on port 53 only.
-const NODE_LOCAL_DNS: &str = "169.254.20.10/32";
+/// Link-local space, where node-local resolvers answer: NodeLocal DNSCache at 169.254.20.10 by
+/// default, AKS LocalDNS at 169.254.10.10 and .11, or an address the cluster chose. Under `allow`
+/// it is reachable on port 53 only. The metadata and credential services in this range (IMDS at
+/// .169.254, ECS at .170.2, EKS Pod Identity at .170.23) serve them over HTTP, not port 53; what
+/// does answer on 53 there (the AWS VPC resolver at .169.253, the GCP metadata server's resolver)
+/// is DNS, the upstream the cluster's own resolver already forwards to.
+const LINK_LOCAL_DNS: &str = "169.254.0.0/16";
 
 /// Path the broker's RBAC lands at. Fixed rather than per-sandbox: the ClusterRole is one per
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
@@ -143,12 +148,12 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
                 .collect();
             // DNS by selector rather than address: the excepts cover the private ranges a
             // cluster's DNS service lives in — 172.20/16 on EKS, 10.0/16 on AKS, 10.96/12 on
-            // kubeadm. A cluster running NodeLocal DNSCache points pods at a link-local
-            // address instead; that address is admitted on port 53 alone, so resolution keeps
+            // kubeadm. A cluster with a node-local resolver points pods at a link-local
+            // address instead; link-local is admitted on port 53 alone, so resolution keeps
             // working without opening anything else the node serves there.
             let dns_ports = "      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
             let dns = format!(
-                "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n{dns_ports}    - to:\n        - ipBlock:\n            cidr: {NODE_LOCAL_DNS}\n{dns_ports}"
+                "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n{dns_ports}    - to:\n        - ipBlock:\n            cidr: {LINK_LOCAL_DNS}\n{dns_ports}"
             );
             format!(
                 "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
