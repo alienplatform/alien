@@ -470,6 +470,134 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
     }
 }
 
+/// A prepared stack carries a stack-wide grant twice: in the profile, and in the service
+/// account the preflight mutation rebuilds from it with today's catalog. The account is frozen,
+/// so its role keeps what setup installed. A boundary installed with an older ai/invoke covers
+/// that role; it does not cover one whose installed account already holds today's definition.
+#[tokio::test]
+async fn a_stack_wide_grant_is_judged_by_what_the_installed_service_account_carries() {
+    const ADDED: &str = "bedrock-mantle:ListModels";
+    let (_, current, config) = fixture();
+    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let profile = PermissionProfile::new().global(["ai/invoke"]);
+    let account = |definition: fn(&mut Value)| {
+        let mut account =
+            ServiceAccount::from_permission_profile("application-sa".to_string(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap();
+        let mut stored = serde_json::to_value(&account.stack_permission_sets[0]).unwrap();
+        definition(&mut stored);
+        account.stack_permission_sets[0] = serde_json::from_value(stored).unwrap();
+        account
+    };
+    fn today(_: &mut Value) {}
+    fn before_the_action(definition: &mut Value) {
+        let mut removed = 0;
+        for entry in definition["platforms"]["aws"].as_array_mut().unwrap() {
+            let actions = entry["grant"]["actions"].as_array_mut().unwrap();
+            let before = actions.len();
+            actions.retain(|action| action != "bedrock-mantle:ListModels");
+            removed += before - actions.len();
+        }
+        assert_eq!(removed, 1, "today's ai/invoke grants the action once");
+    }
+    // The prepared stack, as the service account mutation leaves it.
+    let prepared = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(account(today), ResourceLifecycle::Frozen)
+        .permission("application", profile.clone())
+        .build();
+
+    let mut older = current.clone();
+    for statement in installed(&mut older)["permissionsBoundaryDocument"]["Statement"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if let Some(actions) = statement.get_mut("Action").and_then(Value::as_array_mut) {
+            actions.retain(|action| action != ADDED);
+        }
+    }
+    let with_installed_account = |state: &StackState, definition: fn(&mut Value)| {
+        let mut state = state.clone();
+        let mut saved = StackResourceState::new_pending(
+            "service-account".to_string(),
+            Resource::new(account(definition)),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        saved.status = ResourceStatus::Running;
+        state.resources.insert("application-sa".to_string(), saved);
+        state
+    };
+
+    let installed_before = with_installed_account(&older, before_the_action);
+    validate_installed_aws_permissions_boundary(&prepared, &installed_before, &client, &config)
+        .expect("the installed account carries the older ai/invoke, which the boundary covers");
+    let executor_for_prepared =
+        executor(&prepared, &config, InitialSetupAuthority::ImportedHandoff);
+    executor_for_prepared
+        .refresh(installed_before.clone())
+        .await
+        .unwrap();
+
+    let installed_today = with_installed_account(&older, today);
+    let error =
+        validate_installed_aws_permissions_boundary(&prepared, &installed_today, &client, &config)
+            .expect_err("an installed account with today's ai/invoke needs the action");
+    assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+    assert!(error
+        .to_string()
+        .contains("does not cover this stack's runtime permissions"));
+    assert_setup_required(&executor_for_prepared, &installed_today, "today's account").await;
+
+    // An update that changes the stack-wide grants is judged by the account it asks for, not
+    // the installed one, so the older boundary still refuses it.
+    let changed_profile = PermissionProfile::new().global(["ai/invoke", "storage/data-read"]);
+    let changed = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::from_permission_profile(
+                "application-sa".to_string(),
+                &changed_profile,
+                |id| alien_permissions::get_permission_set(id).cloned(),
+            )
+            .unwrap(),
+            ResourceLifecycle::Frozen,
+        )
+        .permission("application", changed_profile.clone())
+        .build();
+    let error =
+        validate_installed_aws_permissions_boundary(&changed, &installed_before, &client, &config)
+            .expect_err("changed stack-wide grants are judged as desired");
+    assert!(error
+        .to_string()
+        .contains("does not cover this stack's runtime permissions"));
+    assert_setup_required(
+        &executor(&changed, &config, InitialSetupAuthority::ImportedHandoff),
+        &installed_before,
+        "changed stack-wide grants",
+    )
+    .await;
+
+    // With the current boundary, both installed accounts are covered.
+    for definition in [today as fn(&mut Value), before_the_action] {
+        validate_installed_aws_permissions_boundary(
+            &prepared,
+            &with_installed_account(&current, definition),
+            &client,
+            &config,
+        )
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn setup_repair_and_full_teardown_do_not_require_new_runtime_permissions() {
     let (stack, mut state, config) = fixture();
