@@ -14,6 +14,11 @@ import {
   ExecutionClaim$outboundSchema,
 } from "./executionclaim.js";
 import {
+  InstalledSetup,
+  InstalledSetup$Outbound,
+  InstalledSetup$outboundSchema,
+} from "./installedsetup.js";
+import {
   ObservedApplicationReport,
   ObservedApplicationReport$Outbound,
   ObservedApplicationReport$outboundSchema,
@@ -89,6 +94,7 @@ export type AgentSyncRequest = {
    * it in token mode, then enrolled). Answered with the current release.
    */
   installedConfigMissing?: boolean | undefined;
+  installedSetup?: InstalledSetup | null | undefined;
   /**
    * Missing on actors that only understand protocol1.
    */
@@ -121,6 +127,7 @@ export type AgentSyncRequest$Outbound = {
   application?: ObservedApplicationReport$Outbound | null | undefined;
   dynamicContainers?: Array<DynamicContainerReport$Outbound> | null | undefined;
   installedConfigMissing?: boolean | undefined;
+  installedSetup?: InstalledSetup$Outbound | null | undefined;
   maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   operationsConfig?: OperationsConfig$Outbound | null | undefined;
   operatorImage?: OperatorImageReport$Outbound | null | undefined;
@@ -148,6 +155,7 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   dynamicContainers: z.nullable(z.array(DynamicContainerReport$outboundSchema))
     .optional(),
   installedConfigMissing: z.boolean().optional(),
+  installedSetup: z.nullable(InstalledSetup$outboundSchema).optional(),
   maxSupportedDeploymentProtocolVersion: z.nullable(z.int()).optional(),
   operationsConfig: z.nullable(OperationsConfig$outboundSchema).optional(),
   operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),

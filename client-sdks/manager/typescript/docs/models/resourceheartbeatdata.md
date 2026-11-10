@@ -272,6 +272,34 @@ const value: models.ResourceHeartbeatDataPostgres = {
 };
 ```
 
+### `models.ResourceHeartbeatDataRedis`
+
+```typescript
+const value: models.ResourceHeartbeatDataRedis = {
+  data: {
+    name: "<value>",
+    processRunning: true,
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "not-installed",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "deleting",
+      partial: false,
+      stale: false,
+    },
+    version: "<value>",
+    backend: "local",
+  },
+  resourceType: "redis",
+};
+```
+
 ### `models.ResourceHeartbeatDataVault`
 
 ```typescript

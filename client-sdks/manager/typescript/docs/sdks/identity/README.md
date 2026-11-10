@@ -180,8 +180,8 @@ async function run() {
   const result = await alienManager.identity.exchangeRuntimeIdentity({
     deploymentId: "<id>",
     proof: {
-      token: "<value>",
-      type: "session",
+      key: "<key>",
+      type: "dailyKey",
     },
     purpose: {
       target: {
@@ -217,8 +217,8 @@ async function run() {
   const res = await identityExchangeRuntimeIdentity(alienManager, {
     deploymentId: "<id>",
     proof: {
-      token: "<value>",
-      type: "session",
+      key: "<key>",
+      type: "dailyKey",
     },
     purpose: {
       target: {
