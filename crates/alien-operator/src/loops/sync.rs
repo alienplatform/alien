@@ -602,9 +602,10 @@ async fn sync_with_manager(
             // counts only when it is the target this Operator last applied
             // (stored, then interrupted before it was accepted, it applies as
             // an update). A target in the response is new work, with one
-            // exception: with no claim, one that answers a missing config is
-            // the installed release sent again, and is refreshed in place. One
-            // that answers a config without the commands key is applied again.
+            // exception: with no claim, one that answers a missing config and
+            // changes nothing the workloads see is the installed release sent
+            // again, and is refreshed in place. Anything else, including a
+            // config without the commands key, is applied.
             let maintenance = match sync_response.execution_claim.as_ref() {
                 Some(claim) => {
                     state.db.get_applied_operation_id().await?.as_deref()
@@ -618,7 +619,19 @@ async fn sync_with_manager(
                     state.db.get_installed_target_hash().await?.as_deref()
                         == Some(replayed.as_str())
                 }
-                None => installed_config == InstalledConfig::Missing,
+                // A resend answering a missing config is refreshed in place only
+                // when nothing the workloads see changed since the last apply
+                // (same release, settings, inputs and environment). Credentials
+                // and management settings differ freely. Anything else, or an
+                // Operator with no recorded apply, is applied.
+                None if installed_config == InstalledConfig::Missing => {
+                    let resent = crate::db::approved_target_hash(
+                        Some(&target_deployment.release_info),
+                        &target_deployment.config,
+                    )?;
+                    state.db.get_installed_target_hash().await?.as_deref() == Some(resent.as_str())
+                }
+                None => false,
             };
             let repeated_failed_target = if sync_response.execution_claim == durable_execution.claim
             {
@@ -2513,6 +2526,139 @@ mod tests {
             assert_eq!(after.target_release, stuck.target_release);
             assert_eq!(telemetry_token(&stored), format!("ax_cap_v1_pass_{pass}"));
         }
+    }
+
+    /// The resent config of the installed release is stored without applying
+    /// it only when nothing in it reaches the workloads. One that changes the
+    /// environment (or settings or inputs) is new work and is applied.
+    #[tokio::test]
+    async fn a_resent_config_that_changes_the_workload_is_applied_not_just_stored() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        type Shared = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Shared>, Json(_): Json<Value>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .route(
+                "/v1/identity/exchange",
+                post(|| async {
+                    Json(json!({
+                        "token": "ax_cap_v1_fixture",
+                        "expiresAt": chrono::Utc::now() + chrono::Duration::minutes(30),
+                    }))
+                }),
+            )
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_resent").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .sync(SyncConfig {
+                    url: format!("http://{address}").parse().unwrap(),
+                    token: String::new(),
+                })
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_installed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("resent".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+        };
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        *response.lock().unwrap() = json!({
+            "executionClaim": { "operationId": "duop_install", "attemptId": "att_1" },
+            "target": { "releaseInfo": release, "config": config },
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        run_deployment_until_idle(&state).await;
+        assert!(state.db.get_deployment_config().await.unwrap().is_none());
+
+        // The Operator enrolled; it has no config, and the manager sends the
+        // installed release again, with no claim and a changed variable.
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: url.clone(),
+                audience: url.clone(),
+                deployment_id: "dep_resent".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+                previous: None,
+            })
+            .await
+            .unwrap();
+        let mut changed = config.clone();
+        changed.runtime_identity_audience = Some(url.clone());
+        changed
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "MODE".to_string(),
+                value: "changed".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+        *response.lock().unwrap() = json!({
+            "target": { "releaseInfo": release, "config": changed },
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let accepted = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            accepted.status,
+            DeploymentStatus::UpdatePending,
+            "a changed environment must reach the workloads"
+        );
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 
     /// A token-mode Operator clears its config after each apply. Once it enrolls
