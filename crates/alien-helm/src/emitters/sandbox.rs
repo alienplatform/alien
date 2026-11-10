@@ -14,20 +14,16 @@
 use crate::emitter::{HelmEmitter, HelmFragment};
 use alien_core::sandbox_image::AGENT_PORT;
 use alien_core::{
-    import::EmitContext, ErrorData, ResourceRef, Result, Sandbox, SandboxEgress, Stack,
+    import::EmitContext, non_public_ipv4_ranges, ErrorData, ResourceRef, Result, Sandbox,
+    SandboxEgress, Stack,
 };
 use alien_error::AlienError;
 
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 
-// Released allow-mode address exclusions. New internet uses the gateway.
-const ALWAYS_DENIED_CIDRS: &[&str] = &[
-    "169.254.169.254/32",
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-];
+/// The address NodeLocal DNSCache answers on. Under `allow` it is reachable on port 53 only.
+const NODE_LOCAL_DNS: &str = "169.254.20.10/32";
 
 /// Path the broker's RBAC lands at. Fixed rather than per-sandbox: the ClusterRole is one per
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
@@ -60,7 +56,7 @@ impl HelmEmitter for SandboxEmitter {
         fragment
             .extra_templates
             .insert(BROKER_RBAC_TEMPLATE.to_string(), broker_rbac());
-        if matches!(sandbox.egress, SandboxEgress::Internet) {
+        if network_policy_is_the_only_bound(&sandbox.egress) {
             fragment.extra_templates.insert(
                 "sandbox-cni-probe.yaml".to_string(),
                 super::sandbox_cni::template(),
@@ -68,6 +64,18 @@ impl HelmEmitter for SandboxEmitter {
         }
         Ok(fragment)
     }
+}
+
+/// Whether this egress mode's reach is bounded by the session NetworkPolicy and nothing else, so
+/// the chart must prove the cluster enforces NetworkPolicy before it installs or upgrades.
+///
+/// The proof is the `sandbox-cni-probe.yaml` pre-install and pre-upgrade hook: when it fails, Helm
+/// stops before applying any other manifest, so no Operator runs and no session is created. Under
+/// `internet` the policy is what confines a session to the gateway. Under `allow` there is no
+/// gateway, and the policy's address exclusions are all that keep a session off node metadata,
+/// node credentials and private ranges; on a CNI that ignores NetworkPolicy they are not in force.
+fn network_policy_is_the_only_bound(egress: &SandboxEgress) -> bool {
+    matches!(egress, SandboxEgress::Internet | SandboxEgress::Allow)
 }
 
 /// The policy that makes a sandbox's declared egress real.
@@ -125,15 +133,22 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             }));
         }
         SandboxEgress::Allow => {
-            let excepts: String = ALWAYS_DENIED_CIDRS
-                .iter()
-                .map(|cidr| format!("            - {cidr}\n"))
+            // Every range the egress gateway refuses as non-public: private, shared (100.64/10),
+            // loopback, all of link-local (instance metadata, ECS and EKS Pod Identity
+            // credentials), Azure's wire server, and reserved and multicast space. No rule names
+            // an IPv6 block, so no IPv6 destination is reachable.
+            let excepts: String = non_public_ipv4_ranges()
+                .map(|range| format!("            - {range}\n"))
                 .collect();
-            // DNS first, by selector rather than address. The excepts below cover the private
-            // ranges a cluster's DNS service lives in — 172.20/16 on EKS, 10.0/16 on AKS,
-            // 10.96/12 on kubeadm — so an address-based rule alone resolves no names anywhere
-            // except a cluster whose resolver sits on a link-local address.
-            let dns = "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
+            // DNS by selector rather than address: the excepts cover the private ranges a
+            // cluster's DNS service lives in — 172.20/16 on EKS, 10.0/16 on AKS, 10.96/12 on
+            // kubeadm. A cluster running NodeLocal DNSCache points pods at a link-local
+            // address instead; that address is admitted on port 53 alone, so resolution keeps
+            // working without opening anything else the node serves there.
+            let dns_ports = "      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
+            let dns = format!(
+                "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n{dns_ports}    - to:\n        - ipBlock:\n            cidr: {NODE_LOCAL_DNS}\n{dns_ports}"
+            );
             format!(
                 "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
             )
