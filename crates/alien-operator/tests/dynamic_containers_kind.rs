@@ -69,6 +69,7 @@ fn target(name: &str, generation: u64, replicas: u32) -> TargetDynamicContainer 
         deleted: false,
         env: BTreeMap::new(),
         secret_env: BTreeMap::from([("API_KEY".to_string(), "secret-test-value".to_string())]),
+        value_slots: None,
         health_check: None,
         suspended_reason: None,
     }

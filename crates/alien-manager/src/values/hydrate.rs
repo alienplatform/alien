@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
-use alien_core::{EnvironmentVariable, EnvironmentVariableType};
+use alien_core::{EnvironmentVariable, EnvironmentVariableType, ValueSlotRef};
 use alien_error::AlienError;
 
-use super::{constant_time_eq, ValueKind, ValueScope, ValueSlot, ValueStore};
+use super::{constant_time_eq, StoredValue, ValueKind, ValueScope, ValueSlot, ValueStore};
 use crate::error::{ErrorData, Result};
 use crate::traits::deployment_store::DeploymentRecord;
 
@@ -36,29 +36,7 @@ pub async fn hydrate_held_values<'a>(
     let mut variables = Vec::new();
     let mut inputs = Vec::new();
     for held in slots {
-        let slot: ValueSlot = held.slot.parse()?;
-        let stored = store.get(&scope, &slot).await?.ok_or_else(|| {
-            AlienError::new(ErrorData::DeploymentValueMissing {
-                deployment_id: deployment.id.clone(),
-                slot: held.slot.clone(),
-            })
-        })?;
-        let expected_kind = match held.kind {
-            EnvironmentVariableType::Plain => ValueKind::Plain,
-            EnvironmentVariableType::Secret => ValueKind::Secret,
-        };
-        let changed = || {
-            AlienError::new(ErrorData::DeploymentValuesChanged {
-                deployment_id: deployment.id.clone(),
-                slot: held.slot.clone(),
-            })
-        };
-        if stored.kind != expected_kind {
-            return Err(changed());
-        }
-        if !constant_time_eq(stored.digest(&scope)?.as_bytes(), held.digest.as_bytes()) {
-            return Err(changed());
-        }
+        let (slot, stored) = load_held(store, &scope, held).await?;
         if let Some(name) = slot.env_name() {
             variables.push(EnvironmentVariable {
                 name: name.to_string(),
@@ -92,12 +70,44 @@ pub async fn hydrate_held_values<'a>(
     Ok(Cow::Owned(hydrated))
 }
 
+/// The value `held` names, loaded from `store`.
+///
+/// Fails with `DEPLOYMENT_VALUE_MISSING` when nothing is stored for the slot, and with
+/// `DEPLOYMENT_VALUES_CHANGED` when the stored kind or digest differs from what the
+/// sender planned with.
+pub(super) async fn load_held(
+    store: &ValueStore,
+    scope: &ValueScope,
+    held: &ValueSlotRef,
+) -> Result<(ValueSlot, StoredValue)> {
+    let slot: ValueSlot = held.slot.parse()?;
+    let stored = store.get(scope, &slot).await?.ok_or_else(|| {
+        AlienError::new(ErrorData::DeploymentValueMissing {
+            deployment_id: scope.deployment_id().to_string(),
+            slot: held.slot.clone(),
+        })
+    })?;
+    let expected_kind = match held.kind {
+        EnvironmentVariableType::Plain => ValueKind::Plain,
+        EnvironmentVariableType::Secret => ValueKind::Secret,
+    };
+    if stored.kind != expected_kind
+        || !constant_time_eq(stored.digest(scope)?.as_bytes(), held.digest.as_bytes())
+    {
+        return Err(AlienError::new(ErrorData::DeploymentValuesChanged {
+            deployment_id: scope.deployment_id().to_string(),
+            slot: held.slot.clone(),
+        }));
+    }
+    Ok((slot, stored))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use alien_bindings::providers::kv::local::LocalKv;
-    use alien_core::{DeploymentConfig, EnvironmentVariablesSnapshot, Platform, ValueSlotRef};
+    use alien_core::{DeploymentConfig, EnvironmentVariablesSnapshot, Platform};
     use chrono::Utc;
     use serde_json::json;
 
