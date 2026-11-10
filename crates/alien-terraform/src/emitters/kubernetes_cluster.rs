@@ -219,6 +219,14 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             ),
                         ],
                     )),
+                    // Only the default subnets, as for every other use-default resource.
+                    nested(block(
+                        "filter",
+                        [
+                            attr("name", Expression::String("default-for-az".to_string())),
+                            attr("values", expr::raw("[\"true\"]")),
+                        ],
+                    )),
                     nested(block(
                         "filter",
                         [
