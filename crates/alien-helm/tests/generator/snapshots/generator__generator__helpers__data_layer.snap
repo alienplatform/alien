@@ -1301,7 +1301,9 @@ stringData:
 
 === templates/registry-secret.yaml ===
 {{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
-{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode) }}
+{{- /* An enrolled Operator upgraded with no code and no token keeps the pull
+Secret it already has; the Operator keeps refreshing it. */ -}}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
 {{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
 {{- $user := default "deployment" .Values.management.name }}
@@ -1309,6 +1311,14 @@ stringData:
 {{- $config := "" }}
 {{- if .Values.management.token }}
 {{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else if not .Values.management.enrollmentCode }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $codeHash = dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" (default dict $existing) }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" dict | toJson | b64enc }}
+{{- end }}
 {{- else }}
 {{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
@@ -1409,7 +1419,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode) }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -1547,6 +1557,9 @@ spec:
             {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- else if and .Release.IsUpgrade (dig "pullWithManagementToken" false .Values.runtime.image) }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
             {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE

@@ -5869,7 +5869,9 @@ roleRef:
 /// changed, so a new code can recover an operator whose credential expired.
 fn registry_secret_tpl() -> String {
     r#"{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
-{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode) }}
+{{- /* An enrolled Operator upgraded with no code and no token keeps the pull
+Secret it already has; the Operator keeps refreshing it. */ -}}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
 {{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
 {{- $user := default "deployment" .Values.management.name }}
@@ -5877,6 +5879,14 @@ fn registry_secret_tpl() -> String {
 {{- $config := "" }}
 {{- if .Values.management.token }}
 {{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else if not .Values.management.enrollmentCode }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $codeHash = dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" (default dict $existing) }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" dict | toJson | b64enc }}
+{{- end }}
 {{- else }}
 {{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
@@ -6726,7 +6736,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode) }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -6864,6 +6874,9 @@ spec:
             {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- else if and .Release.IsUpgrade (dig "pullWithManagementToken" false .Values.runtime.image) }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
             {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
@@ -9858,6 +9871,108 @@ mod tests {
             .assert_ok("new installation with a token");
         crate::test_utils::helm_template_as_upgrade(&chart.files, Some(without_code.as_str()))
             .assert_ok("upgrade without a code");
+    }
+
+    /// An enrolled Operator upgraded with no code and no token keeps pulling
+    /// its image through the pull Secret it already has. The chart must keep
+    /// rendering that Secret and the Pod's reference to it, or the new Pod
+    /// cannot pull on a node that has not cached the image.
+    #[test]
+    fn an_upgrade_without_a_code_keeps_the_registry_pull_secret() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let with_pull = |values: &str| {
+            if values.contains("\n  image:\n") {
+                values.replacen("\n  image:\n", "\n  image:\n    pullWithManagementToken: true\n", 1)
+            } else {
+                values.replacen(
+                    "\nruntime:\n",
+                    "\nruntime:\n  image:\n    pullWithManagementToken: true\n",
+                    1,
+                )
+            }
+        };
+        let install = with_pull(&enrolled);
+        let upgrade = with_pull(&enrolled.replace(
+            "  enrollmentCode: 'ax_enroll_example'\n",
+            "  enrollmentCode: ''\n",
+        ));
+        assert_ne!(install, upgrade);
+
+        let registry_secret = |rendered: &crate::test_utils::LinterRun| {
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let secret = docs_by_kind(&docs, "Secret").into_iter().any(|secret| {
+                secret["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-registry"))
+            });
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|deployment| {
+                    deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                        == Some("operator")
+                })
+                .expect("Operator Deployment")
+                .clone();
+            let pod = &operator["spec"]["template"]["spec"];
+            let referenced = pod["imagePullSecrets"].as_sequence().is_some_and(|secrets| {
+                secrets.iter().any(|secret| {
+                    secret["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-registry"))
+                })
+            });
+            let env_names: Vec<String> = pod["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter_map(|variable| variable["name"].as_str().map(str::to_string))
+                .collect();
+            (
+                secret,
+                referenced,
+                env_names.contains(&"OPERATOR_REGISTRY_SECRET".to_string()),
+            )
+        };
+        let first = crate::test_utils::helm_template(&chart.files, Some(install.as_str()));
+        first.assert_ok("install with a code");
+        assert_eq!(registry_secret(&first), (true, true, true));
+        let upgraded =
+            crate::test_utils::helm_template_as_upgrade(&chart.files, Some(upgrade.as_str()));
+        upgraded.assert_ok("upgrade without a code");
+        assert_eq!(
+            registry_secret(&upgraded),
+            (true, true, true),
+            "the pull Secret, the Pod reference and the Operator's Secret setting stay"
+        );
     }
 
     /// An upgrade of an enrolled Operator carries no enrollment code and no
