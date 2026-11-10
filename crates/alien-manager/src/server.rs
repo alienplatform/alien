@@ -30,6 +30,7 @@ pub struct AlienManager {
     pub(crate) log_buffer: Arc<LogBuffer>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
     pub(crate) values: Option<Arc<crate::values::ValueStore>>,
+    pub(crate) cloud_metrics: Option<Arc<crate::loops::CloudMetricsLoop>>,
 }
 
 impl AlienManager {
@@ -148,6 +149,14 @@ impl AlienManager {
             });
         } else {
             info!("Heartbeat loop disabled");
+        }
+
+        // Spawn the cloud metrics loop (embedder opt-in)
+        if let Some(cloud_metrics) = self.cloud_metrics.clone() {
+            let shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                cloud_metrics.run_until_shutdown(shutdown).await;
+            });
         }
 
         // Spawn the command deadline reaper: expires overdue non-terminal

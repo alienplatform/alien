@@ -21,6 +21,7 @@ pub struct AlienManagerBuilder {
     token_store: Option<Arc<dyn TokenStore>>,
     credential_resolver: Option<Arc<dyn CredentialResolver>>,
     telemetry_backend: Option<Arc<dyn TelemetryBackend>>,
+    cloud_metrics_interval: Option<std::time::Duration>,
     auth_validator: Option<Arc<dyn AuthValidator>>,
     authz: Option<Arc<dyn Authz>>,
     project_store: Option<Arc<dyn ProjectStore>>,
@@ -81,6 +82,7 @@ impl AlienManagerBuilder {
             token_store: None,
             credential_resolver: None,
             telemetry_backend: None,
+            cloud_metrics_interval: None,
             auth_validator: None,
             authz: None,
             project_store: None,
@@ -202,6 +204,14 @@ impl AlienManagerBuilder {
 
     pub fn telemetry_backend(mut self, backend: Arc<dyn TelemetryBackend>) -> Self {
         self.telemetry_backend = Some(backend);
+        self
+    }
+
+    /// Pull the Lambda metrics of running AWS deployments every `interval` and send them to the
+    /// telemetry backend. Off by default: each pull is a billed CloudWatch call made with the
+    /// deployment's management identity, which needs the `observe/metrics-read` permission set.
+    pub fn cloud_metrics(mut self, interval: std::time::Duration) -> Self {
+        self.cloud_metrics_interval = Some(interval);
         self
     }
 
@@ -865,6 +875,16 @@ impl AlienManagerBuilder {
             .log_buffer
             .unwrap_or_else(|| Arc::new(crate::dev::LogBuffer::new()));
 
+        let cloud_metrics = self.cloud_metrics_interval.map(|interval| {
+            Arc::new(crate::loops::CloudMetricsLoop::new(
+                deployment_store.clone(),
+                credential_resolver.clone(),
+                telemetry_backend.clone(),
+                Arc::new(crate::loops::AwsCloudWatchProvider),
+                interval,
+            ))
+        });
+
         let config = Arc::new(self.config);
         let value_access = self.value_store.as_ref().map(|_| {
             self.value_access.clone().unwrap_or_else(|| {
@@ -905,6 +925,10 @@ impl AlienManagerBuilder {
             value_access,
         )
         .await
+        .map(|mut manager| {
+            manager.cloud_metrics = cloud_metrics;
+            manager
+        })
     }
 }
 
@@ -1206,6 +1230,7 @@ async fn finalize(
         log_buffer,
         command_server,
         values,
+        cloud_metrics: None,
     })
 }
 
