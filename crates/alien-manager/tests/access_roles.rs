@@ -1690,6 +1690,7 @@ mod runtime_credentials {
         assert_eq!(leases.leases.len(), 1);
         assert_eq!(leases.leases[0].command_id, created.command_id);
         let release_path = format!("/v1/commands/leases/{}/release", leases.leases[0].lease_id);
+        let current_lease = leases.leases[0].lease_id.clone();
         clock.store(1_800_000_300, Ordering::SeqCst);
         assert_eq!(
             request(&router, &bearer, "POST", "/v1/commands/leases", lease_body)
@@ -1711,9 +1712,15 @@ mod runtime_credentials {
         );
         let fresh = receiver(&deployment_id, "worker-a");
         assert_eq!(
-            request(&router, &fresh, "PUT", &response_path, result)
-                .await
-                .status(),
+            request(
+                &router,
+                &fresh,
+                "PUT",
+                &format!("{response_path}?lease_id={current_lease}"),
+                result,
+            )
+            .await
+            .status(),
             StatusCode::OK
         );
         let completed = state
@@ -2065,7 +2072,10 @@ mod runtime_credentials {
             &router,
             &bearer,
             "PUT",
-            &format!("/v1/commands/{}/response", second.command_id),
+            &format!(
+                "/v1/commands/{}/response?lease_id={}",
+                second.command_id, leased.lease_id
+            ),
             serde_json::to_value(alien_core::SubmitResponseRequest {
                 response: alien_core::CommandResponse::success(b"answered with the bearer"),
             })
@@ -2075,6 +2085,74 @@ mod runtime_credentials {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             command_state(&state, &second.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// Released receivers answer on the response URL they were handed, which
+    /// names their lease, and never with a bearer. So a bearer answer must name
+    /// its lease too: a commands key that leaves it out, or names a lease the
+    /// command has moved on from, cannot complete the command.
+    #[tokio::test]
+    async fn a_commands_key_answers_only_with_the_lease_it_holds() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let answer = |lease_id: Option<String>| {
+            let path = match &lease_id {
+                Some(lease_id) => format!(
+                    "/v1/commands/{}/response?lease_id={lease_id}",
+                    created.command_id
+                ),
+                None => format!("/v1/commands/{}/response", created.command_id),
+            };
+            let router = router.clone();
+            let bearer = bearer.clone();
+            async move {
+                request(
+                    &router,
+                    &bearer,
+                    "PUT",
+                    &path,
+                    serde_json::to_value(alien_core::SubmitResponseRequest {
+                        response: alien_core::CommandResponse::success(b"answer"),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .status()
+            }
+        };
+
+        let first = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(answer(None).await, StatusCode::BAD_REQUEST);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded,
+            "a bearer answer without a lease must not complete the command"
+        );
+
+        // The command is handed to a new holder; the old lease is superseded.
+        state
+            .command_server
+            .release_lease(&created.command_id, &first.lease_id)
+            .await
+            .unwrap();
+        let second = lease(&router, &bearer, &deployment_id).await;
+        assert_ne!(first.lease_id, second.lease_id);
+        assert_eq!(answer(None).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            answer(Some(first.lease_id.clone())).await,
+            StatusCode::CONFLICT
+        );
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+        assert_eq!(answer(Some(second.lease_id)).await, StatusCode::OK);
+        assert_eq!(
+            command_state(&state, &created.command_id).await,
             alien_core::CommandState::Succeeded
         );
     }

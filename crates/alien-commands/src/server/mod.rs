@@ -263,6 +263,22 @@ impl CommandServer {
     /// command is held by one lease at a time; a holder whose lease expired
     /// without a successor may still report what it ran, but once the command
     /// was leased again the new holder is the one running it.
+    /// Whether the command is currently held by a lease, or was last held by
+    /// one that expired. A response to such a command must name its lease.
+    pub async fn command_is_leased(&self, command_id: &str) -> Result<bool> {
+        let key = format!("cmd:{command_id}:lease");
+        Ok(self
+            .kv
+            .get(&key)
+            .await
+            .context(ErrorData::KvOperationFailed {
+                operation: "get".to_string(),
+                key,
+                message: "Failed to read the command lease".to_string(),
+            })?
+            .is_some())
+    }
+
     pub async fn require_lease_not_superseded(
         &self,
         command_id: &str,

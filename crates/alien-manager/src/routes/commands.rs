@@ -470,6 +470,24 @@ async fn submit_response(
         if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
             return e;
         }
+        // A bearer answer must name its lease, or a holder whose lease was
+        // superseded could complete the command by leaving the lease out.
+        // Released receivers never answer with a bearer: they answer on the
+        // response URL the manager handed them, which already names the lease.
+        // So nothing that works today is refused. A command that was never
+        // leased (push delivery) has no lease to name.
+        if query.lease_id.is_none() {
+            let leased = match state.command_server.command_is_leased(&command_id).await {
+                Ok(leased) => leased,
+                Err(e) => return e.into_response(),
+            };
+            if leased || subject.role == crate::auth::Role::CommandsReceiver {
+                return ErrorData::bad_request(
+                    "lease_id is required to answer a leased command with a bearer token",
+                )
+                .into_response();
+            }
+        }
     } else {
         // No Bearer token — try presigned URL auth from query parameters.
         let (Some(token), Some(expires)) = (&query.response_token, query.expires) else {
