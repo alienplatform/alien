@@ -18,6 +18,8 @@ const queue = new alien.Queue("alien-queue").build()
 // race that consumer. This queue has exactly one consumer: the queue trigger.
 const eventsQueue = new alien.Queue("alien-events-queue").build()
 const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
+// Redis is Local-only here for the same reason as Postgres.
+const redis = isLocal ? new alien.Redis("alien-redis").build() : undefined
 // Sandbox is Local-only: none of this suite's cloud targets has a sandbox controller registered
 // in this repo, so declaring one there would ask the executor to provision a backend nothing
 // drives.
@@ -61,6 +63,9 @@ let workerBuilder = new alien.Worker("alien-ts-worker")
 if (postgres) {
   workerBuilder = workerBuilder.link(postgres)
 }
+if (redis) {
+  workerBuilder = workerBuilder.link(redis)
+}
 if (sandbox) {
   workerBuilder = workerBuilder.link(sandbox)
 }
@@ -80,6 +85,9 @@ const executionPermissions = [
 ]
 if (postgres) {
   executionPermissions.push("postgres/data-access")
+}
+if (redis) {
+  executionPermissions.push("redis/data-access")
 }
 if (sandbox) {
   executionPermissions.push("sandbox/execute")
@@ -101,6 +109,9 @@ let stackBuilder = new alien.Stack("alien-ts-stack")
   .add(ai, "frozen")
 if (postgres) {
   stackBuilder = stackBuilder.add(postgres, "live")
+}
+if (redis) {
+  stackBuilder = stackBuilder.add(redis, "live")
 }
 if (sandbox) {
   stackBuilder = stackBuilder.add(sandbox, "frozen")

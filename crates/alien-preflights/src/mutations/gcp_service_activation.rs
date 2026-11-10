@@ -24,6 +24,7 @@ use tracing::{debug, info};
 /// - queue: pubsub.googleapis.com (Pub/Sub)
 /// - vault: secretmanager.googleapis.com (Secret Manager)
 /// - postgres: sqladmin.googleapis.com (Cloud SQL) + compute.googleapis.com (PSC) + secretmanager.googleapis.com (connection secret)
+/// - redis: memorystore.googleapis.com (Memorystore for Valkey) + networkconnectivity.googleapis.com (service connection policy)
 /// - network: compute.googleapis.com (Compute Engine)
 /// - compute-cluster: compute.googleapis.com (Compute Engine)
 // Google documents these prerequisites for customer-owned workload federation.
@@ -282,6 +283,25 @@ impl GcpServiceActivationMutation {
                         "secretmanager.googleapis.com".to_string(),
                     );
                 }
+                "redis" => {
+                    services.insert(
+                        "enable-memorystore".to_string(),
+                        "memorystore.googleapis.com".to_string(),
+                    );
+                    // PSC for Memorystore goes through a service connection policy.
+                    services.insert(
+                        "enable-network-connectivity".to_string(),
+                        "networkconnectivity.googleapis.com".to_string(),
+                    );
+                    services.insert(
+                        "enable-service-consumer-management".to_string(),
+                        "serviceconsumermanagement.googleapis.com".to_string(),
+                    );
+                    services.insert(
+                        "enable-compute-engine".to_string(),
+                        "compute.googleapis.com".to_string(),
+                    );
+                }
                 "network" => {
                     services.insert(
                         "enable-compute-engine".to_string(),
@@ -336,6 +356,9 @@ fn api_display_name(service: &str) -> &str {
         "pubsub.googleapis.com" => "Pub/Sub API",
         "secretmanager.googleapis.com" => "Secret Manager API",
         "sqladmin.googleapis.com" => "Cloud SQL Admin API",
+        "memorystore.googleapis.com" => "Memorystore API",
+        "networkconnectivity.googleapis.com" => "Network Connectivity API",
+        "serviceconsumermanagement.googleapis.com" => "Service Consumer Management API",
         "compute.googleapis.com" => "Compute Engine API",
         "iamcredentials.googleapis.com" => "IAM Service Account Credentials API",
         "container.googleapis.com" => "Kubernetes Engine API",
@@ -455,6 +478,32 @@ mod tests {
             services.get("enable-aiplatform").map(String::as_str),
             Some("aiplatform.googleapis.com"),
             "a GCP AI resource must inject Vertex AI enablement for the Terraform/Frozen path"
+        );
+    }
+
+    #[test]
+    fn redis_resource_requires_memorystore_and_service_connection_apis() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                alien_core::Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let services = GcpServiceActivationMutation
+            .get_required_services(&stack, &StackState::new(Platform::Gcp));
+        let enabled: std::collections::BTreeSet<_> =
+            services.values().map(String::as_str).collect();
+        for api in [
+            "memorystore.googleapis.com",
+            "networkconnectivity.googleapis.com",
+            "serviceconsumermanagement.googleapis.com",
+            "compute.googleapis.com",
+        ] {
+            assert!(enabled.contains(api), "missing {api}");
+        }
+        assert!(
+            !enabled.contains("secretmanager.googleapis.com"),
+            "Redis reads its token from Memorystore, not Secret Manager"
         );
     }
 }

@@ -1,0 +1,95 @@
+{
+  "id": "redis/data-access",
+  "description": "Allows a workload to read the connection credential and connect to Redis",
+  // A single `data-access` set instead of data-read/data-write: the data plane is gated by the
+  // server password over TCP, not IAM, so the only cloud grant a workload needs is reading that
+  // credential. Management-plane sets never read it. Grows an IAM-auth equivalent if token
+  // refresh lands in client libraries.
+  "platforms": {
+    "aws": [
+      {
+        // Bound to the stack tag, which every create path has set on the connection secret since
+        // it first existed, so a workload of stack `app` cannot read `app-prod`'s password.
+        "label": "read-connection-secret",
+        "description": "Read this stack's tagged AUTH-token secret.",
+        "grant": {
+          "actions": ["secretsmanager:GetSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*-auth-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        // Memorystore generates the token and only its API returns it. The workload reads its own
+        // instance's token when it loads the binding, like Azure listKeys. Memorystore checks this
+        // permission against
+        // projects/<project ID>/locations/<region>/instances/<id>/tokenAuthUsers/default and
+        // evaluates resource.name conditions on that name (measured; Google's conditions docs do not
+        // list Memorystore). Only the project ID form matches, not the project number. If Google
+        // stopped sending the name, the condition would be false and the read would fail closed.
+        "label": "read-instance-auth-token",
+        "description": "Read the auth token of this Redis instance's default user.",
+        "grant": {
+          "permissions": ["memorystore.authTokens.list"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackRedisTokenRead",
+              "expression": "resource.name.startsWith(\"projects/${projectName}/locations/${region}/instances/${stackPrefix}-\") && resource.name.endsWith(\"/tokenAuthUsers/default\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceRedisTokenRead",
+              "expression": "resource.name == \"projects/${projectName}/locations/${region}/instances/${resourceName}/tokenAuthUsers/default\""
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        // Azure Managed Redis hands out its access key through `listKeys`, so the workload
+        // needs exactly that action on its one database. The management identity never gets it.
+        "label": "list-database-access-keys",
+        "description": "Read the access key of this Redis database.",
+        "grant": {
+          "actions": ["Microsoft.Cache/redisEnterprise/databases/listKeys/action"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Cache/redisEnterprise/${resourceName}/databases/default"
+          }
+        }
+      }
+    ]
+  }
+}

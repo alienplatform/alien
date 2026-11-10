@@ -32,6 +32,7 @@ const EXTRA_ROOTS: &[&str] = &[
     alien_core::Vault,
     alien_core::Key,
     alien_core::Postgres,
+    alien_core::Redis,
     alien_core::Email,
     alien_core::Ai,
     alien_core::Sandbox,

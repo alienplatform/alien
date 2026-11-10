@@ -658,7 +658,7 @@ impl EnvironmentVariableBuilder {
                     // Check if there's an external binding for this resource
                     match ctx.deployment_config.external_bindings.get(binding_name) {
                         Some(external) => {
-                            // External Postgres and AI on the local platform: the binding
+                            // External Postgres, Redis and AI on the local platform: the binding
                             // inlines a raw secret, and the local runtime-only channel would
                             // either persist it into worker metadata (Postgres) or silently
                             // replace it with the dev key from the process environment (AI).
@@ -666,12 +666,16 @@ impl EnvironmentVariableBuilder {
                                 && matches!(
                                     external,
                                     alien_core::ExternalBinding::Postgres(_)
+                                        | alien_core::ExternalBinding::Redis(_)
                                         | alien_core::ExternalBinding::Ai(_)
                                 )
                             {
                                 let kind = match external {
                                     alien_core::ExternalBinding::Postgres(_) => {
                                         "external (Remote Access) Postgres"
+                                    }
+                                    alien_core::ExternalBinding::Redis(_) => {
+                                        "external (Remote Access) Redis"
                                     }
                                     _ => "an external (BYO-key) AI binding",
                                 };

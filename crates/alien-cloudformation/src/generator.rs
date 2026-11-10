@@ -2381,10 +2381,11 @@ fn add_standard_conditions(
             && has_created_network
             && stack.resources().any(|(_id, entry)| {
                 entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                    && entry
+                    && (entry
                         .config
                         .downcast_ref::<alien_core::Postgres>()
                         .is_some()
+                        || entry.config.downcast_ref::<alien_core::Redis>().is_some())
             })
         {
             template.conditions.insert(

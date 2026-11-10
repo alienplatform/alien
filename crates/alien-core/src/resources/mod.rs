@@ -91,5 +91,8 @@ pub use container::*;
 mod postgres;
 pub use postgres::*;
 
+mod redis;
+pub use redis::*;
+
 mod kubernetes_compute;
 pub use kubernetes_compute::*;

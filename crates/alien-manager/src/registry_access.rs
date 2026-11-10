@@ -2350,6 +2350,13 @@ mod tests {
             Err(missing_binding(binding_name))
         }
 
+        async fn load_redis(
+            &self,
+            binding_name: &str,
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Redis>> {
+            Err(missing_binding(binding_name))
+        }
+
         async fn load_queue(
             &self,
             binding_name: &str,

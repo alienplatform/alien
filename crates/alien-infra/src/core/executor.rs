@@ -836,6 +836,7 @@ impl StackExecutor {
                 | "queue"
                 | "vault"
                 | "postgres"
+                | "redis"
                 | "key"
                 | "artifact-registry"
                 | "experimental/aws-opensearch"

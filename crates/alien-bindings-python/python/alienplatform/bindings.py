@@ -94,6 +94,51 @@ class PostgresConnection:
         return context
 
 
+@dataclass(frozen=True, repr=False)
+class RedisConnection:
+    url: str
+    host: str
+    port: int
+    username: str
+    password: str
+    tls: bool
+    ca_certificates: tuple[str, ...]
+    database: Literal[0] = 0
+
+    def __repr__(self) -> str:
+        return (
+            "RedisConnection("
+            f"host={self.host!r}, port={self.port!r}, username={self.username!r}, "
+            f"password='<redacted>', tls={self.tls!r}, ca_certificates={len(self.ca_certificates)})"
+        )
+
+    def ssl_context(self) -> ssl.SSLContext | None:
+        """Build a verifying TLS context, or ``None`` for the plaintext local server."""
+        if not self.tls:
+            return None
+        context = ssl.create_default_context()
+        for certificate in self.ca_certificates:
+            context.load_verify_locations(cadata=certificate)
+        return context
+
+    def redis_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments for ``redis.asyncio.Redis(**conn.redis_kwargs())``."""
+        kwargs: dict[str, Any] = {
+            "host": self.host,
+            "port": self.port,
+            "username": self.username,
+            "password": self.password,
+            "db": self.database,
+        }
+        if self.tls:
+            kwargs["ssl"] = True
+            kwargs["ssl_cert_reqs"] = "required"
+            kwargs["ssl_check_hostname"] = True
+            if self.ca_certificates:
+                kwargs["ssl_ca_data"] = "\n".join(self.ca_certificates)
+        return kwargs
+
+
 class Storage:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("storage", name)
@@ -329,6 +374,24 @@ class Postgres:
             value.username,
             value.password,
             value.sslmode,
+            tuple(value.ca_certificates),
+        )
+
+
+class Redis:
+    def __init__(self, name: str) -> None:
+        self._handle = _LazyHandle[Any]("redis", name)
+
+    @translate_errors
+    async def connection(self) -> RedisConnection:
+        value = (await self._handle.get()).connection()
+        return RedisConnection(
+            value.url,
+            value.host,
+            value.port,
+            value.username,
+            value.password,
+            value.tls,
             tuple(value.ca_certificates),
         )
 
@@ -724,6 +787,10 @@ def vault(name: str) -> Vault:
 
 def postgres(name: str) -> Postgres:
     return Postgres(name)
+
+
+def redis(name: str) -> Redis:
+    return Redis(name)
 
 
 def container(name: str) -> Container:

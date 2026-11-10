@@ -1,0 +1,23 @@
+name = "acme-redis"
+platforms = ["aws", "gcp", "azure"]
+
+[key.cache-key]
+
+[redis.sessions]
+display-name = "Session cache"
+description = "Session store for the web tier."
+lifecycle = "live"
+remote-access = true
+enabled-when = "sessions_enabled"
+memory = "4Gi"
+eviction-policy = "allkeys-lru"
+persistence = true
+high-availability = true
+encryption-key = "cache-key"
+
+[input.sessions_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create session cache"
+description = "Whether this deployment gets the session cache."
+default = true

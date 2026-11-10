@@ -42,6 +42,7 @@ pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
 pub mod valid_resource_dependencies;
 pub mod volume_backups;
+pub mod redis_persistence;
 pub mod worker_memory;
 
 pub use allowed_user_resources::AllowedUserResourcesCheck;
@@ -84,6 +85,7 @@ pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };
 pub use volume_backups::VolumeBackupsCheck;
+pub use redis_persistence::RedisPersistenceCheck;
 pub use worker_memory::WorkerMemoryCheck;
 
 pub mod kubernetes_compute;

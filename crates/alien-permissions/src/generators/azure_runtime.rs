@@ -819,6 +819,7 @@ pub fn azure_predefined_role_id(role_name: &str) -> Option<&'static str> {
         "Key Vault Reader" => Some("21090545-7ca7-4776-b22c-e363652d74d2"),
         "Key Vault Secrets User" => Some("4633458b-17de-408a-b874-0445c86b69e6"),
         "Managed Identity Contributor" => Some("e40ec5ca-96e0-45a2-b4ff-59039f2c2b59"),
+        "Monitoring Reader" => Some("43d0d8ad-25c7-4714-9337-8ba259a9fe05"),
         "Network Contributor" => Some("4d97b98b-1d4f-4787-a291-c67834d212e7"),
         "Reader" => Some("acdd72a7-3385-48ef-bd42-f606fba81ae7"),
         "Storage Blob Data Contributor" => Some("ba92f5b4-2d11-453d-a403-e96b0029c9fe"),

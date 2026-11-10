@@ -366,6 +366,13 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
+      - name: Local Redis integration tests
+        if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_core == 'true'
+        # Runs the pinned Valkey image through the runner's Docker engine: start, password,
+        # persistence across restarts, settings changes, recovery and delete. About a minute
+        # plus one image pull; the tests are `#[ignore]`d so the default run needs no Docker.
+        run: cargo nextest run --locked -p alien-local --test redis_integration --run-ignored only --test-threads 1 --no-tests=fail
+
       - name: Enable user namespaces for sandbox security tests
         if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_agent == 'true'
         # These tests exercise nested user namespaces after dropping privileges.

@@ -752,6 +752,140 @@ pub trait Postgres: Binding {
     }
 }
 
+/// TLS settings for a Redis connection.
+///
+/// `Enabled` with no CA certificates uses the runtime's system trust store. A set of CA
+/// certificates replaces it (Memorystore signs with a per-instance CA). `server_name`
+/// is only set when the certificate does not match the host being dialed.
+#[derive(Clone, PartialEq, Eq)]
+pub enum RedisTlsPolicy {
+    /// Plain TCP (Local only, or an explicit opt-out on an external server).
+    Disabled,
+    /// TLS with verification.
+    Enabled {
+        ca_certificates: Arc<[String]>,
+        server_name: Option<String>,
+    },
+}
+
+impl std::fmt::Debug for RedisTlsPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("Disabled"),
+            Self::Enabled {
+                ca_certificates,
+                server_name,
+            } => f
+                .debug_struct("Enabled")
+                .field("ca_certificate_count", &ca_certificates.len())
+                .field("server_name", server_name)
+                .finish(),
+        }
+    }
+}
+
+impl RedisTlsPolicy {
+    /// TLS verified against the system trust store.
+    pub fn system_roots() -> Self {
+        Self::Enabled {
+            ca_certificates: Arc::default(),
+            server_name: None,
+        }
+    }
+
+    /// TLS verified against the given PEM roots. Every entry must be a PEM certificate.
+    pub fn with_ca_certificates(
+        ca_certificates: Vec<String>,
+    ) -> std::result::Result<Self, InvalidPostgresCaCertificates> {
+        if ca_certificates.is_empty()
+            || ca_certificates.iter().any(|certificate| {
+                let certificate = certificate.trim();
+                !certificate.starts_with("-----BEGIN CERTIFICATE-----")
+                    || !certificate.ends_with("-----END CERTIFICATE-----")
+            })
+        {
+            return Err(InvalidPostgresCaCertificates);
+        }
+        Ok(Self::Enabled {
+            ca_certificates: ca_certificates.into(),
+            server_name: None,
+        })
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        matches!(self, Self::Enabled { .. })
+    }
+
+    /// PEM-encoded roots; empty when TLS is off or uses the system trust store.
+    pub fn ca_certificates(&self) -> &[String] {
+        match self {
+            Self::Disabled => &[],
+            Self::Enabled {
+                ca_certificates, ..
+            } => ca_certificates,
+        }
+    }
+}
+
+/// Resolved connection details for a Redis server. The database is always 0.
+#[derive(Clone)]
+pub struct RedisConnectionParams {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub tls: RedisTlsPolicy,
+}
+
+// Hand-written Debug so the resolved password never reaches logs or error chains.
+impl std::fmt::Debug for RedisConnectionParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisConnectionParams")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("tls", &self.tls)
+            .finish()
+    }
+}
+
+impl RedisConnectionParams {
+    /// `redis://` or `rediss://` URL with the password percent-encoded, so a generated
+    /// password with URL-special characters cannot corrupt it.
+    pub fn connection_url(&self) -> String {
+        // A bare IPv6 address must be bracketed to separate it from the port.
+        let host = if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!(
+            "{}://{}:{}@{}:{}/0",
+            if self.tls.is_enabled() {
+                "rediss"
+            } else {
+                "redis"
+            },
+            encode_userinfo(&self.username),
+            encode_userinfo(&self.password),
+            host,
+            self.port,
+        )
+    }
+}
+
+/// Connection-only Redis binding. Like Postgres it ships no gRPC service: the
+/// application uses its own Redis client against the resolved details.
+pub trait Redis: Binding {
+    fn connection_params(&self) -> &RedisConnectionParams;
+
+    /// `rediss://` connection URL, derived from `connection_params` and never stored.
+    fn connection_url(&self) -> String {
+        self.connection_params().connection_url()
+    }
+}
+
 /// A precondition for a KV put operation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum PutCondition {
@@ -1619,6 +1753,13 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// identity. Resolution happens once per load, so the returned handle is synchronous.
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>>;
 
+    /// Given a binding identifier, builds a Redis implementation.
+    ///
+    /// Local and External carry their password inline; cloud variants carry a locator for
+    /// it and read the value from the cloud's secret store during this call, using the
+    /// workload's own identity.
+    async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>>;
+
     /// Given a binding identifier, builds a Queue implementation.
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>>;
 
@@ -1650,7 +1791,22 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use super::CreateSandboxRequest;
+    use super::{CreateSandboxRequest, RedisConnectionParams, RedisTlsPolicy};
+
+    #[test]
+    fn a_redis_url_brackets_an_ipv6_host() {
+        let params = |host: &str| RedisConnectionParams {
+            host: host.to_string(),
+            port: 6379,
+            username: "default".to_string(),
+            password: "pw".to_string(),
+            tls: RedisTlsPolicy::Disabled,
+        };
+        assert_eq!(params("::1").connection_url(), "redis://default:pw@[::1]:6379/0");
+        assert_eq!(params("[::1]").connection_url(), "redis://default:pw@[::1]:6379/0");
+        assert_eq!(params("10.0.0.5").connection_url(), "redis://default:pw@10.0.0.5:6379/0");
+        assert_eq!(params("host.example").host, "host.example");
+    }
 
     /// A field this struct does not know is a caller asking for something it will not get, and
     /// the field it would most want is the one that bounds the sandbox. Read as "absent",

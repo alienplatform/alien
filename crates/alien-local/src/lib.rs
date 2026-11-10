@@ -64,6 +64,7 @@ mod postgres_manager;
 mod postgres_runtime;
 mod queue_manager;
 mod queue_service;
+mod redis_manager;
 pub use queue_service::LocalQueueService;
 mod sandbox_identity;
 mod sandbox_interactive;
@@ -90,6 +91,7 @@ pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;
 pub use postgres_manager::LocalPostgresManager;
 pub use queue_manager::LocalQueueManager;
+pub use redis_manager::{LocalRedisManager, RedisSpec, VALKEY_VERSION};
 pub use sandbox_manager::{
     LocalSandboxManager, SandboxEgressMode, SandboxExecResult, SandboxOutput, SandboxSessionConfig,
     SandboxSessionHandle,

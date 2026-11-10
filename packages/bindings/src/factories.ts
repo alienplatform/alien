@@ -33,6 +33,8 @@ import type {
   RawPostgresConnection,
   RawPostgresHandle,
   RawQueueHandle,
+  RawRedisConnection,
+  RawRedisHandle,
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
   RawSandboxHandle,
@@ -58,6 +60,8 @@ import type {
   PresignedRequest,
   Queue,
   QueueMessage,
+  Redis,
+  RedisConnection,
   RemoteStorage,
   Sandbox,
   SandboxInstance,
@@ -655,6 +659,32 @@ function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
   }
 }
 
+/** Map the Rust-resolved connection to client TLS options. */
+function toRedisConnection(raw: RawRedisConnection): RedisConnection {
+  let tls: RedisConnection["tls"] = false
+  if (raw.tls) {
+    tls = {}
+    if (raw.caCertificates.length > 0) tls.ca = [...raw.caCertificates]
+    if (raw.serverName) tls.servername = raw.serverName
+  }
+  return {
+    url: raw.url,
+    host: raw.host,
+    port: raw.port,
+    username: raw.username,
+    password: raw.password,
+    database: 0,
+    tls,
+  }
+}
+
+function makeRedis(handle: () => Promise<RawRedisHandle>): Redis {
+  return {
+    connection: (): Promise<RedisConnection> =>
+      guard(handle, async raw => toRedisConnection(raw.connection())),
+  }
+}
+
 /** The public factory surface. */
 export interface Factories {
   storage(name: string): Storage
@@ -664,6 +694,7 @@ export interface Factories {
   vault(name: string): Vault
   container(name: string): Container
   postgres(name: string): Postgres
+  redis(name: string): Redis
   sandbox(name: string): Sandbox
 }
 
@@ -678,6 +709,7 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
     vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
     container: name => makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
     postgres: name => makePostgres(lazyHandle(async () => (await getBindings()).postgres(name))),
+    redis: name => makeRedis(lazyHandle(async () => (await getBindings()).redis(name))),
     sandbox: name => makeSandbox(lazyHandle(async () => (await getBindings()).sandbox(name))),
   }
 }
