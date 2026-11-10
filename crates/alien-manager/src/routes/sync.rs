@@ -1842,6 +1842,7 @@ pub(in crate::routes) mod tests {
             deleted: false,
             env: Default::default(),
             secret_env: Default::default(),
+            value_slots: None,
             health_check: None,
             suspended_reason: None,
         }
@@ -4154,12 +4155,29 @@ async fn agent_sync(
         None
     };
 
-    if let (Some(values), Some(targets)) = (state.values.as_deref(), &mut target_dynamic_containers)
-    {
-        if let Err(error) =
-            crate::values::load_container_env(values, &req.deployment_id, targets).await
-        {
-            return error.into_response();
+    if let Some(targets) = &mut target_dynamic_containers {
+        match state.values.as_deref() {
+            Some(values) => {
+                if let Err(error) =
+                    crate::values::load_container_env(values, &req.deployment_id, targets).await
+                {
+                    return error.into_response();
+                }
+            }
+            // Without a store nothing can supply named values, so a container that names any
+            // would start without them. The field is never passed on to the Operator.
+            None => {
+                for target in targets.iter_mut() {
+                    let named = target.value_slots.take();
+                    if !target.deleted && named.is_some_and(|slots| !slots.is_empty()) {
+                        return ErrorData::internal(format!(
+                            "Container '{}' names stored values, but this manager has no value store",
+                            target.name
+                        ))
+                        .into_response();
+                    }
+                }
+            }
         }
     }
 
