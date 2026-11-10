@@ -71,6 +71,23 @@ fn azure_availability(
     }
 }
 
+/// The quota counter that limits a model's GlobalStandard deployments.
+fn usage_name(model_name: &str) -> String {
+    format!("OpenAI.GlobalStandard.{model_name}")
+}
+
+/// Capacity to request for one deployment, given the units still free in the
+/// subscription's regional quota (`None` when the quota could not be read or lists
+/// no counter for the model; Azure then decides when the deployment is created).
+/// `Err` means no whole unit is free.
+fn deployment_capacity(target: i32, free_units: Option<f64>) -> std::result::Result<i32, ()> {
+    match free_units {
+        None => Ok(target),
+        Some(free) if free >= 1.0 => Ok(target.min(free.floor() as i32)),
+        Some(_) => Err(()),
+    }
+}
+
 /// Derives a globally-unique AIServices account name from the stack prefix and
 /// resource id. Azure account names must be 2-64 chars, alphanumeric + hyphens,
 /// start with a letter, and end with a letter or digit.
@@ -109,6 +126,9 @@ pub struct AzureAiController {
     pub(crate) availability: Option<AiAvailabilityObservation>,
     #[serde(default)]
     pub(crate) availability_observed_at: Option<chrono::DateTime<Utc>>,
+    /// One line for each deployment created with less capacity than it asked for.
+    #[serde(default)]
+    pub(crate) capacity_warnings: Vec<String>,
 }
 
 #[controller]
@@ -370,14 +390,82 @@ impl AzureAiController {
             .service_provider
             .get_azure_cognitive_services_client(azure_config)?;
 
-        // PUT is idempotent, so re-entering this state (e.g. after a retry) re-issues
-        // the same deployments harmlessly.
-        for (deployment_name, model_name, model_version, capacity) in
+        let location = self.location.clone();
+        let mut free_units: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        match &location {
+            Some(location) => match cognitive_client.list_usages(location).await {
+                Ok(usages) => {
+                    for usage in usages {
+                        if let Some(name) = usage.name.value {
+                            free_units
+                                .insert(name.to_lowercase(), usage.limit - usage.current_value);
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(id = %config.id, %error, "Azure model quota could not be read; deployments ask for the default capacity");
+                }
+            },
+            None => {}
+        }
+        // Units held by deployments this account already has were counted as used by
+        // Azure. A retry replaces them, so they are free again for this deployment.
+        let existing: std::collections::HashMap<String, i32> = cognitive_client
+            .list_deployments(resource_group_name, account_name)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|deployment| Some((deployment.name?, deployment.sku?.capacity)))
+            .collect();
+
+        // Decide every capacity before creating anything, so a model with no free
+        // quota fails the deploy without leaving some deployments behind.
+        let mut plan = Vec::new();
+        let mut warnings = Vec::new();
+        for (deployment_name, model_name, model_version, target_capacity) in
             alien_core::ai_catalog::azure_deployments()
         {
+            let key = usage_name(model_name).to_lowercase();
+            let free = free_units
+                .get(&key)
+                .map(|free| free + f64::from(existing.get(deployment_name).copied().unwrap_or(0)));
+            let capacity = deployment_capacity(target_capacity, free).map_err(|()| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "The subscription has no free Azure quota for model '{}' ({}) in {}. \
+                         Delete unused deployments in that region or request more quota in the Azure portal, then retry.",
+                        model_name,
+                        usage_name(model_name),
+                        location.as_deref().unwrap_or("the account's region"),
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+            if let Some(free) = free {
+                free_units.insert(key, free - f64::from(capacity));
+            }
+            if capacity < target_capacity {
+                warnings.push(format!(
+                    "Model '{}' was deployed with {} of {} requested capacity units ({} tokens per minute) because the subscription has no more free quota in {}. Request more quota to raise it.",
+                    deployment_name,
+                    capacity,
+                    target_capacity,
+                    u64::from(capacity.unsigned_abs()) * 1000,
+                    location.as_deref().unwrap_or("this region"),
+                ));
+            }
+            plan.push((deployment_name, model_name, model_version, capacity));
+        }
+        self.capacity_warnings = warnings;
+
+        // PUT is idempotent, so re-entering this state (e.g. after a retry) re-issues
+        // the same deployments harmlessly.
+        for (deployment_name, model_name, model_version, capacity) in plan {
             info!(
                 account_name = %account_name,
                 deployment = %deployment_name,
+                capacity,
                 "Creating Azure model deployment"
             );
 
@@ -600,7 +688,13 @@ impl AzureAiController {
                 ObservedHealth::Healthy
             },
             lifecycle: ProviderLifecycleState::Running,
-            message: partial.then(|| "Some model availability could not be observed".to_string()),
+            message: if partial {
+                Some("Some model availability could not be observed".to_string())
+            } else if self.capacity_warnings.is_empty() {
+                None
+            } else {
+                Some(self.capacity_warnings.join(" "))
+            },
             stale: false,
             partial,
             collection_issues: vec![],
@@ -846,6 +940,7 @@ impl AzureAiController {
         self.location = None;
         self.availability = None;
         self.availability_observed_at = None;
+        self.capacity_warnings = vec![];
     }
 
     /// Creates a controller in the ready state for testing purposes.
@@ -859,6 +954,7 @@ impl AzureAiController {
             location: Some("eastus".to_string()),
             availability: None,
             availability_observed_at: None,
+            capacity_warnings: vec![],
             _internal_stay_count: None,
         }
     }
@@ -875,6 +971,7 @@ impl AzureAiController {
             location: Some("eastus".to_string()),
             availability: None,
             availability_observed_at: None,
+            capacity_warnings: vec![],
             _internal_stay_count: None,
         }
     }
@@ -886,12 +983,12 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_azure_clients::azure::cognitive_services::{
-        CognitiveServicesDeployment, CognitiveServicesDeploymentProperties,
-        MockCognitiveServicesAccountsApi,
+        CognitiveServicesDeployment, CognitiveServicesDeploymentProperties, CognitiveServicesUsage,
+        CognitiveServicesUsageName, MockCognitiveServicesAccountsApi,
     };
     use alien_azure_clients::long_running_operation::OperationResult;
     use alien_client_core::ErrorData as CloudClientErrorData;
-    use alien_core::{Ai, AiOutputs, Platform, ResourceStatus};
+    use alien_core::{Ai, AiOutputs, Platform, ResourceHeartbeatData, ResourceStatus};
     use alien_error::AlienError;
     use std::sync::Arc;
 
@@ -989,6 +1086,12 @@ mod tests {
             .returning(move |_| {
                 let mut mock_cognitive = MockCognitiveServicesAccountsApi::new();
                 mock_cognitive
+                    .expect_list_usages()
+                    .returning(|_| Ok(vec![]));
+                mock_cognitive
+                    .expect_list_deployments()
+                    .returning(|_, _| Ok(vec![]));
+                mock_cognitive
                     .expect_create_deployment()
                     .returning(|_, _, _, _| Ok(OperationResult::Completed(succeeded_deployment())));
                 mock_cognitive
@@ -1025,6 +1128,240 @@ mod tests {
         );
     }
 
+    /// A fake Azure subscription: its regional quota counters, the deployments the
+    /// account already has, and a record of every deployment PUT it receives.
+    #[derive(Default)]
+    struct FakeAzure {
+        /// (usage name, limit, current value)
+        usages: Vec<(String, f64, f64)>,
+        usages_unreadable: bool,
+        existing: Vec<(String, i32)>,
+        puts: std::sync::Mutex<Vec<(String, i32)>>,
+    }
+
+    impl FakeAzure {
+        fn with_quota(models: &[(&str, f64, f64)]) -> Self {
+            Self {
+                usages: models
+                    .iter()
+                    .map(|(model, limit, current)| {
+                        (format!("OpenAI.GlobalStandard.{model}"), *limit, *current)
+                    })
+                    .collect(),
+                ..Self::default()
+            }
+        }
+
+        /// Every catalog model has `limit` units with `current` already used.
+        fn uniform(limit: f64, current: f64) -> Self {
+            let models: Vec<(&str, f64, f64)> = alien_core::ai_catalog::azure_deployments()
+                .into_iter()
+                .map(|(_, model, _)| (model, limit, current))
+                .collect();
+            Self::with_quota(&models)
+        }
+
+        fn provider(self: &Arc<Self>) -> Arc<MockPlatformServiceProvider> {
+            let fake = self.clone();
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_azure_cognitive_services_client()
+                .returning(move |_| {
+                    let mut api = MockCognitiveServicesAccountsApi::new();
+                    let fake_usages = fake.clone();
+                    api.expect_list_usages().returning(move |_| {
+                        if fake_usages.usages_unreadable {
+                            return Err(AlienError::new(
+                                CloudClientErrorData::RemoteAccessDenied {
+                                    resource_type: "usages".to_string(),
+                                    resource_name: "eastus".to_string(),
+                                },
+                            ));
+                        }
+                        Ok(fake_usages
+                            .usages
+                            .iter()
+                            .map(|(name, limit, current)| CognitiveServicesUsage {
+                                name: CognitiveServicesUsageName {
+                                    value: Some(name.clone()),
+                                },
+                                current_value: *current,
+                                limit: *limit,
+                            })
+                            .collect())
+                    });
+                    let fake_existing = fake.clone();
+                    api.expect_list_deployments().returning(move |_, _| {
+                        Ok(fake_existing
+                            .existing
+                            .iter()
+                            .map(|(name, capacity)| CognitiveServicesDeployment {
+                                name: Some(name.clone()),
+                                sku: Some(CognitiveServicesDeploymentSku {
+                                    name: "GlobalStandard".to_string(),
+                                    capacity: *capacity,
+                                }),
+                                properties: None,
+                            })
+                            .collect())
+                    });
+                    let fake_puts = fake.clone();
+                    api.expect_create_deployment()
+                        .returning(move |_, _, name, parameters| {
+                            fake_puts
+                                .puts
+                                .lock()
+                                .unwrap()
+                                .push((name.to_string(), parameters.sku.capacity));
+                            Ok(OperationResult::Completed(succeeded_deployment()))
+                        });
+                    api.expect_get_deployment()
+                        .returning(|_, _, _| Ok(succeeded_deployment()));
+                    Ok(Arc::new(api))
+                });
+            Arc::new(provider)
+        }
+
+        fn put_capacity(&self, deployment: &str) -> Option<i32> {
+            self.puts
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(name, _)| name == deployment)
+                .map(|(_, capacity)| *capacity)
+        }
+    }
+
+    async fn deploy_models(
+        fake: &Arc<FakeAzure>,
+    ) -> (
+        SingleControllerExecutor,
+        std::result::Result<(), AlienError<ErrorData>>,
+    ) {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_ai())
+            .controller(AzureAiController::mock_deploying(
+                "my-ai-account",
+                "https://my-ai.cognitiveservices.azure.com/",
+            ))
+            .platform(Platform::Azure)
+            .service_provider(fake.provider())
+            .build()
+            .await
+            .unwrap();
+        for _ in 0..8 {
+            if executor.status() == ResourceStatus::Running {
+                break;
+            }
+            if let Err(error) = executor.step().await {
+                return (executor, Err(error));
+            }
+        }
+        // One more step so the Ready state emits its heartbeat.
+        let result = executor.step().await.map(|_| ());
+        (executor, result)
+    }
+
+    #[tokio::test]
+    async fn deployments_ask_for_50_units_when_the_quota_allows_it() {
+        let fake = Arc::new(FakeAzure::uniform(1000.0, 100.0));
+        let (executor, result) = deploy_models(&fake).await;
+        result.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let puts = fake.puts.lock().unwrap().clone();
+        assert_eq!(
+            puts.len(),
+            alien_core::ai_catalog::azure_deployments().len()
+        );
+        assert!(
+            puts.iter().all(|(_, capacity)| *capacity == 50),
+            "every deployment should get 50 units (50,000 tokens per minute), got {puts:?}"
+        );
+        let heartbeat = executor.last_heartbeats().last().unwrap();
+        let ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(data)) = &heartbeat.data else {
+            panic!("expected an Azure AI heartbeat");
+        };
+        assert_eq!(data.status.message, None);
+    }
+
+    #[tokio::test]
+    async fn a_deployment_is_capped_to_the_free_quota_and_reports_a_warning() {
+        let mut fake = FakeAzure::uniform(1000.0, 0.0);
+        for usage in &mut fake.usages {
+            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+                *usage = (usage.0.clone(), 100.0, 90.0);
+            }
+        }
+        let fake = Arc::new(fake);
+        let (executor, result) = deploy_models(&fake).await;
+        result.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(fake.put_capacity("gpt-4.1"), Some(10));
+        assert_eq!(fake.put_capacity("model-router"), Some(50));
+        let heartbeat = executor.last_heartbeats().last().unwrap();
+        let ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(data)) = &heartbeat.data else {
+            panic!("expected an Azure AI heartbeat");
+        };
+        let message = data.status.message.as_deref().expect("a capacity warning");
+        assert!(message.contains("gpt-4.1"), "{message}");
+        assert!(message.contains("10 of 50"), "{message}");
+        assert!(!message.contains("model-router"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn no_free_quota_fails_before_creating_any_deployment() {
+        let mut fake = FakeAzure::uniform(1000.0, 0.0);
+        for usage in &mut fake.usages {
+            if usage.0 == "OpenAI.GlobalStandard.model-router" {
+                *usage = (usage.0.clone(), 30.0, 30.0);
+            }
+        }
+        let fake = Arc::new(fake);
+        let (_executor, result) = deploy_models(&fake).await;
+
+        let error = result.expect_err("a model with no free quota must fail the deploy");
+        let text = error.to_string();
+        assert!(text.contains("model-router"), "{text}");
+        assert!(text.to_lowercase().contains("quota"), "{text}");
+        assert!(
+            fake.puts.lock().unwrap().is_empty(),
+            "no deployment should be created when one model has no quota"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_does_not_count_its_own_deployments_against_the_quota() {
+        // The first attempt already created gpt-4.1 with 50 units, which now shows as
+        // used. Re-running must not see that as "no quota left".
+        let mut fake = FakeAzure::uniform(1000.0, 0.0);
+        for usage in &mut fake.usages {
+            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+                *usage = (usage.0.clone(), 50.0, 50.0);
+            }
+        }
+        fake.existing = vec![("gpt-4.1".to_string(), 50)];
+        let fake = Arc::new(fake);
+        let (executor, result) = deploy_models(&fake).await;
+        result.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(fake.put_capacity("gpt-4.1"), Some(50));
+    }
+
+    #[tokio::test]
+    async fn unreadable_quota_still_deploys_at_the_default() {
+        let mut fake = FakeAzure::default();
+        fake.usages_unreadable = true;
+        let fake = Arc::new(fake);
+        let (executor, result) = deploy_models(&fake).await;
+        result.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(fake.put_capacity("gpt-4.1"), Some(50));
+    }
+
     #[tokio::test]
     async fn test_deployment_terminal_failure_fails_fast() {
         // A deployment that reports a terminal "Failed" state must route to
@@ -1034,6 +1371,12 @@ mod tests {
             .expect_get_azure_cognitive_services_client()
             .returning(move |_| {
                 let mut mock_cognitive = MockCognitiveServicesAccountsApi::new();
+                mock_cognitive
+                    .expect_list_usages()
+                    .returning(|_| Ok(vec![]));
+                mock_cognitive
+                    .expect_list_deployments()
+                    .returning(|_, _| Ok(vec![]));
                 mock_cognitive
                     .expect_create_deployment()
                     .returning(|_, _, _, _| Ok(OperationResult::Completed(succeeded_deployment())));
