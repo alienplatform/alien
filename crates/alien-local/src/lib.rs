@@ -67,6 +67,7 @@ mod queue_service;
 mod redis_manager;
 pub use queue_service::LocalQueueService;
 mod sandbox_identity;
+mod sandbox_interactive;
 mod sandbox_manager;
 mod sandbox_route;
 mod storage_manager;

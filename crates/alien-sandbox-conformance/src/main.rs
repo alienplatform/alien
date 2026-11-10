@@ -292,6 +292,68 @@ async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Result<R
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InteractiveSuite {
+    backend: String,
+    revision: String,
+    binding: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveReport {
+    backend: String,
+    revision: String,
+    sandbox_id: String,
+    cases: Vec<alien_sandbox_conformance::interactive::CaseResult>,
+    termination_calls_completed: bool,
+}
+
+/// Creates one session, runs every interactive case in it, and terminates it.
+async fn interactive(
+    bindings: &Bindings,
+    suite: InteractiveSuite,
+    journal_path: &Path,
+) -> Result<InteractiveReport> {
+    let mut journal = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(journal_path)
+        .into_alien_error()
+        .context(operation(
+            "create a fresh cleanup journal (never overwrite a previous run)",
+        ))?;
+    let provider = bindings
+        .sandbox(&suite.binding)
+        .await
+        .context(operation("load interactive binding"))?;
+    let providers = BTreeMap::from([(suite.binding.clone(), provider.clone())]);
+    let mut sessions = Vec::new();
+    let result = async {
+        let index = create(provider.as_ref(), &suite.binding, &mut journal, &mut sessions).await?;
+        let sandbox_id = sessions[index].sandbox_id.clone();
+        let cases =
+            alien_sandbox_conformance::interactive::run_cases(provider.clone(), &sandbox_id).await;
+        Ok(InteractiveReport {
+            backend: suite.backend,
+            revision: suite.revision,
+            sandbox_id,
+            cases,
+            termination_calls_completed: false,
+        })
+    }
+    .await;
+    let cleaned = cleanup(&providers, &sessions).await;
+    match (result, cleaned) {
+        (Ok(mut report), Ok(())) => {
+            report.termination_calls_completed = true;
+            Ok(report)
+        }
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+    }
+}
+
 async fn execute() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let bindings = Bindings::from_env().context(operation("read deployment bindings"))?;
@@ -320,6 +382,23 @@ async fn execute() -> Result<bool> {
             serde_json::to_writer_pretty(std::io::stdout().lock(), &report)
                 .into_alien_error()
                 .context(operation("write conformance report"))?;
+            println!();
+            Ok(passed)
+        }
+        [action, suite_path, journal_path] if action == "interactive" => {
+            let file = File::open(suite_path)
+                .into_alien_error()
+                .context(operation("open interactive suite"))?;
+            let suite = serde_json::from_reader(file)
+                .into_alien_error()
+                .context(operation("decode interactive suite"))?;
+            let report = interactive(&bindings, suite, Path::new(journal_path)).await?;
+            let passed = report.cases.iter().all(|case| {
+                case.verdict != alien_sandbox_conformance::interactive::CaseVerdict::Fail
+            });
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &report)
+                .into_alien_error()
+                .context(operation("write interactive report"))?;
             println!();
             Ok(passed)
         }
@@ -359,7 +438,7 @@ async fn execute() -> Result<bool> {
             Ok(true)
         }
         _ => Err(invalid(
-            "usage: alien-sandbox-conformance run SUITE.json JOURNAL.jsonl | entrypoint SUITE.json JOURNAL.jsonl | cleanup JOURNAL.jsonl",
+            "usage: alien-sandbox-conformance run SUITE.json JOURNAL.jsonl | entrypoint SUITE.json JOURNAL.jsonl | interactive SUITE.json JOURNAL.jsonl | cleanup JOURNAL.jsonl",
         )),
     }
 }

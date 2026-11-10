@@ -56,8 +56,10 @@ export {
 
 export type {
   CommandFrame,
+  CommandSignal,
   Container,
   CreateSandboxOptions,
+  InteractiveCommand,
   JobError,
   JobExit,
   JobPoll,

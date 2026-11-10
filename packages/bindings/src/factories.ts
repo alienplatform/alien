@@ -27,6 +27,7 @@ import type {
   RawCommandFrame,
   RawCommandStreamHandle,
   RawContainerHandle,
+  RawInteractiveCommandHandle,
   RawKeyHandle,
   RawKvHandle,
   RawPostgresConnection,
@@ -43,7 +44,9 @@ import type {
 } from "./loader.js"
 import type {
   CommandFrame,
+  CommandSignal,
   Container,
+  InteractiveCommand,
   JobPoll,
   Key,
   KeyOptions,
@@ -357,6 +360,58 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         }
       },
     }),
+    runInteractive: async (sandboxId, command, options) => {
+      const raw: RawInteractiveCommandHandle = await guard(handle, raw =>
+        raw.runInteractive(
+          sandboxId,
+          command,
+          options.args ?? [],
+          options.timeoutMs,
+          options.cwd ?? null,
+          options.env ?? null,
+        ),
+      )
+      const call = async <T>(run: () => Promise<T>): Promise<T> => {
+        try {
+          return await run()
+        } catch (err) {
+          throw unwrapNapiError(err)
+        }
+      }
+      let finished = false
+      const close = () => call(() => raw.close())
+      // Pulls are chained so two concurrent `next()` calls cannot read the stream out of order.
+      let tail: Promise<unknown> = Promise.resolve()
+      const interactive: InteractiveCommand = {
+        write: data => call(() => raw.write(typeof data === "string" ? Buffer.from(data) : data)),
+        closeStdin: () => call(() => raw.closeStdin()),
+        signal: (signal: CommandSignal) => call(() => raw.signal(signal)),
+        close,
+        [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
+          return {
+            next() {
+              const pull = tail.then(async (): Promise<IteratorResult<CommandFrame, undefined>> => {
+                if (finished) return { done: true, value: undefined }
+                const next = await call(() => raw.next())
+                if (next === null) {
+                  finished = true
+                  return { done: true, value: undefined }
+                }
+                return { done: false, value: frame(next) }
+              })
+              tail = pull.catch(() => undefined)
+              return pull
+            },
+            async return() {
+              finished = true
+              await close()
+              return { done: true, value: undefined }
+            },
+          }
+        },
+      }
+      return interactive
+    },
     readFile: (sandboxId, path) => guard(handle, raw => raw.readFile(sandboxId, path)),
     writeFiles: (sandboxId, files) =>
       guard(handle, async raw => {

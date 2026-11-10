@@ -3,6 +3,7 @@ pub mod confine;
 pub mod error;
 pub mod exec;
 pub mod files;
+pub mod interactive;
 pub mod jobs;
 pub mod paths;
 pub mod peer;

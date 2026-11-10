@@ -550,6 +550,50 @@ class CommandStream(AsyncIterator[CommandFrame]):
         await self._handle.close()
 
 
+CommandSignal = Literal["interrupt", "terminate", "kill", "hangup", "quit", "user1", "user2"]
+
+
+class InteractiveCommand(AsyncIterator[CommandFrame]):
+    """A running command you can write to and signal while reading its output.
+
+    Iterate it for output frames exactly as a ``CommandStream``: output arrives as the program
+    writes it, so a prompt with no newline after it arrives while the program waits. ``write``
+    returns once the sandbox has handed the bytes to the program, which pushes back when the
+    program is not reading. ``close`` ends the command.
+    """
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+
+    def __aiter__(self) -> InteractiveCommand:
+        return self
+
+    @translate_errors
+    async def __anext__(self) -> CommandFrame:
+        value = await self._handle.next()
+        if value is None:
+            raise StopAsyncIteration
+        return _command_frame(value)
+
+    @translate_errors
+    async def write(self, data: bytes) -> None:
+        await self._handle.write(bytes(data))
+
+    @translate_errors
+    async def close_stdin(self) -> None:
+        """End of input. Closing again, or after the command ended, is not an error."""
+        await self._handle.close_stdin()
+
+    @translate_errors
+    async def signal(self, signal: CommandSignal) -> None:
+        """Signal the command's process group. Fails once the command has ended."""
+        await self._handle.signal(signal)
+
+    @translate_errors
+    async def close(self) -> None:
+        await self._handle.close()
+
+
 class SandboxAllowEgress(TypedDict):
     allow: list[str]
 
@@ -635,6 +679,23 @@ class Sandbox:
             sandbox_id, command, list(args), timeout_ms, cwd, dict(env) if env else None
         )
         return CommandStream(handle)
+
+    @translate_errors
+    async def run_interactive(
+        self,
+        sandbox_id: str,
+        command: str,
+        args: Sequence[str],
+        *,
+        timeout_ms: int,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> InteractiveCommand:
+        """Start a command you can drive over stdin. Requires ``interactiveCommands``."""
+        handle = await (await self._handle.get()).run_interactive(
+            sandbox_id, command, list(args), timeout_ms, cwd, dict(env) if env else None
+        )
+        return InteractiveCommand(handle)
 
     @translate_errors
     async def start_job(

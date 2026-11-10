@@ -212,6 +212,13 @@ export interface RawCommandStreamHandle {
   close(): Promise<void>
 }
 
+/** Raw napi interactive command: the output stream plus stdin and signals. */
+export interface RawInteractiveCommandHandle extends RawCommandStreamHandle {
+  write(data: Buffer): Promise<void>
+  closeStdin(): Promise<void>
+  signal(signal: string): Promise<void>
+}
+
 /** A job's output so far, as the addon returns it. */
 export interface RawJobPoll {
   running: boolean
@@ -268,6 +275,14 @@ export interface RawSandboxHandle {
     cwd?: string | null,
     env?: Record<string, string> | null,
   ): Promise<RawCommandStreamHandle>
+  runInteractive(
+    sandboxId: string,
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    cwd?: string | null,
+    env?: Record<string, string> | null,
+  ): Promise<RawInteractiveCommandHandle>
   startJob(
     sandboxId: string,
     command: string,
