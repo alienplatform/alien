@@ -18,7 +18,7 @@ use std::{
 use alien_core::{DeploymentModel, Platform, StackSettings};
 use alien_helm::{
     apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
-    LogCollectorDefault, OperatorImageDefault, PackageDefaults,
+    LogCollectorDefault, OperatorImageDefault, PackageDefaults, SetupDefault,
 };
 use axum::{
     body::Body,
@@ -39,6 +39,12 @@ pub const CHART_NAMESPACE: &str = "charts/";
 const MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 const CONFIG_MEDIA_TYPE: &str = "application/vnd.cncf.helm.config.v1+json";
 const CHART_MEDIA_TYPE: &str = "application/vnd.cncf.helm.chart.content.v1.tar+gzip";
+
+/// Version of the setup fingerprint served charts carry: the release's
+/// [`alien_core::Stack::setup_update_digest`]. A deployment's first report
+/// records it, and later reports with another version are refused, so it
+/// changes only with what the fingerprint means.
+const SETUP_FINGERPRINT_VERSION: u32 = 1;
 
 /// Chart settings for a manager that serves charts.
 #[derive(Debug, Clone)]
@@ -322,6 +328,11 @@ fn render(
         Some(upstream) => (proxied_repository.as_str(), upstream.tag.as_str()),
         None => split_image(&settings.operator_image),
     };
+    // The setup the chart carries lets a `helm upgrade` to it complete a
+    // pending setup update: the Operator reports it and the manager authorizes
+    // the change. A setup change also changes the Operator's pod template, so
+    // the Operator restarts with it.
+    let setup_fingerprint = stack.setup_update_digest();
     let chart = apply_package_defaults(
         chart,
         &PackageDefaults {
@@ -331,7 +342,12 @@ fn render(
             log_collector: Some(LogCollectorDefault::PodApi),
             // Pulls through the manager authenticate with the install token.
             registry_pull_secret: settings.operator_upstream.is_some(),
-            setup: None,
+            setup: Some(SetupDefault {
+                release_id: &release.id,
+                target: Platform::Kubernetes.as_str(),
+                fingerprint: &setup_fingerprint,
+                fingerprint_version: SETUP_FINGERPRINT_VERSION,
+            }),
         },
     )
     .map_err(|e| render_failed(format!("failed to apply chart defaults: {e}")))?;

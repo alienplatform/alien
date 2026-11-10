@@ -307,8 +307,7 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::get_att(image_id, "ImageArn"),
             ),
             ("imageArn", CfExpression::get_att(image_id, "ImageArn")),
-            // `RunMicrovm` has no tags, so image plus version is the whole of session identity.
-            // A stale version enumerates the wrong set and orphans live sessions.
+            // The version `RunMicrovm` launches.
             (
                 "imageVersion",
                 CfExpression::get_att(image_id, "LatestActiveImageVersion"),

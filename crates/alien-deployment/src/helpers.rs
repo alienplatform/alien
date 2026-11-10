@@ -377,6 +377,10 @@ struct AlienSecretsConfig {
 ///   the keys are listed in ALIEN_SECRETS and alien-worker-runtime loads the
 ///   actual values from the "secrets" vault at startup.
 ///
+/// Variables without `target_resources` are for the stack's own workloads. They are not
+/// injected into containers Alien adds itself (the sandbox egress gateway), so changing
+/// one does not restart them. A variable that names such a container still reaches it.
+///
 /// `SecretsVaultMutation` links the secrets vault only to Worker wrappers that
 /// can consume vault pointers. Native-projected workloads use the deployment
 /// environment snapshot directly and receive no workload vault grant.
@@ -403,6 +407,12 @@ pub fn inject_environment_variables(
         platform,
         deployer_reports,
     );
+    let alien_added_resources: Vec<String> = stack
+        .resources
+        .keys()
+        .filter(|id| alien_core::sandbox_egress::is_managed_gateway(stack, id))
+        .cloned()
+        .collect();
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -410,13 +420,17 @@ pub fn inject_environment_variables(
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
+            let alien_added = alien_added_resources.contains(resource_name);
             let deployer_secrets: Vec<DeployerSecretEnv> = deployer_environment
                 .iter()
-                .filter(|(_, targets)| alien_core::targets_resource(targets, resource_name))
+                .filter(|(_, targets)| {
+                    alien_core::env_delivered_to_resource(targets, resource_name, alien_added)
+                })
                 .map(|(variable, _)| variable.clone())
                 .collect();
             inject_into_compute_resource(
                 resource_name,
+                alien_added,
                 resource_entry,
                 snapshot,
                 platform,
@@ -639,6 +653,7 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 ///   them natively (see `alien_core::SecretDelivery`).
 fn inject_into_compute_resource(
     resource_name: &str,
+    alien_added: bool,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
@@ -647,6 +662,7 @@ fn inject_into_compute_resource(
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
             resource_name,
+            alien_added,
             ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
@@ -659,6 +675,7 @@ fn inject_into_compute_resource(
     {
         inject_into_environment(
             resource_name,
+            alien_added,
             ComputeKind::Container,
             &mut container.environment,
             snapshot,
@@ -668,6 +685,7 @@ fn inject_into_compute_resource(
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
             resource_name,
+            alien_added,
             ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
@@ -686,6 +704,7 @@ fn inject_into_compute_resource(
 
 fn inject_into_environment(
     resource_name: &str,
+    alien_added: bool,
     kind: ComputeKind,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
@@ -698,7 +717,9 @@ fn inject_into_environment(
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
         .iter()
-        .filter(|v| alien_core::targets_resource(&v.target_resources, resource_name))
+        .filter(|v| {
+            alien_core::env_delivered_to_resource(&v.target_resources, resource_name, alien_added)
+        })
         .filter(|v| !deployer_secrets.iter().any(|secret| secret.name == v.name))
         .collect();
 
@@ -2063,6 +2084,7 @@ mod tests {
         };
         inject_into_environment(
             "api",
+            false,
             ComputeKind::Worker,
             &mut worker.environment,
             &make_snapshot(&[("PLAIN_VAR", "plain")], &[]),
@@ -2636,6 +2658,118 @@ mod tests {
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"
         assert!(!func.environment.contains_key(ENV_ALIEN_SECRETS));
+    }
+
+    /// Adds an internet-egress sandbox and the egress gateway container Alien installs for it.
+    fn with_managed_gateway(mut stack: Stack) -> Stack {
+        let sandbox = alien_core::Sandbox::new("subject".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "test:latest".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let gateway = alien_core::Container::new(
+            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+        )
+        .code(alien_core::ContainerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.25".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "256Mi".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+        for (id, config) in [
+            ("subject".to_string(), Resource::new(sandbox)),
+            (
+                alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string(),
+                Resource::new(gateway),
+            ),
+        ] {
+            stack.resources.insert(
+                id,
+                ResourceEntry {
+                    config,
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    display_name: None,
+                    description: None,
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+        }
+        stack
+    }
+
+    fn snapshot_with_untargeted_and_targeted_plain_vars() -> EnvironmentVariablesSnapshot {
+        let mut snapshot = make_snapshot(&[("APP_FLAG", "on")], &[]);
+        snapshot.variables.push(EnvironmentVariable {
+            name: "GATEWAY_ONLY".to_string(),
+            value: "yes".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: Some(vec!["sandbox-egress-*".to_string()]),
+        });
+        snapshot
+    }
+
+    /// An untargeted variable is for the stack's own workloads. The egress gateway is a
+    /// container Alien adds itself, so it must not receive one (and must not restart when
+    /// one changes). A variable that names the gateway still reaches it.
+    #[test]
+    fn untargeted_variables_skip_the_managed_egress_gateway() {
+        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        let config = make_config(snapshot_with_untargeted_and_targeted_plain_vars());
+        let mut stack = with_managed_gateway(make_compute_stack());
+
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &[]).unwrap();
+
+        for id in ["worker", "web", "agent"] {
+            assert_eq!(
+                resource_env(&stack, id).get("APP_FLAG").map(String::as_str),
+                Some("on"),
+                "application resource '{id}' keeps receiving untargeted variables"
+            );
+        }
+        let gateway_env = resource_env(&stack, gateway_id);
+        assert!(
+            !gateway_env.contains_key("APP_FLAG"),
+            "the gateway must not receive an untargeted variable: {gateway_env:?}"
+        );
+        assert_eq!(
+            gateway_env.get("GATEWAY_ONLY").map(String::as_str),
+            Some("yes"),
+            "an explicitly targeted variable still reaches the gateway"
+        );
+    }
+
+    /// Without an internet sandbox the id is an ordinary application resource, so it keeps
+    /// receiving untargeted variables.
+    #[test]
+    fn application_container_with_the_gateway_id_still_gets_untargeted_variables() {
+        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        let config = make_config(snapshot_with_untargeted_and_targeted_plain_vars());
+        let mut stack = with_managed_gateway(make_compute_stack());
+        stack.resources.swap_remove("subject");
+
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &[]).unwrap();
+
+        assert_eq!(
+            resource_env(&stack, gateway_id)
+                .get("APP_FLAG")
+                .map(String::as_str),
+            Some("on")
+        );
     }
 
     #[test]

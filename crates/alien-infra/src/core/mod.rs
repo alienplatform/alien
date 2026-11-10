@@ -8,8 +8,8 @@ mod registry;
 pub use registry::*;
 mod executor;
 pub use executor::{
-    allow_denied_replaces_to_retry, PlanResult, RunningResourcePolicy, StackExecutor, StepResult,
-    REPLACE_DELETE_DENIED_CODE,
+    allow_denied_replaces_to_retry, PlanResult, RunningObservation, RunningResourcePolicy,
+    StackExecutor, StepResult, REPLACE_DELETE_DENIED_CODE,
 };
 
 mod service_provider;

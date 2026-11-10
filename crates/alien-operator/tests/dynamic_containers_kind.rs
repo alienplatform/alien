@@ -7,6 +7,19 @@ use std::time::Duration;
 use alien_core::sync::{DynamicContainerStatus, TargetDynamicContainer};
 use alien_k8s_clients::{KubernetesClient, KubernetesClientConfigExt};
 use alien_operator::loops::dynamic_containers::reconcile;
+use k8s_openapi::api::apps::v1::Deployment;
+
+/// What the Operator writes to a workload: the spec, the generation that counts spec changes, and
+/// the labels and annotations. A Deployment's resourceVersion also moves on every status write the
+/// Deployment controller makes while pods roll, so comparing it fails without any Operator write.
+fn applied_workload(deployment: &Deployment) -> serde_json::Value {
+    serde_json::json!({
+        "generation": deployment.metadata.generation,
+        "labels": deployment.metadata.labels,
+        "annotations": deployment.metadata.annotations,
+        "spec": deployment.spec,
+    })
+}
 
 fn require_kind_context() {
     let expected = std::env::var("ALIEN_DYNAMIC_KIND_CONTEXT").expect("set explicit Kind context");
@@ -296,12 +309,7 @@ async fn two_independent_containers_update_and_delete() {
     let versions: BTreeMap<_, _> = owned
         .items
         .iter()
-        .map(|item| {
-            (
-                item.metadata.name.clone().unwrap(),
-                item.metadata.resource_version.clone().unwrap(),
-            )
-        })
+        .map(|item| (item.metadata.name.clone().unwrap(), applied_workload(item)))
         .collect();
     reconcile(
         &client,
@@ -323,7 +331,7 @@ async fn two_independent_containers_update_and_delete() {
         .expect("unchanged Deployments");
     for deployment in &unchanged.items {
         assert_eq!(
-            deployment.metadata.resource_version.as_ref().unwrap(),
+            &applied_workload(deployment),
             versions
                 .get(deployment.metadata.name.as_ref().unwrap())
                 .unwrap(),
@@ -589,8 +597,9 @@ async fn two_independent_containers_update_and_delete() {
         .unwrap();
     assert_eq!(remaining.items.len(), 1);
     assert_eq!(
-        remaining.items[0].metadata.resource_version,
-        existing_second.metadata.resource_version
+        applied_workload(&remaining.items[0]),
+        applied_workload(&existing_second),
+        "a blocked target must not change its existing workload"
     );
 
     for _ in 0..30 {

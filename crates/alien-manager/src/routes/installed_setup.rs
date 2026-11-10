@@ -550,8 +550,16 @@ async fn write(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::routes::charts::{self, ChartSettings};
+    use crate::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore};
+    use crate::traits::{
+        CreateDeploymentGroupParams, CreateImportedDeploymentParams, CreateReleaseParams,
+        DeploymentStore, ReleaseStore,
+    };
     use alien_core::{RuntimeMetadata, ServiceAccount, StackState, Storage};
+    use axum::{body::to_bytes, http::Method};
     use chrono::Utc;
+    use std::{collections::BTreeMap, sync::Arc};
 
     pub(in crate::routes) fn baseline() -> Stack {
         Stack::new("app".to_string())
@@ -1156,5 +1164,376 @@ pub(super) mod tests {
             "the write was attempted"
         );
         assert!(changed, "the stored record moved, so it must be re-read");
+    }
+
+    /// Fetches one path from the manager's chart registry, as Helm does.
+    async fn pull_chart_path(state: &AppState, path: &str) -> Vec<u8> {
+        let response = charts::serve(state, &Subject::system(), &Method::GET, path).await;
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("chart response body")
+            .to_vec();
+        assert!(
+            status.is_success(),
+            "GET {path}: {status} {}",
+            String::from_utf8_lossy(&body)
+        );
+        body
+    }
+
+    /// What the Operator installed from the chart this manager serves for
+    /// `release_id` would report: the chart is pulled over the registry
+    /// routes, rendered with `helm template`, and the report is read from the
+    /// Operator container's environment and the chart's ConfigMap, the way the
+    /// Operator reads them.
+    async fn report_from_served_chart(
+        state: &AppState,
+        chart_name: &str,
+        release_id: &str,
+    ) -> InstalledSetup {
+        let tags: serde_json::Value = serde_json::from_slice(
+            &pull_chart_path(state, &format!("charts/{chart_name}/tags/list")).await,
+        )
+        .expect("tag list");
+        let mut chart = None;
+        for tag in tags["tags"].as_array().expect("tags") {
+            let tag = tag.as_str().expect("tag");
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &pull_chart_path(state, &format!("charts/{chart_name}/manifests/{tag}")).await,
+            )
+            .expect("manifest");
+            if manifest["annotations"]["org.opencontainers.image.revision"] == release_id {
+                let digest = manifest["layers"][0]["digest"].as_str().expect("layer");
+                chart = Some(
+                    pull_chart_path(state, &format!("charts/{chart_name}/blobs/{digest}")).await,
+                );
+            }
+        }
+        let chart = chart.unwrap_or_else(|| panic!("no chart is served for {release_id}"));
+
+        let directory = tempfile::tempdir().expect("chart directory");
+        let archive = directory.path().join("chart.tgz");
+        std::fs::write(&archive, chart).expect("write chart");
+        let output = std::process::Command::new("helm")
+            .arg("template")
+            .arg("shop")
+            .arg(&archive)
+            .args(["--namespace", "apps"])
+            .args(["--set", "management.token=ax_dg_example"])
+            .args([
+                "--set",
+                "runtime.encryption.key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ])
+            .output()
+            .expect("run helm template (helm must be installed)");
+        let rendered = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "helm template failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // `- name: X` followed by `value: "..."`, as the chart renders env
+        // entries; the ConfigMap holds the release in `setup-release-id`.
+        let unquote = |value: &str| value.trim().trim_matches('"').to_string();
+        let mut env = BTreeMap::new();
+        let mut release_file = None;
+        let mut lines = rendered.lines().map(str::trim).peekable();
+        while let Some(line) = lines.next() {
+            if let Some(name) = line.strip_prefix("- name: ") {
+                if let Some(value) = lines.peek().and_then(|next| next.strip_prefix("value: ")) {
+                    env.insert(name.to_string(), unquote(value));
+                }
+            } else if let Some(value) = line.strip_prefix("setup-release-id: ") {
+                release_file = Some(unquote(value));
+            }
+        }
+        let setup_env = |name: &str| {
+            env.get(name).cloned().unwrap_or_else(|| {
+                panic!(
+                    "the chart served for release {release_id} gives the Operator no {name}, so the installed setup is never reported; Operator env: {:?}",
+                    env.keys().collect::<Vec<_>>()
+                )
+            })
+        };
+        let setup_target = setup_env("OPERATOR_SETUP_TARGET");
+        let setup_fingerprint = setup_env("OPERATOR_SETUP_FINGERPRINT");
+        InstalledSetup {
+            release_id: release_file.unwrap_or_else(|| {
+                panic!("the chart served for release {release_id} records no setup release")
+            }),
+            setup_target,
+            setup_fingerprint,
+            setup_fingerprint_version: setup_env("OPERATOR_SETUP_FINGERPRINT_VERSION")
+                .parse()
+                .expect("fingerprint version"),
+            release_name: Some(setup_env("OPERATOR_HELM_RELEASE")),
+            namespace: Some(setup_env("KUBERNETES_NAMESPACE")),
+        }
+    }
+
+    /// The deployment as the SQLite store returns it.
+    async fn stored(deployments: &SqliteDeploymentStore, id: &str) -> DeploymentRecord {
+        deployments
+            .get_deployment(&Subject::system(), id)
+            .await
+            .expect("read deployment")
+            .expect("deployment exists")
+    }
+
+    /// A Helm install of the standalone manager's own chart, paused on a
+    /// release that adds a frozen service account. Upgrading to the chart the
+    /// manager serves for that release completes the update; the chart for the
+    /// installed release does not. Everything goes through the SQLite store.
+    #[tokio::test]
+    async fn the_chart_this_manager_serves_completes_a_setup_update() {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let deployments = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let publish = |stack: Stack| {
+            let releases = releases.clone();
+            async move {
+                releases
+                    .create_release(
+                        &Subject::system(),
+                        CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: std::collections::HashMap::from([(
+                                Platform::Kubernetes,
+                                stack,
+                            )]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                        },
+                    )
+                    .await
+                    .expect("release")
+            }
+        };
+        let installed = publish(baseline()).await;
+        let waiting = publish(with_service_account(&baseline())).await;
+
+        let group = deployments
+            .create_deployment_group(
+                &Subject::system(),
+                CreateDeploymentGroupParams {
+                    name: "customers".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .expect("deployment group");
+        let template = deployment(baseline());
+        let prepared = prepare_target(
+            &installed,
+            &template,
+            template.stack_settings.as_ref().expect("settings"),
+            template.stack_state.as_ref().expect("stack state"),
+        )
+        .await
+        .expect("prepared baseline");
+        let created = deployments
+            .create_with_state(
+                &Subject::system(),
+                CreateImportedDeploymentParams {
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    name: template.name.clone(),
+                    deployment_group_id: group.id,
+                    platform: Platform::Kubernetes,
+                    base_platform: None,
+                    stack_settings: Default::default(),
+                    stack_state: StackState::new(Platform::Kubernetes),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata {
+                        prepared_stack: Some(prepared.clone()),
+                        ..RuntimeMetadata::default()
+                    },
+                    status: "update-failed".to_string(),
+                    current_release_id: Some(installed.id.clone()),
+                    desired_release_id: Some(waiting.id.clone()),
+                    import_source: None,
+                    setup_metadata: None,
+                    setup_target: String::new(),
+                    setup_fingerprint: String::new(),
+                    setup_fingerprint_version: 0,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .expect("deployment");
+        // A Helm install registers without a setup lane; its first report
+        // records one.
+        db.execute(
+            "UPDATE deployments SET setup_target = NULL, setup_fingerprint = NULL, setup_fingerprint_version = NULL",
+        )
+        .await
+        .expect("clear the setup lane");
+
+        let mut state = crate::routes::sync::tests::test_app_state(
+            temp.path(),
+            deployments.clone(),
+            releases.clone(),
+            Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    temp.path().to_path_buf(),
+                ),
+            ),
+            db.clone(),
+        )
+        .await;
+        state.charts = Some(Arc::new(ChartSettings::new(
+            Some("alien-operator:test".to_string()),
+            false,
+        )));
+        let operator = Subject {
+            scope: Scope::Deployment {
+                project_id: created.project_id.clone(),
+                deployment_id: created.id.clone(),
+            },
+            ..Subject::system()
+        };
+
+        // Before the upgrade the installed chart reports the installed
+        // release: nothing is authorized and the update stays paused.
+        let before = report_from_served_chart(&state, "app", &installed.id).await;
+        assert_eq!(before.release_id, installed.id);
+        assert_eq!(before.setup_target, "kubernetes");
+        assert_eq!(before.release_name.as_deref(), Some("shop"));
+        assert_eq!(before.namespace.as_deref(), Some("apps"));
+        handle_installed_setup(
+            &state,
+            &operator,
+            &stored(&deployments, &created.id).await,
+            &before,
+        )
+        .await;
+        let record = stored(&deployments, &created.id).await;
+        assert_eq!(record.status, "update-failed");
+        let metadata = record.runtime_metadata.expect("metadata");
+        assert!(metadata.setup_update_authorization.is_none());
+        assert_eq!(
+            metadata.installed_helm_release,
+            Some(alien_core::InstalledHelmRelease {
+                name: "shop".to_string(),
+                namespace: "apps".to_string(),
+            })
+        );
+        assert_eq!(record.setup_target.as_deref(), Some("kubernetes"));
+        assert_eq!(
+            record.setup_fingerprint_version,
+            Some(before.setup_fingerprint_version)
+        );
+
+        // `helm upgrade` to the chart for the waiting release: a different
+        // setup, so the Operator restarts and reports it, and the manager
+        // authorizes exactly this change.
+        let after = report_from_served_chart(&state, "app", &waiting.id).await;
+        assert_eq!(after.release_id, waiting.id);
+        assert_ne!(
+            after.setup_fingerprint, before.setup_fingerprint,
+            "a chart with a different setup must restart the Operator"
+        );
+        handle_installed_setup(
+            &state,
+            &operator,
+            &stored(&deployments, &created.id).await,
+            &after,
+        )
+        .await;
+        let record = stored(&deployments, &created.id).await;
+        assert_eq!(record.status, "update-pending");
+        assert_eq!(
+            record.setup_fingerprint.as_deref(),
+            Some(after.setup_fingerprint.as_str())
+        );
+        let authorization = record
+            .runtime_metadata
+            .expect("metadata")
+            .setup_update_authorization
+            .expect("the upgrade authorizes the setup update");
+        assert_eq!(authorization.release_id, waiting.id);
+        assert_eq!(authorization.setup_fingerprint, after.setup_fingerprint);
+        assert_eq!(authorization.setup_target, "kubernetes");
+        assert_eq!(
+            authorization.baseline_frozen_digest,
+            prepared.setup_update_digest()
+        );
+
+        // A newer release adds a cloud resource. The stored verdict and the
+        // refusal of the now-stale chart survive the SQLite round trip.
+        let cloud = publish(with_storage(&with_service_account(&baseline()))).await;
+        deployments
+            .set_deployment_desired_release(&Subject::system(), &created.id, &cloud.id)
+            .await
+            .expect("point at the cloud release");
+        handle_installed_setup(
+            &state,
+            &operator,
+            &stored(&deployments, &created.id).await,
+            &after,
+        )
+        .await;
+        let required = stored(&deployments, &created.id)
+            .await
+            .runtime_metadata
+            .expect("metadata")
+            .cloud_setup_required
+            .expect("the cloud setup verdict is stored");
+        assert_eq!(required.release_id, cloud.id);
+        handle_installed_setup(
+            &state,
+            &operator,
+            &stored(&deployments, &created.id).await,
+            &after,
+        )
+        .await;
+        let refusal = stored(&deployments, &created.id)
+            .await
+            .runtime_metadata
+            .expect("metadata")
+            .setup_report_refusal
+            .expect("the stale chart's refusal is stored");
+        assert_eq!(refusal.reported_release_id, waiting.id);
+        assert!(refusal.reason.contains(&cloud.id), "{}", refusal.reason);
+
+        // A release that changes only Live code keeps the chart's setup: the
+        // Operator's pod template, and so the running Operator, stays as it is.
+        let live_code = |image: &str| {
+            Stack::new("live-code".to_string())
+                .permission("runtime", alien_core::permissions::PermissionProfile::new())
+                .add(
+                    ServiceAccount::new("execution-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::Worker::new("api".to_string())
+                        .code(alien_core::WorkerCode::Image {
+                            image: image.to_string(),
+                        })
+                        .permissions("runtime".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let first = publish(live_code("example.com/api:1")).await;
+        let second = publish(live_code("example.com/api:2")).await;
+        let first = report_from_served_chart(&state, "live-code", &first.id).await;
+        let second = report_from_served_chart(&state, "live-code", &second.id).await;
+        assert_ne!(first.release_id, second.release_id);
+        assert_eq!(
+            first.setup_fingerprint, second.setup_fingerprint,
+            "a Live code change must not change the chart's setup"
+        );
     }
 }

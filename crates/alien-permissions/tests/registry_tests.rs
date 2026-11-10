@@ -116,6 +116,24 @@ fn test_ai_invoke_lists_the_bedrock_inference_profiles_it_can_invoke() {
     }
 }
 
+/// The AWS AI health check lists the account's inference profiles to see whether Claude
+/// can be invoked from the region, with the management role that carries these sets.
+#[test]
+fn test_ai_health_sets_list_the_bedrock_inference_profiles() {
+    for id in ["ai/heartbeat", "ai/management"] {
+        let set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));
+        let aws = set.platforms.aws.as_ref().expect("an AWS grant");
+        let listed = aws.iter().any(|entry| {
+            entry.grant.actions.as_ref().is_some_and(|actions| {
+                actions
+                    .iter()
+                    .any(|action| action == "bedrock:ListInferenceProfiles")
+            })
+        });
+        assert!(listed, "{id} must grant bedrock:ListInferenceProfiles");
+    }
+}
+
 #[test]
 fn test_ai_invoke_is_inference_only() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");

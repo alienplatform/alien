@@ -26,6 +26,24 @@ pub struct FoundationModelAvailability {
     pub region_availability: Option<String>,
 }
 
+/// One of Bedrock's system-defined inference profiles, the ids Claude is invoked through
+/// (for example `us.anthropic.claude-haiku-4-5-20251001-v1:0`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InferenceProfileSummary {
+    pub inference_profile_id: String,
+    /// `ACTIVE` when the profile can be invoked.
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListInferenceProfilesResponse {
+    #[serde(default)]
+    inference_profile_summaries: Vec<InferenceProfileSummary>,
+    next_token: Option<String>,
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
@@ -35,6 +53,9 @@ pub trait BedrockApi: Send + Sync + Debug {
         &self,
         model_id: &str,
     ) -> Result<FoundationModelAvailability>;
+
+    /// List the system-defined inference profiles the region offers, following pagination.
+    async fn list_inference_profiles(&self) -> Result<Vec<InferenceProfileSummary>>;
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +116,36 @@ impl BedrockApi for BedrockClient {
             .with_retry()
             .send_json()
             .await
+    }
+
+    async fn list_inference_profiles(&self) -> Result<Vec<InferenceProfileSummary>> {
+        let mut profiles = Vec::new();
+        let mut next_token: Option<String> = None;
+        loop {
+            self.credentials.ensure_fresh().await?;
+            let mut url = format!(
+                "{}/inference-profiles?type=SYSTEM_DEFINED&maxResults=1000",
+                self.base_url().trim_end_matches('/')
+            );
+            if let Some(token) = &next_token {
+                url.push_str("&nextToken=");
+                url.push_str(&urlencoding::encode(token));
+            }
+            let builder = self.client.get(url).host(&format!(
+                "bedrock.{}.amazonaws.com",
+                self.credentials.region()
+            ));
+            let page: ListInferenceProfilesResponse = builder
+                .sign_aws_request(&self.sign_config())?
+                .with_retry()
+                .send_json()
+                .await?;
+            profiles.extend(page.inference_profile_summaries);
+            match page.next_token {
+                Some(token) => next_token = Some(token),
+                None => return Ok(profiles),
+            }
+        }
     }
 }
 

@@ -1851,38 +1851,85 @@ async fn deployment_events_task(
             message: "event limit must be greater than zero".to_string(),
         })
     })?;
-    let response = client
-        .list_events()
-        .workspace(workspace)
-        .deployment_id(deployment_id)
-        .limit(limit)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("listing events for deployment '{deployment_id}'"),
-            url: None,
-        })?
-        .into_inner();
+    let response = list_deployment_events(client, workspace, deployment_id, limit).await?;
 
     if json {
         return print_json(&response);
     }
 
-    let rows = response
-        .items
+    let items = response["items"].as_array().ok_or_else(|| {
+        AlienError::new(ErrorData::JsonError {
+            operation: "read events".to_string(),
+            reason: "the answer has no `items` list".to_string(),
+        })
+    })?;
+    let rows = items
         .iter()
         .map(|event| {
-            EventDisplayRow::try_new(
-                String::from(event.id.clone()),
-                event.created_at,
-                &event.data,
-                &event.state,
-            )
+            let created_at = event["createdAt"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::JsonError {
+                        operation: "read events".to_string(),
+                        reason: "an event has no valid `createdAt`".to_string(),
+                    })
+                })?
+                .with_timezone(&chrono::Utc);
+            let id = event["id"].as_str().ok_or_else(|| {
+                AlienError::new(ErrorData::JsonError {
+                    operation: "read events".to_string(),
+                    reason: "an event has no `id`".to_string(),
+                })
+            })?;
+            EventDisplayRow::try_new(id.to_string(), created_at, &event["data"], &event["state"])
         })
         .collect::<Result<Vec<_>>>()?;
     print_event_table(&rows);
     Ok(())
+}
+
+/// Lists the deployment's events with its status changes (update started or
+/// ended, waiting for a secret). A platform that predates them rejects the
+/// option, so the list is asked for again without it.
+async fn list_deployment_events(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    limit: NonZeroU64,
+) -> Result<serde_json::Value> {
+    let action = format!("listing events for deployment '{deployment_id}'");
+    let path = format!(
+        "/v1/events?deploymentId={}&limit={limit}",
+        urlencoding::encode(deployment_id)
+    );
+    let (status, text) = value_access::platform_request(
+        client,
+        reqwest::Method::GET,
+        &format!("{path}&include=statusChanges"),
+        workspace,
+        None,
+    )
+    .await?;
+    let (status, text) = if status == 400 {
+        value_access::platform_request(client, reqwest::Method::GET, &path, workspace, None).await?
+    } else {
+        (status, text)
+    };
+    if !(200..300).contains(&status) {
+        return Err(value_access::platform_error(status, &text)).context(
+            ErrorData::ApiRequestFailed {
+                message: action,
+                url: None,
+            },
+        );
+    }
+    serde_json::from_str(&text)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse".to_string(),
+            reason: format!("the answer to: {action}"),
+        })
 }
 
 async fn machines_inventory_task(

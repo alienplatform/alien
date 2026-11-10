@@ -167,8 +167,7 @@ pub struct AwsSandboxBinding {
     pub egress: Option<SandboxEgressBinding>,
     /// MicroVM image ARN that scopes the sandboxes this binding creates
     pub image_arn: BindingValue<String>,
-    /// Image version. Sandboxes are enumerated by image and version together, so a rolled
-    /// version remains a cleanup scope until its own MicroVMs are gone.
+    /// Image version that `RunMicrovm` launches.
     pub image_version: BindingValue<String>,
     /// Region the MicroVMs run in
     pub region: BindingValue<String>,
