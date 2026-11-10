@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "alien-signing"
-version = "3.3.58"
+version = "3.3.59"
 dependencies = [
  "alien-error",
  "base64 0.22.1",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "alien-verifier"
-version = "3.3.58"
+version = "3.3.59"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
