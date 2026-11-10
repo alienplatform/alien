@@ -253,6 +253,7 @@ impl LocalSandboxManager {
             cap_drop: Some(vec!["ALL".to_string()]),
             cap_add: Some(vec!["KILL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+            init: Some(true),
             pids_limit: config.pids_limit,
             memory: Some(config.memory_bytes),
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
@@ -280,7 +281,9 @@ impl LocalSandboxManager {
             },
             // Hold the session open without a shell of its own; commands arrive through exec. One
             // sleep that never forks again, so a session out of process slots does not spin it.
-            // Whole seconds, which every `sleep` reads, unlike `infinity`.
+            // Whole seconds, which every `sleep` reads, unlike `infinity`. Docker's init runs it
+            // as pid 1's child, and reaps every process orphaned in the session: a command killed
+            // with its children leaves them to pid 1, and unreaped they would hold process slots.
             entrypoint: Some(vec!["sleep".to_string()]),
             cmd: Some(vec!["2147483647".to_string()]),
             host_config: Some(host_config),

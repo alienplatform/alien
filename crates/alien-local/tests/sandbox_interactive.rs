@@ -382,10 +382,17 @@ async fn a_command_that_takes_every_process_slot_still_meets_its_deadline() {
 }
 
 /// A child the command moves to a session of its own escapes the group kill, as it does on the
-/// cloud backends. The deadline still holds. Where Docker closes the output once the command
-/// itself exits, only the command ends and the session runs on. Where the escaped child holds
-/// the output open, the session is killed from the host: the caller is told the whole session
-/// stopped, the session reports itself stopped, and later calls fail rather than hang.
+/// cloud backends. The deadline still holds for the command. Where Docker closes the output once
+/// the command itself exits, only the command ends and the session runs on. Where the escaped
+/// child holds the output open, the session is killed from the host: the caller is told the
+/// whole session stopped, the session reports itself stopped, and later calls fail rather than
+/// hang.
+///
+/// Known limitation, not intended behaviour: in the first outcome the escaped child outlives
+/// its command's deadline, and runs until the session ends. Accepting either outcome here
+/// records that gap; it does not endorse it. The fix is to end every process the command
+/// started, by killing its cgroup or tracking its descendants, after which this test should
+/// assert the child is gone.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
 async fn a_command_whose_child_escapes_its_group_still_meets_its_deadline() {
@@ -455,8 +462,8 @@ async fn one_shot(sandbox: &dyn Sandbox, id: &str, script: &str) -> String {
 }
 
 /// The container's own user is root, so every path that runs something in the session must name
-/// the session's user. Each public path is checked here; only the idle `sleep` and the signal
-/// shell run as root.
+/// the session's user. Each public path is checked here; only Docker's init, the idle `sleep`
+/// and the signal shell run as root.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
 async fn every_path_into_the_session_runs_as_its_user_and_only_the_signal_shell_is_root() {
@@ -510,7 +517,7 @@ async fn every_path_into_the_session_runs_as_its_user_and_only_the_signal_shell_
     assert_eq!(written, format!("{user}\n{user}\n"), "write_files");
     assert_eq!(read.expect("read_file reads its own file"), b"secret");
     assert_eq!(
-        roots, "sh -c while read -r g n t\nsleep 2147483647 \n",
-        "only the idle sleep and the signal shell run as root"
+        roots, "/sbin/docker-init -- slee\nsh -c while read -r g n t\nsleep 2147483647 \n",
+        "only Docker's init, the idle sleep and the signal shell run as root"
     );
 }
