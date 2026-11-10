@@ -805,6 +805,11 @@ pub trait DeploymentStore: Send + Sync {
     /// Running on `current_release_id` with nothing queued. Returns whether it
     /// was queued; false when the deployment changed in the meantime.
     ///
+    /// `routing` is the channel and pin the target was chosen from. A store
+    /// that keeps routing queues the update only while the deployment's routing
+    /// is still that, so a channel or pin change made after the choice is not
+    /// overridden by it.
+    ///
     /// Stores that decide targets themselves keep the default, which queues
     /// nothing.
     async fn retarget_settled_deployment(
@@ -813,6 +818,7 @@ pub trait DeploymentStore: Send + Sync {
         _deployment_id: &str,
         _current_release_id: &str,
         _target_release_id: &str,
+        _routing: Option<&crate::traits::DeploymentRouting>,
     ) -> Result<bool, AlienError> {
         Ok(false)
     }

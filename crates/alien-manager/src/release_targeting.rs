@@ -44,6 +44,60 @@ impl ReleaseTargeting {
     }
 }
 
+/// The release a deployment should run, and the routing that choice rests on.
+struct Selection {
+    release_id: Option<String>,
+    /// The channel and pin the choice was read from; `None` without channels.
+    routing: Option<DeploymentRouting>,
+}
+
+async fn select_release(
+    channels: Option<&dyn ReleaseChannelStore>,
+    release_store: &dyn ReleaseStore,
+    subject: &Subject,
+    deployment: Option<&DeploymentRecord>,
+) -> Result<Selection, AlienError> {
+    let mut used_routing = None;
+    if let Some(channels) = channels {
+        let routing = match deployment {
+            Some(deployment) => channels.deployment_routing(&deployment.id).await?,
+            None => DeploymentRouting {
+                channel: DEFAULT_CHANNEL.to_string(),
+                pinned_release_id: None,
+            },
+        };
+        let release_id = match &routing.pinned_release_id {
+            Some(pinned) => Some(pinned.clone()),
+            None => channels
+                .get_channel(&routing.channel)
+                .await?
+                .and_then(|channel| channel.current_release_id),
+        };
+        if release_id.is_some() {
+            return Ok(Selection {
+                release_id,
+                routing: Some(routing),
+            });
+        }
+        if routing.channel != DEFAULT_CHANNEL {
+            return Ok(Selection {
+                release_id: None,
+                routing: Some(routing),
+            });
+        }
+        used_routing = Some(routing);
+    } else if let Some(release_id) = deployment.and_then(|d| d.desired_release_id.as_deref()) {
+        return Ok(Selection {
+            release_id: Some(release_id.to_string()),
+            routing: None,
+        });
+    }
+    Ok(Selection {
+        release_id: release_store.latest_release_id(subject).await?,
+        routing: used_routing,
+    })
+}
+
 /// The id of the release a deployment should run: its pin, else its channel's
 /// release. A channel with no release yet sends nothing, so a deployment never
 /// runs a release published to another channel; only the default channel falls
@@ -57,31 +111,9 @@ pub async fn release_id_for_deployment(
     subject: &Subject,
     deployment: Option<&DeploymentRecord>,
 ) -> Result<Option<String>, AlienError> {
-    if let Some(channels) = channels {
-        let routing = match deployment {
-            Some(deployment) => channels.deployment_routing(&deployment.id).await?,
-            None => DeploymentRouting {
-                channel: DEFAULT_CHANNEL.to_string(),
-                pinned_release_id: None,
-            },
-        };
-        let release_id = match routing.pinned_release_id {
-            Some(pinned) => Some(pinned),
-            None => channels
-                .get_channel(&routing.channel)
-                .await?
-                .and_then(|channel| channel.current_release_id),
-        };
-        if release_id.is_some() {
-            return Ok(release_id);
-        }
-        if routing.channel != DEFAULT_CHANNEL {
-            return Ok(None);
-        }
-    } else if let Some(release_id) = deployment.and_then(|d| d.desired_release_id.as_deref()) {
-        return Ok(Some(release_id.to_string()));
-    }
-    release_store.latest_release_id(subject).await
+    Ok(select_release(channels, release_store, subject, deployment)
+        .await?
+        .release_id)
 }
 
 /// Queue an update when `record` is Running with nothing queued on a release
@@ -101,16 +133,21 @@ pub async fn retarget_if_settled(
     let Some(current) = record.current_release_id.clone() else {
         return Ok(());
     };
-    let Some(target) =
-        release_id_for_deployment(channels, release_store, subject, Some(record)).await?
-    else {
+    let selection = select_release(channels, release_store, subject, Some(record)).await?;
+    let Some(target) = selection.release_id else {
         return Ok(());
     };
     if target == current {
         return Ok(());
     }
     if deployment_store
-        .retarget_settled_deployment(subject, &record.id, &current, &target)
+        .retarget_settled_deployment(
+            subject,
+            &record.id,
+            &current,
+            &target,
+            selection.routing.as_ref(),
+        )
         .await?
     {
         record.desired_release_id = Some(target);

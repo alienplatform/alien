@@ -1273,7 +1273,7 @@ pub(in crate::routes) mod tests {
         // These tests are about the report, not where a settled deployment goes next.
         store
             .expect_retarget_settled_deployment()
-            .returning(|_, _, _, _| Ok(false));
+            .returning(|_, _, _, _, _| Ok(false));
         store.expect_reconcile().returning(move |_, data| {
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {
@@ -1547,7 +1547,7 @@ pub(in crate::routes) mod tests {
         // These tests are about the report, not where a settled deployment goes next.
         store
             .expect_retarget_settled_deployment()
-            .returning(|_, _, _, _| Ok(false));
+            .returning(|_, _, _, _, _| Ok(false));
         store.expect_reconcile().returning(move |_, data| {
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {

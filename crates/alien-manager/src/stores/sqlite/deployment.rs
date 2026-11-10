@@ -1478,10 +1478,14 @@ impl DeploymentStore for SqliteDeploymentStore {
         deployment_id: &str,
         current_release_id: &str,
         target_release_id: &str,
+        routing: Option<&crate::traits::DeploymentRouting>,
     ) -> Result<bool, AlienError> {
         // Conditional on the row still being settled with nothing queued, so an
-        // update that started since the report was read is never overridden.
-        let sql = Query::update()
+        // update that started since the report was read is never overridden,
+        // and on the routing the target was chosen from being unchanged, so a
+        // channel or pin change made since then is not overridden either.
+        let mut query = Query::update();
+        query
             .table(Deployments::Table)
             .value(Deployments::DesiredReleaseId, target_release_id)
             .value(Deployments::Status, "update-pending")
@@ -1489,8 +1493,20 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_where(Expr::col(Deployments::Id).eq(deployment_id))
             .and_where(Expr::col(Deployments::Status).eq("running"))
             .and_where(Expr::col(Deployments::DesiredReleaseId).is_null())
-            .and_where(Expr::col(Deployments::CurrentReleaseId).eq(current_release_id))
-            .to_string(SqliteQueryBuilder);
+            .and_where(Expr::col(Deployments::CurrentReleaseId).eq(current_release_id));
+        if let Some(routing) = routing {
+            query.and_where(Expr::cust_with_values(
+                "id IN (SELECT d.id FROM deployments d
+                        LEFT JOIN deployment_channels c ON c.deployment_id = d.id
+                        WHERE COALESCE(c.channel, ?) = ? AND COALESCE(c.pinned_release_id, '') = ?)",
+                [
+                    crate::traits::DEFAULT_CHANNEL,
+                    routing.channel.as_str(),
+                    routing.pinned_release_id.as_deref().unwrap_or(""),
+                ],
+            ));
+        }
+        let sql = query.to_string(SqliteQueryBuilder);
         Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
     }
 
