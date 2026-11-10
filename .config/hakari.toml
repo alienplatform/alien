@@ -39,6 +39,7 @@ workspace-members = ["alien-manager-api", "alien-platform-api", "alien-permissio
 # alien-sdk's default features must not depend on oci-client (and through it jwt); CI
 # checks that. Keeping these out of the hack crate leaves them enabled only where a
 # crate asks for them (`local-artifact-registry`).
-# The dockdash entry pins its git rev; update it when the dockdash dependency moves.
+# oci-client is patched to vendor/oci-client, so the entry names that path. The dockdash
+# entry pins its git rev; update it when the dockdash dependency moves.
 [final-excludes]
-third-party = [{ name = "oci-client" }, { name = "dockdash", git = "https://github.com/alienplatform/dockdash", rev = "fd4f517312a56b329f3bdb08ff32685aeacd73b3" }]
+third-party = [{ name = "oci-client", path = "vendor/oci-client" }, { name = "dockdash", git = "https://github.com/alienplatform/dockdash", rev = "fd4f517312a56b329f3bdb08ff32685aeacd73b3" }]

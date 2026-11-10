@@ -1,0 +1,133 @@
+# oci-client 0.15.0 as published on crates.io (Apache-2.0, see LICENSE), with two
+# changes in src/client.rs so chunked blob uploads work against Amazon ECR:
+#
+# - A chunk PATCH answered with 201 Created is accepted like 202 Accepted. ECR answers
+#   201; upstream treats it as a spec violation and falls back to one monolithic PUT,
+#   which ECR refuses for large blobs (HTTP 413).
+# - Chunks are 8 MiB instead of 4 MiB. ECR refuses to complete an upload whose parts,
+#   other than the last, are under 5 MB.
+#
+# Only `push_chunk` and the chunk size changed; starting an upload still expects 202.
+# The workspace uses it through `[patch.crates-io]` in the root Cargo.toml. The
+# published crate's examples, integration tests and dev-dependencies are left out, so
+# the unit tests inside src/ don't build here; the workspace tests the patched push
+# path in crates/alien-build/tests/ecr_chunked_push.rs.
+
+[package]
+edition = "2021"
+name = "oci-client"
+version = "0.15.0"
+publish = false
+authors = [
+    "Matt Butcher <matt.butcher@microsoft.com>",
+    "Matthew Fisher <matt.fisher@microsoft.com>",
+    "Radu Matei <radu.matei@microsoft.com>",
+    "Taylor Thomas <taylor.thomas@microsoft.com>",
+    "Brian Ketelsen <Brian.Ketelsen@microsoft.com>",
+    "Brian Hardock <Brian.Hardock@microsoft.com>",
+    "Ryan Levick <rylevick@microsoft.com>",
+    "Kevin Flansburg <kevin.flansburg@gmail.com>",
+    "Flavio Castelli <fcastelli@suse.com>",
+]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "An OCI implementation in Rust"
+homepage = "https://github.com/oras-project/rust-oci-client"
+documentation = "https://docs.rs/oci-client"
+readme = "README.md"
+keywords = [
+    "oci",
+    "containers",
+]
+license = "Apache-2.0"
+repository = "https://github.com/oras-project/rust-oci-client"
+
+[badges.maintenance]
+status = "actively-developed"
+
+[features]
+default = [
+    "native-tls",
+    "test-registry",
+]
+native-tls = ["reqwest/native-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+rustls-tls-native-roots = ["reqwest/rustls-tls-native-roots"]
+test-registry = []
+trust-dns = ["reqwest/trust-dns"]
+
+[lib]
+name = "oci_client"
+path = "src/lib.rs"
+
+[dependencies.bytes]
+version = "1"
+
+[dependencies.chrono]
+version = "0.4.23"
+features = ["serde"]
+
+[dependencies.futures-util]
+version = "0.3"
+
+[dependencies.http]
+version = "1.1"
+
+[dependencies.http-auth]
+version = "0.1"
+default-features = false
+
+[dependencies.jwt]
+version = "0.16"
+
+[dependencies.lazy_static]
+version = "1.4"
+
+[dependencies.oci-spec]
+version = "0.8.1"
+
+[dependencies.olpc-cjson]
+version = "0.1"
+
+[dependencies.regex]
+version = "1.6"
+
+[dependencies.reqwest]
+version = "0.12.4"
+features = [
+    "json",
+    "stream",
+]
+default-features = false
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0"
+
+[dependencies.sha2]
+version = "0.10"
+
+[dependencies.thiserror]
+version = "2"
+
+[dependencies.tokio]
+version = "1.21"
+features = [
+    "macros",
+    "io-util",
+]
+
+[dependencies.tracing]
+version = "0.1"
+features = ["log"]
+
+[dependencies.unicase]
+version = "2.6"
+
