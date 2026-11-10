@@ -441,6 +441,8 @@ async fn submit_response(
     Query(query): Query<SubmitResponseQuery>,
     Json(request): Json<SubmitResponseRequest>,
 ) -> Response {
+    // An empty lease_id names no lease.
+    let lease_id = query.lease_id.clone().filter(|id| !id.is_empty());
     // Try Bearer token auth first (used by polling-mode runtimes and admin callers).
     let bearer_auth = match auth::extract_auth(&state, &headers).await {
         Ok(subject) => subject,
@@ -477,7 +479,7 @@ async fn submit_response(
         // response URL the manager handed them, which already names the lease.
         // So nothing that works today is refused. A command that was never
         // leased (push delivery) has no lease to name.
-        if query.lease_id.is_none() {
+        if lease_id.is_none() {
             let leased = match state.command_server.command_is_leased(&command_id).await {
                 Ok(leased) => leased,
                 Err(e) => return e.into_response(),
@@ -498,7 +500,7 @@ async fn submit_response(
 
         if !state.command_server.verify_response_token(
             &command_id,
-            query.lease_id.as_deref(),
+            lease_id.as_deref(),
             token,
             expires,
         ) {
@@ -509,7 +511,7 @@ async fn submit_response(
     // A response is applied under the lease it names, or under "never leased"
     // when it names none. The lease is checked in the same conditional write
     // that claims it, so a lease taken a moment earlier cannot be overtaken.
-    let expected = match (query.lease_id, via_bearer) {
+    let expected = match (lease_id, via_bearer) {
         (Some(lease_id), true) => alien_commands::server::ExpectedLease::HeldLease(lease_id),
         (Some(lease_id), false) => alien_commands::server::ExpectedLease::Lease(lease_id),
         (None, _) => alien_commands::server::ExpectedLease::NeverLeased,

@@ -2200,27 +2200,110 @@ mod runtime_credentials {
     }
 
     /// The commands key's lease_id is checked against the real lease record: a
-    /// made-up one on a command that was never leased is refused.
+    /// made-up one is refused on a command with an active lease, and on one
+    /// whose lease has expired.
     #[tokio::test]
     async fn a_commands_key_with_a_made_up_lease_id_is_refused() {
         let (mut state, deployment_id, tmp) = state().await;
         let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
         let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let held = lease(&router, &bearer, &deployment_id).await;
+        let answer = |lease_id: String| {
+            let router = router.clone();
+            let bearer = bearer.clone();
+            let command_id = created.command_id.clone();
+            async move {
+                request(
+                    &router,
+                    &bearer,
+                    "PUT",
+                    &format!("/v1/commands/{command_id}/response?lease_id={lease_id}"),
+                    serde_json::to_value(alien_core::SubmitResponseRequest {
+                        response: alien_core::CommandResponse::success(b"forged"),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .status()
+            }
+        };
+
+        // Active lease: another lease id does not hold it.
+        assert_eq!(
+            answer("lease_made_up".to_string()).await,
+            StatusCode::CONFLICT
+        );
+        // Expired lease: its record is gone, and an unsigned lease id proves nothing.
+        alien_bindings::traits::Kv::delete(
+            state.kv.as_ref(),
+            &format!("cmd:{}:lease", created.command_id),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            answer("lease_made_up".to_string()).await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(answer(held.lease_id).await, StatusCode::CONFLICT);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// An empty lease_id is no lease_id, so the commands key cannot answer a
+    /// command through a claim a response left behind for a command that has no
+    /// lease.
+    #[tokio::test]
+    async fn a_commands_key_with_an_empty_lease_id_is_refused() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let _held = lease(&router, &bearer, &deployment_id).await;
+        // The command now looks pushed: no lease, and a claim left by a response.
+        let key = format!("cmd:{}:lease", created.command_id);
+        alien_bindings::traits::Kv::delete(state.kv.as_ref(), &key, None)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        alien_bindings::traits::Kv::put(
+            state.kv.as_ref(),
+            &key,
+            serde_json::to_vec(&json!({
+                "lease_id": "",
+                "acquired_at": now,
+                "expires_at": now + chrono::Duration::seconds(60),
+                "owner": "response",
+                "completing": true,
+            }))
+            .unwrap(),
+            Some(alien_bindings::traits::PutOptions {
+                ttl: Some(std::time::Duration::from_secs(60)),
+                condition: alien_bindings::traits::PutCondition::Absent,
+            }),
+        )
+        .await
+        .unwrap();
+
         let response = request(
             &router,
-            &token(Role::CommandsReceiver),
+            &bearer,
             "PUT",
-            &format!(
-                "/v1/commands/{}/response?lease_id=lease_made_up",
-                created.command_id
-            ),
+            &format!("/v1/commands/{}/response?lease_id=", created.command_id),
             serde_json::to_value(alien_core::SubmitResponseRequest {
                 response: alien_core::CommandResponse::success(b"forged"),
             })
             .unwrap(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
     }
 
     /// The commands key never reaches the reserved operations targets, so it

@@ -360,11 +360,16 @@ impl CommandServer {
                             message: "Failed to deserialize lease data".to_string(),
                             data_type: Some("LeaseData".to_string()),
                         })?;
-                    if !matches!(
-                        expected,
-                        ExpectedLease::Lease(id) | ExpectedLease::HeldLease(id)
-                            if *id == lease.lease_id
-                    ) {
+                    // "Never leased" matches only the claim an earlier attempt
+                    // of this same response left (empty lease id), never a
+                    // claim or lease held under a real lease id.
+                    let matches_expected = match expected {
+                        ExpectedLease::Lease(id) | ExpectedLease::HeldLease(id) => {
+                            *id == lease.lease_id
+                        }
+                        ExpectedLease::NeverLeased => lease.lease_id.is_empty() && lease.completing,
+                    };
+                    if !matches_expected {
                         return Err(superseded());
                     }
                     if lease.completing {
@@ -432,6 +437,13 @@ impl CommandServer {
         response: CommandResponse,
         expected: ExpectedLease,
     ) -> Result<()> {
+        // An empty lease id names no lease.
+        let expected = match expected {
+            ExpectedLease::Lease(id) | ExpectedLease::HeldLease(id) if id.is_empty() => {
+                ExpectedLease::NeverLeased
+            }
+            other => other,
+        };
         self.claim_lease_for_response(command_id, &expected).await?;
         self.submit_command_response(command_id, response).await?;
         // A duplicate response to a finished command returns early above and
