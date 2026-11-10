@@ -818,7 +818,7 @@ pub trait DeploymentStore: Send + Sync {
         _deployment_id: &str,
         _current_release_id: &str,
         _target_release_id: &str,
-        _routing: Option<&crate::traits::DeploymentRouting>,
+        _routing: Option<crate::traits::DeploymentRouting>,
     ) -> Result<bool, AlienError> {
         Ok(false)
     }

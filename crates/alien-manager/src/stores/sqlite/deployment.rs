@@ -1478,7 +1478,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         deployment_id: &str,
         current_release_id: &str,
         target_release_id: &str,
-        routing: Option<&crate::traits::DeploymentRouting>,
+        routing: Option<crate::traits::DeploymentRouting>,
     ) -> Result<bool, AlienError> {
         // Conditional on the row still being settled with nothing queued, so an
         // update that started since the report was read is never overridden,
@@ -1495,7 +1495,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .and_where(Expr::col(Deployments::Status).eq("running"))
                 .and_where(Expr::col(Deployments::DesiredReleaseId).is_null())
                 .and_where(Expr::col(Deployments::CurrentReleaseId).eq(current_release_id));
-            if let Some(routing) = routing {
+            if let Some(routing) = &routing {
                 query.and_where(Expr::cust_with_values(
                     "id IN (SELECT d.id FROM deployments d
                             LEFT JOIN deployment_channels c ON c.deployment_id = d.id

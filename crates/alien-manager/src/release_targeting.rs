@@ -141,13 +141,7 @@ pub async fn retarget_if_settled(
         return Ok(());
     }
     if deployment_store
-        .retarget_settled_deployment(
-            subject,
-            &record.id,
-            &current,
-            &target,
-            selection.routing.as_ref(),
-        )
+        .retarget_settled_deployment(subject, &record.id, &current, &target, selection.routing)
         .await?
     {
         record.desired_release_id = Some(target);
