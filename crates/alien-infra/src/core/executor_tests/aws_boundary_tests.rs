@@ -12,7 +12,7 @@ use crate::{
 };
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 use alien_core::{
-    AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, Key,
+    Ai, AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, Key,
     ManagementConfig, PermissionProfile, PermissionSetReference, Platform, RemoteStackManagement,
     Resource, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus, ServiceAccount,
     SetupManagement, Stack, StackResourceState, StackState, Storage,
@@ -350,6 +350,69 @@ async fn new_external_grant_requires_setup_until_installed_document_is_replaced(
     }));
     executor.step(state.clone()).await.unwrap();
     executor.refresh(state).await.unwrap();
+}
+
+/// A boundary installed before a catalog set gained an action still covers stacks that do not
+/// use that set. A stack that uses it, through a resource of its type or a profile that names
+/// it, still needs setup.
+#[tokio::test]
+async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
+    const ADDED: &str = "bedrock-mantle:ListModels";
+    let (stack, mut state, config) = fixture();
+    let statements = installed(&mut state)["permissionsBoundaryDocument"]["Statement"]
+        .as_array_mut()
+        .unwrap();
+    let mut removed = 0;
+    for statement in statements.iter_mut() {
+        if let Some(actions) = statement.get_mut("Action").and_then(Value::as_array_mut) {
+            let before = actions.len();
+            actions.retain(|action| action != ADDED);
+            removed += before - actions.len();
+        }
+    }
+    assert_eq!(removed, 1, "the full catalog boundary grants {ADDED} once");
+    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+
+    validate_installed_aws_permissions_boundary(&stack, &state, &client, &config)
+        .expect("a stack without ai/invoke does not need the added action");
+    let executor_without_ai = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    executor_without_ai.step(state.clone()).await.unwrap();
+    executor_without_ai.refresh(state.clone()).await.unwrap();
+
+    let with_resource = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Live,
+        )
+        .permission(
+            "application",
+            PermissionProfile::new().resource("models", ["ai/invoke"]),
+        )
+        .build();
+    let with_global_grant = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .permission(
+            "application",
+            PermissionProfile::new().global(["ai/invoke"]),
+        )
+        .build();
+    for (scenario, stack) in [
+        ("an AI resource", with_resource),
+        ("a stack-wide ai/invoke grant", with_global_grant),
+    ] {
+        let error = validate_installed_aws_permissions_boundary(&stack, &state, &client, &config)
+            .expect_err(scenario);
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{scenario}");
+        let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+        assert_setup_required(&executor, &state, scenario).await;
+    }
 }
 
 #[tokio::test]
