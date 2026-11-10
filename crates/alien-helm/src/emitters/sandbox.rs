@@ -1,9 +1,10 @@
 //! Sandbox emitter — the NetworkPolicy that bounds a session, and the cluster-scoped RBAC the
-//! broker needs to authenticate one.
+//! operator needs to provision one and its broker needs to authenticate one.
 //!
 //! Both belong to Helm rather than to the operator: the operator does not create
-//! NetworkPolicies, and a `TokenReview` is cluster-scoped while the operator is namespace-scoped
-//! with no cluster-admin. Build has the same shape and is the precedent.
+//! NetworkPolicies, and a `TokenReview` and the RuntimeClass listing the controller checks before
+//! provisioning are cluster-scoped while the operator is namespace-scoped with no cluster-admin.
+//! Build has the same shape and is the precedent.
 //!
 //! No ServiceAccount is emitted, unlike Build's. A sandbox pod runs with
 //! `automountServiceAccountToken: false` — a mounted token is a credential the untrusted code can
@@ -189,6 +190,11 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
+  # The controller refuses to provision before it has seen a sandboxed RuntimeClass
+  # (gVisor or Kata) on the cluster, and RuntimeClasses are cluster-scoped.
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
