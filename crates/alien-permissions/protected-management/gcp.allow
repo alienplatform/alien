@@ -3,9 +3,9 @@
 # - `role`: predefined roles, exact names. Checked for every permission set rendered for the
 #   management identity, built-in or not: a predefined role can't be narrowed, so a role that is not
 #   listed (a broad one such as `roles/editor`, or one GCP adds later) is refused.
-# - `permission`: permissions of a custom role. Checked for permission sets the stack defines
-#   (not the built-in set of their id); the built-in sets are reviewed separately and filtered by
-#   the verifier-owned list.
+# - `permission`: permissions of a custom role. Checked for every permission set except the
+#   built-in sets `held-sets.allow` names, which are reviewed separately and filtered by the
+#   verifier-owned list.
 #
 # Format: `<kind> <pattern or name>  # reason`. A requested permission is covered when this
 # file's pattern matches it, with `*` matching any run of characters. Every line needs a reason.

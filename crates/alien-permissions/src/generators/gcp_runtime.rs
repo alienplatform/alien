@@ -2,8 +2,8 @@ use crate::{
     error::{ErrorData, Result},
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        protected_allowlist::{AllowListCloud, Kind as AllowListKind},
-        verifier_owned::{gcp_verifier_owned, is_stack_defined_set},
+        protected_allowlist::{is_management_held, AllowListCloud, Kind as AllowListKind},
+        verifier_owned::gcp_verifier_owned,
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -493,7 +493,7 @@ fn granted_permissions(
         .filter(|permission| !(context.signing_protected && gcp_verifier_owned(permission)))
         .cloned()
         .collect();
-    if context.signing_protected && is_stack_defined_set(permission_set) {
+    if context.signing_protected && !is_management_held(permission_set) {
         for permission in &kept {
             AllowListCloud::Gcp.require(
                 &permission_set.id,

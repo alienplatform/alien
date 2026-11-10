@@ -27,7 +27,9 @@ const GOLDEN: &str = "tests/golden/unprotected-render.json";
 
 /// The one statement a built-in set carries that the main branch did not: a Deny on writes under
 /// the signing settings path, rendered for every management role. It is a separate, tested part of
-/// signed deployments, so the comparison leaves it out and the rest must match exactly.
+/// signed deployments, so the comparison leaves it out and the rest must match exactly. It is a
+/// Deny on a path no unprotected setup writes, so it takes no permitted action from an install
+/// that doesn't use signing.
 const SIGNING_SETTINGS_GUARD: &str = "only-setup-changes-signing-settings";
 
 fn without_signing_settings_guard(set: &PermissionSet) -> PermissionSet {

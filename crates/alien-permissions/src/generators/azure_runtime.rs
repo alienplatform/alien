@@ -2,9 +2,10 @@ use crate::{
     error::{ErrorData, Result},
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        protected_allowlist::{AllowListCloud, Kind as AllowListKind},
+        protected_allowlist::{is_management_held, AllowListCloud, Kind as AllowListKind},
         verifier_owned::{
-            azure_changes_what_runs, azure_verifier_owned_action, is_stack_defined_set,
+            azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
+            azure_verifier_owned_data_action,
         },
     },
     variables::VariableInterpolator,
@@ -513,7 +514,12 @@ impl AzureRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for role_name in predefined_roles {
-                    if context.signing_protected && is_stack_defined_set(permission_set) {
+                    if context.signing_protected {
+                        // The two built-in roles a held set binds that reach the verifier's
+                        // identity are replaced by the custom role the entry renders below.
+                        if protected_role_substitute(permission_set, role_name).is_some() {
+                            continue;
+                        }
                         AllowListCloud::Azure.require(
                             &permission_set.id,
                             AllowListKind::Role,
@@ -531,7 +537,11 @@ impl AzureRuntimePermissionsGenerator {
                 }
             }
 
-            if grants_residual_azure_permissions(&platform_permission.grant, context) {
+            if grants_residual_azure_permissions(
+                permission_set,
+                &platform_permission.grant,
+                context,
+            ) {
                 let entry_label = entry_snake_label(
                     platform_permission.label.as_deref(),
                     &platform_permission.grant,
@@ -613,15 +623,17 @@ impl AzureRuntimePermissionsGenerator {
             })
         })?;
 
-        let mut actions = granted_actions(
+        let mut requested: Vec<String> = platform_permission
+            .grant
+            .actions
+            .clone()
+            .unwrap_or_default();
+        requested.extend(substitute_actions(
             permission_set,
-            platform_permission
-                .grant
-                .actions
-                .as_deref()
-                .unwrap_or_default(),
+            &platform_permission.grant,
             context,
-        )?;
+        ));
+        let mut actions = granted_actions(permission_set, &requested, context)?;
         let mut data_actions = granted_data_actions(
             permission_set,
             platform_permission
@@ -822,7 +834,7 @@ fn granted_actions(
     context: &PermissionContext,
 ) -> Result<Vec<String>> {
     let kept = kept_actions(actions, context);
-    if context.signing_protected && is_stack_defined_set(permission_set) {
+    if context.signing_protected && !is_management_held(permission_set) {
         // A wildcard the filter would drop is still refused: the stack asked for more than the
         // allow-list covers. Only a named action that the filter removes is dropped quietly.
         for action in actions
@@ -844,12 +856,26 @@ fn granted_data_actions(
     data_actions: &[String],
     context: &PermissionContext,
 ) -> Result<Vec<String>> {
+    let kept = kept_data_actions(data_actions, context);
     if context.signing_protected {
-        for action in data_actions {
+        // A wildcard that would reach a verifier-owned action is refused by the allow-list, which
+        // doesn't list those; only a named one is dropped quietly.
+        for action in data_actions
+            .iter()
+            .filter(|action| action.contains(['*', '?']) || kept.contains(action))
+        {
             AllowListCloud::Azure.require(&permission_set.id, AllowListKind::DataAction, action)?;
         }
     }
-    Ok(data_actions.to_vec())
+    Ok(kept)
+}
+
+fn kept_data_actions(data_actions: &[String], context: &PermissionContext) -> Vec<String> {
+    data_actions
+        .iter()
+        .filter(|action| !(context.signing_protected && azure_verifier_owned_data_action(action)))
+        .cloned()
+        .collect()
 }
 
 fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
@@ -863,16 +889,48 @@ fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> 
         .collect()
 }
 
-/// Whether the entry grants the rendered identity any action or data action.
-fn grants_residual_azure_permissions(grant: &PermissionGrant, context: &PermissionContext) -> bool {
+/// The actions that stand in for `role` on a protected install's management identity, when the
+/// set is one the install holds by design.
+fn protected_role_substitute(
+    permission_set: &PermissionSet,
+    role: &str,
+) -> Option<&'static [&'static str]> {
+    azure_protected_role_substitute(role).filter(|_| is_management_held(permission_set))
+}
+
+/// The actions the entry's substituted predefined roles stand for. Empty off a protected install.
+fn substitute_actions(
+    permission_set: &PermissionSet,
+    grant: &PermissionGrant,
+    context: &PermissionContext,
+) -> Vec<String> {
+    if !context.signing_protected {
+        return Vec::new();
+    }
     grant
-        .actions
-        .as_ref()
-        .is_some_and(|actions| !kept_actions(actions, context).is_empty())
+        .predefined_roles
+        .iter()
+        .flatten()
+        .filter_map(|role| protected_role_substitute(permission_set, role))
+        .flat_map(|actions| actions.iter().map(|action| action.to_string()))
+        .collect()
+}
+
+/// Whether the entry grants the rendered identity any action or data action.
+fn grants_residual_azure_permissions(
+    permission_set: &PermissionSet,
+    grant: &PermissionGrant,
+    context: &PermissionContext,
+) -> bool {
+    !substitute_actions(permission_set, grant, context).is_empty()
+        || grant
+            .actions
+            .as_ref()
+            .is_some_and(|actions| !kept_actions(actions, context).is_empty())
         || grant
             .data_actions
             .as_ref()
-            .is_some_and(|actions| !actions.is_empty())
+            .is_some_and(|actions| !kept_data_actions(actions, context).is_empty())
 }
 
 fn has_residual_azure_permissions(grant: &PermissionGrant) -> bool {

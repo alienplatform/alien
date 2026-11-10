@@ -276,14 +276,9 @@ fn protect_deployer_secrets(
     if platform == Platform::Aws
         && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
     {
-        grants.push(inline_vault_permission(serde_json::json!({
-            "id": "vault/stack-secrets-data",
-            "description": "Read and sync stack vaults except protected deployer secrets",
-            "platforms": { "aws": [{
-                "grant": { "actions": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"] },
-                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"] }, "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"] } }
-            }] }
-        }))?);
+        grants.push(PermissionSetReference::from_inline(
+            alien_permissions::generators::management_stack_secrets_data().clone(),
+        ));
     }
     // The deny also covers stack-wide provision writes and user-supplied AWS grants.
     if platform == Platform::Aws

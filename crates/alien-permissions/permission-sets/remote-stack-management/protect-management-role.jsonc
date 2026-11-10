@@ -53,6 +53,30 @@
         }
       },
       {
+        // The management role's own managed policies decide what it may do, and only setup
+        // changes them. A grant on `policy/${stackPrefix}-*` or on the CloudFormation policy
+        // names would otherwise let the role write a new version of its own policy. Rendered for
+        // a protected install only.
+        "label": "signing-only-setup-changes-management-policies",
+        "effect": "Deny",
+        "grant": {
+          "actions": [
+            "iam:CreatePolicyVersion",
+            "iam:SetDefaultPolicyVersion",
+            "iam:DeletePolicyVersion",
+            "iam:DeletePolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRole*",
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
+            ]
+          }
+        }
+      },
+      {
         // Signing settings, ledgers and signed inputs live under `/signed/`, and only setup
         // writes them. No grant reaches the path today; this holds if a later one does, and is
         // harmless on installs without signing.

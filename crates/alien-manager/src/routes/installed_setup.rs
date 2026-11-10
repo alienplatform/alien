@@ -1308,6 +1308,8 @@ pub(super) mod tests {
                                 Platform::Kubernetes,
                                 stack,
                             )]),
+                            signed_stacks: Default::default(),
+                            setup_templates: Default::default(),
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,

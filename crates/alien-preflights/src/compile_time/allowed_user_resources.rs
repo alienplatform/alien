@@ -277,7 +277,12 @@ mod tests {
             )
             .build();
 
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure, Platform::Local] {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Local,
+        ] {
             let result = AllowedUserResourcesCheck
                 .check(&stack, platform)
                 .await

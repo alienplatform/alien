@@ -2345,6 +2345,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = |allow_frozen_changes: bool| {
             alien_core::DeploymentConfig::builder()
@@ -2447,6 +2449,7 @@ mod tests {
                 Some(&alien_core::sync::TargetDeployment {
                     release_info: release.clone(),
                     config: changed,
+                    signed_config: None,
                 }),
             )
             .await

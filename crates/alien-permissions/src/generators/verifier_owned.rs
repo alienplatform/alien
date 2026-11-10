@@ -12,9 +12,7 @@
 //!
 //! [`PermissionContext::signing_protected`]: crate::PermissionContext::signing_protected
 
-use alien_core::{permissions::PermissionSet, AwsBindingSpec, AwsConditionValue};
-
-use crate::registry::get_permission_set;
+use alien_core::{AwsBindingSpec, AwsConditionValue};
 
 /// AWS actions only the verifier holds on a protected install. AWS scaling stays with the
 /// management identity: `SetDesiredCapacity` can't change what boots, and the verifier sets the
@@ -95,13 +93,6 @@ pub fn aws_management_actions(actions: &[String], binding: &AwsBindingSpec) -> V
         .collect()
 }
 
-/// Whether `permission_set` is one a stack defines: it is not the built-in set of its id. The
-/// built-in sets are reviewed with the limits in mind and render as they are; a stack's own
-/// grants to a protected management identity are checked against the rules below.
-pub fn is_stack_defined_set(permission_set: &PermissionSet) -> bool {
-    get_permission_set(&permission_set.id) != Some(permission_set)
-}
-
 /// GCP permissions only the verifier holds, besides every `setIamPolicy`, the Cloud Run writes
 /// [`gcp_cloud_run_write`] names and the OS Login and OS Config writes [`gcp_machine_access_write`]
 /// names.
@@ -141,6 +132,11 @@ const GCP_VERIFIER_OWNED: &[&str] = &[
     // A reasoning engine can carry a code package.
     "aiplatform.reasoningEngines.create",
     "aiplatform.reasoningEngines.update",
+    // A sandbox template decides what a sandbox runs, and a sandbox is created from one. The AWS
+    // equivalent, `AWS_MICROVM_RUNS`, is the verifier's too.
+    "aiplatform.sandboxEnvironmentTemplates.create",
+    "aiplatform.sandboxEnvironmentTemplates.delete",
+    "aiplatform.sandboxEnvironments.create",
 ];
 
 /// Whether `permission` is a Cloud Run service or job write. The management identity keeps the
@@ -209,6 +205,45 @@ pub fn azure_verifier_owned_action(action: &str) -> bool {
     AZURE_VERIFIER_OWNED_ACTIONS
         .iter()
         .any(|owned| owned.eq_ignore_ascii_case(action))
+}
+
+/// Azure data actions only the verifier holds in a protected install's roles: a sandbox disk
+/// image or a sandbox is what a sandbox runs, and setup's deny settings don't reach the data
+/// plane. The verifier-owned AWS and GCP sandbox powers are the same.
+const AZURE_VERIFIER_OWNED_DATA_ACTIONS: &[&str] = &[
+    "Microsoft.App/sandboxGroups/diskimages/write",
+    "Microsoft.App/sandboxGroups/sandboxes/write",
+];
+
+/// Whether only the verifier may hold the Azure data `action` in a protected install's roles.
+pub fn azure_verifier_owned_data_action(action: &str) -> bool {
+    AZURE_VERIFIER_OWNED_DATA_ACTIONS
+        .iter()
+        .any(|owned| owned.eq_ignore_ascii_case(action))
+}
+
+/// What a protected install's management identity receives instead of a predefined role that a
+/// built-in set it holds binds at the resource group, and that reaches the verifier's identity or
+/// runs a template:
+/// - `Managed Identity Contributor` writes every user-assigned identity in the group, including
+///   the verifier's, and adds a federated credential to it, which makes management the verifier.
+///   Management keeps reading identities.
+/// - `Network Contributor` also holds `Microsoft.Resources/deployments/*`, which deploys any
+///   template into the group. Management keeps the network actions.
+const AZURE_PROTECTED_ROLE_SUBSTITUTES: &[(&str, &[&str])] = &[
+    (
+        "Managed Identity Contributor",
+        &["Microsoft.ManagedIdentity/userAssignedIdentities/read"],
+    ),
+    ("Network Contributor", &["Microsoft.Network/*"]),
+];
+
+/// The actions that replace the predefined `role` on a protected install, if it is replaced.
+pub fn azure_protected_role_substitute(role: &str) -> Option<&'static [&'static str]> {
+    AZURE_PROTECTED_ROLE_SUBSTITUTES
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(role))
+        .map(|(_, actions)| *actions)
 }
 
 /// Azure resource paths whose writes and deletes run code or decide who code runs as. Setup's

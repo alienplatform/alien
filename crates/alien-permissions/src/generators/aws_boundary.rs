@@ -20,8 +20,7 @@ use crate::{
 
 use super::{
     aws_boundary_coverage::action_patterns_overlap,
-    protected_allowlist::{AllowListCloud, Kind as AllowListKind},
-    verifier_owned::is_stack_defined_set,
+    protected_allowlist::{is_management_held, AllowListCloud, Kind as AllowListKind},
     AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
 
@@ -933,7 +932,7 @@ pub(super) fn protected_management_actions<'a>(
         return Ok(actions);
     }
     let kept = super::verifier_owned::aws_management_actions(&actions, binding);
-    if is_stack_defined_set(permission_set) {
+    if !is_management_held(permission_set) {
         for action in &kept {
             AllowListCloud::Aws.require(&permission_set.id, AllowListKind::Action, action)?;
         }

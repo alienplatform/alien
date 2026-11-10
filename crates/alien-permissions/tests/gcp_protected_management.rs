@@ -119,6 +119,9 @@ fn verifier_only(permission: &str) -> bool {
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
             "aiplatform.reasoningEngines.create",
+            "aiplatform.sandboxEnvironmentTemplates.create",
+            "aiplatform.sandboxEnvironmentTemplates.delete",
+            "aiplatform.sandboxEnvironments.create",
             "storage.hmacKeys.create",
         ]
         .contains(&permission)
@@ -169,6 +172,9 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
         removed,
         [
             "aiplatform.reasoningEngines.create",
+            "aiplatform.sandboxEnvironmentTemplates.create",
+            "aiplatform.sandboxEnvironmentTemplates.delete",
+            "aiplatform.sandboxEnvironments.create",
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
             "compute.instanceGroupManagers.create",

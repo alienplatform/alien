@@ -11,7 +11,12 @@
 
 use std::sync::OnceLock;
 
-use crate::error::{ErrorData, Result};
+use alien_core::PermissionSet;
+
+use crate::{
+    error::{ErrorData, Result},
+    registry::get_permission_set,
+};
 
 /// The kind of a line in an allow-list file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +81,70 @@ impl AllowListCloud {
                 allow_list: self.file().to_string(),
             },
         ))
+    }
+}
+
+/// Whether `permission_set` is one a protected install's management identity holds by design,
+/// without its grants being checked against the cloud's allow-list: the built-in set of its id,
+/// unchanged, and named in `protected-management/held-sets.allow`. Every other set is checked.
+pub fn is_management_held(permission_set: &PermissionSet) -> bool {
+    static HELD: OnceLock<HeldSets> = OnceLock::new();
+    (get_permission_set(&permission_set.id) == Some(permission_set)
+        && HELD
+            .get_or_init(|| {
+                HeldSets::parse(include_str!("../../protected-management/held-sets.allow"))
+            })
+            .holds(&permission_set.id))
+        || permission_set == management_stack_secrets_data()
+}
+
+/// The set that lets automatic AWS setup's management role read and sync the stack's vault
+/// parameters. Setup adds it as an inline set, so it is held by its exact contents, not its id.
+/// The deployer-secrets and signing Denies still apply on top of it.
+pub fn management_stack_secrets_data() -> &'static PermissionSet {
+    static SET: OnceLock<PermissionSet> = OnceLock::new();
+    SET.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../protected-management/stack-secrets-data.json"
+        ))
+        .expect("protected-management/stack-secrets-data.json is a permission set")
+    })
+}
+
+struct HeldSets {
+    held: Vec<String>,
+    unheld: Vec<String>,
+}
+
+impl HeldSets {
+    fn parse(text: &str) -> Self {
+        let (mut held, mut unheld) = (Vec::new(), Vec::new());
+        for line in text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            let (entry, _reason) = line
+                .split_once(" #")
+                .unwrap_or_else(|| panic!("held-sets line has no reason: {line}"));
+            let (kind, id) = entry
+                .trim()
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("held-sets line has no id: {line}"));
+            let id = id.trim().to_ascii_lowercase();
+            match kind {
+                "held" => held.push(id),
+                "unheld" => unheld.push(id),
+                other => panic!("held-sets line has unknown kind {other}: {line}"),
+            }
+        }
+        Self { held, unheld }
+    }
+
+    fn holds(&self, id: &str) -> bool {
+        let id = id.to_ascii_lowercase();
+        let matches = |pattern: &String| pattern_covers(pattern.as_bytes(), id.as_bytes());
+        self.held.iter().any(matches) && !self.unheld.iter().any(matches)
     }
 }
 

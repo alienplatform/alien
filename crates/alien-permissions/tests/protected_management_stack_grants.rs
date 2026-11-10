@@ -8,8 +8,9 @@ mod common;
 use alien_core::PermissionSet;
 use alien_permissions::{
     generators::{
-        AwsCloudFormationPermissionsGenerator, AwsRuntimePermissionsGenerator,
-        AzureRuntimePermissionsGenerator, GcpRuntimePermissionsGenerator,
+        is_management_held, management_stack_secrets_data, AwsCloudFormationPermissionsGenerator,
+        AwsRuntimePermissionsGenerator, AzureRuntimePermissionsGenerator,
+        GcpRuntimePermissionsGenerator,
     },
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
@@ -224,11 +225,11 @@ fn a_changed_copy_of_a_built_in_set_is_a_stack_set() {
 }
 
 #[test]
-fn no_built_in_aws_set_is_refused_on_a_protected_install() {
+fn no_held_built_in_aws_set_is_refused_on_a_protected_install() {
     let mut rendered = 0;
     for id in list_permission_set_ids() {
         let set = get_permission_set(id).expect("listed set");
-        if set.platforms.aws.is_none() {
+        if set.platforms.aws.is_none() || !is_management_held(set) {
             continue;
         }
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -246,7 +247,41 @@ fn no_built_in_aws_set_is_refused_on_a_protected_install() {
             }
         }
     }
-    assert!(rendered > 50, "only {rendered} built-in sets rendered");
+    assert!(rendered > 50, "only {rendered} held built-in sets rendered");
+}
+
+#[test]
+fn a_built_in_set_that_is_not_held_is_checked_like_a_stack_set() {
+    // Setup's sets and the sets that rewrite the management policies are not held by management,
+    // so the allow-list decides them. Their id is no exemption.
+    for id in ["remote-stack-management/provision", "service-account/setup"] {
+        let set = get_permission_set(id).expect("built-in set");
+        assert!(!is_management_held(set), "{id} is held");
+        let error = render_aws(set, true).expect_err(id);
+        assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED", "{id}");
+        assert!(error.message.contains(id), "{id}: {}", error.message);
+        render_aws(set, false).unwrap_or_else(|error| panic!("{id} unprotected: {error}"));
+    }
+    let held = get_permission_set("storage/provision").expect("built-in set");
+    assert!(is_management_held(held));
+}
+
+#[test]
+fn a_held_set_id_does_not_exempt_a_changed_copy() {
+    let mut copy = get_permission_set("storage/provision")
+        .expect("built-in set")
+        .clone();
+    assert!(is_management_held(&copy));
+    let aws = copy.platforms.aws.as_mut().expect("aws entries");
+    aws[0]
+        .grant
+        .actions
+        .as_mut()
+        .expect("actions")
+        .push("iam:CreateRole".to_string());
+    assert!(!is_management_held(&copy));
+    let error = render_aws(&copy, true).expect_err("a changed copy is checked");
+    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
 }
 
 #[test]
@@ -648,4 +683,197 @@ fn gcp_os_login_and_os_config_writes_are_left_out_of_a_protected_role() {
     let (_, unprotected) = render_gcp(&set, false).expect("renders");
     assert!(unprotected.contains(&"osconfig.patchJobs.exec".to_string()));
     assert!(unprotected.contains(&"compute.instances.osAdminLogin".to_string()));
+}
+
+fn aws_policy_json(id: &str, protected: bool) -> Value {
+    let set = get_permission_set(id).expect("built-in set");
+    let policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(set, BindingTarget::Stack, &aws_context(protected))
+        .unwrap_or_else(|error| panic!("{id}: {error}"));
+    serde_json::to_value(policy).expect("policy json")
+}
+
+#[test]
+fn a_protected_install_denies_management_new_versions_of_its_own_policies() {
+    let denied = |policy: &Value| -> Vec<String> {
+        policy["Statement"]
+            .as_array()
+            .expect("statements")
+            .iter()
+            .filter(|statement| {
+                statement["Effect"] == "Deny"
+                    && statement["Resource"]
+                        .to_string()
+                        .contains("ManagementRole*")
+            })
+            .flat_map(|statement| match &statement["Action"] {
+                Value::Array(actions) => actions.clone(),
+                single => vec![single.clone()],
+            })
+            .map(|action| action.as_str().expect("action").to_string())
+            .collect()
+    };
+    let protected = aws_policy_json("remote-stack-management/protect-management-role", true);
+    let denied_actions = denied(&protected);
+    for action in [
+        "iam:CreatePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:DeletePolicyVersion",
+    ] {
+        assert!(
+            denied_actions.contains(&action.to_string()),
+            "{action} is not denied on the management policies: {protected}"
+        );
+    }
+    let resources = protected.to_string();
+    assert!(
+        resources.contains("policy/my-stack-ManagementRole*"),
+        "{resources}"
+    );
+    assert!(
+        resources.contains("policy/my-stack-deployment-management-*"),
+        "{resources}"
+    );
+
+    let unprotected = aws_policy_json("remote-stack-management/protect-management-role", false);
+    assert!(denied(&unprotected).is_empty(), "{unprotected}");
+}
+
+fn azure_plan(
+    id: &str,
+    protected: bool,
+) -> alien_permissions::Result<alien_permissions::generators::AzureGrantPlan> {
+    azure_plan_for(id, BindingTarget::Stack, protected)
+}
+
+fn azure_plan_for(
+    id: &str,
+    target: BindingTarget,
+    protected: bool,
+) -> alien_permissions::Result<alien_permissions::generators::AzureGrantPlan> {
+    AzureRuntimePermissionsGenerator::new().generate_grant_plan(
+        get_permission_set(id).expect("built-in set"),
+        target,
+        &azure_context(protected),
+    )
+}
+
+#[test]
+fn a_protected_azure_install_gets_custom_roles_for_the_identity_and_network_sets() {
+    for (id, role) in [
+        ("service-account/provision", "Managed Identity Contributor"),
+        ("network/provision", "Network Contributor"),
+    ] {
+        let unprotected = azure_plan(id, false).expect("unprotected renders");
+        assert!(
+            unprotected.bindings.iter().any(|b| b.role_name == role),
+            "{id}: the unprotected install binds {role}"
+        );
+        let protected = azure_plan(id, true).expect("protected renders");
+        assert!(
+            protected.bindings.iter().all(|b| b.role_name != role),
+            "{id}: the protected install must not bind {role}"
+        );
+        let actions: Vec<String> = protected
+            .custom_roles
+            .iter()
+            .flat_map(|r| r.role_definition.actions.clone())
+            .collect();
+        for forbidden in [
+            "federatedIdentityCredentials",
+            "userAssignedIdentities/write",
+            "userAssignedIdentities/delete",
+            "Microsoft.Resources/deployments",
+        ] {
+            assert!(
+                actions.iter().all(|a| !a.contains(forbidden)),
+                "{id}: a protected custom role holds {forbidden}: {actions:?}"
+            );
+        }
+        assert!(
+            actions
+                .iter()
+                .all(|a| a.ends_with("/read") || a == "Microsoft.Network/*"),
+            "{id}: a protected custom role holds more than reads and Network: {actions:?}"
+        );
+    }
+    let network = azure_plan("network/provision", true).expect("renders");
+    let actions: Vec<String> = network
+        .custom_roles
+        .iter()
+        .flat_map(|r| r.role_definition.actions.clone())
+        .collect();
+    assert!(
+        actions.iter().any(|a| a == "Microsoft.Network/*"),
+        "network setup keeps its own resource type: {actions:?}"
+    );
+}
+
+#[test]
+fn a_protected_azure_install_leaves_the_sandbox_powers_to_the_verifier() {
+    for (id, target) in [
+        ("sandbox/management", BindingTarget::Stack),
+        ("sandbox/images", BindingTarget::Resource),
+    ] {
+        let Some(set) = get_permission_set(id) else {
+            continue;
+        };
+        if set.platforms.azure.is_none() {
+            continue;
+        }
+        let protected =
+            azure_plan_for(id, target, true).unwrap_or_else(|error| panic!("{id}: {error}"));
+        let data: Vec<String> = protected
+            .custom_roles
+            .iter()
+            .flat_map(|r| r.role_definition.data_actions.clone())
+            .collect();
+        for write in ["diskimages/write", "sandboxes/write"] {
+            assert!(
+                data.iter().all(|a| !a.contains(write)),
+                "{id}: protected management holds {write}: {data:?}"
+            );
+        }
+        let unprotected = azure_plan_for(id, target, false).expect("unprotected renders");
+        let before: Vec<String> = unprotected
+            .custom_roles
+            .iter()
+            .flat_map(|r| r.role_definition.data_actions.clone())
+            .collect();
+        assert!(
+            before
+                .iter()
+                .any(|a| a.contains("diskimages/write") || a.contains("sandboxes/write")),
+            "{id}: the unprotected install keeps the sandbox writes: {before:?}"
+        );
+    }
+}
+
+#[test]
+fn a_wildcard_data_action_that_covers_a_verifier_power_is_refused() {
+    let set = azure_data_set(&["Microsoft.App/*"]);
+    render_azure_data(&set, true).expect_err("a wildcard reaching sandbox writes is refused");
+}
+
+#[test]
+fn the_stack_secrets_set_setup_adds_is_held_by_its_contents_not_its_id() {
+    let set = management_stack_secrets_data();
+    assert!(is_management_held(set));
+    let actions = render_aws(set, true).expect("the set setup adds renders");
+    assert!(
+        actions.contains(&"ssm:PutParameter".to_string()),
+        "{actions:?}"
+    );
+
+    let mut wider = set.clone();
+    wider.platforms.aws.as_mut().expect("aws entries")[0]
+        .binding
+        .stack = Some(alien_core::AwsBindingSpec {
+        resources: vec!["*".to_string()],
+        not_resources: Vec::new(),
+        condition: None,
+    });
+    assert!(!is_management_held(&wider));
+    let error = render_aws(&wider, true).expect_err("the same id with other contents is checked");
+    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
 }

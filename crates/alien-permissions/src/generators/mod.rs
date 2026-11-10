@@ -51,9 +51,12 @@ pub use gcp_runtime::{
     GcpBindingResourceKind, GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding,
     GcpIamBindings, GcpIamCondition, GcpRuntimePermissionsGenerator,
 };
-pub use protected_allowlist::{AllowListCloud, Kind as AllowListKind};
+pub use protected_allowlist::{
+    is_management_held, management_stack_secrets_data, AllowListCloud, Kind as AllowListKind,
+};
 pub use verifier_owned::{
-    aws_management_actions, aws_verifier_owned, azure_changes_what_runs, azure_runs_no_code,
-    azure_verifier_owned_action, azure_write_or_delete, gcp_verifier_owned, is_stack_defined_set,
+    aws_management_actions, aws_verifier_owned, azure_changes_what_runs,
+    azure_protected_role_substitute, azure_runs_no_code, azure_verifier_owned_action,
+    azure_verifier_owned_data_action, azure_write_or_delete, gcp_verifier_owned,
     AWS_VERIFIER_OWNED,
 };

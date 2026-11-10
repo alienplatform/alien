@@ -1,9 +1,10 @@
 # What a protected AWS install accepts in the management grants its stack defines.
 #
-# A grant to the management identity from a permission set the stack defines (one that is not the
-# built-in set of its id) may name only actions this file covers. A grant that could reach any
-# other action is refused when it is rendered, so a wildcard such as `iam:*`, `cloudformation:*`
-# or `*` fails instead of being filtered. The built-in permission sets are reviewed separately.
+# A grant to the management identity may name only actions this file covers, whichever set it
+# comes from. A grant that could reach any other action is refused when it is rendered, so a
+# wildcard such as `iam:*`, `cloudformation:*` or `*` fails instead of being filtered. The one
+# exception is the built-in sets `held-sets.allow` names, which management holds by design;
+# a set with the same id but different contents is checked like any other.
 #
 # Format: `action <IAM action pattern>  # reason`. A requested pattern is covered when this
 # file's pattern matches it with the requested pattern's own `*` and `?` taken as literal
