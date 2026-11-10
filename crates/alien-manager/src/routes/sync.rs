@@ -840,7 +840,7 @@ async fn reconcile(
         Err(response) => return response,
     };
     let result = match reconcile_agent_report(
-        state.deployment_store.as_ref(),
+        &state,
         &subject,
         ReconcileData {
             deployment_id: req.deployment_id.clone(),
@@ -3501,7 +3501,28 @@ struct AgentReportExtras {
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
+/// Persist an agent's report. A report that leaves the deployment Running with
+/// nothing queued also queues the update to the release it should run now.
 async fn reconcile_agent_report(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    data: ReconcileData,
+    extras: AgentReportExtras,
+) -> Result<crate::traits::ReconcileOutcome, AlienError> {
+    let mut outcome =
+        persist_agent_report(state.deployment_store.as_ref(), subject, data, extras).await?;
+    crate::release_targeting::retarget_if_settled(
+        state.deployment_store.as_ref(),
+        state.release_store.as_ref(),
+        state.release_channels.as_deref(),
+        subject,
+        &mut outcome.record,
+    )
+    .await?;
+    Ok(outcome)
+}
+
+async fn persist_agent_report(
     store: &dyn crate::traits::DeploymentStore,
     subject: &crate::auth::Subject,
     data: ReconcileData,
@@ -3811,7 +3832,7 @@ async fn agent_sync(
                         operations_report: req.operations_report.clone(),
                     };
                     let reconcile_result = reconcile_agent_report(
-                        state.deployment_store.as_ref(),
+                        &state,
                         &subject,
                         reconcile_data,
                         AgentReportExtras {
@@ -4108,7 +4129,7 @@ async fn agent_sync(
                         operations_report: req.operations_report.clone(),
                     };
                     let reconcile_result = reconcile_agent_report(
-                        state.deployment_store.as_ref(),
+                        &state,
                         &subject,
                         reconcile_data,
                         AgentReportExtras {

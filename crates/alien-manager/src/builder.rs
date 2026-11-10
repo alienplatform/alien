@@ -1161,7 +1161,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
         charts,
-        release_channels,
+        release_channels: release_channels.clone(),
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
@@ -1206,6 +1206,7 @@ async fn finalize(
         log_buffer,
         command_server,
         values,
+        release_channels,
     })
 }
 

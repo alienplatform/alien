@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
+use alien_manager::release_targeting::retarget_if_settled;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseChannelStore, SqliteReleaseStore,
 };
@@ -165,7 +166,8 @@ impl Fixture {
             retry_requested: false,
             protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
         };
-        self.deployments
+        let mut outcome = self
+            .deployments
             .reconcile(
                 &admin(),
                 ReconcileData {
@@ -184,6 +186,16 @@ impl Fixture {
             )
             .await
             .unwrap();
+        // The report paths do this right after persisting the report.
+        retarget_if_settled(
+            &self.deployments,
+            &self.releases,
+            Some(&self.channels),
+            &admin(),
+            &mut outcome.record,
+        )
+        .await
+        .unwrap();
     }
 
     async fn desired(&self, id: &str) -> (Option<String>, String) {
