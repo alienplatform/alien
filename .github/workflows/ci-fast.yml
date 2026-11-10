@@ -264,8 +264,11 @@ jobs:
             | tar xz kubeconform
           sudo mv kubeconform /usr/local/bin/kubeconform
 
-      - name: Install zig (needed by cargo-zigbuild for example builds)
-        run: pip3 install ziglang
+      # Builds of Linux musl Rust resources run `zig` directly, so it has to be on
+      # PATH, which `pip3 install ziglang` does not do.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
 
       - name: Configure git credentials for cargo
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"

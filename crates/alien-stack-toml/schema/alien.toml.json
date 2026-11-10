@@ -864,6 +864,10 @@
           },
           "type": "array"
         },
+        "commands-capability-file": {
+          "description": "Set by `alien build` when the container's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.",
+          "type": "boolean"
+        },
         "commands-enabled": {
           "default": false,
           "description": "Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.",
@@ -1488,6 +1492,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "commands-capability-file": {
+          "description": "Set by `alien build` when the daemon's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.",
+          "type": "boolean"
         },
         "commands-enabled": {
           "default": false,

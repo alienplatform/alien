@@ -720,8 +720,13 @@ mod tests {
                 .remove("commandsCapabilityFile");
         }
         let old_stack: Stack = serde_json::from_value(stored_by_old_build).unwrap();
+        // Resource order follows the JSON object's key order, which depends on
+        // whether the workspace turns on serde_json's `preserve_order`, so the
+        // set is compared, not its order.
+        let mut without_file = old_stack.command_receivers_without_capability_file();
+        without_file.sort();
         assert_eq!(
-            old_stack.command_receivers_without_capability_file(),
+            without_file,
             vec![
                 "new-container".to_string(),
                 "new-daemon".to_string(),

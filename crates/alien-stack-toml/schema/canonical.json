@@ -890,6 +890,9 @@
             "null"
           ]
         },
+        "commandsCapabilityFile": {
+          "type": "boolean"
+        },
         "commandsEnabled": {
           "type": "boolean"
         },
@@ -1305,6 +1308,9 @@
             "array",
             "null"
           ]
+        },
+        "commandsCapabilityFile": {
+          "type": "boolean"
         },
         "commandsEnabled": {
           "type": "boolean"
