@@ -71,7 +71,7 @@ Sandbox commands stream raw stdout and stderr frames with production-order seque
 
 ```python
 runtime = sandbox("runtime")
-instance, created = await runtime.get_or_create(tenant_key="tenant-42", timeout_ms=300_000)
+instance = await runtime.create()
 stream = await runtime.run_command(
     instance.sandbox_id,
     "python",
@@ -86,6 +86,7 @@ try:
             raise RuntimeError(f"command exited with {frame.exit_code}")
 finally:
     await stream.close()
+    await runtime.terminate(instance.sandbox_id)
 ```
 
 Long-running commands can use `start_job`, `poll_job`, and `cancel_job`. Call `capabilities()` for new sessions, or `capabilities(sandbox_id)` for an existing session, before optional file, job, pause/resume, or isolation behavior. Azure sessions retain the transport they were created with across image upgrades and rollbacks.
