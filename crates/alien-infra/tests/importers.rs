@@ -30,7 +30,7 @@ use alien_core::import::{
         AzureKeyImportData, AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
         AzureResourceGroupImportData, AzureServiceAccountImportData, AzureStorageAccountImportData,
         AzureStorageImportData, GcpAiImportData, GcpBuildImportData, GcpKeyImportData,
-        GcpKvImportData, GcpNetworkImportData, GcpRemoteBindingsImportData,
+        GcpKvImportData, GcpNetworkImportData, GcpQueueImportData, GcpRemoteBindingsImportData,
         GcpRemoteStackManagementImportData, GcpServiceActivationImportData, GcpStorageImportData,
         KubernetesClusterImportData,
     },
@@ -640,6 +640,65 @@ fn gcp_kv_remote_access_round_trip() {
             "collectionName": "settings",
         }))
     );
+}
+
+/// A protected install's verifier gives a worker the GCP queue and KV bindings it derives from the
+/// install's names (`alien_signing::binding_env`), not what any controller reports. Setup names
+/// the topic, subscription and database from the prefix (the setup template tests pin those
+/// names); the controllers that take over the imported resources must hold the same values.
+#[test]
+fn gcp_queue_and_kv_from_setup_carry_the_binding_the_enforcers_derive() {
+    let context = alien_signing::BindingContext {
+        platform: "gcp".to_string(),
+        prefix: "acme-prod".to_string(),
+        account: "my-project".to_string(),
+        region: None,
+    };
+    let derived = alien_signing::binding_env(
+        &std::collections::BTreeMap::from([
+            ("jobs".to_string(), "queue".to_string()),
+            ("metadata".to_string(), "kv".to_string()),
+        ]),
+        &context,
+    )
+    .unwrap();
+    assert!(derived.unresolved.is_empty());
+    let derived = |id: &str| -> serde_json::Value {
+        serde_json::from_str(&derived.values[&alien_signing::binding_env_name(id)]).unwrap()
+    };
+
+    let queue = run_through_registry(
+        &Queue::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(GcpQueueImportData {
+            project_id: "my-project".to_string(),
+            topic_id: "acme-prod-jobs".to_string(),
+            topic_name: "projects/my-project/topics/acme-prod-jobs".to_string(),
+            subscription_id: "acme-prod-jobs-default".to_string(),
+            subscription_name: "projects/my-project/subscriptions/acme-prod-jobs-default"
+                .to_string(),
+        })
+        .unwrap(),
+        &entry(Queue::new("jobs".to_string()).build()),
+        "us-central1",
+        &gcp_management_config(),
+    );
+    assert_eq!(controller_binding_params(&queue), derived("jobs"));
+
+    let kv = run_through_registry(
+        &Kv::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(GcpKvImportData {
+            project_id: "my-project".to_string(),
+            database_id: "acme-prod-metadata".to_string(),
+            location: "us-central1".to_string(),
+        })
+        .unwrap(),
+        &entry(Kv::new("metadata".to_string()).build()),
+        "us-central1",
+        &gcp_management_config(),
+    );
+    assert_eq!(controller_binding_params(&kv), derived("metadata"));
 }
 
 #[test]

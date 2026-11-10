@@ -405,6 +405,10 @@ mod tests {
              "env": [{"name": "DATABASE_PASSWORD", "targetResources": ["api"]}]},
         ]))
         .unwrap();
+        accepted_stack(platform, stack).await
+    }
+
+    async fn accepted_stack(platform: Platform, stack: alien_core::Stack) -> Accepted {
         let body = alien_core::release_statement::release_body(
             platform,
             &stack,
@@ -598,5 +602,57 @@ mod tests {
             error.contains("deployer secrets vault has no value"),
             "{error}"
         );
+    }
+
+    /// A worker linked to a queue gets the queue binding the verifier derives from the
+    /// install's names on GCP, and a binding naming another topic is refused.
+    #[tokio::test]
+    async fn a_gcp_worker_linked_to_a_queue_gets_the_derived_binding() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: format!("ghcr.io/shop/api@{DIGEST}"),
+            })
+            .permissions("execution".to_string())
+            .link(&queue)
+            .build();
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(queue, alien_core::ResourceLifecycle::Frozen)
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        let accepted = accepted_stack(Platform::Gcp, stack).await;
+        let reads = Reads::default();
+        let queue_key = alien_signing::binding_env_name("jobs");
+
+        let derived = json!({
+            "service": "pubsub",
+            "topic": "acme-prod-jobs",
+            "subscription": "acme-prod-jobs-default",
+        })
+        .to_string();
+        check(
+            Platform::Gcp,
+            &accepted,
+            &reads,
+            "api",
+            &env(&[(queue_key.as_str(), derived)]),
+        )
+        .unwrap();
+
+        let other = json!({
+            "service": "pubsub",
+            "topic": "attacker-topic",
+            "subscription": "acme-prod-jobs-default",
+        })
+        .to_string();
+        let error = check(
+            Platform::Gcp,
+            &accepted,
+            &reads,
+            "api",
+            &env(&[(queue_key.as_str(), other)]),
+        )
+        .expect_err("another topic");
+        assert!(error.contains("ALIEN_JOBS_BINDING differs"), "{error}");
     }
 }

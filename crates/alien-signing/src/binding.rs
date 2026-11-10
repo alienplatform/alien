@@ -279,6 +279,20 @@ pub fn binding_env(
             ("aws", "vault") => json!({ "service": "parameter-store", "vaultPrefix": name }),
             ("gcp", "storage") => json!({ "service": "gcs", "bucketName": name }),
             ("gcp", "vault") => json!({ "service": "secret-manager", "vaultPrefix": name }),
+            // Setup creates the topic `<prefix>-<id>` with the pull subscription
+            // `<prefix>-<id>-default`, and a Firestore database `<prefix>-<id>` whose
+            // collection is the resource id.
+            ("gcp", "queue") => json!({
+                "service": "pubsub",
+                "topic": name,
+                "subscription": format!("{name}-default"),
+            }),
+            ("gcp", "kv") => json!({
+                "service": "firestore",
+                "projectId": context.account,
+                "databaseId": name,
+                "collectionName": id,
+            }),
             // Azure names the deployer secrets vault with a random suffix, so the enforcer
             // finds it in its own group instead of deriving it.
             ("azure", "vault") if id != DEPLOYER_SECRETS_VAULT => {

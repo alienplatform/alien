@@ -716,6 +716,48 @@ fn bindings_come_from_the_install_not_the_control_plane() {
     assert!(overridden["ALIEN_UPLOADS_BINDING"].contains("acme-prod-uploads"));
 }
 
+/// A GCP queue or KV a worker links to is named by setup from the install's prefix, so the
+/// enforcer derives the binding. Before, both stayed unresolved and a signed worker linked to one
+/// was refused on every deploy.
+#[test]
+fn gcp_queue_and_kv_bindings_follow_from_the_install() {
+    let context = BindingContext {
+        platform: "gcp".to_string(),
+        prefix: PREFIX.to_string(),
+        account: "acme-project".to_string(),
+        region: None,
+    };
+    let derived = binding_env(
+        &BTreeMap::from([
+            ("jobs".to_string(), "queue".to_string()),
+            ("metadata".to_string(), "kv".to_string()),
+        ]),
+        &context,
+    )
+    .unwrap();
+    assert!(derived.unresolved.is_empty(), "{:?}", derived.unresolved);
+    let value = |name: &str| -> serde_json::Value {
+        serde_json::from_str(&derived.values[name]).unwrap()
+    };
+    assert_eq!(
+        value("ALIEN_JOBS_BINDING"),
+        serde_json::json!({
+            "service": "pubsub",
+            "topic": "acme-prod-jobs",
+            "subscription": "acme-prod-jobs-default",
+        })
+    );
+    assert_eq!(
+        value("ALIEN_METADATA_BINDING"),
+        serde_json::json!({
+            "service": "firestore",
+            "projectId": "acme-project",
+            "databaseId": "acme-prod-metadata",
+            "collectionName": "metadata",
+        })
+    );
+}
+
 #[test]
 fn config_sets_only_bindings_the_release_has() {
     let release = release_body();
