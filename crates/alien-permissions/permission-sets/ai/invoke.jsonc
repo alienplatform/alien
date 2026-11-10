@@ -42,6 +42,27 @@
             ]
           }
         }
+      },
+      {
+        "label": "list-bedrock-inference-profiles",
+        "description": "List the Bedrock inference profiles, so an app can discover which Claude models it can invoke.",
+        "grant": {
+          // Read-only. Claude models are invoked through inference profiles
+          // (us.anthropic.*, global.anthropic.*), so the profile list is how an app
+          // learns which of them exist in its region, the Bedrock counterpart of
+          // bedrock-mantle:ListModels above.
+          "actions": ["bedrock:ListInferenceProfiles"]
+        },
+        "binding": {
+          "stack": {
+            // AWS does not support resource-level permissions for this action.
+            // It exposes only profile metadata, never model output or account data.
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
       }
     ],
     "gcp": [

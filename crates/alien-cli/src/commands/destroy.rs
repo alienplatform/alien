@@ -1696,7 +1696,7 @@ mod tests {
                 }))
             }))
             .route("/v1/deployment-groups", get(|| async {
-                Json(serde_json::json!({ "items": [{ "id": "dg_0000000000000000000000000000", "name": "fleet", "externalId": null, "projectId": PLATFORM_PROJECT, "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z" }], "nextCursor": null }))
+                Json(serde_json::json!({ "items": [{ "id": "dg_0000000000000000000000000000", "name": "fleet", "externalId": null, "accessApprover": "customer", "projectId": PLATFORM_PROJECT, "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z" }], "nextCursor": null }))
             }))
             .route("/v1/deployments", get(move || async move {
                 Json(serde_json::json!({ "items": [deployment_json()], "nextCursor": null }))

@@ -357,7 +357,17 @@ async fn new_external_grant_requires_setup_until_installed_document_is_replaced(
 /// it, still needs setup.
 #[tokio::test]
 async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
-    const ADDED: &str = "bedrock-mantle:ListModels";
+    // Each was added to ai/invoke after boundaries were installed in the field: one in a
+    // statement it shares with other actions, one as a statement of its own on "*".
+    for added in [
+        "bedrock-mantle:ListModels",
+        "bedrock:ListInferenceProfiles",
+    ] {
+        catalog_action_added_after_setup(added).await;
+    }
+}
+
+async fn catalog_action_added_after_setup(added: &str) {
     let (stack, current, config) = fixture();
     let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
     let management = || RemoteStackManagement::new("management".to_string()).build();
@@ -405,19 +415,13 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
             .unwrap_or_else(|error| panic!("{scenario} with the current boundary: {error}"));
     }
 
+    // The boundary setup installed before the action was added.
     let mut older = current.clone();
-    let statements = installed(&mut older)["permissionsBoundaryDocument"]["Statement"]
-        .as_array_mut()
-        .unwrap();
-    let mut removed = 0;
-    for statement in statements.iter_mut() {
-        if let Some(actions) = statement.get_mut("Action").and_then(Value::as_array_mut) {
-            let before = actions.len();
-            actions.retain(|action| action != ADDED);
-            removed += before - actions.len();
-        }
-    }
-    assert_eq!(removed, 1, "the full catalog boundary grants {ADDED} once");
+    let removed = without_boundary_action(
+        &mut installed(&mut older)["permissionsBoundaryDocument"],
+        added,
+    );
+    assert_eq!(removed, 1, "the full catalog boundary grants {added} once");
 
     validate_installed_aws_permissions_boundary(&stack, &older, &client, &config)
         .expect("a stack without ai/invoke does not need the added action");
@@ -434,14 +438,8 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
     )
     .unwrap();
     let mut definition = serde_json::to_value(&stored.stack_permission_sets[0]).unwrap();
-    let mut stored_removed = 0;
-    for entry in definition["platforms"]["aws"].as_array_mut().unwrap() {
-        let actions = entry["grant"]["actions"].as_array_mut().unwrap();
-        let before = actions.len();
-        actions.retain(|action| action != ADDED);
-        stored_removed += before - actions.len();
-    }
-    assert_eq!(stored_removed, 1, "today's ai/invoke grants {ADDED} once");
+    let stored_removed = without_definition_action(&mut definition, added);
+    assert_eq!(stored_removed, 1, "today's ai/invoke grants {added} once");
     stored.stack_permission_sets[0] = serde_json::from_value(definition).unwrap();
     let with_older_service_account = Stack::new("boundary".to_string())
         .add(management(), ResourceLifecycle::Frozen)
@@ -468,6 +466,42 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
         let executor = executor(stack, &config, InitialSetupAuthority::ImportedHandoff);
         assert_setup_required(&executor, &older, scenario).await;
     }
+}
+
+/// Removes `action` from an AWS policy document, and any statement left with no action.
+/// Returns how many times the document granted it.
+fn without_boundary_action(document: &mut Value, action: &str) -> usize {
+    let statements = document["Statement"].as_array_mut().unwrap();
+    let mut removed = 0;
+    for statement in statements.iter_mut() {
+        if let Some(actions) = statement.get_mut("Action").and_then(Value::as_array_mut) {
+            let before = actions.len();
+            actions.retain(|granted| granted != action);
+            removed += before - actions.len();
+        }
+    }
+    statements.retain(|statement| {
+        statement
+            .get("Action")
+            .and_then(Value::as_array)
+            .is_none_or(|actions| !actions.is_empty())
+    });
+    removed
+}
+
+/// Removes `action` from a stored permission set's AWS grants, and any grant left with no
+/// action. Returns how many times the definition granted it.
+fn without_definition_action(definition: &mut Value, action: &str) -> usize {
+    let entries = definition["platforms"]["aws"].as_array_mut().unwrap();
+    let mut removed = 0;
+    for entry in entries.iter_mut() {
+        let actions = entry["grant"]["actions"].as_array_mut().unwrap();
+        let before = actions.len();
+        actions.retain(|granted| granted != action);
+        removed += before - actions.len();
+    }
+    entries.retain(|entry| !entry["grant"]["actions"].as_array().unwrap().is_empty());
+    removed
 }
 
 /// A prepared stack carries a stack-wide grant twice: in the profile, and in the service
@@ -924,4 +958,117 @@ async fn boundaries_installed_with_copied_prefixed_grants_still_cover_the_stack(
     let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
     executor.step(state.clone()).await.unwrap();
     executor.refresh(state).await.unwrap();
+}
+
+/// An update that has finished leaves the account it replaced in `previous_config`. The role
+/// carries what the update applied, so the check judges `config`; the replaced definition,
+/// here a stack-wide `postgres/data-access` stored before its read gained the stack tag
+/// condition, must not be asked of the boundary. While an update is in flight or after it
+/// failed, the role may still carry the replaced definition, and that one is judged.
+#[tokio::test]
+async fn a_running_account_is_judged_by_its_config_and_an_unfinished_update_by_the_one_it_replaced()
+{
+    let (_, current, config) = fixture();
+    let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let profile = PermissionProfile::new().global(["postgres/data-access"]);
+    let account = |definition: fn(&mut Value)| {
+        let mut account =
+            ServiceAccount::from_permission_profile("application-sa".to_string(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap();
+        let mut stored = serde_json::to_value(&account.stack_permission_sets[0]).unwrap();
+        definition(&mut stored);
+        account.stack_permission_sets[0] = serde_json::from_value(stored).unwrap();
+        account
+    };
+    fn today(_: &mut Value) {}
+    fn before_the_tag_condition(definition: &mut Value) {
+        let mut removed = 0;
+        for entry in definition["platforms"]["aws"].as_array_mut().unwrap() {
+            for scope in ["stack", "resource"] {
+                let binding = entry["binding"][scope].as_object_mut().unwrap();
+                removed += usize::from(binding.remove("condition").is_some());
+            }
+        }
+        assert_eq!(removed, 2, "today's read is conditioned in both scopes");
+    }
+    let prepared = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(account(today), ResourceLifecycle::Frozen)
+        .permission("application", profile.clone())
+        .build();
+    let with_account =
+        |status: ResourceStatus, config: fn(&mut Value), previous: Option<fn(&mut Value)>| {
+            let mut state = current.clone();
+            let mut saved = StackResourceState::new_pending(
+                "service-account".to_string(),
+                Resource::new(account(config)),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            saved.status = status;
+            saved.previous_config = previous.map(|previous| Resource::new(account(previous)));
+            state.resources.insert("application-sa".to_string(), saved);
+            state
+        };
+    let executor = executor(&prepared, &config, InitialSetupAuthority::ImportedHandoff);
+
+    // The replaced definition is outside the installed boundary.
+    let applied_before = with_account(ResourceStatus::Running, before_the_tag_condition, None);
+    let error =
+        validate_installed_aws_permissions_boundary(&prepared, &applied_before, &client, &config)
+            .expect_err("the boundary allows the secret read only with the stack tag condition");
+    assert!(error
+        .to_string()
+        .contains("does not cover this stack's runtime permissions"));
+
+    // The update to today's definition finished, and its replaced account stayed behind.
+    for status in [ResourceStatus::Running, ResourceStatus::RefreshFailed] {
+        let finished = with_account(status, today, Some(before_the_tag_condition));
+        validate_installed_aws_permissions_boundary(&prepared, &finished, &client, &config)
+            .unwrap_or_else(|error| {
+                panic!("a {status:?} account is judged by what it applied: {error}")
+            });
+    }
+    let finished = with_account(
+        ResourceStatus::Running,
+        today,
+        Some(before_the_tag_condition),
+    );
+    executor.step(finished.clone()).await.unwrap();
+    executor.refresh(finished).await.unwrap();
+
+    // An update in flight or failed may not have replaced the role yet.
+    for status in [ResourceStatus::Updating, ResourceStatus::UpdateFailed] {
+        let unfinished = with_account(status, today, Some(before_the_tag_condition));
+        let error =
+            validate_installed_aws_permissions_boundary(&prepared, &unfinished, &client, &config)
+                .expect_err("an unfinished update is judged by the account it replaced");
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{status:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("does not cover this stack's runtime permissions"),
+            "{status:?}: {error}"
+        );
+    }
+
+    // A deletion that failed leaves the role with what it applied, broader than today's.
+    let delete_failed = with_account(ResourceStatus::DeleteFailed, before_the_tag_condition, None);
+    let error =
+        validate_installed_aws_permissions_boundary(&prepared, &delete_failed, &client, &config)
+            .expect_err("a failed deletion is judged by the account it applied");
+    assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+    assert!(error
+        .to_string()
+        .contains("does not cover this stack's runtime permissions"));
+
+    // A deleted account has no role left; it is recreated from the desired account.
+    let deleted = with_account(ResourceStatus::Deleted, before_the_tag_condition, None);
+    validate_installed_aws_permissions_boundary(&prepared, &deleted, &client, &config)
+        .expect("a deleted account is judged as desired, not by its stale saved config");
 }

@@ -280,6 +280,15 @@ fn default_network_data(label: &str, count: Option<&str>) -> TfFragment {
             attr("values", expr::raw(format!("[{vpc_ref}]"))),
         ],
     ));
+    // Only the default subnets, one per availability zone. Subnets someone added to the default
+    // VPC can share a zone with them, and a load balancer takes one subnet per zone.
+    subnet_attributes.push(nested_block(
+        "filter",
+        vec![
+            attr("name", Expression::String("default-for-az".to_string())),
+            attr("values", expr::raw("[\"true\"]")),
+        ],
+    ));
 
     TfFragment::default()
         .with_data(crate::block::data_block(
