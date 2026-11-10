@@ -170,7 +170,12 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        refuse_a_config_without_the_installs_signing(ctx).await?;
+        if !refuse_a_config_without_the_installs_signing(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: ApplyingManagementPermissions,
+                suggested_delay: Some(SIGNING_READ_RETRY_DELAY),
+            });
+        }
         let role_name = self.role_name.clone().unwrap();
         let policy_documents = self.planned_management_policy_documents(ctx, &role_name)?;
         self.install_permissions_boundary(ctx).await?;
@@ -255,7 +260,12 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        refuse_a_config_without_the_installs_signing(ctx).await?;
+        if !refuse_a_config_without_the_installs_signing(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: Some(SIGNING_READ_RETRY_DELAY),
+            });
+        }
         let role_name = self.role_name.clone().unwrap();
         let policy_documents = self.planned_management_policy_documents(ctx, &role_name)?;
         self.install_permissions_boundary(ctx).await?;
@@ -1448,6 +1458,10 @@ fn permissions_boundary_description(resource_prefix: &str) -> String {
     format!("Permissions boundary for the roles that deployment {resource_prefix} manages")
 }
 
+/// How long a step waits before reading the install's signing settings again after a throttle,
+/// timeout or service outage.
+const SIGNING_READ_RETRY_DELAY: Duration = Duration::from_secs(30);
+
 /// Refuse to render management permissions from a deployment config without signing settings
 /// when the install has them at `/signed/<prefix>/fingerprint`: the config comes from the control
 /// plane, the parameter only from setup.
@@ -1455,11 +1469,15 @@ fn permissions_boundary_description(resource_prefix: &str) -> String {
 /// Only a protected install's management may read the parameter (setup grants the read in
 /// `<prefix>-management-limits`, which management can't change), so on an unprotected install
 /// the read is denied and that answers the question too.
+///
+/// Returns `false` when AWS could not answer for a transient reason (throttling, a timeout or an
+/// outage): the caller waits and asks again rather than failing the deployment, since the answer
+/// decides nothing until it is known. Any other failure is an error.
 async fn refuse_a_config_without_the_installs_signing(
     ctx: &ResourceControllerContext<'_>,
-) -> Result<()> {
+) -> Result<bool> {
     if ctx.deployment_config.stack_settings.signing.is_some() {
-        return Ok(());
+        return Ok(true);
     }
     let settings_location = alien_signing::settings::names::aws_settings(ctx.resource_prefix);
     let client = ctx
@@ -1486,7 +1504,25 @@ async fn refuse_a_config_without_the_installs_signing(
                     Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
                 ) =>
         {
-            Ok(())
+            Ok(true)
+        }
+        Err(error)
+            if matches!(
+                error.error,
+                Some(
+                    alien_client_core::ErrorData::RateLimitExceeded { .. }
+                        | alien_client_core::ErrorData::Timeout { .. }
+                        | alien_client_core::ErrorData::RemoteServiceUnavailable { .. }
+                        | alien_client_core::ErrorData::HttpRequestFailed { .. }
+                )
+            ) =>
+        {
+            warn!(
+                settings_location = %settings_location,
+                error = %error,
+                "Could not read the install's signing settings; trying again"
+            );
+            Ok(false)
         }
         Err(error) => Err(error.context(ErrorData::CloudPlatformError {
             message: format!(
@@ -1634,6 +1670,106 @@ mod tests {
             error.message.contains("/signed/acme-prod/fingerprint"),
             "{}",
             error.message
+        );
+    }
+
+    /// A throttled or unreachable parameter store must not push the deployment into a failed state
+    /// (the executor gives up on a step after ten errors): the step waits and asks again, and the
+    /// settings it finally reads still decide.
+    #[tokio::test]
+    async fn a_throttled_signing_read_waits_and_is_asked_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let prefix = "acme-prod";
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        let iam = Arc::new(iam);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let mut ssm = MockSsmApi::new();
+        ssm.expect_get_parameter().returning(move |request| {
+            let read = counted.fetch_add(1, Ordering::SeqCst) + 1;
+            match read {
+                1..=12 => Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RateLimitExceeded {
+                        message: "ThrottlingException".to_string(),
+                    },
+                )),
+                _ => Ok(GetParameterResponse {
+                    parameter: Some(Parameter {
+                        name: Some(request.name.clone()),
+                        value: Some(format!(
+                            r#"{{"fingerprint":"SHA256:{}","prefix":"acme-prod","channel":"production"}}"#,
+                            "ab".repeat(32)
+                        )),
+                        parameter_type: Some("String".to_string()),
+                        version: Some(1),
+                        arn: None,
+                        last_modified_date: None,
+                        data_type: None,
+                    }),
+                }),
+            }
+        });
+        let ssm = Arc::new(ssm);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .resource_prefix(prefix)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the settings read after the throttling still refuse the config");
+
+        assert_eq!(
+            error.code, "SIGNING_SETTINGS_MISSING_FROM_CONFIG",
+            "{error:?}"
+        );
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            13,
+            "twelve throttled reads, then the answer"
+        );
+        let delays = executor.suggested_delays();
+        assert_eq!(
+            delays
+                .iter()
+                .filter(|delay| **delay == SIGNING_READ_RETRY_DELAY)
+                .count(),
+            12,
+            "each throttled read waits {SIGNING_READ_RETRY_DELAY:?}: {delays:?}"
         );
     }
 
