@@ -144,7 +144,13 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/default
           - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
           - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
-          Sid: AiInvoke
+          Sid: AiInvokeBedrockInvokeModelPermissions
+        - Action:
+          - bedrock:ListInferenceProfiles
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ListBedrockInferenceProfiles
       Roles:
       - Ref: ExecutionSaRole
     DependsOn:

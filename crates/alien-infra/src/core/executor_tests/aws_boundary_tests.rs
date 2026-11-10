@@ -357,7 +357,17 @@ async fn new_external_grant_requires_setup_until_installed_document_is_replaced(
 /// it, still needs setup.
 #[tokio::test]
 async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
-    const ADDED: &str = "bedrock-mantle:ListModels";
+    // Each was added to ai/invoke after boundaries were installed in the field: one in a
+    // statement it shares with other actions, one as a statement of its own on "*".
+    for added in [
+        "bedrock-mantle:ListModels",
+        "bedrock:ListInferenceProfiles",
+    ] {
+        catalog_action_added_after_setup(added).await;
+    }
+}
+
+async fn catalog_action_added_after_setup(added: &str) {
     let (stack, current, config) = fixture();
     let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
     let management = || RemoteStackManagement::new("management".to_string()).build();
@@ -405,19 +415,13 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
             .unwrap_or_else(|error| panic!("{scenario} with the current boundary: {error}"));
     }
 
+    // The boundary setup installed before the action was added.
     let mut older = current.clone();
-    let statements = installed(&mut older)["permissionsBoundaryDocument"]["Statement"]
-        .as_array_mut()
-        .unwrap();
-    let mut removed = 0;
-    for statement in statements.iter_mut() {
-        if let Some(actions) = statement.get_mut("Action").and_then(Value::as_array_mut) {
-            let before = actions.len();
-            actions.retain(|action| action != ADDED);
-            removed += before - actions.len();
-        }
-    }
-    assert_eq!(removed, 1, "the full catalog boundary grants {ADDED} once");
+    let removed = without_boundary_action(
+        &mut installed(&mut older)["permissionsBoundaryDocument"],
+        added,
+    );
+    assert_eq!(removed, 1, "the full catalog boundary grants {added} once");
 
     validate_installed_aws_permissions_boundary(&stack, &older, &client, &config)
         .expect("a stack without ai/invoke does not need the added action");
@@ -434,14 +438,8 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
     )
     .unwrap();
     let mut definition = serde_json::to_value(&stored.stack_permission_sets[0]).unwrap();
-    let mut stored_removed = 0;
-    for entry in definition["platforms"]["aws"].as_array_mut().unwrap() {
-        let actions = entry["grant"]["actions"].as_array_mut().unwrap();
-        let before = actions.len();
-        actions.retain(|action| action != ADDED);
-        stored_removed += before - actions.len();
-    }
-    assert_eq!(stored_removed, 1, "today's ai/invoke grants {ADDED} once");
+    let stored_removed = without_definition_action(&mut definition, added);
+    assert_eq!(stored_removed, 1, "today's ai/invoke grants {added} once");
     stored.stack_permission_sets[0] = serde_json::from_value(definition).unwrap();
     let with_older_service_account = Stack::new("boundary".to_string())
         .add(management(), ResourceLifecycle::Frozen)
@@ -468,6 +466,42 @@ async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
         let executor = executor(stack, &config, InitialSetupAuthority::ImportedHandoff);
         assert_setup_required(&executor, &older, scenario).await;
     }
+}
+
+/// Removes `action` from an AWS policy document, and any statement left with no action.
+/// Returns how many times the document granted it.
+fn without_boundary_action(document: &mut Value, action: &str) -> usize {
+    let statements = document["Statement"].as_array_mut().unwrap();
+    let mut removed = 0;
+    for statement in statements.iter_mut() {
+        if let Some(actions) = statement.get_mut("Action").and_then(Value::as_array_mut) {
+            let before = actions.len();
+            actions.retain(|granted| granted != action);
+            removed += before - actions.len();
+        }
+    }
+    statements.retain(|statement| {
+        statement
+            .get("Action")
+            .and_then(Value::as_array)
+            .is_none_or(|actions| !actions.is_empty())
+    });
+    removed
+}
+
+/// Removes `action` from a stored permission set's AWS grants, and any grant left with no
+/// action. Returns how many times the definition granted it.
+fn without_definition_action(definition: &mut Value, action: &str) -> usize {
+    let entries = definition["platforms"]["aws"].as_array_mut().unwrap();
+    let mut removed = 0;
+    for entry in entries.iter_mut() {
+        let actions = entry["grant"]["actions"].as_array_mut().unwrap();
+        let before = actions.len();
+        actions.retain(|granted| granted != action);
+        removed += before - actions.len();
+    }
+    entries.retain(|entry| !entry["grant"]["actions"].as_array().unwrap().is_empty());
+    removed
 }
 
 /// A prepared stack carries a stack-wide grant twice: in the profile, and in the service

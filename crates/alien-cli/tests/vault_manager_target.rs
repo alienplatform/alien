@@ -29,7 +29,7 @@ fn check_platform_vault(selector: &str, action: &str, ambiguous: bool, missing_u
             .query_param("search", "demo")
             .query_param("project", PROJECT).query_param("workspace", "demo");
         then.status(200)
-            .json_body(json!({"items":[{"id":GROUP,"name":"demo",
+            .json_body(json!({"items":[{"id":GROUP,"name":"demo","accessApprover":"customer",
                     "projectId":PROJECT,"workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z",
                     "updatedAt":"2026-01-01T00:00:00Z"}],"nextCursor":null}));
     });

@@ -72,6 +72,36 @@ fn test_ai_invoke_lists_the_mantle_models_it_can_invoke() {
 }
 
 #[test]
+fn test_ai_invoke_lists_the_bedrock_inference_profiles_it_can_invoke() {
+    let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
+    let aws = invoke.platforms.aws.as_ref().expect("ai/invoke must have an AWS grant");
+
+    // Claude models are invoked through inference profiles, so an app discovers
+    // them with ListInferenceProfiles. AWS has no resource-level permissions for
+    // that action, so it needs its own statement on "*", kept apart from the
+    // invoke statement so the invoke resources stay narrow.
+    let listing = aws
+        .iter()
+        .find(|entry| {
+            entry
+                .grant
+                .actions
+                .as_ref()
+                .is_some_and(|actions| actions.iter().any(|action| action == "bedrock:ListInferenceProfiles"))
+        })
+        .expect("ai/invoke grants bedrock:InvokeModel on inference profiles but not bedrock:ListInferenceProfiles, so an app can't list the Claude models it may invoke");
+    assert_eq!(
+        listing.grant.actions.as_deref(),
+        Some(&["bedrock:ListInferenceProfiles".to_string()][..]),
+        "the \"*\" statement carries only the list action"
+    );
+    for binding in [&listing.binding.stack, &listing.binding.resource] {
+        let resources = &binding.as_ref().expect("ai/invoke AWS bindings").resources;
+        assert_eq!(resources, &["*"], "ListInferenceProfiles has no resource-level permissions");
+    }
+}
+
+#[test]
 fn test_ai_invoke_is_inference_only() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
 
@@ -86,6 +116,7 @@ fn test_ai_invoke_is_inference_only() {
     const AWS_INFERENCE_ACTIONS: &[&str] = &[
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream",
+        "bedrock:ListInferenceProfiles",
         "bedrock-mantle:CreateInference",
         "bedrock-mantle:ListModels",
     ];

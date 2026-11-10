@@ -3063,14 +3063,22 @@ impl AwsNetworkController {
                     })
                 })?;
 
-                // List subnets in the default VPC
+                // Only the default subnets: AWS keeps one per availability zone. Subnets someone
+                // added to the default VPC can share a zone with them, and a load balancer
+                // takes one subnet per zone, so they must not be picked up.
                 let subnets_response = ec2_client
                     .describe_subnets(
                         DescribeSubnetsRequest::builder()
-                            .filters(vec![Filter::builder()
-                                .name("vpc-id".to_string())
-                                .values(vec![vpc_id.clone()])
-                                .build()])
+                            .filters(vec![
+                                Filter::builder()
+                                    .name("vpc-id".to_string())
+                                    .values(vec![vpc_id.clone()])
+                                    .build(),
+                                Filter::builder()
+                                    .name("default-for-az".to_string())
+                                    .values(vec!["true".to_string()])
+                                    .build(),
+                            ])
                             .build(),
                     )
                     .await
@@ -3080,10 +3088,23 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                let discovered_subnets = subnets_response
+                let discovered_subnets: Vec<Subnet> = subnets_response
                     .subnet_set
                     .map(|set| set.items)
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|subnet| subnet.default_for_az == Some(true))
+                    .collect();
+                if discovered_subnets.is_empty() {
+                    return Err(AlienError::new(ErrorData::InfrastructureError {
+                        message: format!(
+                            "The default VPC '{vpc_id}' has no default subnets. Create a new \
+                             network, or use an existing VPC and name its subnets."
+                        ),
+                        operation: Some("discover_default_subnets".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
                 let subnet_ids: Vec<String> = discovered_subnets
                     .iter()
                     .filter_map(|subnet| subnet.subnet_id.clone())
@@ -6041,9 +6062,17 @@ mod controller_state_tests {
     /// The delete flow looks for the VPC's flow log, its role and its log group; these
     /// networks have none.
     async fn executor(
-        mut ec2: MockEc2Api,
+        ec2: MockEc2Api,
         controller: AwsNetworkController,
         cidr: Option<&str>,
+    ) -> SingleControllerExecutor {
+        executor_for(ec2, controller, network(cidr)).await
+    }
+
+    async fn executor_for(
+        mut ec2: MockEc2Api,
+        controller: AwsNetworkController,
+        network: Network,
     ) -> SingleControllerExecutor {
         ec2.expect_describe_flow_logs()
             .returning(|_| Ok(parse(json!({}))));
@@ -6074,7 +6103,7 @@ mod controller_state_tests {
                 }))
             });
         SingleControllerExecutor::builder()
-            .resource(network(cidr))
+            .resource(network)
             .controller(controller)
             .platform(Platform::Aws)
             .service_provider(Arc::new(provider))
@@ -6972,6 +7001,87 @@ mod controller_state_tests {
                 expected_public
             );
         }
+    }
+
+    fn use_default_network() -> Network {
+        Network::new(NETWORK_ID.to_string())
+            .settings(NetworkSettings::UseDefault)
+            .build()
+    }
+
+    /// A default VPC as AWS returns it when someone added subnets to it: zone a holds the
+    /// default subnet and an added one. EC2 is not asked to filter here, so the controller
+    /// must ignore the added subnet itself.
+    fn default_vpc_ec2(subnets: serde_json::Value) -> MockEc2Api {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs().times(1).returning(|_| {
+            Ok(parse(
+                json!({"vpcSet": {"item": [{"vpcId": "vpc-default", "isDefault": true}]}}),
+            ))
+        });
+        ec2.expect_describe_subnets()
+            .times(1)
+            .returning(move |_| Ok(parse(json!({"subnetSet": {"item": subnets.clone()}}))));
+        ec2
+    }
+
+    #[tokio::test]
+    async fn use_default_network_uses_only_the_default_subnets() {
+        let ec2 = default_vpc_ec2(json!([
+            {"subnetId": "subnet-default-a", "availabilityZone": "us-east-2a", "defaultForAz": true},
+            {"subnetId": "subnet-added-a", "availabilityZone": "us-east-2a", "defaultForAz": false},
+            {"subnetId": "subnet-default-b", "availabilityZone": "us-east-2b", "defaultForAz": true},
+            {"subnetId": "subnet-added-b", "availabilityZone": "us-east-2b"},
+        ]));
+        let mut executor =
+            executor_for(ec2, AwsNetworkController::default(), use_default_network()).await;
+
+        executor
+            .step()
+            .await
+            .expect("default VPC discovery succeeds");
+
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::Ready);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-default"));
+        assert_eq!(
+            state.public_subnet_ids,
+            ["subnet-default-a", "subnet-default-b"]
+        );
+        assert!(state.private_subnet_ids.is_empty());
+        assert_eq!(state.availability_zones, ["us-east-2a", "us-east-2b"]);
+        for (zone, subnet) in [
+            ("us-east-2a", "subnet-default-a"),
+            ("us-east-2b", "subnet-default-b"),
+        ] {
+            assert_eq!(
+                state.subnets_by_failure_domain[zone],
+                AwsFailureDomainSubnets {
+                    public_subnet_ids: vec![subnet.to_string()],
+                    private_subnet_ids: Vec::new(),
+                },
+                "one subnet per zone in {zone}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn use_default_network_without_default_subnets_fails_with_what_to_do() {
+        let ec2 = default_vpc_ec2(json!([
+            {"subnetId": "subnet-added-a", "availabilityZone": "us-east-2a", "defaultForAz": false},
+        ]));
+        let mut executor =
+            executor_for(ec2, AwsNetworkController::default(), use_default_network()).await;
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("a default VPC without default subnets must fail");
+
+        let message = error.to_string();
+        assert!(message.contains("has no default subnets"), "{message}");
+        assert!(message.contains("Create a new network"), "{message}");
+        assert!(controller(&executor).public_subnet_ids.is_empty());
     }
 
     #[tokio::test]

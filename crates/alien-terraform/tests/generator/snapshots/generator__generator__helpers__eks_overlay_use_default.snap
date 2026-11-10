@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 229
 expression: buf
 ---
 === versions.tf ===
@@ -636,6 +635,13 @@ data "aws_subnets" "default_network_default" {
     name = "vpc-id"
     values = [
       data.aws_vpcs.default_network_default.ids[0]
+    ]
+  }
+
+  filter {
+    name = "default-for-az"
+    values = [
+      "true"
     ]
   }
 }
