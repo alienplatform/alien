@@ -463,3 +463,145 @@ async fn deployment_installing_a_release_the_channel_rolled_back_from_is_sent_ba
         (Some(r1.clone()), "update-pending".to_string())
     );
 }
+
+/// Channel store that moves a deployment to another channel right after the
+/// production channel is read, as a concurrent request could between a
+/// report's selection of a release and its write.
+struct MovesDeploymentAfterRead {
+    inner: SqliteReleaseChannelStore,
+    deployment_id: String,
+    move_to: String,
+}
+
+#[async_trait::async_trait]
+impl ReleaseChannelStore for MovesDeploymentAfterRead {
+    async fn list_channels(
+        &self,
+    ) -> Result<Vec<alien_manager::traits::ReleaseChannelRecord>, alien_error::AlienError> {
+        self.inner.list_channels().await
+    }
+
+    async fn get_channel(
+        &self,
+        name: &str,
+    ) -> Result<Option<alien_manager::traits::ReleaseChannelRecord>, alien_error::AlienError> {
+        let channel = self.inner.get_channel(name).await?;
+        if name == DEFAULT_CHANNEL {
+            self.inner
+                .set_deployment_routing(
+                    &self.deployment_id,
+                    &DeploymentRouting {
+                        channel: self.move_to.clone(),
+                        pinned_release_id: None,
+                    },
+                )
+                .await?;
+        }
+        Ok(channel)
+    }
+
+    async fn create_channel(
+        &self,
+        name: &str,
+        release_id: Option<&str>,
+    ) -> Result<alien_manager::traits::ReleaseChannelRecord, alien_error::AlienError> {
+        self.inner.create_channel(name, release_id).await
+    }
+
+    async fn delete_channel(&self, name: &str) -> Result<bool, alien_error::AlienError> {
+        self.inner.delete_channel(name).await
+    }
+
+    async fn set_channel_release(
+        &self,
+        name: &str,
+        release_id: &str,
+    ) -> Result<alien_manager::traits::ReleaseChannelRecord, alien_error::AlienError> {
+        self.inner.set_channel_release(name, release_id).await
+    }
+
+    async fn deployment_routing(
+        &self,
+        deployment_id: &str,
+    ) -> Result<DeploymentRouting, alien_error::AlienError> {
+        self.inner.deployment_routing(deployment_id).await
+    }
+
+    async fn set_deployment_routing(
+        &self,
+        deployment_id: &str,
+        routing: &DeploymentRouting,
+    ) -> Result<(), alien_error::AlienError> {
+        self.inner
+            .set_deployment_routing(deployment_id, routing)
+            .await
+    }
+
+    async fn count_following(&self, channel: &str) -> Result<u64, alien_error::AlienError> {
+        self.inner.count_following(channel).await
+    }
+
+    async fn roll_out_channel(
+        &self,
+        channel: &str,
+        release_id: &str,
+    ) -> Result<(), alien_error::AlienError> {
+        self.inner.roll_out_channel(channel, release_id).await
+    }
+
+    async fn roll_out_deployment(
+        &self,
+        deployment_id: &str,
+        release_id: &str,
+    ) -> Result<(), alien_error::AlienError> {
+        self.inner
+            .roll_out_deployment(deployment_id, release_id)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_retarget_is_dropped_when_the_deployment_moves_to_another_channel_meanwhile() {
+    let f = Fixture::new().await;
+    let r1 = f.release().await;
+    let r2 = f.publish(DEFAULT_CHANNEL).await;
+    let a = f.running_deployment("a").await;
+    f.db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET current_release_id = ?1 WHERE id = ?2",
+            (r1.as_str(), a.as_str()),
+        )
+        .await
+        .unwrap();
+    f.channels.create_channel("empty", None).await.unwrap();
+
+    // The report reads production (pointing at r2) while a runs r1; then a is
+    // moved to a channel with no release; then the report's write arrives.
+    let racing = MovesDeploymentAfterRead {
+        inner: SqliteReleaseChannelStore::new(f.db.clone()),
+        deployment_id: a.clone(),
+        move_to: "empty".to_string(),
+    };
+    let mut record = f
+        .deployments
+        .get_deployment(&admin(), &a)
+        .await
+        .unwrap()
+        .unwrap();
+    retarget_if_settled(
+        &f.deployments,
+        &f.releases,
+        Some(&racing),
+        &admin(),
+        &mut record,
+    )
+    .await
+    .unwrap();
+
+    // The deployment must not install production's release.
+    assert_eq!(f.desired(&a).await, (None, "running".to_string()));
+    assert_eq!(record.desired_release_id, None);
+    let _ = r2;
+}
