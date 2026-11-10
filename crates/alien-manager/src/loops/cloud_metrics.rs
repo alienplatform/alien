@@ -4,7 +4,8 @@
 //! Off unless the embedder turns it on with [`crate::builder::AlienManagerBuilder::cloud_metrics`]:
 //! every pull is a billed `GetMetricData` call made with the deployment's management identity.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use alien_aws_clients::{AwsCredentialProvider, CloudWatchApi, CloudWatchClient};
@@ -24,6 +25,9 @@ use crate::auth::Subject;
 use crate::error::ErrorData;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
 use crate::traits::{CredentialResolver, DeploymentStore, TelemetryBackend, TelemetryCaller};
+
+/// The puller's error code when the deployment's identity may not read CloudWatch.
+const SETUP_UPDATE_REQUIRED: &str = "METRICS_SETUP_UPDATE_REQUIRED";
 
 /// Deployments pulled at the same time.
 const MAX_CONCURRENT_PULLS: usize = 8;
@@ -94,12 +98,47 @@ impl CloudWatchProvider for AwsCloudWatchProvider {
     }
 }
 
+/// How often a deployment that still lacks the metrics permission is logged at WARN.
+const SETUP_UPDATE_WARN_EVERY: Duration = Duration::from_secs(3600);
+
+/// Remembers when each deployment's missing metrics permission was last logged at WARN, so an
+/// install that is never updated logs once an hour instead of on every tick.
+#[derive(Default)]
+struct SetupUpdateWarnings(Mutex<HashMap<String, tokio::time::Instant>>);
+
+impl SetupUpdateWarnings {
+    /// True when this denial should be logged at WARN.
+    fn should_warn(&self, deployment_id: &str) -> bool {
+        let now = tokio::time::Instant::now();
+        let mut last = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match last.get(deployment_id) {
+            Some(at) if now.duration_since(*at) < SETUP_UPDATE_WARN_EVERY => false,
+            _ => {
+                last.insert(deployment_id.to_owned(), now);
+                true
+            }
+        }
+    }
+
+    /// A pull went through: the next denial is news again.
+    fn clear(&self, deployment_id: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(deployment_id);
+    }
+}
+
 pub struct CloudMetricsLoop {
     deployment_store: Arc<dyn DeploymentStore>,
     credential_resolver: Arc<dyn CredentialResolver>,
     telemetry_backend: Arc<dyn TelemetryBackend>,
     cloudwatch: Arc<dyn CloudWatchProvider>,
     interval: Duration,
+    setup_update_warnings: SetupUpdateWarnings,
 }
 
 impl CloudMetricsLoop {
@@ -124,6 +163,7 @@ impl CloudMetricsLoop {
             telemetry_backend,
             cloudwatch,
             interval: interval.min(MAX_INTERVAL),
+            setup_update_warnings: SetupUpdateWarnings::default(),
         }
     }
 
@@ -232,13 +272,22 @@ impl CloudMetricsLoop {
         );
         let batch = match puller.pull(&targets, window).await {
             Ok(batch) => batch,
+            // A denied pull is the expected state of an install whose setup predates the
+            // metrics permission. It repeats every tick until the setup is updated, so it is
+            // logged at WARN once an hour per deployment.
+            Err(error)
+                if error.code == SETUP_UPDATE_REQUIRED
+                    && !self.setup_update_warnings.should_warn(deployment_id) =>
+            {
+                debug!(deployment_id, code = %error.code, "Cloud metrics: pull still denied");
+                return;
+            }
             Err(error) => {
-                // A denied pull is the expected state of an install whose setup predates the
-                // metrics permission; its code says so to whoever reads the log.
                 warn!(deployment_id, code = %error.code, %error, "Cloud metrics: pull failed");
                 return;
             }
         };
+        self.setup_update_warnings.clear(deployment_id);
         if batch.data_points == 0 {
             return;
         }
@@ -674,5 +723,24 @@ mod tests {
             Duration::from_secs(3600),
         );
         assert!(metrics_loop.interval.as_secs() < WINDOW_SECONDS as u64);
+    }
+
+    /// An install that never updates its setup is denied on every tick; it is logged at WARN
+    /// once an hour, per deployment, and again as soon as a denial follows a good pull.
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_metrics_permission_is_warned_once_an_hour_per_deployment() {
+        let warnings = SetupUpdateWarnings::default();
+        assert!(warnings.should_warn("a"));
+        assert!(warnings.should_warn("b"));
+        tokio::time::advance(Duration::from_secs(300)).await;
+        assert!(!warnings.should_warn("a"));
+        assert!(!warnings.should_warn("b"));
+
+        warnings.clear("b");
+        assert!(warnings.should_warn("b"));
+
+        tokio::time::advance(SETUP_UPDATE_WARN_EVERY).await;
+        assert!(warnings.should_warn("a"));
+        assert!(!warnings.should_warn("a"));
     }
 }
