@@ -78,3 +78,57 @@ async fn rejects_provider_access_denied_response() {
         "provider error must retain structured data"
     );
 }
+
+#[tokio::test]
+async fn lists_system_inference_profiles_across_pages() {
+    let server = MockServer::start_async().await;
+    // httpmock serves the first mock that matches, so the page-two mock goes first.
+    let second = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/inference-profiles")
+                .query_param("nextToken", "page/2==");
+            then.status(200).json_body_obj(&serde_json::json!({
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "global.anthropic.claude-sonnet-5", "status": "ACTIVE", "type": "SYSTEM_DEFINED"}
+                ]
+            }));
+        })
+        .await;
+
+    let first = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/inference-profiles")
+                .query_param("type", "SYSTEM_DEFINED")
+                .header_exists("authorization");
+            then.status(200).json_body_obj(&serde_json::json!({
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE", "type": "SYSTEM_DEFINED"}
+                ],
+                "nextToken": "page/2=="
+            }));
+        })
+        .await;
+    let profiles = client(&server)
+        .list_inference_profiles()
+        .await
+        .expect("inference profiles");
+
+    first.assert_async().await;
+    second.assert_async().await;
+    let ids: Vec<_> = profiles
+        .iter()
+        .map(|profile| profile.inference_profile_id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "global.anthropic.claude-sonnet-5"
+        ]
+    );
+    assert!(profiles
+        .iter()
+        .all(|profile| profile.status.as_deref() == Some("ACTIVE")));
+}

@@ -621,6 +621,10 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
 struct ApiDeploymentGroup {
     id: String,
     project_id: String,
+    /// Set by the by-name call: `true` when that call inserted the group. A
+    /// manager that predates the field leaves it out.
+    #[serde(default)]
+    created: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -764,22 +768,44 @@ async fn create_self_deployment(
             .await?
         }
     };
-    let session = create_first_party_deployment_session(
-        &auth.client,
+    // Only a group that `ensure_self_deployment_group` just made is ours to
+    // remove. A group the user named was there before this run.
+    let made_group = if args.deployment_group.is_none() {
+        Some(deployment_group.created)
+    } else {
+        None
+    };
+    let (create_response, withheld) = match create_deployment_in_group(
+        &auth,
+        &workspace,
         &base_url,
-        workspace.query.as_deref(),
         &deployment_group.id,
-    )
-    .await?;
-
-    let create_response = create_first_party_deployment(
-        auth.sdk_client(),
-        &workspace.name,
-        &base_url,
-        &session.token,
         resolved_args,
         args,
         &project_id,
+    )
+    .await
+    {
+        Ok(created) => created,
+        Err(error) => {
+            return Err(settle_group_after_refusal(
+                &auth.client,
+                &base_url,
+                workspace.query.as_deref(),
+                &deployment_group.id,
+                made_group,
+                error,
+            )
+            .await);
+        }
+    };
+    // The deployment exists from here on, so a failure below is not a refused
+    // create and the group is not cleaned up.
+    store_withheld_answers(
+        auth.sdk_client(),
+        &workspace.name,
+        &create_response.deployment.id,
+        &withheld,
     )
     .await?;
     let deployment_token = create_response.token.ok_or_else(|| {
@@ -944,6 +970,7 @@ async fn resolve_self_deployment_group(
         [group] => Ok(ApiDeploymentGroup {
             id: group.id.clone(),
             project_id: project_id.to_string(),
+            created: None,
         }),
         [] => Err(AlienError::new(ErrorData::ValidationError {
             field: "deployment-group".to_string(),
@@ -982,6 +1009,88 @@ async fn ensure_self_deployment_group(
             message: "Failed to ensure deployment group".to_string(),
         })?;
     parse_api_response(response, "Failed to ensure deployment group").await
+}
+
+async fn create_deployment_in_group(
+    auth: &crate::auth::AuthHttp,
+    workspace: &crate::execution_context::PlatformWorkspaceContext,
+    base_url: &str,
+    deployment_group_id: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<(CreateDeploymentApiResponse, WithheldAnswers)> {
+    let session = create_first_party_deployment_session(
+        &auth.client,
+        base_url,
+        workspace.query.as_deref(),
+        deployment_group_id,
+    )
+    .await?;
+    create_first_party_deployment_without_storing_answers(
+        base_url,
+        &session.token,
+        resolved_args,
+        args,
+        project_id,
+    )
+    .await
+}
+
+/// A refused create must not leave the group it made behind. `made_group` is
+/// `None` when the user chose the group, and otherwise what the by-name call
+/// said about creating it. The manager refuses to delete a group that has a
+/// deployment, so a create that got further than it looks is safe. A manager
+/// that does not say whether it made the group gets nothing deleted: the group
+/// id is in the error so the user can remove it.
+async fn settle_group_after_refusal(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    group_id: &str,
+    made_group: Option<Option<bool>>,
+    error: AlienError<ErrorData>,
+) -> AlienError<ErrorData> {
+    let note = match made_group {
+        None | Some(Some(false)) => return error,
+        Some(None) => format!(
+            "No deployment was created. Deployment group {group_id} may be empty; this manager did not say whether the run created it. Delete it with `alien deployment-groups delete {group_id}` if it is not needed."
+        ),
+        Some(Some(true)) => match delete_deployment_group(http_client, base_url, workspace, group_id).await {
+            Ok(true) => format!("No deployment was created. Deleted the empty deployment group {group_id} this run made."),
+            Ok(false) => format!(
+                "Deployment group {group_id} already holds a deployment, so it was kept."
+            ),
+            Err(delete_error) => format!(
+                "No deployment was created. Could not delete the empty deployment group {group_id} this run made ({delete_error}). Delete it with `alien deployment-groups delete {group_id}`."
+            ),
+        },
+    };
+    error.context(ErrorData::ConfigurationError { message: note })
+}
+
+async fn delete_deployment_group(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    group_id: &str,
+) -> Result<bool> {
+    let path = format!("/v1/deployment-groups/{}", urlencoding::encode(group_id));
+    let url = api_url(base_url, &path, workspace)?;
+    let response = http_client
+        .delete(url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to delete deployment group".to_string(),
+        })?;
+    // The manager refuses to delete a group that holds a deployment.
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(false);
+    }
+    parse_empty_api_response(response, "Failed to delete deployment group").await?;
+    Ok(true)
 }
 
 async fn create_first_party_deployment_session(
@@ -1043,6 +1152,9 @@ fn first_party_inputs_request_body(
     })
 }
 
+/// The answers a deploy holds back from the create request, by input id.
+type WithheldAnswers = serde_json::Map<String, serde_json::Value>;
+
 /// Creates a deployment from a first-party session. Only the answers to
 /// boolean inputs go to the hosted inputs endpoint: the platform plans
 /// resources from them, a boolean is never a secret, and the manager can start
@@ -1054,15 +1166,15 @@ fn first_party_inputs_request_body(
 /// rest. An older platform that validates and stores inputs itself and
 /// refuses the create for a missing required input gets that one answer back
 /// in the inputs, once.
-async fn create_first_party_deployment(
-    client: &alien_platform_api::Client,
-    workspace: &str,
+/// The caller stores the returned answers: once the deployment exists, a
+/// failure to store them is not a refused create.
+async fn create_first_party_deployment_without_storing_answers(
     base_url: &str,
     session_token: &str,
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
     project_id: &str,
-) -> Result<CreateDeploymentApiResponse> {
+) -> Result<(CreateDeploymentApiResponse, WithheldAnswers)> {
     let mut inputs = HashMap::new();
     let mut withheld = serde_json::Map::new();
     for (id, value) in resolved_args.input_values.clone() {
@@ -1101,11 +1213,7 @@ async fn create_first_party_deployment(
         match send_group_session_create(base_url, session_token, resolved_args, args, project_id)
             .await?
         {
-            Ok(response) => {
-                store_withheld_answers(client, workspace, &response.deployment.id, &withheld)
-                    .await?;
-                return Ok(response);
-            }
+            Ok(response) => return Ok((response, withheld)),
             Err(error) => {
                 let Some(input) = value_access::missing_required_input(&error, &withheld) else {
                     return Err(group_session_create_failed(&error));
@@ -1116,6 +1224,28 @@ async fn create_first_party_deployment(
             }
         }
     }
+}
+
+#[cfg(test)]
+async fn create_first_party_deployment(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    base_url: &str,
+    session_token: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<CreateDeploymentApiResponse> {
+    let (response, withheld) = create_first_party_deployment_without_storing_answers(
+        base_url,
+        session_token,
+        resolved_args,
+        args,
+        project_id,
+    )
+    .await?;
+    store_withheld_answers(client, workspace, &response.deployment.id, &withheld).await?;
+    Ok(response)
 }
 
 #[cfg(test)]

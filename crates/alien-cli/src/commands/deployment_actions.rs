@@ -6,7 +6,10 @@ use std::io::IsTerminal;
 use std::str::FromStr;
 use std::time::Duration;
 
-use alien_core::{ComputePoolSelection, ComputeSettings, Platform};
+use alien_core::{
+    env_delivered_to_resource, sandbox_egress, ComputePoolSelection, ComputeSettings, Platform,
+    StackState,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::ValueKind;
 use alien_platform_api::types::{
@@ -527,6 +530,15 @@ pub(crate) async fn set_environment_variables_task(
             )
         );
     }
+    let previous = current_environment(client, workspace, deployment_id).await;
+    if !json {
+        let affected: Vec<Option<Vec<String>>> = variables
+            .iter()
+            .map(|variable| target_patterns(variable.target_resources.as_deref()))
+            .chain(previous.iter().map(|(_, targets)| targets.clone()))
+            .collect();
+        print_restart_notice(&detail_json(deployment)?, &affected);
+    }
     if matches!(confirmation, ConfirmationMode::Prompt)
         && !prompt_confirm("Replace the environment variables?", false)?
     {
@@ -534,7 +546,7 @@ pub(crate) async fn set_environment_variables_task(
         return Ok(());
     }
 
-    let previous = current_environment_names(client, workspace, deployment_id).await;
+    let previous: Vec<String> = previous.into_iter().map(|(name, _)| name).collect();
     let message = save_environment_variables(client, workspace, deployment_id, &variables).await?;
     let dropped: Vec<String> = previous
         .into_iter()
@@ -566,18 +578,86 @@ pub(crate) async fn set_environment_variables_task(
     Ok(())
 }
 
-/// Replaces the deployment's environment variables and returns the platform's message.
-///
-/// When the deployment's manager stores values, the values go there and the
-/// platform receives only a reference to each. Otherwise the platform receives
-/// the values, as it did before managers stored them.
-/// The variable names the deployment has now. Empty when they cannot be read:
-/// removing their manager copies is best effort.
-async fn current_environment_names(
+/// The resources that receive a variable, among a deployment's recorded resources, as
+/// `(id, type)` sorted by id. A variable without targets reaches every worker, container and
+/// daemon of the stack except the containers Alien adds itself.
+fn resources_receiving(
+    detail: &Value,
+    variable_targets: &[Option<Vec<String>>],
+) -> Vec<(String, String)> {
+    let Some(state) = detail
+        .get("stackState")
+        .filter(|state| !state.is_null())
+        .and_then(|state| serde_json::from_value::<StackState>(state.clone()).ok())
+    else {
+        return Vec::new();
+    };
+    let mut receiving: Vec<(String, String)> = state
+        .resources
+        .iter()
+        .filter(|(_, resource)| {
+            matches!(
+                resource.resource_type.as_str(),
+                "worker" | "container" | "daemon"
+            )
+        })
+        .filter(|(id, _)| {
+            let alien_added = sandbox_egress::is_managed_gateway_among(
+                state.resources.values().map(|resource| &resource.config),
+                id,
+            );
+            variable_targets
+                .iter()
+                .any(|targets| env_delivered_to_resource(targets, id, alien_added))
+        })
+        .map(|(id, resource)| (id.clone(), resource.resource_type.clone()))
+        .collect();
+    receiving.sort();
+    receiving
+}
+
+/// Says which resources restart when their environment changes, so a change meant for one
+/// resource doesn't surprise the others.
+fn print_restart_notice(detail: &Value, variable_targets: &[Option<Vec<String>>]) {
+    let receiving = resources_receiving(detail, variable_targets);
+    if receiving.is_empty() {
+        return;
+    }
+    println!("These resources restart when their environment changes:");
+    for (id, resource_type) in &receiving {
+        println!("  {id} ({resource_type})");
+    }
+    if variable_targets.iter().any(Option::is_none) {
+        println!(
+            "{}",
+            dim_label(
+                "Variables without targets reach every resource listed. To limit a variable to some resources, use `--env-targeted KEY=VALUE:resource-id` (or `--secret-targeted`)."
+            )
+        );
+    }
+}
+
+/// Target patterns as text; `None` when the variable has no targets.
+fn target_patterns(
+    targets: Option<&[alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem]>,
+) -> Option<Vec<String>> {
+    targets.map(|targets| {
+        targets
+            .iter()
+            .filter_map(|target| serde_json::to_value(target).ok())
+            .filter_map(|target| target.as_str().map(str::to_string))
+            .collect()
+    })
+}
+
+/// The variables the deployment has now, as `(name, targets)`. Empty when they cannot be
+/// read: the restart notice then covers only the new variables, and removing the manager
+/// copies of dropped values is best effort.
+async fn current_environment(
     client: &alien_platform_api::Client,
     workspace: &str,
     deployment_id: &str,
-) -> Vec<String> {
+) -> Vec<(String, Option<Vec<String>>)> {
     let current = platform_json(
         client,
         reqwest::Method::GET,
@@ -592,13 +672,29 @@ async fn current_environment_names(
         .and_then(|body| {
             body.get("variables")?.as_array().map(|rows| {
                 rows.iter()
-                    .filter_map(|row| row.get("name")?.as_str().map(str::to_string))
+                    .filter_map(|row| {
+                        let targets =
+                            row.get("targetResources")
+                                .and_then(Value::as_array)
+                                .map(|targets| {
+                                    targets
+                                        .iter()
+                                        .filter_map(|target| target.as_str().map(str::to_string))
+                                        .collect()
+                                });
+                        Some((row.get("name")?.as_str()?.to_string(), targets))
+                    })
                     .collect()
             })
         })
         .unwrap_or_default()
 }
 
+/// Replaces the deployment's environment variables and returns the platform's message.
+///
+/// When the deployment's manager stores values, the values go there and the
+/// platform receives only a reference to each. Otherwise the platform receives
+/// the values, as it did before managers stored them.
 pub(crate) async fn save_environment_variables(
     client: &alien_platform_api::Client,
     workspace: &str,
