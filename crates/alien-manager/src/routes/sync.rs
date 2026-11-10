@@ -4411,6 +4411,7 @@ fn default_monitoring(
     let token = deployment.deployment_token.as_ref()?;
     forwards.then(|| alien_core::OtlpConfig {
         logs_endpoint: format!("{}/v1/logs", config.base_url()),
+        credentials: None,
         logs_auth_header: format!("authorization=Bearer {token}"),
         metrics_endpoint: Some(format!("{}/v1/metrics", config.base_url())),
         metrics_auth_header: Some(format!("authorization=Bearer {token}")),

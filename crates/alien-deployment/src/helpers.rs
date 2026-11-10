@@ -9,7 +9,8 @@ use alien_core::{
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
     ResourceLifecycle, ResourceStatus, RuntimeMetadata, SecretDelivery, Stack, StackResourceState,
     StackState, TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    ENV_ALIEN_TELEMETRY_CREDENTIALS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -442,6 +443,9 @@ fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
 /// - `ALIEN_RUNTIME_SECRETS`          — workers only; points
 ///   alien-worker-runtime at runtime-owned vault secrets. These are not forwarded to
 ///   the child application process.
+/// - `ALIEN_TELEMETRY_CREDENTIALS`    — workers only, when the monitoring config has
+///   `credentials`; where alien-worker-runtime trades proof of its cloud identity for
+///   short-lived log export credentials, instead of reading the vault auth header.
 ///
 /// Runtime-less Containers and Daemons do not store auth headers in their
 /// resource config. Their platform controller reads the values directly from
@@ -562,6 +566,17 @@ pub fn inject_monitoring_environment_variables(
                         message: "Failed to serialize ALIEN_RUNTIME_SECRETS config".to_string(),
                     })?;
                 env.insert(ENV_ALIEN_RUNTIME_SECRETS.to_string(), runtime_secrets_json);
+                if let Some(credentials) = &monitoring.credentials {
+                    let credentials_json = serde_json::to_string(credentials)
+                        .into_alien_error()
+                        .context(ErrorData::InternalError {
+                            message: "Failed to serialize ALIEN_TELEMETRY_CREDENTIALS".to_string(),
+                        })?;
+                    env.insert(
+                        ENV_ALIEN_TELEMETRY_CREDENTIALS.to_string(),
+                        credentials_json,
+                    );
+                }
             }
 
             debug!(
@@ -2679,6 +2694,7 @@ mod tests {
         let mut stack = make_single_function_stack("worker");
         let monitoring = OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer token".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
@@ -2720,6 +2736,7 @@ mod tests {
             );
         let monitoring = OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer token".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
@@ -2743,6 +2760,47 @@ mod tests {
             func.environment.get(OTEL_RESOURCE_ATTRIBUTES).unwrap(),
             "alien.deployment_id=dep_test,custom=value"
         );
+    }
+
+    #[test]
+    fn monitoring_credentials_reach_workers_only() {
+        let credentials = alien_core::OtlpCredentials {
+            url: "https://manager.test/v1/telemetry/credentials".to_string(),
+            audience: "mgr_test".to_string(),
+        };
+        let monitoring = |credentials| OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials,
+            logs_auth_header: "authorization=Bearer token".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: std::collections::HashMap::new(),
+        };
+
+        let mut stack = make_compute_stack();
+        inject_monitoring_environment_variables(
+            &mut stack,
+            &monitoring(Some(credentials.clone())),
+            Platform::Aws,
+        )
+        .unwrap();
+        let injected: alien_core::OtlpCredentials =
+            serde_json::from_str(&resource_env(&stack, "worker")[ENV_ALIEN_TELEMETRY_CREDENTIALS])
+                .unwrap();
+        assert_eq!(injected, credentials);
+        // The vault header stays for runtimes that predate credentials.
+        assert!(resource_env(&stack, "worker").contains_key(ENV_ALIEN_RUNTIME_SECRETS));
+        for id in ["web", "agent"] {
+            assert!(
+                !resource_env(&stack, id).contains_key(ENV_ALIEN_TELEMETRY_CREDENTIALS),
+                "runtime-less '{id}' has no runtime to read it"
+            );
+        }
+
+        let mut stack = make_compute_stack();
+        inject_monitoring_environment_variables(&mut stack, &monitoring(None), Platform::Aws)
+            .unwrap();
+        assert!(!resource_env(&stack, "worker").contains_key(ENV_ALIEN_TELEMETRY_CREDENTIALS));
     }
 
     fn make_compute_stack() -> Stack {
@@ -2800,6 +2858,7 @@ mod tests {
     fn make_monitoring_with_metrics() -> OtlpConfig {
         OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer logs-token".to_string(),
             metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
             metrics_auth_header: None,
@@ -3041,6 +3100,7 @@ mod tests {
         let mut config = make_config(make_snapshot(&[], &[("KEEP", "current")]));
         config.monitoring = Some(OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer current".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
@@ -3497,6 +3557,7 @@ mod tests {
         second.environment_variables.hash = "second".to_string();
         second.monitoring = Some(OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer next".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
@@ -3726,6 +3787,7 @@ mod tests {
         let mut config = make_config(make_snapshot(&[], &[("CURRENT", "current-value")]));
         config.monitoring = Some(OtlpConfig {
             logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "monitoring-value".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,

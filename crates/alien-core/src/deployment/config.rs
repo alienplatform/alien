@@ -265,6 +265,11 @@ pub struct OtlpConfig {
     /// Auth header value in "key=value,..." format.
     /// Example: "authorization=Bearer <write-token>"
     pub logs_auth_header: String,
+    /// Where a Worker's runtime trades proof of its cloud identity for short-lived log export
+    /// credentials. A runtime that knows this field exports with those credentials and does not
+    /// read `logs_auth_header`; an older runtime ignores it and keeps using the header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<OtlpCredentials>,
     /// Full OTLP metrics endpoint URL (optional).
     /// When set, the worker runtime exports its own VM/container orchestration metrics here.
     /// Example: "https://api.axiom.co/v1/metrics"
@@ -287,6 +292,23 @@ pub struct OtlpConfig {
     /// the runtime/exporter.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub resource_attributes: HashMap<String, String>,
+}
+
+/// How a Worker's runtime gets short-lived log export credentials from its manager.
+///
+/// The runtime sends the manager a proof of the cloud identity it runs as (a signed AWS STS
+/// `GetCallerIdentity` request, or a Google ID token), made for `audience` so that no other
+/// service can reuse it. The manager answers with the endpoint to export to and an
+/// `authorization` value that expires.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OtlpCredentials {
+    /// URL of the manager's credentials endpoint.
+    /// Example: "https://<manager-host>/v1/telemetry/credentials"
+    pub url: String,
+    /// The audience every proof is made for: the id of the manager that serves `url`.
+    pub audience: String,
 }
 
 #[cfg(test)]
