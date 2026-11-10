@@ -1852,7 +1852,7 @@ impl StackExecutor {
     /// data required for the next iteration is carried within the returned
     /// `StackState`.
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
-        self.step_inner(state, true, false).await
+        self.step_inner(state, true, None).await
     }
 
     /// Steps controllers that are already active without planning stack changes.
@@ -1861,7 +1861,7 @@ impl StackExecutor {
     /// stack, resume failed updates, or initiate create/update/delete transitions.
     /// It is suitable for periodic observation of a Running deployment.
     pub async fn refresh(&self, state: StackState) -> Result<StepResult> {
-        self.step_inner(state, false, false).await
+        self.step_inner(state, false, None).await
     }
 
     /// Runs the Ready handler of every Running resource. Nothing is planned and no other
@@ -1873,8 +1873,17 @@ impl StackExecutor {
     /// not repeated on every call. Only the controller state of a resource that was Running
     /// before and is Running without an error after is taken. The rest of the returned state
     /// is the state that was passed in.
-    pub async fn observe_running(&self, state: StackState) -> Result<RunningObservation> {
-        let observed = self.step_inner(state.clone(), false, true).await?;
+    ///
+    /// `already_run` lists resources the caller's own step has just run. They are left alone,
+    /// so a pass does not repeat their cloud calls or replace the controller state that step saved.
+    pub async fn observe_running(
+        &self,
+        state: StackState,
+        already_run: &[String],
+    ) -> Result<RunningObservation> {
+        let observed = self
+            .step_inner(state.clone(), false, Some(already_run))
+            .await?;
         let mut kept = state;
         for (resource_id, after) in observed.next_state.resources {
             let Some(before) = kept.resources.get_mut(&resource_id) else {
@@ -1995,7 +2004,7 @@ impl StackExecutor {
         }
 
         state.resources.extend(logical_compute);
-        self.step_inner(state, false, false).await
+        self.step_inner(state, false, None).await
     }
 
     #[alien_event(AlienEvent::StackStep {
@@ -2006,8 +2015,9 @@ impl StackExecutor {
         &self,
         state: StackState,
         apply_plan: bool,
-        observe_only: bool,
+        observing: Option<&[String]>,
     ) -> Result<StepResult> {
+        let observe_only = observing.is_some();
         validate_stack_controller_state_versions(&state)?;
 
         // Setup must be able to repair the installed ceiling. An empty desired stack
@@ -2600,10 +2610,10 @@ impl StackExecutor {
             let current_resource_view = next_state.resources.get(resource_id).unwrap(); // Should always exist
                                                                                         // Check terminality based on *desired* state + current status
             if observe_only
-                && !matches!(
+                && (!matches!(
                     current_resource_view.status,
                     ResourceStatus::Running | ResourceStatus::RefreshFailed
-                )
+                ) || observing.is_some_and(|already_run| already_run.contains(resource_id)))
             {
                 continue;
             }

@@ -185,7 +185,7 @@ fn reports_a_group_it_could_not_delete() {
         &api,
         json!({"id": GROUP_ID, "projectId": PROJECT, "created": true}),
     );
-    let delete = mock_delete_group(&api, 409);
+    let delete = mock_delete_group(&api, 500);
 
     let run = run_deploy(&api);
 
@@ -200,6 +200,38 @@ fn reports_a_group_it_could_not_delete() {
         run.text.contains(&format!(
             "Could not delete the empty deployment group {GROUP_ID}"
         )),
+        "{}",
+        run.text
+    );
+}
+
+#[test]
+fn says_a_group_that_holds_a_deployment_was_kept() {
+    let api = MockServer::start();
+    mock_refusing_platform(
+        &api,
+        json!({"id": GROUP_ID, "projectId": PROJECT, "created": true}),
+    );
+    let delete = mock_delete_group(&api, 409);
+
+    let run = run_deploy(&api);
+
+    assert!(!run.success, "deploy should fail: {}", run.text);
+    delete.assert_hits(1);
+    assert!(
+        run.text.contains("SETUP_METHOD_CANNOT_INSTALL_RESOURCES"),
+        "{}",
+        run.text
+    );
+    assert!(
+        run.text.contains(&format!(
+            "Deployment group {GROUP_ID} already holds a deployment"
+        )),
+        "{}",
+        run.text
+    );
+    assert!(
+        !run.text.contains("No deployment was created"),
         "{}",
         run.text
     );

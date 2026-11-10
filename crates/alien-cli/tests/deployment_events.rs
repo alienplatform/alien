@@ -239,3 +239,21 @@ fn a_refused_list_is_still_an_error() {
         text(&output)
     );
 }
+
+#[test]
+fn an_event_without_an_id_is_an_error() {
+    let api = MockServer::start();
+    mock_platform(&api);
+    let mut broken = timeline().pop().unwrap();
+    broken.as_object_mut().unwrap().remove("id");
+    mock_events(&api, true, vec![broken]);
+
+    let output = run_events(&api, &[]);
+
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("an event has no `id`"),
+        "{}",
+        text(&output)
+    );
+}

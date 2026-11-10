@@ -806,8 +806,11 @@ mod tests {
         });
         let executor = observing_executor(&stack, provider);
 
-        let first = executor.observe_running(state).await.unwrap();
-        let second = executor.observe_running(first.state.clone()).await.unwrap();
+        let first = executor.observe_running(state, &[]).await.unwrap();
+        let second = executor
+            .observe_running(first.state.clone(), &[])
+            .await
+            .unwrap();
 
         assert_eq!(first.heartbeats.len(), 1);
         assert_eq!(
@@ -838,7 +841,7 @@ mod tests {
         let before = serde_json::to_value(&state).unwrap();
         let executor = observing_executor(&stack, MockPlatformServiceProvider::new());
 
-        let observation = executor.observe_running(state).await.unwrap();
+        let observation = executor.observe_running(state, &[]).await.unwrap();
 
         assert!(observation.heartbeats.is_empty());
         assert_eq!(serde_json::to_value(&observation.state).unwrap(), before);
@@ -846,5 +849,35 @@ mod tests {
             observation.state.resources["llm"].status,
             ResourceStatus::Running
         );
+    }
+
+    /// An update's own step already ran the resources it changed. Observing them again in the
+    /// same pass would repeat their cloud calls and replace the controller state the step saved.
+    #[tokio::test]
+    async fn an_observation_skips_resources_the_step_already_ran() {
+        let mut bedrock = MockBedrockApi::new();
+        bedrock.expect_get_foundation_model_availability().times(0);
+        bedrock.expect_list_inference_profiles().times(0);
+        let bedrock = Arc::new(bedrock);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_bedrock_client()
+            .times(0)
+            .returning(move |_| Ok(bedrock.clone()));
+        let (stack, state) = running_ai_stack(AwsAiController {
+            state: AwsAiState::Ready,
+            region: Some("us-west-2".to_string()),
+            ..Default::default()
+        });
+        let before = serde_json::to_value(&state).unwrap();
+        let executor = observing_executor(&stack, provider);
+
+        let observation = executor
+            .observe_running(state, &["llm".to_string()])
+            .await
+            .unwrap();
+
+        assert!(observation.heartbeats.is_empty());
+        assert_eq!(serde_json::to_value(&observation.state).unwrap(), before);
     }
 }

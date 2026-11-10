@@ -1647,12 +1647,13 @@ async fn deployment_events_task(
                     })
                 })?
                 .with_timezone(&chrono::Utc);
-            EventDisplayRow::try_new(
-                event["id"].as_str().unwrap_or_default().to_string(),
-                created_at,
-                &event["data"],
-                &event["state"],
-            )
+            let id = event["id"].as_str().ok_or_else(|| {
+                AlienError::new(ErrorData::JsonError {
+                    operation: "read events".to_string(),
+                    reason: "an event has no `id`".to_string(),
+                })
+            })?;
+            EventDisplayRow::try_new(id.to_string(), created_at, &event["data"], &event["state"])
         })
         .collect::<Result<Vec<_>>>()?;
     print_event_table(&rows);
@@ -1669,7 +1670,10 @@ async fn list_deployment_events(
     limit: NonZeroU64,
 ) -> Result<serde_json::Value> {
     let action = format!("listing events for deployment '{deployment_id}'");
-    let path = format!("/v1/events?deploymentId={deployment_id}&limit={limit}");
+    let path = format!(
+        "/v1/events?deploymentId={}&limit={limit}",
+        urlencoding::encode(deployment_id)
+    );
     let (status, text) = value_access::platform_request(
         client,
         reqwest::Method::GET,

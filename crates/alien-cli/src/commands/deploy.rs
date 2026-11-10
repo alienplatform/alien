@@ -1057,7 +1057,10 @@ async fn settle_group_after_refusal(
             "No deployment was created. Deployment group {group_id} may be empty; this manager did not say whether the run created it. Delete it with `alien deployment-groups delete {group_id}` if it is not needed."
         ),
         Some(Some(true)) => match delete_deployment_group(http_client, base_url, workspace, group_id).await {
-            Ok(()) => format!("No deployment was created. Deleted the empty deployment group {group_id} this run made."),
+            Ok(true) => format!("No deployment was created. Deleted the empty deployment group {group_id} this run made."),
+            Ok(false) => format!(
+                "Deployment group {group_id} already holds a deployment, so it was kept."
+            ),
             Err(delete_error) => format!(
                 "No deployment was created. Could not delete the empty deployment group {group_id} this run made ({delete_error}). Delete it with `alien deployment-groups delete {group_id}`."
             ),
@@ -1071,7 +1074,7 @@ async fn delete_deployment_group(
     base_url: &str,
     workspace: Option<&str>,
     group_id: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let path = format!("/v1/deployment-groups/{}", urlencoding::encode(group_id));
     let url = api_url(base_url, &path, workspace)?;
     let response = http_client
@@ -1082,7 +1085,12 @@ async fn delete_deployment_group(
         .context(ErrorData::ConfigurationError {
             message: "Failed to delete deployment group".to_string(),
         })?;
-    parse_empty_api_response(response, "Failed to delete deployment group").await
+    // The manager refuses to delete a group that holds a deployment.
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(false);
+    }
+    parse_empty_api_response(response, "Failed to delete deployment group").await?;
+    Ok(true)
 }
 
 async fn create_first_party_deployment_session(

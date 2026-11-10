@@ -21,19 +21,6 @@ fn base_stack() -> Stack {
         .build()
 }
 
-/// Adds two storages, the second after the first, so the update takes more than one step.
-fn two_step_update_stack() -> Stack {
-    Stack::new("beat".to_string())
-        .add(storage("kept"), ResourceLifecycle::Live)
-        .add(storage("first"), ResourceLifecycle::Live)
-        .add_with_dependencies(
-            storage("second"),
-            ResourceLifecycle::Live,
-            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "first")],
-        )
-        .build()
-}
-
 fn required_secret_stack() -> Stack {
     let mut stack = base_stack();
     stack.inputs = vec![StackInputDefinition {

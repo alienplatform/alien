@@ -56,7 +56,14 @@ async fn untouched_heartbeats(
     if !untouched_heartbeat_due(&stack_state.resource_prefix) {
         return vec![];
     }
-    let observation = match executor.observe_running(stack_state.clone()).await {
+    let already_run: Vec<String> = already_reported
+        .iter()
+        .map(|heartbeat| heartbeat.resource_id.clone())
+        .collect();
+    let observation = match executor
+        .observe_running(stack_state.clone(), &already_run)
+        .await
+    {
         Ok(observation) => observation,
         Err(error) => {
             warn!(%error, "Could not read the running resources an update leaves alone");
@@ -64,15 +71,7 @@ async fn untouched_heartbeats(
         }
     };
     *stack_state = observation.state;
-    observation
-        .heartbeats
-        .into_iter()
-        .filter(|heartbeat| {
-            !already_reported
-                .iter()
-                .any(|reported| reported.resource_id == heartbeat.resource_id)
-        })
-        .collect()
+    observation.heartbeats
 }
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
