@@ -69,6 +69,13 @@ pub struct AwsRemoteStackManagementController {
     /// controllers from before revisions were recorded.
     #[serde(default)]
     pub(crate) management_permissions_revision: Option<String>,
+    /// Reads of the install's signing settings in a row that AWS could not answer.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) signing_read_failures: u32,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 #[controller]
@@ -170,7 +177,9 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if !refuse_a_config_without_the_installs_signing(ctx).await? {
+        if !refuse_a_config_without_the_installs_signing(ctx, &mut self.signing_read_failures)
+            .await?
+        {
             return Ok(HandlerAction::Continue {
                 state: ApplyingManagementPermissions,
                 suggested_delay: Some(SIGNING_READ_RETRY_DELAY),
@@ -260,7 +269,9 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        if !refuse_a_config_without_the_installs_signing(ctx).await? {
+        if !refuse_a_config_without_the_installs_signing(ctx, &mut self.signing_read_failures)
+            .await?
+        {
             return Ok(HandlerAction::Continue {
                 state: UpdateStart,
                 suggested_delay: Some(SIGNING_READ_RETRY_DELAY),
@@ -1424,6 +1435,7 @@ impl AwsRemoteStackManagementController {
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
             management_permissions_revision: None,
+            signing_read_failures: 0,
             permissions_boundary_arn: None,
             permissions_boundary_document: None,
             _internal_stay_count: None,
@@ -1462,6 +1474,11 @@ fn permissions_boundary_description(resource_prefix: &str) -> String {
 /// timeout or service outage.
 const SIGNING_READ_RETRY_DELAY: Duration = Duration::from_secs(30);
 
+/// How many reads in a row may go unanswered before the step fails, about an hour at
+/// [`SIGNING_READ_RETRY_DELAY`]. A deployment that can never reach the parameter store then
+/// shows an error instead of waiting for ever.
+const SIGNING_READ_MAX_FAILURES: u32 = 120;
+
 /// Refuse to render management permissions from a deployment config without signing settings
 /// when the install has them at `/signed/<prefix>/fingerprint`: the config comes from the control
 /// plane, the parameter only from setup.
@@ -1472,9 +1489,11 @@ const SIGNING_READ_RETRY_DELAY: Duration = Duration::from_secs(30);
 ///
 /// Returns `false` when AWS could not answer for a transient reason (throttling, a timeout or an
 /// outage): the caller waits and asks again rather than failing the deployment, since the answer
-/// decides nothing until it is known. Any other failure is an error.
+/// decides nothing until it is known. After [`SIGNING_READ_MAX_FAILURES`] unanswered reads in a
+/// row, or on any other failure, it is an error.
 async fn refuse_a_config_without_the_installs_signing(
     ctx: &ResourceControllerContext<'_>,
+    unanswered_reads: &mut u32,
 ) -> Result<bool> {
     if ctx.deployment_config.stack_settings.signing.is_some() {
         return Ok(true);
@@ -1504,6 +1523,7 @@ async fn refuse_a_config_without_the_installs_signing(
                     Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
                 ) =>
         {
+            *unanswered_reads = 0;
             Ok(true)
         }
         Err(error)
@@ -1517,6 +1537,15 @@ async fn refuse_a_config_without_the_installs_signing(
                 )
             ) =>
         {
+            *unanswered_reads += 1;
+            if *unanswered_reads >= SIGNING_READ_MAX_FAILURES {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Could not read '{settings_location}' to tell whether the install is protected, {unanswered_reads} times in a row"
+                    ),
+                    resource_id: Some(ctx.desired_config.id().to_string()),
+                }));
+            }
             warn!(
                 settings_location = %settings_location,
                 error = %error,
@@ -1771,6 +1800,84 @@ mod tests {
             12,
             "each throttled read waits {SIGNING_READ_RETRY_DELAY:?}: {delays:?}"
         );
+    }
+
+    /// A parameter store that never answers must end in an error, not a deployment that stays
+    /// "Updating" for ever.
+    #[tokio::test]
+    async fn a_signing_read_that_never_gets_an_answer_ends_in_an_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        let iam = Arc::new(iam);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let mut ssm = MockSsmApi::new();
+        ssm.expect_get_parameter().returning(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "no route to ssm".to_string(),
+                },
+            ))
+        });
+        let ssm = Arc::new(ssm);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .resource_prefix("acme-prod")
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let mut steps = 0;
+        let mut waits = 0;
+        let error = loop {
+            steps += 1;
+            assert!(steps < 300, "the step never failed");
+            match executor.step().await {
+                Ok(step) if step.suggested_delay == Some(SIGNING_READ_RETRY_DELAY) => waits += 1,
+                Ok(_) => {}
+                Err(error) => break error,
+            }
+        };
+
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR", "{error:?}");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            SIGNING_READ_MAX_FAILURES as usize,
+            "the cap, no more"
+        );
+        assert_eq!(waits, SIGNING_READ_MAX_FAILURES as usize - 1);
     }
 
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny

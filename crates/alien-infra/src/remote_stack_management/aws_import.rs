@@ -56,6 +56,7 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
             permissions_boundary_document: data.permissions_boundary_document,
             // Setup was applied by an external engine, which refreshes it itself.
             management_permissions_revision: None,
+            signing_read_failures: 0,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
