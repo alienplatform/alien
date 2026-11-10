@@ -364,6 +364,7 @@ async fn a_command_that_takes_every_process_slot_still_meets_its_deadline() {
                 timeout: Duration::from_secs(4),
             },
         )
+        .await
         .expect("starts");
     let (stdout, terminal) = drain(&mut command, Duration::from_secs(30)).await;
     let after = run(sandbox.as_ref(), &id, "echo alive").await;
@@ -425,5 +426,83 @@ async fn a_command_whose_child_escapes_its_group_ends_with_its_session() {
     assert!(
         after.is_err(),
         "nothing runs in a stopped session: {after:?}"
+    );
+}
+
+/// Collects a one-shot command's stdout, failing on any exit other than 0.
+async fn one_shot(sandbox: &dyn Sandbox, id: &str, script: &str) -> String {
+    let mut stream = sandbox
+        .run_command(id, sh(script, Duration::from_secs(20)))
+        .await
+        .expect("the command starts");
+    let mut stdout = Vec::new();
+    while let Some(item) = stream.next().await {
+        match item.expect("a frame") {
+            CommandOutput::Stdout { data, .. } => stdout.extend(data),
+            CommandOutput::Stderr { .. } => {}
+            CommandOutput::Exit { code, .. } => assert_eq!(code, 0, "{script}"),
+        }
+    }
+    String::from_utf8_lossy(&stdout).into_owned()
+}
+
+/// The container's own user is root, so every path that runs something in the session must name
+/// the session's user. Each public path is checked here; only the idle `sleep` and the signal
+/// shell run as root.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn every_path_into_the_session_runs_as_its_user_and_only_the_signal_shell_is_root() {
+    const KEY: &str = "interactive-users";
+    let (_dir, sandbox, id) = local_session(KEY, 64).await;
+    let checked = async {
+        let user = one_shot(sandbox.as_ref(), &id, "echo \"$(id -u):$(id -g)\"").await;
+        let interactive = run(sandbox.as_ref(), &id, "echo \"$(id -u):$(id -g)\"").await;
+        sandbox
+            .write_files(
+                &id,
+                [("owned/probe".to_string(), b"secret".to_vec())]
+                    .into_iter()
+                    .collect(),
+            )
+            .await
+            .expect("the write runs");
+        let written = one_shot(
+            sandbox.as_ref(),
+            &id,
+            "stat -c '%u:%g' /sandbox/owned; stat -c '%u:%g' /sandbox/owned/probe; \
+             chmod 0400 /sandbox/owned/probe",
+        )
+        .await;
+        // Readable only by its owner: root here holds no capability that would read past that.
+        let read = sandbox.read_file(&id, "owned/probe").await;
+        let roots = one_shot(
+            sandbox.as_ref(),
+            &id,
+            "for p in /proc/[0-9]*; do \
+               [ \"$(awk '/^Uid/ {print $2}' $p/status 2>/dev/null)\" = 0 ] || continue; \
+               tr '\\0' ' ' < $p/cmdline | cut -c1-25; \
+             done | sort",
+        )
+        .await;
+        (user, interactive, written, read, roots)
+    }
+    .await;
+    let _ = sandbox.terminate(&id).await;
+    SandboxRoute::remove(KEY).await;
+
+    let (user, interactive, written, read, roots) = checked;
+    let user = user.trim_end().to_string();
+    let (uid, gid) = user.split_once(':').expect("uid:gid");
+    assert!(uid != "0" && gid != "0", "run_command runs as root: {user}");
+    assert_eq!(
+        interactive.expect("runs").trim_end(),
+        user,
+        "run_interactive"
+    );
+    assert_eq!(written, format!("{user}\n{user}\n"), "write_files");
+    assert_eq!(read.expect("read_file reads its own file"), b"secret");
+    assert_eq!(
+        roots, "sh -c while read -r g n t\nsleep 2147483647 \n",
+        "only the idle sleep and the signal shell run as root"
     );
 }

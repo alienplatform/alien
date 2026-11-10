@@ -29,6 +29,12 @@ use alien_error::{AlienError, Context, IntoAlienError};
 const LABEL_SANDBOX: &str = "dev.alien.sandbox";
 /// Label carrying the session id within that sandbox.
 const LABEL_SESSION: &str = "dev.alien.sandbox.session";
+/// Label carrying the `uid:gid` every command in the session runs as. Set by the manager when it
+/// creates the container and fixed from then on: nothing inside the container can change it.
+const LABEL_EXEC_USER: &str = "dev.alien.sandbox.exec-user";
+/// Prefix of the environment names the manager sets in a session. A session's own environment
+/// may not use it, so code in the session never reads a value the declaration chose.
+const RESERVED_ENV_PREFIX: &str = "ALIEN_SANDBOX_";
 
 /// Where a session's writable area is mounted, and what every caller-supplied path resolves
 /// against. The same root the in-sandbox agent uses on the cloud backends, so one path means
@@ -140,6 +146,20 @@ impl LocalSandboxManager {
     ) -> Result<SandboxSessionHandle> {
         let name = Self::container_name(sandbox, session_id);
 
+        if let Some(reserved) = config
+            .env
+            .keys()
+            .find(|name| name.starts_with(RESERVED_ENV_PREFIX))
+        {
+            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: session_id.to_string(),
+                operation: format!(
+                    "environment variable {reserved:?} is reserved: names starting with \
+                     {RESERVED_ENV_PREFIX} are set by the sandbox itself"
+                ),
+            }));
+        }
+
         // Docker accepts port bindings on a network-less container and silently drops them, so
         // a preview port under deny egress would look configured and never resolve.
         if !config.preview_ports.is_empty() && config.egress == SandboxEgressMode::Deny {
@@ -179,6 +199,10 @@ impl LocalSandboxManager {
         let labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
             (LABEL_SESSION.to_string(), session_id.to_string()),
+            (
+                LABEL_EXEC_USER.to_string(),
+                format!("{}:{}", image.identity.uid, image.identity.gid),
+            ),
         ]);
 
         // Bound to 127.0.0.1, never 0.0.0.0: a preview is for the developer's own machine, and
@@ -254,12 +278,11 @@ impl LocalSandboxManager {
             } else {
                 Some(exposed_ports)
             },
-            // Hold the session open without a shell of its own; commands arrive through exec.
-            entrypoint: Some(vec!["/bin/sh".to_string()]),
-            cmd: Some(vec![
-                "-c".to_string(),
-                "while true; do sleep 3600; done".to_string(),
-            ]),
+            // Hold the session open without a shell of its own; commands arrive through exec. One
+            // sleep that never forks again, so a session out of process slots does not spin it.
+            // Whole seconds, which every `sleep` reads, unlike `infinity`.
+            entrypoint: Some(vec!["sleep".to_string()]),
+            cmd: Some(vec!["2147483647".to_string()]),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -483,15 +506,10 @@ impl LocalSandboxManager {
     }
 
     /// The user every command in the session runs as: the image's resolved, non-root identity,
-    /// which the session was created with. Named on each exec, because the container's own
-    /// user is root. Missing, it fails rather than fall back to root.
+    /// from the label the manager set when it created the container. Named on each exec,
+    /// because the container's own user is root. Missing, or root, it fails rather than fall
+    /// back to root.
     async fn session_user(&self, container_id: &str) -> Result<String> {
-        let failed = |operation: &str| {
-            AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: container_id.to_string(),
-                operation: operation.to_string(),
-            })
-        };
         let inspected = self
             .docker
             .inspect_container(container_id, None)
@@ -501,20 +519,16 @@ impl LocalSandboxManager {
                 session_id: container_id.to_string(),
                 operation: "inspect for the session's user".to_string(),
             })?;
-        let env = inspected
+        let label = inspected
             .config
-            .and_then(|config| config.env)
-            .unwrap_or_default();
-        let id = |name: &str| {
-            env.iter()
-                .find_map(|entry| entry.strip_prefix(name)?.strip_prefix('='))
-                .and_then(|value| value.parse::<u32>().ok())
-        };
-        match (id("ALIEN_SANDBOX_EXEC_UID"), id("ALIEN_SANDBOX_EXEC_GID")) {
-            (Some(0), _) => Err(failed("the session's user is root")),
-            (Some(uid), Some(gid)) => Ok(format!("{uid}:{gid}")),
-            _ => Err(failed("the session has no recorded user")),
-        }
+            .and_then(|config| config.labels)
+            .and_then(|labels| labels.get(LABEL_EXEC_USER).cloned());
+        exec_user(label.as_deref()).map_err(|reason| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: reason.to_string(),
+            })
+        })
     }
 
     async fn exec_attached(
@@ -857,6 +871,20 @@ impl LocalSandboxManager {
 /// would let a caller name any file in the image, and the session root is the only writable
 /// area anyway.
 /// A command started by [`LocalSandboxManager::exec_interactive`].
+/// Reads the session's `uid:gid` label. Root is refused for either id, as the image identity
+/// resolution refuses it.
+fn exec_user(label: Option<&str>) -> std::result::Result<String, &'static str> {
+    let label = label.ok_or("the session has no recorded user")?;
+    let (uid, gid) = label
+        .split_once(':')
+        .and_then(|(uid, gid)| Some((uid.parse::<u32>().ok()?, gid.parse::<u32>().ok()?)))
+        .ok_or("the session's recorded user is not uid:gid")?;
+    if uid == 0 || gid == 0 {
+        return Err("the session's recorded user is root");
+    }
+    Ok(format!("{uid}:{gid}"))
+}
+
 /// The user the signal shell runs as. Only root holds the one capability the container keeps.
 const ROOT_USER: &str = "0";
 
@@ -971,6 +999,63 @@ mod tests {
         }
         assert_eq!(command.user.as_deref(), Some("1000:1000"));
         assert_eq!(shell.user.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn the_exec_user_is_the_label_and_never_root() {
+        assert_eq!(exec_user(Some("1000:1001")).as_deref(), Ok("1000:1001"));
+        for refused in [
+            None,
+            Some("0:1000"),
+            Some("1000:0"),
+            Some("1000"),
+            Some("a:b"),
+        ] {
+            assert!(exec_user(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    /// A declaration that names the manager's own variables is refused before Docker is asked
+    /// for anything, so it never chooses what code in the session reads.
+    #[tokio::test]
+    async fn a_session_environment_cannot_set_the_sandbox_variables() {
+        let server = MockServer::start_async().await;
+        let any = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500);
+            })
+            .await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+        };
+        for name in [
+            "ALIEN_SANDBOX_EXEC_UID",
+            "ALIEN_SANDBOX_EXEC_GID",
+            "ALIEN_SANDBOX_ROOT",
+        ] {
+            let error = manager
+                .create_session(
+                    "box",
+                    "s1",
+                    &SandboxSessionConfig {
+                        image: "alpine".to_string(),
+                        cpu_cores: 1.0,
+                        memory_bytes: 1 << 28,
+                        pids_limit: None,
+                        scratch_bytes: 1 << 24,
+                        egress: SandboxEgressMode::Deny,
+                        preview_ports: Vec::new(),
+                        env: HashMap::from([(name.to_string(), "0".to_string())]),
+                    },
+                )
+                .await
+                .expect_err("refused");
+            assert!(error.to_string().contains("is reserved"), "{error}");
+        }
+        any.assert_hits_async(0).await;
     }
 
     #[tokio::test]
