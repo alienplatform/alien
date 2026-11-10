@@ -6,7 +6,7 @@
 
 use alien_core::sync::TargetDynamicContainer;
 
-use super::{hydrate::load_held, StoredValue, ValueKind, ValueScope, ValueStore};
+use super::{hydrate::load_held, StoredValue, ValueKind, ValueScope, ValueSlot, ValueStore};
 use crate::error::{ErrorData, Result};
 
 /// Adds the stored environment values of each container in `targets`.
@@ -36,18 +36,20 @@ pub async fn load_container_env(
             Some(slots) => {
                 let mut values = Vec::with_capacity(slots.len());
                 for held in &slots {
-                    let (slot, stored) = load_held(store, &scope, held).await?;
-                    match slot.container_env_parts() {
-                        Some((container, name)) if container == target.name => {
-                            values.push((name.to_string(), stored));
-                        }
+                    // The owner is checked before the store is read, so a slot of another
+                    // container is refused as such, never reported as missing or changed.
+                    let slot: ValueSlot = held.slot.parse()?;
+                    let name = match slot.container_env_parts() {
+                        Some((container, name)) if container == target.name => name.to_string(),
                         _ => {
                             return Err(ErrorData::bad_request(format!(
                                 "Value slot '{}' does not belong to container '{}'",
                                 held.slot, target.name
                             )));
                         }
-                    }
+                    };
+                    let (_, stored) = load_held(store, &scope, held).await?;
+                    values.push((name, stored));
                 }
                 values
             }
@@ -99,7 +101,7 @@ mod tests {
     use alien_core::{EnvironmentVariableType, ValueSlotRef};
 
     use super::*;
-    use crate::values::{fixtures::kv_store, ValueSlot};
+    use crate::values::fixtures::kv_store;
 
     const DEPLOYMENT: &str = "dep_test";
 
@@ -276,6 +278,26 @@ mod tests {
 
         assert_eq!(error.http_status_code, Some(400));
         assert!(targets[0].secret_env.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_missing_slot_of_another_container_is_refused_as_foreign() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = kv_store(dir.path()).await;
+        let neighbour = put(&store, "api.worker", "TOKEN", ValueKind::Secret, "worker").await;
+        let scope = ValueScope::deployment(DEPLOYMENT).unwrap();
+        store
+            .delete(&scope, &neighbour.slot.parse().unwrap())
+            .await
+            .unwrap();
+        let mut targets = vec![target("api", Some(vec![neighbour]))];
+
+        let error = load_container_env(&store, DEPLOYMENT, &mut targets)
+            .await
+            .expect_err("a slot under another container's name");
+
+        assert_eq!(error.http_status_code, Some(400));
+        assert_ne!(error.code, "DEPLOYMENT_VALUE_MISSING");
     }
 
     #[tokio::test]
