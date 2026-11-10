@@ -469,6 +469,13 @@ pub(crate) async fn run_deployment_continuously(
                 if let Some(operation_id) = applying_operation_id.as_deref() {
                     state.db.set_applied_operation_id(operation_id).await?;
                 }
+                state
+                    .db
+                    .set_installed_target_hash(&crate::db::approved_target_hash(
+                        current.current_release.as_ref(),
+                        &base_config,
+                    )?)
+                    .await?;
             }
             // A disconnected Operator needs the installed config for health refreshes.
             if state.config.airgap_target_secret.is_none()

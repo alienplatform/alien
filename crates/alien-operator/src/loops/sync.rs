@@ -535,26 +535,21 @@ async fn sync_with_manager(
             // A manager that issues no claims sends no target when nothing
             // changed; the stored target is replayed as maintenance, so a
             // settled deployment runs its Ready handlers. A target in the
-            // response is always new work, and so is a replayed one whose
-            // approved configuration differs from the installed one (stored,
-            // then interrupted before it was accepted).
+            // response is always new work, and so is a replayed one that is
+            // not the target this Operator last applied (stored, then
+            // interrupted before it was accepted).
             let maintenance = match sync_response.execution_claim.as_ref() {
                 Some(claim) => {
                     state.db.get_applied_operation_id().await?.as_deref()
                         == Some(claim.operation_id.as_str())
                 }
                 None if sync_response.target.is_none() => {
-                    match state.db.get_deployment_config().await? {
-                        Some(installed) => {
-                            let release = Some(&target_deployment.release_info);
-                            crate::db::approved_target_hash(release, &installed)?
-                                == crate::db::approved_target_hash(
-                                    release,
-                                    &target_deployment.config,
-                                )?
-                        }
-                        None => false,
-                    }
+                    let replayed = crate::db::approved_target_hash(
+                        Some(&target_deployment.release_info),
+                        &target_deployment.config,
+                    )?;
+                    state.db.get_installed_target_hash().await?.as_deref()
+                        == Some(replayed.as_str())
                 }
                 None => false,
             };
