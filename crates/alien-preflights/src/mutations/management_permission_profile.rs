@@ -677,9 +677,8 @@ fn generate_auto_management_profile(
             permission_set_ids.insert(format!("{}/telemetry", permission_resource_type));
         }
 
-        // Infrastructure metrics for new AWS installs. Updating an install that lacks it is a
-        // setup update on purpose: the grant is not a migration grant (see
-        // PermissionProfilesUnchangedCheck), so the manager never gains it silently.
+        // Infrastructure metrics for new AWS installs. An installed deployment that lacks it keeps
+        // its profile until setup is rerun (see `without_uninstalled_setup_only_grants`).
         if platform == Platform::Aws
             && resource_type == "worker"
             && config.stack_settings.telemetry.is_enabled()
@@ -945,6 +944,40 @@ fn add_cloud_heartbeat_permission(
 /// Lets the AWS Key controller probe a customer key's availability.
 pub(crate) const KEY_AVAILABILITY_PERMISSION_SET_ID: &str = "key/availability";
 const METRICS_READ_PERMISSION_SET_ID: &str = "observe/metrics-read";
+
+/// Grants only setup can give an installed deployment: the management role cannot change its own
+/// policies, and an update that asks for a grant the installed profile lacks fails with a setup
+/// requirement. A new feature's grant therefore reaches new installs, and an existing install
+/// keeps the profile it was set up with until setup is rerun (a setup run prepares the stack
+/// without calling this).
+const SETUP_ONLY_PERMISSION_SET_IDS: &[&str] = &[METRICS_READ_PERMISSION_SET_ID];
+
+/// The prepared stack without the setup-only grants the installed management profile lacks.
+pub(crate) fn without_uninstalled_setup_only_grants(old_stack: &Stack, mut stack: Stack) -> Stack {
+    let installed = |id: &str| management_profile_contains(old_stack.management(), id);
+    let uninstalled: Vec<&str> = SETUP_ONLY_PERMISSION_SET_IDS
+        .iter()
+        .copied()
+        .filter(|id| !installed(id))
+        .collect();
+    let installed_has_global_scope = old_stack
+        .management()
+        .profile()
+        .is_some_and(|profile| profile.0.contains_key("*"));
+    let ManagementPermissions::Extend(profile) = &mut stack.permissions.management else {
+        return stack;
+    };
+    for grants in profile.0.values_mut() {
+        grants.retain(|grant| !uninstalled.contains(&grant.id()));
+    }
+    if !installed_has_global_scope && profile.0.get("*").is_some_and(|grants| grants.is_empty()) {
+        profile.0.shift_remove("*");
+    }
+    if profile.0.is_empty() && matches!(old_stack.management(), ManagementPermissions::Auto) {
+        stack.permissions.management = ManagementPermissions::Auto;
+    }
+    stack
+}
 
 /// Management's use of a volume key: it creates, grows, restores and deletes the volumes but
 /// never decrypts with the key. The node that attaches a volume holds `key/native-volume`.
@@ -1352,15 +1385,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_install_without_the_metrics_grant_gets_a_setup_update_not_a_silent_grant() {
+    async fn an_installed_profile_without_the_metrics_grant_keeps_its_profile() {
         let config = deployment_config_for_management_permission_test();
-        let new_stack = ManagementPermissionProfileMutation
-            .mutate(worker_stack(), &StackState::new(Platform::Aws), &config)
+        let state = StackState::new(Platform::Aws);
+        let target = ManagementPermissionProfileMutation
+            .mutate(worker_stack(), &state, &config)
             .await
             .expect("management profile");
-        assert!(grants_metrics_read(&new_stack));
+        assert!(grants_metrics_read(&target));
 
-        let mut installed = new_stack.clone();
+        let mut installed = target.clone();
         let ManagementPermissions::Extend(profile) = &mut installed.permissions.management else {
             panic!("expected an extended management profile");
         };
@@ -1369,20 +1403,21 @@ mod tests {
             .get_mut("*")
             .expect("stack-wide grants")
             .retain(|grant| grant.id() != METRICS_READ_PERMISSION_SET_ID);
-        assert!(!grants_metrics_read(&installed));
 
-        let check = crate::compatibility::PermissionProfilesUnchangedCheck;
+        let kept = without_uninstalled_setup_only_grants(&installed, target.clone());
+        assert!(!grants_metrics_read(&kept));
+        assert_eq!(kept.management(), installed.management());
         assert!(
-            check.management_needs_setup(&installed, &new_stack, &config),
-            "the new grant must reach the install through setup"
+            !crate::compatibility::PermissionProfilesUnchangedCheck
+                .management_needs_setup(&installed, &kept, &config),
+            "an update of an installed deployment must not ask for setup"
         );
-        assert!(
-            !check.management_needs_setup(&new_stack, &new_stack, &config),
-            "an install that already has it needs nothing"
-        );
-        assert!(
-            !check.management_needs_setup(&new_stack, &installed, &config),
-            "dropping it again only narrows"
+
+        let installed_with_it = target.clone();
+        assert_eq!(
+            without_uninstalled_setup_only_grants(&installed_with_it, target.clone()),
+            target,
+            "a deployment that has the grant keeps it"
         );
     }
 
