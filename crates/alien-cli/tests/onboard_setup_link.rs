@@ -61,7 +61,7 @@ fn mock_platform(server: &MockServer, allowed: Value) -> Mock<'_> {
         then.json_body(json!({
             "token":"ax_test", "deploymentLink":LINK, "expiresAt":"2026-11-05T10:00:00Z",
             "deploymentGroup":{"id":GROUP, "name":"jane-corp", "externalId":"jane-corp",
-                "projectId":PROJECT, "workspaceId":"ws_000000000000000000000000",
+                "accessApprover":"customer", "projectId":PROJECT, "workspaceId":"ws_000000000000000000000000",
                 "createdAt":"2026-01-01T00:00:00Z"}
         }));
     })
