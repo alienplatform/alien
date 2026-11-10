@@ -3362,6 +3362,38 @@ platform = "aws"
         }
     }
 
+    /// Running `deploy` again against an installed release must not ask Helm to
+    /// change the runtime encryption key: the chart refuses that, since it would
+    /// make the stored state unreadable. The key is left empty so the chart keeps
+    /// the installed one, or generates one on the first install.
+    #[test]
+    fn kubernetes_helm_values_leave_the_encryption_key_to_the_chart() {
+        let stack = Stack::new("orders".to_string()).build();
+        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
+            .expect("chart renders");
+        for run in ["first run", "second run"] {
+            let values = write_kubernetes_helm_values(
+                chart.path(),
+                "https://manager.example.test",
+                "ax_dep_fixture",
+                "dep_fixture",
+                "orders-eu",
+                "korders",
+                &StackSettings::default(),
+                "ghcr.io/example/operator:1.0.0",
+                None,
+                None,
+            )
+            .expect("values are written");
+            let written: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&values).unwrap()).unwrap();
+            assert_eq!(
+                written["runtime"]["encryption"]["key"], "",
+                "{run}: the CLI must not pick an encryption key"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn kubernetes_initialize_reports_the_helm_release_it_installs() {
         for (flags, expected) in [
@@ -7666,7 +7698,7 @@ fn write_kubernetes_helm_values(
                 "pullPolicy": "IfNotPresent",
             },
             // Left empty: the chart generates the key on the first install and
-            // keeps the installed one on every upgrade. A new key on an upgrade
+            // keeps the installed one on every upgrade. A new key on a re-run
             // would be refused, since it would make the stored state unreadable.
             "encryption": {
                 "key": "",
