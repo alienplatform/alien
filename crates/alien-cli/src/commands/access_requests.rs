@@ -11,7 +11,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     AccessRequestStatus, ApproveAccessRequestBody, CreateAccessRequest, CreateAccessRequestMaxRisk,
-    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, DenyAccessRequestBody,
+    CreateAccessRequestRequestedExpiresAt, DebugGrantTool,
     RevokeAccessRequest,
 };
 use alien_platform_api::SdkResultExt as _;
@@ -249,9 +249,6 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
     }
 }
 
-/// Recorded with the decision so the audit trail shows where it was made.
-const DECISION_METHOD: &str = "cli";
-
 fn approved_for_minutes(duration: Option<&str>) -> Result<Option<u64>> {
     let Some(duration) = duration else {
         return Ok(None);
@@ -275,7 +272,6 @@ async fn approve_task(
     json: bool,
 ) -> Result<()> {
     let body: ApproveAccessRequestBody = serde_json::from_value(serde_json::json!({
-        "method": DECISION_METHOD,
         "approvedForMinutes": approved_for_minutes(duration)?,
     }))
     .into_alien_error()
@@ -315,18 +311,11 @@ async fn deny_task(
     id: &str,
     json: bool,
 ) -> Result<()> {
-    let body: DenyAccessRequestBody =
-        serde_json::from_value(serde_json::json!({ "method": DECISION_METHOD }))
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "Invalid deny request".to_string(),
-            })?;
     let request = sdk_client
         .deny_access_request()
         .id(id)
         .workspace(workspace)
-        .body(body)
+        .body(serde_json::Map::new())
         .send()
         .await
         .into_sdk_error()
@@ -1231,7 +1220,7 @@ mod tests {
     ) {
         type Received = Arc<Mutex<Option<(Option<String>, Value)>>>;
 
-        async fn revoke(
+        async fn record(
             State((status, body, received)): State<(u16, Value, Received)>,
             RawQuery(query): RawQuery,
             Json(request_body): Json<Value>,
@@ -1245,7 +1234,8 @@ mod tests {
 
         let received: Received = Arc::new(Mutex::new(None));
         let app = Router::new()
-            .route("/v1/access-requests/ar_123/revoke", post(revoke))
+            .route("/v1/access-requests/ar_123/revoke", post(record))
+            .route("/v1/access-requests/ar_123/deny", post(record))
             .with_state((status, body, received.clone()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1279,6 +1269,7 @@ mod tests {
                 "createdAt": "2026-10-01T00:00:00Z",
                 "queuedBy": null,
                 "queuedAt": null,
+                "approver": "customer",
                 "approvedBy": null,
                 "deniedBy": null,
                 "revokedBy": {
@@ -1306,6 +1297,51 @@ mod tests {
             .expect("the revoke endpoint should have been called");
         assert_eq!(query.as_deref(), Some("workspace=acme"));
         assert_eq!(body, serde_json::json!({ "reason": "incident resolved" }));
+    }
+
+    // The deny endpoint takes an empty object; the server records who denied and how.
+    #[tokio::test]
+    async fn deny_sends_an_empty_body_and_accepts_a_rejected_request() {
+        let (client, received) = fake_platform(
+            200,
+            serde_json::json!({
+                "id": "ar_123",
+                "deploymentId": "dep_1",
+                "title": "Restart api",
+                "reason": "api is wedged",
+                "status": "rejected",
+                "operationPattern": null,
+                "maxRisk": null,
+                "commands": [],
+                "debugGrant": null,
+                "approvedUntil": null,
+                "agentSessionId": null,
+                "createdAt": "2026-10-01T00:00:00Z",
+                "queuedBy": null,
+                "queuedAt": null,
+                "approver": "team",
+                "approvedBy": null,
+                "deniedBy": null,
+                "revokedBy": null,
+                "remediationPlanId": null,
+                "requestedExpiresAt": null,
+                "requesterId": "usr_1",
+                "requesterKind": null
+            }),
+        )
+        .await;
+
+        deny_task(&client, "acme", "ar_123", true)
+            .await
+            .expect("a rejected response should succeed");
+
+        let (query, body) = received
+            .lock()
+            .expect("read the recorded request")
+            .clone()
+            .expect("the deny endpoint should have been called");
+        assert_eq!(query.as_deref(), Some("workspace=acme"));
+        assert_eq!(body, serde_json::json!({}));
     }
 
     #[tokio::test]
