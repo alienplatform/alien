@@ -532,12 +532,16 @@ async fn sync_with_manager(
             // Platform claims maintenance on the operation whose apply this
             // Operator completed last (its applied operation). Any other
             // claim is new work: an update, a corrective target or a retry.
+            // A manager that issues no claims sends no target when nothing
+            // changed; the stored target is replayed as maintenance, so a
+            // settled deployment runs its Ready handlers. A target in the
+            // response is always new work.
             let maintenance = match sync_response.execution_claim.as_ref() {
                 Some(claim) => {
                     state.db.get_applied_operation_id().await?.as_deref()
                         == Some(claim.operation_id.as_str())
                 }
-                None => false,
+                None => sync_response.target.is_none(),
             };
             let repeated_failed_target = if sync_response.execution_claim == durable_execution.claim
             {
