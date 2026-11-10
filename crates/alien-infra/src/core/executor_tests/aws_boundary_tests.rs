@@ -544,6 +544,16 @@ async fn a_stack_wide_grant_is_judged_by_what_the_installed_service_account_carr
         .await
         .unwrap();
 
+    // A failed heartbeat does not change what the installed account carries.
+    let mut heartbeat_failed = installed_before.clone();
+    heartbeat_failed
+        .resources
+        .get_mut("application-sa")
+        .unwrap()
+        .status = ResourceStatus::RefreshFailed;
+    validate_installed_aws_permissions_boundary(&prepared, &heartbeat_failed, &client, &config)
+        .expect("a failed heartbeat keeps the installed account's grants");
+
     let installed_today = with_installed_account(&older, today);
     let error =
         validate_installed_aws_permissions_boundary(&prepared, &installed_today, &client, &config)

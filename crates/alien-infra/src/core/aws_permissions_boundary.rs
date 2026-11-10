@@ -198,7 +198,15 @@ fn with_installed_service_accounts(stack: &Stack, state: &StackState) -> Stack {
         };
         let applied: Option<&Resource> = match &saved.previous_config {
             Some(previous) => Some(previous),
-            None if saved.status == ResourceStatus::Running => Some(&saved.config),
+            // A failed heartbeat leaves the applied grants in place. After a failed update the
+            // config may be a target that was never applied, so it is judged as desired.
+            None if matches!(
+                saved.status,
+                ResourceStatus::Running | ResourceStatus::RefreshFailed
+            ) =>
+            {
+                Some(&saved.config)
+            }
             None => None,
         };
         let Some(installed) = applied.and_then(|config| config.downcast_ref::<ServiceAccount>())
