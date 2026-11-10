@@ -3,8 +3,9 @@
 //! ranges. On a CNI that ignores NetworkPolicy those denials do nothing, so installing the chart
 //! there must be refused before anything is provisioned.
 //!
-//! Runs against the disposable Kind cluster the `Kind lifecycle` workflow creates. Kind's default
-//! CNI, kindnet, does not enforce NetworkPolicy, which is the cluster this test needs.
+//! Both tests run in the `Kind lifecycle` workflow, each against its own disposable cluster:
+//! - the refusal on a cluster made by Kind v0.32, whose kindnet does not enforce NetworkPolicy;
+//! - the admission on the workflow's main cluster, made by Kind v0.31, whose kindnet does.
 
 use alien_core::{
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
@@ -15,10 +16,13 @@ use std::{
     fs,
     io::Write,
     path::Path,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
 };
 
-const CLUSTER_CONTEXT: &str = "kind-alien-product-lifecycle";
+/// The cluster whose CNI ignores NetworkPolicy.
+const UNENFORCED_CONTEXT: &str = "kind-alien-allow-egress-unenforced";
+/// The workflow's main cluster, whose CNI enforces NetworkPolicy.
+const ENFORCED_CONTEXT: &str = "kind-alien-product-lifecycle";
 const NAMESPACE: &str = "alien-allow-egress-ci";
 const RELEASE: &str = "allow-egress";
 
@@ -83,48 +87,7 @@ impl Drop for Cleanup {
 #[test]
 #[ignore = "requires the disposable Kind cluster configured by CI"]
 fn allow_egress_install_is_refused_where_network_policy_is_not_enforced() {
-    assert_eq!(
-        std::env::var("ALIEN_RUN_ALLOW_EGRESS_KIND_E2E").as_deref(),
-        Ok("1"),
-        "set ALIEN_RUN_ALLOW_EGRESS_KIND_E2E=1 only for a disposable Kind cluster"
-    );
-    assert_eq!(
-        kubectl(&["config", "current-context"]).trim(),
-        CLUSTER_CONTEXT
-    );
-    let _cleanup = Cleanup;
-
-    let directory = tempfile::tempdir().expect("chart directory");
-    write_chart(directory.path());
-    apply(RUNTIME_CLASS);
-
-    let install = Command::new("helm")
-        .args([
-            "install",
-            RELEASE,
-            directory.path().to_str().expect("chart path"),
-            "--namespace",
-            NAMESPACE,
-            "--create-namespace",
-            "--timeout",
-            "6m",
-            "--set-string",
-            "runtime.image.repository=busybox",
-            "--set-string",
-            "runtime.image.tag=1.37.0",
-            "--set",
-            "runtime.probes.liveness.enabled=false",
-            "--set",
-            "runtime.probes.readiness.enabled=false",
-            "--set",
-            "heartbeat.collection.nodes.enabled=false",
-            "--set",
-            "runtime.cleanup.onUninstall.enabled=false",
-            "--set-string",
-            "management.defaultUrl=https://manager.example.test",
-        ])
-        .output()
-        .expect("run helm install");
+    let (_cleanup, install) = install_allow_chart(UNENFORCED_CONTEXT);
     let stdout = String::from_utf8_lossy(&install.stdout);
     let stderr = String::from_utf8_lossy(&install.stderr);
     assert!(
@@ -167,6 +130,88 @@ fn allow_egress_install_is_refused_where_network_policy_is_not_enforced() {
         .trim(),
         ""
     );
+}
+
+/// The gate must not refuse a cluster that does enforce NetworkPolicy: the probe runs, passes,
+/// and the session policy is installed.
+#[test]
+#[ignore = "requires the disposable Kind cluster configured by CI"]
+fn allow_egress_install_proceeds_where_network_policy_is_enforced() {
+    let (_cleanup, install) = install_allow_chart(ENFORCED_CONTEXT);
+    assert!(
+        install.status.success(),
+        "an enforcing cluster must accept an `allow` sandbox:\n{}\n{}",
+        String::from_utf8_lossy(&install.stdout),
+        String::from_utf8_lossy(&install.stderr)
+    );
+    // A passing hook Job is deleted with the hook; its completion event remains.
+    let job_events = kubectl(&[
+        "--namespace",
+        NAMESPACE,
+        "get",
+        "events",
+        "--field-selector",
+        "involvedObject.kind=Job",
+        "-o",
+        "jsonpath={range .items[*]}{.involvedObject.name} {.reason}{\"\\n\"}{end}",
+    ]);
+    assert!(
+        job_events
+            .lines()
+            .any(|line| line.ends_with("-sandbox-cni Completed")),
+        "the NetworkPolicy enforcement probe must have run and passed:\n{job_events}"
+    );
+    kubectl(&[
+        "--namespace",
+        NAMESPACE,
+        "get",
+        "networkpolicy",
+        "alien-sbx-agent",
+    ]);
+}
+
+/// Install a chart with one `allow` sandbox into `context`, which must be the current context.
+/// The returned guard removes everything the install created.
+fn install_allow_chart(context: &str) -> (Cleanup, Output) {
+    assert_eq!(
+        std::env::var("ALIEN_RUN_ALLOW_EGRESS_KIND_E2E").as_deref(),
+        Ok("1"),
+        "set ALIEN_RUN_ALLOW_EGRESS_KIND_E2E=1 only for a disposable Kind cluster"
+    );
+    assert_eq!(kubectl(&["config", "current-context"]).trim(), context);
+    let cleanup = Cleanup;
+
+    let directory = tempfile::tempdir().expect("chart directory");
+    write_chart(directory.path());
+    apply(RUNTIME_CLASS);
+    let install = Command::new("helm")
+        .args([
+            "install",
+            RELEASE,
+            directory.path().to_str().expect("chart path"),
+            "--namespace",
+            NAMESPACE,
+            "--create-namespace",
+            "--timeout",
+            "6m",
+            "--set-string",
+            "runtime.image.repository=busybox",
+            "--set-string",
+            "runtime.image.tag=1.37.0",
+            "--set",
+            "runtime.probes.liveness.enabled=false",
+            "--set",
+            "runtime.probes.readiness.enabled=false",
+            "--set",
+            "heartbeat.collection.nodes.enabled=false",
+            "--set",
+            "runtime.cleanup.onUninstall.enabled=false",
+            "--set-string",
+            "management.defaultUrl=https://manager.example.test",
+        ])
+        .output()
+        .expect("run helm install");
+    (cleanup, install)
 }
 
 fn write_chart(directory: &Path) {

@@ -75,19 +75,35 @@ jobs:
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
           cargo test --locked -p alien-helm --test sandbox_allow_egress_kind --no-run
 
+      # A second disposable cluster, deleted before the main one starts. The kindnet that Kind
+      # v0.32 ships does not enforce NetworkPolicy; the one in v0.31, used below, does.
+      - name: Sandbox allow egress is refused where NetworkPolicy is not enforced
+        env:
+          ALIEN_RUN_ALLOW_EGRESS_KIND_E2E: "1"
+        run: |
+          kind="$RUNNER_TEMP/kind-v0.32.0"
+          curl -fsSLo "$kind" https://github.com/kubernetes-sigs/kind/releases/download/v0.32.0/kind-linux-arm64
+          echo "b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d  $kind" | sha256sum -c -
+          chmod +x "$kind"
+          export KUBECONFIG="$RUNNER_TEMP/allow-egress-unenforced.kubeconfig"
+          trap '"$kind" delete cluster --name alien-allow-egress-unenforced; rm -f "$KUBECONFIG"' EXIT
+          "$kind" create cluster --name alien-allow-egress-unenforced --wait 120s
+          cargo test --locked -p alien-helm --test sandbox_allow_egress_kind -- \
+            --ignored --nocapture --test-threads=1 --exact \
+            allow_egress_install_is_refused_where_network_policy_is_not_enforced
+
       - name: Start disposable Kubernetes cluster
         uses: helm/kind-action@v1.14.0
         with:
           cluster_name: alien-product-lifecycle
 
-      # Runs first: it is short, and it needs the cluster's default CNI (kindnet), which does
-      # not enforce NetworkPolicy.
-      - name: Sandbox allow egress is refused without NetworkPolicy enforcement
+      - name: Sandbox allow egress proceeds where NetworkPolicy is enforced
         env:
           ALIEN_RUN_ALLOW_EGRESS_KIND_E2E: "1"
         run: |
           cargo test --locked -p alien-helm --test sandbox_allow_egress_kind -- \
-            --ignored --nocapture --test-threads=1
+            --ignored --nocapture --test-threads=1 --exact \
+            allow_egress_install_proceeds_where_network_policy_is_enforced
 
       - name: Kubernetes compute pool dynamic container lifecycle
         env:
