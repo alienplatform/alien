@@ -36,6 +36,22 @@ pub enum ErrorData {
         resource: String,
     },
 
+    /// A permission set grants an application identity something the management identity may
+    /// not be allowed to grant.
+    #[error(
+        code = "RUNTIME_GRANT_NOT_DELEGABLE",
+        message = "Permission set '{permission_set_id}' grants '{permission}' to an application identity, which setup cannot let the management identity grant",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    RuntimeGrantNotDelegable {
+        /// The permission set that carries the permission
+        permission_set_id: String,
+        /// The permission management may not grant
+        permission: String,
+    },
+
     /// Platform is not supported by the permission set.
     #[error(
         code = "PLATFORM_NOT_SUPPORTED",

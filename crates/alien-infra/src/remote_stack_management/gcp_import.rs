@@ -52,6 +52,9 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             // Setup was applied by an external engine, which refreshes it itself.
             management_permissions_revision: None,
+            role_layout: super::gcp::GCP_MANAGEMENT_ROLE_LAYOUT,
+            runtime_roles_revision: None,
+            admitted_project_roles: Default::default(),
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
