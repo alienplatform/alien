@@ -41,6 +41,8 @@ cat > "$W/img/Dockerfile" <<'D'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq ca-certificates && rm -rf /var/lib/apt/lists/* && mkdir -p /var/lib/operator && chown 1000:1000 /var/lib/operator
 COPY alien-operator /app/alien-operator
+# Debug builds keep large futures on the stack.
+ENV RUST_MIN_STACK=67108864
 USER 1000
 ENTRYPOINT ["/app/alien-operator"]
 D
