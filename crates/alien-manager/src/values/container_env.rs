@@ -38,11 +38,12 @@ pub async fn load_container_env(
                 for held in &slots {
                     // The owner is checked before the store is read, so a slot of another
                     // container is refused as such, never reported as missing or changed.
+                    // It is the sender's mistake, not the Operator's, so it is not a 400.
                     let slot: ValueSlot = held.slot.parse()?;
                     let name = match slot.container_env_parts() {
                         Some((container, name)) if container == target.name => name.to_string(),
                         _ => {
-                            return Err(ErrorData::bad_request(format!(
+                            return Err(ErrorData::internal(format!(
                                 "Value slot '{}' does not belong to container '{}'",
                                 held.slot, target.name
                             )));
@@ -276,7 +277,7 @@ mod tests {
             .await
             .expect_err("a slot under another container's name");
 
-        assert_eq!(error.http_status_code, Some(400));
+        assert_eq!(error.code, "INTERNAL_ERROR");
         assert!(targets[0].secret_env.is_empty());
     }
 
@@ -296,8 +297,7 @@ mod tests {
             .await
             .expect_err("a slot under another container's name");
 
-        assert_eq!(error.http_status_code, Some(400));
-        assert_ne!(error.code, "DEPLOYMENT_VALUE_MISSING");
+        assert_eq!(error.code, "INTERNAL_ERROR");
     }
 
     #[tokio::test]
