@@ -36,8 +36,6 @@ const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_au
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v4-keyed\0";
 
-/// The stack the executor reconciles once the deployment is prepared: the prepared stack from
-/// runtime metadata, with the deployment's environment variables and monitoring injected.
 /// The signed statement and signer list chain of the release being
 /// deployed, for controllers that forward them to enforcers.
 pub(crate) fn release_statements(
@@ -64,6 +62,8 @@ pub(crate) fn installed_release_statements(
     )
 }
 
+/// The stack the executor reconciles once the deployment is prepared: the prepared stack from
+/// runtime metadata, with the deployment's environment variables and monitoring injected.
 pub(crate) fn injected_target_stack(
     runtime_metadata: &RuntimeMetadata,
     config: &DeploymentConfig,

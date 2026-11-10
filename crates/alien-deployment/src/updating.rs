@@ -277,8 +277,8 @@ pub async fn handle_update_pending(
         .and_then(|metadata| metadata.setup_update_authorization.as_ref());
     info!(
         authorization_present = setup_update_authorization.is_some(),
-        authorization_release_id = setup_update_authorization
-            .map(|authorization| authorization.release_id.as_str()),
+        authorization_release_id =
+            setup_update_authorization.map(|authorization| authorization.release_id.as_str()),
         target_release_id,
         "setup update authorization recorded for the update"
     );
