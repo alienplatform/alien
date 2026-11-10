@@ -885,6 +885,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
           - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
         - Action:
+          - bedrock:ListInferenceProfiles
           - ec2:AssignPrivateIpAddresses
           - ec2:CreateNetworkInterface
           - ec2:DeleteNetworkInterface
@@ -2292,6 +2293,7 @@ Resources:
               - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
               - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
             - Action:
+              - bedrock:ListInferenceProfiles
               - ec2:AssignPrivateIpAddresses
               - ec2:CreateNetworkInterface
               - ec2:DeleteNetworkInterface
@@ -3012,7 +3014,7 @@ Outputs:
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
         - '","'
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
-        - '"]},{"Action":["ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
+        - '"]},{"Action":["bedrock:ListInferenceProfiles","ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
         - Fn::Sub:
           - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
           - ManagingAccountId:
