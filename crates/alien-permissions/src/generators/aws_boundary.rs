@@ -147,7 +147,7 @@ impl CatalogSets<'_> {
 /// Whether a workload role written for `stack` can carry catalog set `id`.
 ///
 /// A set is used when any of these holds:
-/// - a permission profile names it;
+/// - a permission profile names it, outside the stack-wide grants its service account carries;
 /// - a service account in the stack captured it, as a resource grant or as a stack-wide grant
 ///   whose stored definition is today's. Preflight mutations add runtime baselines, such as
 ///   `worker/execute`, only to the service account and not to its profile. A stack-wide grant
@@ -157,11 +157,18 @@ impl CatalogSets<'_> {
 ///   or `experimental/aws-opensearch`). Remote bindings attach the set of the resource they
 ///   bind, so they never name a type the stack lacks.
 fn stack_uses_catalog_set(stack: &Stack, id: &str) -> bool {
-    let named_by_profile = stack.permission_profiles().values().any(|profile| {
+    // A profile's stack-wide grants are what its service account (`{profile}-sa`, from the
+    // preflight mutation) carries, so they count through that account below.
+    let named_by_profile = stack.permission_profiles().iter().any(|(name, profile)| {
+        let has_account = stack
+            .resources
+            .get(&format!("{name}-sa"))
+            .is_some_and(|entry| entry.config.downcast_ref::<ServiceAccount>().is_some());
         profile
             .0
-            .values()
-            .flatten()
+            .iter()
+            .filter(|(scope, _)| !(has_account && scope.as_str() == "*"))
+            .flat_map(|(_, references)| references)
             .any(|reference| reference.id() == id)
     });
     let captured_by_service_account = stack.resources().any(|(_, entry)| {

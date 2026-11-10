@@ -1,8 +1,8 @@
 //! Resolve boundary grants using the same names as AWS workload policy writers.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, ManagementConfig, Platform, RemoteStackManagement,
-    ResourceStatus, Stack, StackResourceState, StackState,
+    ClientConfig, DeploymentConfig, ManagementConfig, Platform, RemoteStackManagement, Resource,
+    ResourceStatus, ServiceAccount, Stack, StackResourceState, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -145,7 +145,11 @@ pub fn validate_installed_aws_permissions_boundary(
                 )));
             }
         }
-        let required = required_aws_permissions_boundary_for_stack(stack, state, &context)
+        let required = required_aws_permissions_boundary_for_stack(
+            &with_installed_service_accounts(stack, state),
+            state,
+            &context,
+        )
             .context(setup_required(format!(
                 "Cannot resolve the permissions required by boundary '{arn}'; regenerate and rerun setup"
             )))?;
@@ -161,6 +165,51 @@ pub fn validate_installed_aws_permissions_boundary(
         }
     }
     Ok(())
+}
+
+/// `stack` with each service account replaced by the one setup installed, when the installed
+/// account holds the same grants by ID.
+///
+/// The preflight mutation rebuilds service accounts from their profiles with today's catalog on
+/// every deploy, but a frozen account's role keeps the definitions setup installed. When only
+/// a definition changed, the role still asks for the installed one. An account whose grant IDs
+/// changed, or that state has not applied, is judged as desired.
+fn with_installed_service_accounts(stack: &Stack, state: &StackState) -> Stack {
+    let grant_ids = |account: &ServiceAccount| {
+        let ids = |sets: &[alien_core::PermissionSet]| -> Vec<String> {
+            sets.iter().map(|set| set.id.clone()).collect()
+        };
+        (
+            ids(&account.stack_permission_sets),
+            account
+                .resource_permission_sets
+                .iter()
+                .map(|(resource, sets)| (resource.clone(), ids(sets)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let mut judged = stack.clone();
+    for (id, entry) in judged.resources.iter_mut() {
+        let Some(desired) = entry.config.downcast_ref::<ServiceAccount>() else {
+            continue;
+        };
+        let Some(saved) = state.resources.get(id) else {
+            continue;
+        };
+        let applied: Option<&Resource> = match &saved.previous_config {
+            Some(previous) => Some(previous),
+            None if saved.status == ResourceStatus::Running => Some(&saved.config),
+            None => None,
+        };
+        let Some(installed) = applied.and_then(|config| config.downcast_ref::<ServiceAccount>())
+        else {
+            continue;
+        };
+        if grant_ids(installed) == grant_ids(desired) {
+            entry.config = Resource::new(installed.clone());
+        }
+    }
+    judged
 }
 
 fn boundary_grant_context(
