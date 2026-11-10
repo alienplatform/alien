@@ -4216,7 +4216,9 @@ fn registration_body(
             }
             verified_setup::reserve_attributes(target)
         } else {
-            vec![attr("token", expr::raw("var.token"))]
+            // The install token goes to the provider, not to a resource
+            // argument that would be kept in Terraform state.
+            Vec::new()
         };
         body.insert(0, lifecycle);
         body.extend(common.iter().cloned());
@@ -5765,7 +5767,16 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
         // Resource arguments are kept in Terraform state; the install token is
         // given to the provider instead, whose configuration never is.
-        assert!(!registration_body.contains("var.token"));
+        // The module's precondition may read `var.token`; conditions are not
+        // kept in state. No resource argument carries it.
+        let parsed = hcl::parse(&registration_body).expect("registration parses");
+        assert!(
+            parsed.blocks().all(|block| block
+                .body()
+                .attributes()
+                .all(|attribute| attribute.key() != "token")),
+            "{registration_body}"
+        );
         let providers = hcl::parse(
             &render_body(providers_body(
                 TerraformTarget::Aws,

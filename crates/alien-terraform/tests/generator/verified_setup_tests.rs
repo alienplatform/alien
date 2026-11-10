@@ -75,6 +75,23 @@ fn stand_in_files(module: &ModuleFiles) -> IndexMap<String, String> {
     );
     let registration: Body =
         hcl::from_str(&files["registration.tf"]).expect("registration.tf parses");
+    // The stand-in resource has no provider, so the provider block that carries
+    // the install token goes too.
+    if let Some(providers) = files.get("providers.tf") {
+        let providers: Body = hcl::from_str(providers).expect("providers.tf parses");
+        let providers: Body = providers
+            .into_iter()
+            .filter(|structure| {
+                !matches!(structure, Structure::Block(block)
+                    if block.identifier.as_str() == "provider"
+                        && block.labels.first().is_some_and(|label| label.as_str() == "terraform"))
+            })
+            .collect();
+        files.insert(
+            "providers.tf".into(),
+            hcl::to_string(&providers).expect("providers.tf renders"),
+        );
+    }
     let mut stand_ins = 0;
     let registration: Body = registration
         .into_iter()
@@ -216,7 +233,7 @@ run "verified_setup_without_token" {{
     setup_record_bucket  = "acme-setup-record"
   }}
   assert {{
-    condition     = terraform_data.this.input.token == null
+    condition     = !contains(keys(terraform_data.this.input), "token")
     error_message = "No token may reach the registration resource."
   }}
   assert {{
@@ -267,8 +284,8 @@ run "token_registration_is_unchanged" {{
     token = "legacy-token"
   }}
   assert {{
-    condition     = nonsensitive(terraform_data.this.input.token == "legacy-token")
-    error_message = "A token module must still pass its token."
+    condition     = !contains(keys(terraform_data.this.input), "token")
+    error_message = "A token module gives its token to the provider, not to the registration resource."
   }}
   assert {{
     condition     = terraform_data.this.input.setup_reservation_id == null && terraform_data.this.input.setup_stage == null && nonsensitive(terraform_data.this.input.enrollment_code == null) && terraform_data.this.input.setup_account_id == null

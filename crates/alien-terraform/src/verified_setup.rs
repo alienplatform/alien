@@ -133,10 +133,6 @@ fn setup_account(target: TerraformTarget) -> &'static str {
 pub(crate) fn reserve_attributes(target: TerraformTarget) -> Vec<Structure> {
     vec![
         attr(
-            "token",
-            expr::raw("var.setup_reservation_id == null ? var.token : null"),
-        ),
-        attr(
             "setup_reservation_id",
             expr::raw("var.setup_reservation_id"),
         ),
