@@ -23,28 +23,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-const NAMESPACES: [&str; 2] = ["alien-sandbox-rbac-a", "alien-sandbox-rbac-b"];
 const RELEASE: &str = "sandbox-rbac";
-/// Release names that contain the chart name are used as the full name unchanged, and these two
-/// agree on their first 45 characters, past where the role name truncates the full name.
-const LONG_RELEASES: [&str; 2] = [
-    "sandbox-rbac-tenant-with-a-long-install-name-one",
-    "sandbox-rbac-tenant-with-a-long-install-name-two",
+/// Every (release, namespace) the test installs, one install per namespace: a chart with
+/// sandboxes also creates namespaced objects with fixed names (the sandbox NetworkPolicies), so
+/// Helm refuses a second install of it in the same namespace. The first two share a release name
+/// across namespaces. The last two use release names that contain the chart name, so they are the
+/// full name unchanged, and agree on their first 45 characters, past where the role name
+/// truncates the full name.
+const INSTALLS: [(&str, &str); 4] = [
+    (RELEASE, "alien-sandbox-rbac-a"),
+    (RELEASE, "alien-sandbox-rbac-b"),
+    (
+        "sandbox-rbac-tenant-with-a-long-install-name-one",
+        "alien-sandbox-rbac-c",
+    ),
+    (
+        "sandbox-rbac-tenant-with-a-long-install-name-two",
+        "alien-sandbox-rbac-d",
+    ),
 ];
-
-/// Every (release, namespace) the test installs.
-fn installs() -> Vec<(&'static str, &'static str)> {
-    let mut installs: Vec<_> = NAMESPACES
-        .iter()
-        .map(|namespace| (RELEASE, *namespace))
-        .collect();
-    installs.extend(
-        LONG_RELEASES
-            .iter()
-            .map(|release| (*release, NAMESPACES[0])),
-    );
-    installs
-}
 
 struct Cleanup<'a> {
     context: &'a str,
@@ -53,13 +50,13 @@ struct Cleanup<'a> {
 impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         // Best effort on the way out of a disposable cluster; the assertions already ran.
-        for (release, namespace) in installs() {
+        for (release, namespace) in INSTALLS {
             let _ = Command::new("helm")
                 .args(["--kube-context", self.context, "uninstall", release])
                 .args(["--namespace", namespace, "--ignore-not-found", "--no-hooks"])
                 .output();
         }
-        for namespace in NAMESPACES {
+        for (_, namespace) in INSTALLS {
             let _ = Command::new("kubectl")
                 .args(["--context", self.context, "delete", "namespace", namespace])
                 .args(["--ignore-not-found", "--wait=false"])
@@ -209,7 +206,7 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
 
     // No --wait: only the RBAC the chart creates is under test, not the Operator pod. A later
     // install fails here if it shares a cluster-scoped name with an earlier one.
-    for (release, namespace) in installs() {
+    for (release, namespace) in INSTALLS {
         run_ok(
             "helm",
             &[
@@ -236,10 +233,10 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
     let bindings = sandbox_bindings(&context);
     assert_eq!(
         bindings.len(),
-        installs().len(),
+        INSTALLS.len(),
         "each install needs its own sandbox ClusterRoleBinding: {bindings:?}"
     );
-    for (release, namespace) in installs() {
+    for (release, namespace) in INSTALLS {
         let (binding, role, _, _, account) = bindings
             .iter()
             .find(|(_, _, binding_release, subject_namespace, _)| {
