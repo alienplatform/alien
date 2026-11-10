@@ -931,6 +931,63 @@ impl OperatorDb {
     }
 
     // =========================================================================
+    // Installed Target
+    // =========================================================================
+
+    const KEY_INSTALLED_TARGET_HASH: &str = "installed_target_hash";
+
+    /// The approved-target hash (release and approved configuration) of the
+    /// last apply this Operator completed. The deployment config itself is
+    /// cleared after an online apply, so this is what tells a replayed
+    /// claimless target that is already installed from one that is not.
+    pub async fn get_installed_target_hash(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = ?",
+                (Self::KEY_INSTALLED_TARGET_HASH,),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query installed_target_hash".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch installed_target_hash row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let hash: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read installed_target_hash value".to_string(),
+            })?;
+        Ok(Some(hash))
+    }
+
+    /// Record the approved-target hash of the apply that just completed.
+    pub async fn set_installed_target_hash(&self, hash: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (Self::KEY_INSTALLED_TARGET_HASH, hash),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set installed_target_hash".to_string(),
+        })?;
+        Ok(())
+    }
+
+    // =========================================================================
     // Deployment Config
     // =========================================================================
 

@@ -81,6 +81,17 @@ pub struct StepResult {
     pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
+/// What [`StackExecutor::observe_running`] saw.
+#[derive(Debug)]
+pub struct RunningObservation {
+    /// The state it was given, with the controller state of every resource whose check
+    /// succeeded. Anything a controller keeps between checks, such as the time of its last
+    /// slow lookup, is in it.
+    pub state: StackState,
+    /// Heartbeats the checks emitted.
+    pub heartbeats: Vec<ResourceHeartbeat>,
+}
+
 /// Result of run_until_synced that includes the final state even on failure
 #[derive(Debug)]
 pub struct CompletionResult {
@@ -1841,7 +1852,7 @@ impl StackExecutor {
     /// data required for the next iteration is carried within the returned
     /// `StackState`.
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
-        self.step_inner(state, true).await
+        self.step_inner(state, true, None).await
     }
 
     /// Steps controllers that are already active without planning stack changes.
@@ -1850,7 +1861,46 @@ impl StackExecutor {
     /// stack, resume failed updates, or initiate create/update/delete transitions.
     /// It is suitable for periodic observation of a Running deployment.
     pub async fn refresh(&self, state: StackState) -> Result<StepResult> {
-        self.step_inner(state, false).await
+        self.step_inner(state, false, None).await
+    }
+
+    /// Runs the Ready handler of every Running resource. Nothing is planned and no other
+    /// resource is stepped.
+    ///
+    /// A check that fails changes nothing: it cannot mark a resource failed or end an update
+    /// that is in progress. A check that succeeds hands back the controller's new state, so
+    /// work a controller spaces out over many checks (a lookup it repeats every 15 minutes) is
+    /// not repeated on every call. Only the controller state of a resource that was Running
+    /// before and is Running without an error after is taken. The rest of the returned state
+    /// is the state that was passed in.
+    ///
+    /// `already_run` lists resources the caller's own step has just run. They are left alone,
+    /// so a pass does not repeat their cloud calls or replace the controller state that step saved.
+    pub async fn observe_running(
+        &self,
+        state: StackState,
+        already_run: &[String],
+    ) -> Result<RunningObservation> {
+        let observed = self
+            .step_inner(state.clone(), false, Some(already_run))
+            .await?;
+        let mut kept = state;
+        for (resource_id, after) in observed.next_state.resources {
+            let Some(before) = kept.resources.get_mut(&resource_id) else {
+                continue;
+            };
+            if before.status == ResourceStatus::Running
+                && after.status == ResourceStatus::Running
+                && after.error.is_none()
+                && after.retry_attempt == 0
+            {
+                before.internal_state = after.internal_state;
+            }
+        }
+        Ok(RunningObservation {
+            state: kept,
+            heartbeats: observed.heartbeats,
+        })
     }
 
     /// Continues controller states registered by an external setup engine
@@ -1954,14 +2004,20 @@ impl StackExecutor {
         }
 
         state.resources.extend(logical_compute);
-        self.step_inner(state, false).await
+        self.step_inner(state, false, None).await
     }
 
     #[alien_event(AlienEvent::StackStep {
         next_state: state.clone(),
         suggested_delay_ms: None,
     })]
-    async fn step_inner(&self, state: StackState, apply_plan: bool) -> Result<StepResult> {
+    async fn step_inner(
+        &self,
+        state: StackState,
+        apply_plan: bool,
+        observing: Option<&[String]>,
+    ) -> Result<StepResult> {
+        let observe_only = observing.is_some();
         validate_stack_controller_state_versions(&state)?;
 
         // Setup must be able to repair the installed ceiling. An empty desired stack
@@ -2553,6 +2609,14 @@ impl StackExecutor {
             // Check status and terminal state using next_state
             let current_resource_view = next_state.resources.get(resource_id).unwrap(); // Should always exist
                                                                                         // Check terminality based on *desired* state + current status
+            if observe_only
+                && (!matches!(
+                    current_resource_view.status,
+                    ResourceStatus::Running | ResourceStatus::RefreshFailed
+                ) || observing.is_some_and(|already_run| already_run.contains(resource_id)))
+            {
+                continue;
+            }
             let is_potentially_terminal = self.is_resource_synced(resource_id, &next_state);
 
             // If the planned transition put it into a terminal state (e.g. failed update plan), skip.
@@ -2577,7 +2641,8 @@ impl StackExecutor {
                 && current_resource_view
                     .get_internal_controller()?
                     .is_some_and(|controller| controller.requires_convergence_reconciliation());
-            let should_step_out_of_scope_resource = opted_in_running_resource
+            let should_step_out_of_scope_resource = observe_only
+                || opted_in_running_resource
                 || self.should_step_out_of_scope_resource(resource_id, current_resource_view);
 
             if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
@@ -2610,6 +2675,7 @@ impl StackExecutor {
                 // This is important for local platform where ephemeral state (ports, URLs)
                 // needs to be refreshed after restart, even if config hasn't changed.
                 match self.running_resource_policy {
+                    _ if observe_only => true,
                     RunningResourcePolicy::All => true,
                     RunningResourcePolicy::None => false,
                     RunningResourcePolicy::OptIn => opted_in_running_resource,

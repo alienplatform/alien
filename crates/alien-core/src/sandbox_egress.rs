@@ -65,17 +65,19 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
         .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
 }
 
-/// The stack's first Sandbox with internet egress, if any. Such a sandbox reserves
+/// Whether `resource` is a Sandbox with internet egress. Such a sandbox reserves
 /// [`SANDBOX_EGRESS_GATEWAY_ID`] for the gateway Alien manages.
+pub fn is_internet_sandbox(resource: &crate::Resource) -> bool {
+    resource
+        .downcast_ref::<Sandbox>()
+        .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+}
+
+/// The stack's first Sandbox with internet egress, if any.
 fn first_internet_sandbox(stack: &Stack) -> Option<&String> {
     stack
         .resources()
-        .find(|(_, entry)| {
-            entry
-                .config
-                .downcast_ref::<Sandbox>()
-                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
-        })
+        .find(|(_, entry)| is_internet_sandbox(&entry.config))
         .map(|(id, _)| id)
 }
 
@@ -91,7 +93,19 @@ pub fn has_internet_sandbox(stack: &Stack) -> bool {
 /// own resource `sandbox-egress-gateway`. With one, the id is reserved for the gateway
 /// preparation installs, and an application resource that uses it is refused.
 pub fn is_managed_gateway(stack: &Stack, resource_id: &str) -> bool {
-    resource_id == SANDBOX_EGRESS_GATEWAY_ID && has_internet_sandbox(stack)
+    is_managed_gateway_among(
+        stack.resources().map(|(_, entry)| &entry.config),
+        resource_id,
+    )
+}
+
+/// [`is_managed_gateway`] for a caller that has the stack's resources but not a [`Stack`],
+/// such as a deployment's recorded state.
+pub fn is_managed_gateway_among<'a>(
+    mut resources: impl Iterator<Item = &'a crate::Resource>,
+    resource_id: &str,
+) -> bool {
+    resource_id == SANDBOX_EGRESS_GATEWAY_ID && resources.any(is_internet_sandbox)
 }
 
 /// An AWS internet sandbox's connector routes through the gateway, so a setup surface that

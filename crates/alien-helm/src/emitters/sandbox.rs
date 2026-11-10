@@ -1,9 +1,10 @@
 //! Sandbox emitter — the NetworkPolicy that bounds a session, and the cluster-scoped RBAC the
-//! broker needs to authenticate one.
+//! operator needs to provision one and its broker needs to authenticate one.
 //!
 //! Both belong to Helm rather than to the operator: the operator does not create
-//! NetworkPolicies, and a `TokenReview` is cluster-scoped while the operator is namespace-scoped
-//! with no cluster-admin. Build has the same shape and is the precedent.
+//! NetworkPolicies, and a `TokenReview` and the RuntimeClass listing the controller checks before
+//! provisioning are cluster-scoped while the operator is namespace-scoped with no cluster-admin.
+//! Build has the same shape and is the precedent.
 //!
 //! No ServiceAccount is emitted, unlike Build's. A sandbox pod runs with
 //! `automountServiceAccountToken: false` — a mounted token is a credential the untrusted code can
@@ -194,21 +195,32 @@ spec:
 /// the broker checks it with a `TokenReview`. `TokenReview` is a cluster-scoped subresource, so a
 /// namespaced Role cannot grant it and authorization fails closed at the first claim without this.
 fn broker_rbac() -> String {
-    r#"apiVersion: rbac.authorization.k8s.io/v1
+    // Cluster-scoped names must differ per install: one cluster can run several copies of the
+    // same chart in different namespaces, or several charts in one namespace, and a shared name
+    // would refuse the second install or rebind the role away from the first. The full name is
+    // truncated to fit, so the hash covers the namespace and the whole full name.
+    r#"{{- $suffix := printf "sandbox-broker-%s" (printf "%s/%s" .Release.Namespace (include "deployment.fullname" .) | sha256sum | trunc 8) -}}
+{{- $name := printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "deployment.fullname" . }}-sandbox-broker
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
+  # The controller refuses to provision before it has seen a sandboxed RuntimeClass
+  # (gVisor or Kata) on the cluster, and RuntimeClasses are cluster-scoped.
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . }}-sandbox-broker
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
 subjects:
@@ -218,7 +230,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "deployment.fullname" . }}-sandbox-broker
+  name: {{ $name }}
 "#
     .to_string()
 }

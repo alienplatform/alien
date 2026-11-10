@@ -1030,7 +1030,9 @@ impl Sandbox {
     /// exceeds the bound they wrote down.
     pub fn microvm_tier(&self) -> Result<MicrovmTier> {
         let Some(limits) = self.limits.as_ref() else {
-            // Nothing declared: AWS's own default baseline, which is also `default_limits`.
+            // Nothing declared: AWS's own default size, a 2 GiB baseline that bursts to 8 GiB and
+            // 4 vCPU. This is larger than `default_limits`, which the other backends use; picked
+            // by the rule below, `default_limits` would select the 512 MiB tier (#1474).
             return Ok(MICROVM_TIERS[2]);
         };
 
