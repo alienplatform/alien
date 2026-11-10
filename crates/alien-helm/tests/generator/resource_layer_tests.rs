@@ -226,7 +226,9 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
         "169.254.169.254", // instance metadata (AWS, GCP, Azure)
         "169.254.170.2",   // ECS task credentials
         "169.254.170.23",  // EKS Pod Identity agent
-        "169.254.20.10",   // node-local DNS cache, outside port 53
+        "169.254.20.10",   // NodeLocal DNSCache, outside port 53
+        "169.254.10.10",   // AKS LocalDNS (VNet DNS), outside port 53
+        "169.254.10.11",   // AKS LocalDNS (cluster DNS), outside port 53
         "168.63.129.16",   // Azure wire server
         "100.64.0.10",     // shared address space: CGNAT, EKS custom pod networking
         "100.127.255.254",
@@ -247,8 +249,15 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
         "fe80::1",
         "2606:4700:4700::1111",
     ] {
-        for (protocol, port) in [("TCP", 80), ("TCP", 443), ("UDP", 53), ("TCP", 53)] {
-            if address == "169.254.20.10" && port == 53 {
+        for (protocol, port) in [
+            ("TCP", 80),
+            ("TCP", 443),
+            ("UDP", 54),
+            ("UDP", 53),
+            ("TCP", 53),
+        ] {
+            // Link-local DNS is admitted below; every other link-local port stays denied.
+            if address.starts_with("169.254.") && port == 53 {
                 continue;
             }
             assert!(
@@ -261,9 +270,15 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
         ("8.8.8.8", "TCP", 443),
         ("1.1.1.1", "UDP", 53),
         ("203.0.114.1", "TCP", 22),
-        // NodeLocal DNSCache answers on a link-local address; DNS only.
+        // Node-local resolvers answer on link-local addresses that vary by cluster
+        // (NodeLocal DNSCache, AKS LocalDNS, custom ones), so all of link-local is DNS-only.
         ("169.254.20.10", "UDP", 53),
         ("169.254.20.10", "TCP", 53),
+        ("169.254.10.10", "UDP", 53),
+        ("169.254.10.10", "TCP", 53),
+        ("169.254.10.11", "UDP", 53),
+        ("169.254.10.11", "TCP", 53),
+        ("169.254.25.10", "UDP", 53),
     ] {
         assert!(
             reachable(address, protocol, port),
