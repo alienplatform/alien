@@ -557,6 +557,26 @@ async fn every_next_token_is_followed_before_the_next_call() {
 }
 
 #[tokio::test]
+async fn a_final_page_that_still_says_partial_data_is_rejected_not_read_as_no_activity() {
+    let t = utc("2026-11-10T08:05:00Z").timestamp();
+    let stub = StubCloudWatch::answering(vec![
+        Ok(response(
+            vec![result("f0c0", "PartialData", vec![t], vec![3.0])],
+            Some("t1"),
+        )),
+        Ok(response(
+            vec![result("f0c0", "PartialData", vec![t + 60], vec![4.0])],
+            None,
+        )),
+    ]);
+    let error = LambdaMetricsPuller::new(stub, scope())
+        .pull(&[target("demo", "api")], window())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "METRICS_RESPONSE_INVALID");
+}
+
+#[tokio::test]
 async fn a_forbidden_query_status_needs_a_setup_update_instead_of_empty_data() {
     let stub = StubCloudWatch::answering(vec![Ok(response(
         vec![result("f0c0", "Forbidden", vec![], vec![])],

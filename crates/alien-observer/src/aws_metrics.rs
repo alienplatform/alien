@@ -13,7 +13,7 @@
 //! - A period CloudWatch reports no point for stays absent. Nothing is filled with zero, and a
 //!   denied read is an error, never an empty batch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use alien_aws_clients::cloudwatch::{
@@ -299,6 +299,8 @@ impl LambdaMetricsPuller {
         series: &mut BTreeMap<String, SeriesPoints>,
     ) -> MetricsResult<()> {
         let mut next_token: Option<String> = None;
+        // Queries whose latest page said PartialData; the final page must clear every one.
+        let mut unfinished: BTreeSet<String> = BTreeSet::new();
         for _ in 0..MAX_PAGES_PER_CALL {
             let response = self
                 .cloudwatch
@@ -313,11 +315,26 @@ impl LambdaMetricsPuller {
                 .await
                 .map_err(map_client_error)?;
             for result in response.metric_data_results {
-                absorb_result(series, result)?;
+                let id = result.id.clone();
+                if absorb_result(series, result)? {
+                    unfinished.remove(&id);
+                } else {
+                    unfinished.insert(id);
+                }
             }
             match response.next_token.filter(|token| !token.is_empty()) {
                 Some(token) => next_token = Some(token),
-                None => return Ok(()),
+                None => {
+                    if let Some(id) = unfinished.first() {
+                        return Err(AlienError::new(MetricsErrorData::ResponseInvalid {
+                            metrics_source: METRICS_SOURCE.to_string(),
+                            message: format!(
+                                "query '{id}' ended with PartialData and no next page"
+                            ),
+                        }));
+                    }
+                    return Ok(());
+                }
             }
         }
         Err(AlienError::new(MetricsErrorData::ResponseInvalid {
@@ -347,11 +364,12 @@ fn map_client_error(error: AlienError<ClientErrorData>) -> AlienError<MetricsErr
 /// The points of one query, merged across pages, by epoch second.
 type SeriesPoints = BTreeMap<i64, f64>;
 
-/// Adds one page's answer for a query to the merged series.
+/// Adds one page's answer for a query to the merged series. Returns whether the
+/// query is finished (`Complete`) or still has pages to come (`PartialData`).
 fn absorb_result(
     series: &mut BTreeMap<String, SeriesPoints>,
     result: MetricDataResult,
-) -> MetricsResult<()> {
+) -> MetricsResult<bool> {
     let invalid = |message: String| {
         AlienError::new(MetricsErrorData::ResponseInvalid {
             metrics_source: METRICS_SOURCE.to_string(),
@@ -366,9 +384,10 @@ fn absorb_result(
             .collect::<Vec<_>>()
             .join("; ")
     };
-    match result.status_code.as_deref() {
+    let complete = match result.status_code.as_deref() {
         // The last page of a query is Complete. Earlier pages of a long one say PartialData.
-        Some("Complete") | Some("PartialData") => {}
+        Some("Complete") => true,
+        Some("PartialData") => false,
         Some("Forbidden") => {
             return Err(AlienError::new(MetricsErrorData::SetupUpdateRequired {
                 metrics_source: METRICS_SOURCE.to_string(),
@@ -384,7 +403,7 @@ fn absorb_result(
                 notes()
             )));
         }
-    }
+    };
     if result.timestamps.len() != result.values.len() {
         return Err(invalid(format!(
             "query '{}' has {} timestamps but {} values",
@@ -403,7 +422,7 @@ fn absorb_result(
         }
         points.insert(timestamp, value);
     }
-    Ok(())
+    Ok(complete)
 }
 
 fn string_attribute(key: &str, value: &str) -> KeyValue {
