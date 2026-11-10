@@ -196,18 +196,16 @@ fn with_installed_service_accounts(stack: &Stack, state: &StackState) -> Stack {
         let Some(saved) = state.resources.get(id) else {
             continue;
         };
-        let applied: Option<&Resource> = match &saved.previous_config {
-            Some(previous) => Some(previous),
-            // A failed heartbeat leaves the applied grants in place. After a failed update the
-            // config may be a target that was never applied, so it is judged as desired.
-            None if matches!(
-                saved.status,
-                ResourceStatus::Running | ResourceStatus::RefreshFailed
-            ) =>
-            {
-                Some(&saved.config)
+        // The executor sets `previous_config` when an update starts and never clears it, so it
+        // names the applied account only while that update is in flight or after it failed.
+        // Once the account is Running again, `config` is what was applied, and a failed
+        // heartbeat leaves it in place.
+        let applied: Option<&Resource> = match saved.status {
+            ResourceStatus::Running | ResourceStatus::RefreshFailed => Some(&saved.config),
+            ResourceStatus::Updating | ResourceStatus::UpdateFailed => {
+                saved.previous_config.as_ref()
             }
-            None => None,
+            _ => None,
         };
         let Some(installed) = applied.and_then(|config| config.downcast_ref::<ServiceAccount>())
         else {
