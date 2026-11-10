@@ -164,9 +164,23 @@ impl IdentityProver for GcpIdentity {
                 message: format!("The metadata server answered {}", response.status()),
             }));
         }
-        let token = response.text().await.into_alien_error().context(
+        let mut body = Vec::new();
+        let mut response = response;
+        while let Some(chunk) = response.chunk().await.into_alien_error().context(
             ErrorData::TelemetryCredentialsFailed {
                 message: "The metadata server reply could not be read".to_string(),
+            },
+        )? {
+            if body.len() + chunk.len() > MAX_METADATA_TOKEN_BYTES {
+                return Err(AlienError::new(ErrorData::TelemetryCredentialsFailed {
+                    message: "The metadata server reply is too large".to_string(),
+                }));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let token = String::from_utf8(body).into_alien_error().context(
+            ErrorData::TelemetryCredentialsFailed {
+                message: "The metadata server reply is not text".to_string(),
             },
         )?;
         let token = token.trim();
@@ -242,6 +256,33 @@ mod tests {
         assert_eq!(seen[0].0["audience"], "mgr_42");
         assert_eq!(seen[0].0["format"], "full");
         assert_eq!(seen[0].1, "Google");
+    }
+
+    #[tokio::test]
+    async fn gcp_stops_reading_a_metadata_reply_that_never_ends() {
+        use futures_util::stream;
+
+        let app = Router::new().route(
+            "/computeMetadata/v1/instance/service-accounts/default/identity",
+            get(|| async {
+                axum::body::Body::from_stream(stream::repeat_with(|| {
+                    Ok::<_, std::convert::Infallible>(bytes::Bytes::from(vec![b'a'; 4096]))
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let started = std::time::Instant::now();
+        let error = GcpIdentity::new(host)
+            .unwrap()
+            .prove("mgr_42")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("too large"), "{error}");
+        assert!(started.elapsed() < METADATA_TIMEOUT / 2);
     }
 
     #[tokio::test]

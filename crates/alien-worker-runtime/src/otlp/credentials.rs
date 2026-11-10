@@ -164,19 +164,23 @@ impl Inner {
                 Ok(grant)
             }
             Err(error) => {
-                let mut state = self.state.lock().expect("telemetry credentials poisoned");
-                state.failures += 1;
-                let backoff = BACKOFF_START
-                    .saturating_mul(1 << state.failures.min(5).saturating_sub(1))
-                    .min(BACKOFF_MAX);
-                state.retry_at = Some(Instant::now() + backoff);
+                let backoff = {
+                    let mut state = self.state.lock().expect("telemetry credentials poisoned");
+                    state.failures += 1;
+                    let backoff = BACKOFF_START
+                        .saturating_mul(1 << state.failures.min(5).saturating_sub(1))
+                        .min(BACKOFF_MAX);
+                    state.retry_at = Some(Instant::now() + backoff);
+                    backoff
+                };
                 warn!(
                     error = %error,
                     retry_in_secs = backoff.as_secs(),
                     "Could not refresh log export credentials"
                 );
-                // Credentials that are still valid keep working until they expire.
-                held.ok_or(error)
+                // Credentials that are still valid keep working until they expire. The
+                // exchange may have run long enough for the old ones to run out.
+                self.usable().ok_or(error)
             }
         }
     }
@@ -472,6 +476,8 @@ mod tests {
             endpoint: &'static str,
         },
         Status(u16),
+        /// Answers the status after 1.2 seconds.
+        SlowStatus(u16),
         Redirect,
     }
 
@@ -532,6 +538,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         match plan {
             Plan::Status(code) => (StatusCode::from_u16(code).unwrap(), headers, String::new()),
+            Plan::SlowStatus(code) => {
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+                (StatusCode::from_u16(code).unwrap(), headers, String::new())
+            }
             Plan::Redirect => {
                 headers.insert("location", "/elsewhere".parse().unwrap());
                 (StatusCode::TEMPORARY_REDIRECT, headers, String::new())
@@ -709,6 +719,27 @@ mod tests {
         assert_eq!(appends[0].0, "Bearer grant-1");
         assert_eq!(appends[1].0, "Bearer grant-2");
         assert_eq!(server.exchanges().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn credentials_that_ran_out_during_a_failed_refresh_are_not_sent() {
+        let server = Server::start(vec![
+            Plan::Grant {
+                token: "grant-1",
+                lifetime_secs: 12,
+            },
+            Plan::SlowStatus(500),
+        ])
+        .await;
+        let (_grants, client) = start(&server).await;
+
+        // Refresh is due 6 seconds before expiry, while the grant is still sendable.
+        // The manager then takes long enough to fail that fewer than 5 seconds remain.
+        tokio::time::sleep(Duration::from_millis(6300)).await;
+        let error = client.send_bytes(export(b"a")).await.unwrap_err();
+
+        assert!(error.to_string().contains("500"), "{error}");
+        assert!(server.appends().is_empty(), "the old grant was sent");
     }
 
     #[tokio::test]

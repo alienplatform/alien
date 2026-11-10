@@ -444,8 +444,9 @@ fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
 ///   alien-worker-runtime at runtime-owned vault secrets. These are not forwarded to
 ///   the child application process.
 /// - `ALIEN_TELEMETRY_CREDENTIALS`    — workers only, when the monitoring config has
-///   `credentials`; where alien-worker-runtime trades proof of its cloud identity for
-///   short-lived log export credentials, instead of reading the vault auth header.
+///   `credentials` and the platform is AWS or GCP; where alien-worker-runtime trades
+///   proof of its cloud identity for short-lived log export credentials, instead of
+///   reading the vault auth header.
 ///
 /// Runtime-less Containers and Daemons do not store auth headers in their
 /// resource config. Their platform controller reads the values directly from
@@ -566,7 +567,13 @@ pub fn inject_monitoring_environment_variables(
                         message: "Failed to serialize ALIEN_RUNTIME_SECRETS config".to_string(),
                     })?;
                 env.insert(ENV_ALIEN_RUNTIME_SECRETS.to_string(), runtime_secrets_json);
-                if let Some(credentials) = &monitoring.credentials {
+                // Only AWS and GCP Workers can prove their cloud identity; elsewhere
+                // the Worker keeps exporting with the vault auth header.
+                let credentials = monitoring
+                    .credentials
+                    .as_ref()
+                    .filter(|_| matches!(platform, Platform::Aws | Platform::Gcp));
+                if let Some(credentials) = credentials {
                     let credentials_json = serde_json::to_string(credentials)
                         .into_alien_error()
                         .context(ErrorData::InternalError {
@@ -2801,6 +2808,23 @@ mod tests {
         inject_monitoring_environment_variables(&mut stack, &monitoring(None), Platform::Aws)
             .unwrap();
         assert!(!resource_env(&stack, "worker").contains_key(ENV_ALIEN_TELEMETRY_CREDENTIALS));
+
+        // Platforms without a cloud identity proof keep exporting with the vault header.
+        for platform in [Platform::Azure, Platform::Kubernetes, Platform::Local] {
+            let mut stack = make_compute_stack();
+            inject_monitoring_environment_variables(
+                &mut stack,
+                &monitoring(Some(credentials.clone())),
+                platform,
+            )
+            .unwrap();
+            let env = resource_env(&stack, "worker");
+            assert!(
+                !env.contains_key(ENV_ALIEN_TELEMETRY_CREDENTIALS),
+                "{platform:?}: no identity proof exists there"
+            );
+            assert!(env.contains_key(ENV_ALIEN_RUNTIME_SECRETS));
+        }
     }
 
     fn make_compute_stack() -> Stack {
