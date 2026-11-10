@@ -1985,6 +1985,11 @@ mod tests {
         std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 
+    /// Consume a sync request left by earlier steps, if any.
+    async fn drain_sync_request(state: &OperatorState) {
+        let _ = tokio::time::timeout(std::time::Duration::ZERO, state.db.wait_for_sync()).await;
+    }
+
     /// A manager that issues no execution claims (the OSS SQLite manager) sends
     /// `{}` once the release is installed. The Operator used to replay the stored
     /// install target as a new update on every sync, so the deployment never
@@ -2076,6 +2081,7 @@ mod tests {
             DeploymentStatus::Running,
             "an empty sync must not turn into an update"
         );
+        drain_sync_request(&state).await;
         run_deployment_until_idle(&state).await;
         let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(refreshed.status, DeploymentStatus::Running);
@@ -2084,6 +2090,18 @@ mod tests {
             "an empty sync must run Ready on the Running storage ({} -> {})",
             ready_before,
             storage_ready_checks(&refreshed)
+        );
+        // No claim waits for this refresh's result. An immediate sync would
+        // replay the stored target and start the next refresh at once, so the
+        // Operator would refresh and sync in a tight loop.
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                state.db.wait_for_sync()
+            )
+            .await
+            .is_err(),
+            "a claimless refresh must wait for the sync interval, not request a sync"
         );
 
         // A fresh claimless target for the same release with changed
