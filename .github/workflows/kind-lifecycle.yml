@@ -73,6 +73,7 @@ jobs:
         run: |
           cargo test --locked -p alien-operator --test dynamic_containers_kind --no-run
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
+          cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
 
       - name: Start disposable Kubernetes cluster
         uses: helm/kind-action@v1.14.0
@@ -93,6 +94,13 @@ jobs:
           docker tag "$image" docker.io/library/memcached:alien-kind-test
           kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
           cargo test --locked -p alien-operator --test dynamic_containers_kind -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: Sandbox chart RBAC on a real API server
+        env:
+          ALIEN_SANDBOX_RBAC_KIND_CONTEXT: kind-alien-product-lifecycle
+        run: |
+          cargo test --locked -p alien-helm --test sandbox_rbac_kind -- \
             --ignored --nocapture --test-threads=1
 
       - name: Product Remote Operator Helm and Terraform lifecycle
