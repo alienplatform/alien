@@ -94,7 +94,76 @@ pub fn aws_stack_permissions_boundary(
     context: &PermissionContext,
     resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
 ) -> Result<Value> {
-    stack_boundary(stack, context, resolve_context, CopiedGrants::NotAdmitted)
+    stack_boundary(
+        stack,
+        context,
+        resolve_context,
+        CopiedGrants::NotAdmitted,
+        CatalogSets::All,
+    )
+}
+
+/// The boundary an installed ceiling must cover for `stack` to run.
+///
+/// Setup installs [`aws_stack_permissions_boundary`], which holds the whole runtime catalog so
+/// that Live resources added later fit without rerunning setup. Checking an installed ceiling
+/// against that whole catalog would make every catalog addition refuse every installed
+/// boundary, including stacks that never use the new grant. This renders the same document
+/// with only the catalog sets the stack can use (see [`stack_uses_catalog_set`]), so a stack
+/// that adds a resource whose grants the installed ceiling lacks still needs setup.
+pub fn aws_stack_required_permissions_boundary(
+    stack: &Stack,
+    context: &PermissionContext,
+    resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
+) -> Result<Value> {
+    stack_boundary(
+        stack,
+        context,
+        resolve_context,
+        CopiedGrants::NotAdmitted,
+        CatalogSets::UsedBy(stack),
+    )
+}
+
+/// Which runtime catalog sets `render_boundary` renders.
+#[derive(Debug, Clone, Copy)]
+enum CatalogSets<'a> {
+    /// Every runtime set: the ceiling setup installs.
+    All,
+    /// The sets this stack can use: what an installed ceiling must cover for it.
+    UsedBy(&'a Stack),
+}
+
+impl CatalogSets<'_> {
+    fn includes(self, id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::UsedBy(stack) => stack_uses_catalog_set(stack, id),
+        }
+    }
+}
+
+/// Whether a workload role written for `stack` can carry catalog set `id`.
+///
+/// Workload roles come from permission profiles, which preflight mutations extend with the
+/// sets they need. A set is used when a profile names it, or when the stack has a resource of
+/// the set's type (its ID without the operation, such as `ai` or
+/// `experimental/aws-opensearch`): grants that apply to every resource of a type, such as
+/// remote bindings, name only resources the stack has.
+fn stack_uses_catalog_set(stack: &Stack, id: &str) -> bool {
+    let Some((resource_type, _)) = id.rsplit_once('/') else {
+        return true;
+    };
+    stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
+        || stack.permission_profiles().values().any(|profile| {
+            profile
+                .0
+                .values()
+                .flatten()
+                .any(|reference| reference.id() == id)
+        })
 }
 
 fn stack_boundary(
@@ -102,6 +171,7 @@ fn stack_boundary(
     context: &PermissionContext,
     mut resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
     copied: CopiedGrants,
+    catalog: CatalogSets<'_>,
 ) -> Result<Value> {
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut statements = Vec::new();
@@ -224,6 +294,7 @@ fn stack_boundary(
         exact_resources,
         &inline_grants,
         copied,
+        catalog,
     )
 }
 
@@ -348,6 +419,7 @@ pub fn aws_permissions_boundary(
         BTreeMap::new(),
         custom_statements,
         CopiedGrants::NotAdmitted,
+        CatalogSets::All,
     )
 }
 
@@ -357,6 +429,7 @@ fn render_boundary(
     exact_resources: BTreeMap<String, BTreeSet<String>>,
     exception_grants: &[AwsIamStatement],
     copied: CopiedGrants,
+    catalog: CatalogSets<'_>,
 ) -> Result<Value> {
     let prefix = context.stack_prefix.as_deref().ok_or_else(|| {
         AlienError::new(ErrorData::VariableNotFound {
@@ -371,7 +444,10 @@ fn render_boundary(
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut ids = list_permission_set_ids();
     ids.sort();
-    for id in ids.into_iter().filter(|id| is_runtime_set(id)) {
+    for id in ids
+        .into_iter()
+        .filter(|id| is_runtime_set(id) && catalog.includes(id))
+    {
         let set = get_permission_set(id).ok_or_else(|| {
             AlienError::new(ErrorData::InvalidPermissionSet {
                 message: format!("Catalog permission set '{id}' is missing"),
@@ -487,15 +563,19 @@ fn render_boundary(
             );
         }
     }
-    let mut rendered = vec![
-        json!({
+    let mut rendered = Vec::new();
+    // The whole catalog always scopes some resources; a required boundary for a stack whose
+    // used sets scope none has no scoped Allow, since IAM and the coverage check refuse an
+    // empty selector.
+    if !scoped_resources.is_empty() {
+        rendered.push(json!({
             "Effect": "Allow", "NotAction": "iam:*", "Resource": scoped_resources,
-        }),
-        json!({
-            "Effect": "Allow", "NotAction": "iam:*", "Resource": "*",
-            "Condition": {"StringEquals": {ownership_key: prefix}},
-        }),
-    ];
+        }));
+    }
+    rendered.push(json!({
+        "Effect": "Allow", "NotAction": "iam:*", "Resource": "*",
+        "Condition": {"StringEquals": {ownership_key: prefix}},
+    }));
     for sourced in &statements {
         let statement = render_statement(&sourced.statement);
         let example = sourced
@@ -1955,6 +2035,7 @@ mod tests {
             &context(),
             |_, scope| key_context(scope),
             CopiedGrants::All,
+            CatalogSets::All,
         )
         .unwrap();
         let after =
@@ -2185,6 +2266,7 @@ mod tests {
             &context(),
             |_, scope| key_context(scope),
             CopiedGrants::All,
+            CatalogSets::All,
         )
         .expect_err("copied grants exceed the managed policy limit");
         assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");

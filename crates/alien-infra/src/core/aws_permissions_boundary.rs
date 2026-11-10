@@ -6,7 +6,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
+    generators::{
+        aws_permissions_boundary_covers, aws_stack_permissions_boundary,
+        aws_stack_required_permissions_boundary,
+    },
     ErrorData as PermissionErrorData, PermissionContext,
 };
 use serde::de::DeserializeOwned;
@@ -25,7 +28,7 @@ use crate::{
     worker::AwsWorkerController,
 };
 
-/// Generate the required boundary for direct setup or a deployment compatibility check.
+/// Generate the boundary direct setup installs for this stack.
 ///
 /// `context` supplies the deployment account, region, prefix and management identity.
 /// Existing resources use durable controller names, including imported names outside
@@ -36,17 +39,50 @@ pub fn aws_permissions_boundary_for_stack(
     state: &StackState,
     context: &PermissionContext,
 ) -> Result<Value> {
+    render_for_stack(stack, state, context, Ceiling::Installed)
+}
+
+/// Generate the boundary an installed ceiling must cover for this stack to run: the same
+/// document with only the catalog sets the stack can use. A catalog grant the stack does not
+/// use cannot make an installed boundary stale.
+pub fn required_aws_permissions_boundary_for_stack(
+    stack: &Stack,
+    state: &StackState,
+    context: &PermissionContext,
+) -> Result<Value> {
+    render_for_stack(stack, state, context, Ceiling::Required)
+}
+
+/// Which boundary `render_for_stack` renders.
+#[derive(Debug, Clone, Copy)]
+enum Ceiling {
+    /// What setup installs: the whole runtime catalog.
+    Installed,
+    /// What an installed boundary must cover for this stack.
+    Required,
+}
+
+fn render_for_stack(
+    stack: &Stack,
+    state: &StackState,
+    context: &PermissionContext,
+    ceiling: Ceiling,
+) -> Result<Value> {
     let mut base = context.clone();
     base.resource_id = None;
     base.resource_name = None;
-    aws_stack_permissions_boundary(stack, &base, |_, scope| {
+    let resolve = |_: &str, scope: &str| {
         boundary_grant_context(stack, state, &base, scope).context(
             PermissionErrorData::GeneratorError {
                 platform: "aws".to_string(),
                 message: format!("Cannot resolve permissions boundary scope '{scope}'"),
             },
         )
-    })
+    };
+    match ceiling {
+        Ceiling::Installed => aws_stack_permissions_boundary(stack, &base, resolve),
+        Ceiling::Required => aws_stack_required_permissions_boundary(stack, &base, resolve),
+    }
     .context(ErrorData::InfrastructureError {
         message: "Cannot generate the required AWS permissions boundary".to_string(),
         operation: Some("generate_permissions_boundary".to_string()),
@@ -109,7 +145,7 @@ pub fn validate_installed_aws_permissions_boundary(
                 )));
             }
         }
-        let required = aws_permissions_boundary_for_stack(stack, state, &context)
+        let required = required_aws_permissions_boundary_for_stack(stack, state, &context)
             .context(setup_required(format!(
                 "Cannot resolve the permissions required by boundary '{arn}'; regenerate and rerun setup"
             )))?;
