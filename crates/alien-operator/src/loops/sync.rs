@@ -1971,6 +1971,124 @@ mod tests {
         std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 
+    /// A manager that issues no execution claims (the OSS SQLite manager) sends
+    /// `{}` once the release is installed. The Operator used to replay the stored
+    /// install target as a new update on every sync, so the deployment never
+    /// stayed Running long enough for the maintenance refresh to run Ready.
+    #[tokio::test]
+    async fn a_claimless_manager_refreshes_instead_of_reapplying() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Response>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_claimless").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_installed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("claimless".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+        };
+        let config = |allow_frozen_changes: bool| {
+            alien_core::DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(allow_frozen_changes)
+                .external_bindings(Default::default())
+                .build()
+        };
+
+        // The first sync delivers the install target without a claim.
+        *response.lock().unwrap() =
+            json!({ "target": { "releaseInfo": release, "config": config(false) } });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        run_deployment_until_idle(&state).await;
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(installed.status, DeploymentStatus::Running);
+        let ready_before = storage_ready_checks(&installed);
+
+        // Nothing changed: the manager sends `{}`. The Operator stays Running
+        // and runs every Ready handler instead of re-applying the release.
+        *response.lock().unwrap() = json!({});
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let accepted = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            accepted.status,
+            DeploymentStatus::Running,
+            "an empty sync must not turn into an update"
+        );
+        run_deployment_until_idle(&state).await;
+        let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refreshed.status, DeploymentStatus::Running);
+        assert!(
+            storage_ready_checks(&refreshed) > ready_before,
+            "an empty sync must run Ready on the Running storage ({} -> {})",
+            ready_before,
+            storage_ready_checks(&refreshed)
+        );
+
+        // A fresh claimless target for the same release with changed
+        // configuration is still applied as an update.
+        *response.lock().unwrap() =
+            json!({ "target": { "releaseInfo": release, "config": config(true) } });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let update = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(update.status, DeploymentStatus::UpdatePending);
+        run_deployment_until_idle(&state).await;
+        let updated = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(updated.status, DeploymentStatus::Running);
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
+    }
+
     /// Serves the Kubernetes list calls the observe pass makes for one
     /// Helm-installed Deployment in namespace `shop`, and returns a service
     /// provider whose Kubernetes clients talk to it.
