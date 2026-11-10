@@ -465,8 +465,10 @@ impl InteractiveRegistry {
                     reservation,
                 ));
                 return Err(ControlError::Failed(format!(
-                    "the command wrapper did not report a pid within {}s",
-                    ANNOUNCEMENT_WAIT.as_secs()
+                    "the command wrapper did not report a pid within {wait}s; the command is \
+                     stopped if it reports one within another {wait}s, and otherwise its whole \
+                     sandbox session is stopped",
+                    wait = ANNOUNCEMENT_WAIT.as_secs()
                 )));
             }
         };
@@ -747,8 +749,9 @@ async fn kill_session(manager: &LocalSandboxManager, container_id: &str) {
 }
 
 /// A start that timed out waiting for the announcement: the command may be running anyway. If
-/// the announcement still comes, its group is stopped; the id is released only once the output
-/// has ended.
+/// the announcement still comes within another `ANNOUNCEMENT_WAIT`, its group is stopped;
+/// otherwise its session is killed from the host. The id is released only once the command is
+/// gone.
 async fn abandon(
     manager: Arc<LocalSandboxManager>,
     container_id: String,
@@ -757,10 +760,13 @@ async fn abandon(
     mut heard: Heard,
     reservation: Reservation,
 ) {
-    let (process_group, started) = match announcement(&mut output, &mut heard).await {
-        Ok((announced, _)) => announced,
-        Err(Unannounced { ended: true, .. }) => return outlast(output, reservation).await,
-        Err(Unannounced { ended: false, .. }) => {
+    let late = tokio::time::timeout(ANNOUNCEMENT_WAIT, announcement(&mut output, &mut heard)).await;
+    let (process_group, started) = match late {
+        Ok(Ok((announced, _))) => announced,
+        Ok(Err(Unannounced { ended: true, .. })) => return outlast(output, reservation).await,
+        // Still no group to stop it by, and no bound on how long it would run: its session is
+        // stopped from the host instead.
+        Ok(Err(Unannounced { ended: false, .. })) | Err(_) => {
             return untracked(&manager, &container_id, output, reservation).await
         }
     };
