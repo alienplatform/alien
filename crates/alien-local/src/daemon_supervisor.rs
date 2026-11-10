@@ -315,6 +315,7 @@ pub(crate) fn log_exporter_from_env(env_vars: &HashMap<String, String>, id: &str
         endpoint: endpoint.clone(),
         headers,
         service_name,
+        credentials: None,
     }
 }
 

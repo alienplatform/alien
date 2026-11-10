@@ -38,6 +38,7 @@ fn runtime_secrets_hash() -> String {
         .build();
     let monitoring = OtlpConfig {
         logs_endpoint: "https://manager.test/v1/logs".to_string(),
+        credentials: None,
         logs_auth_header: "authorization=Bearer logs-token".to_string(),
         metrics_endpoint: None,
         metrics_auth_header: None,

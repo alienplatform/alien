@@ -13,6 +13,7 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 
 use crate::{error::ErrorData, otlp, Result};
+use alien_core::ENV_ALIEN_TELEMETRY_CREDENTIALS;
 use alien_error::AlienError;
 
 const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -44,6 +45,10 @@ pub enum LogExporter {
         headers: HashMap<String, String>,
         /// Service name for resource identification
         service_name: String,
+        /// Where to get short-lived export credentials from the manager. When set, the
+        /// runtime exports with those and never with `headers`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credentials: Option<alien_core::OtlpCredentials>,
     },
 }
 
@@ -115,7 +120,7 @@ impl RuntimeConfig {
 
         // Populate env_vars from process environment for standalone binary
         let env_vars: HashMap<String, String> = std::env::vars().collect();
-        let log_exporter = LogExporter::from_env_vars(&env_vars);
+        let log_exporter = LogExporter::from_env_vars(&env_vars)?;
 
         Ok(Self {
             transport: cli.transport,
@@ -208,9 +213,9 @@ impl RuntimeConfig {
 }
 
 impl LogExporter {
-    pub fn from_env_vars(env_vars: &HashMap<String, String>) -> Self {
+    pub fn from_env_vars(env_vars: &HashMap<String, String>) -> Result<Self> {
         if runtime_otlp_disabled(env_vars) {
-            return LogExporter::None;
+            return Ok(LogExporter::None);
         }
 
         let Some(endpoint) = env_vars
@@ -218,18 +223,41 @@ impl LogExporter {
             .or_else(|| env_vars.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
             .cloned()
         else {
-            return LogExporter::None;
+            return Ok(LogExporter::None);
         };
+
+        let credentials = env_vars
+            .get(ENV_ALIEN_TELEMETRY_CREDENTIALS)
+            .map(|json| {
+                serde_json::from_str(json).map_err(|error| {
+                    AlienError::new(ErrorData::ConfigurationInvalid {
+                        message: format!(
+                            "Failed to parse {ENV_ALIEN_TELEMETRY_CREDENTIALS}: {error}"
+                        ),
+                        field: Some(ENV_ALIEN_TELEMETRY_CREDENTIALS.to_string()),
+                    })
+                })
+            })
+            .transpose()?;
 
         let service_name = env_vars
             .get("OTEL_SERVICE_NAME")
             .cloned()
             .unwrap_or_else(|| "alien-worker-runtime".to_string());
 
-        LogExporter::Otlp {
+        Ok(LogExporter::Otlp {
             endpoint,
             headers: otlp_headers_from_env_vars(env_vars),
             service_name,
+            credentials,
+        })
+    }
+
+    /// The manager endpoint to get export credentials from, if this exporter uses one.
+    pub fn credentials(&self) -> Option<&alien_core::OtlpCredentials> {
+        match self {
+            LogExporter::Otlp { credentials, .. } => credentials.as_ref(),
+            LogExporter::None => None,
         }
     }
 
@@ -239,12 +267,14 @@ impl LogExporter {
                 endpoint,
                 mut headers,
                 service_name,
+                credentials,
             } => {
                 headers.extend(otlp_headers_from_env_vars(runtime_secrets));
                 LogExporter::Otlp {
                     endpoint,
                     headers,
                     service_name,
+                    credentials,
                 }
             }
             LogExporter::None => LogExporter::None,
@@ -258,12 +288,15 @@ impl LogExporter {
                 endpoint,
                 headers,
                 service_name,
+                ..
             } => Some(otlp::OtlpConfig {
                 endpoint: endpoint.clone(),
                 headers: headers.clone(),
                 service_name: service_name.clone(),
                 service_version: std::env::var("OTEL_SERVICE_VERSION")
                     .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
+                #[cfg(feature = "otlp")]
+                grants: None,
             }),
         }
     }
@@ -335,6 +368,68 @@ mod tests {
             .validate()
             .unwrap_err();
         assert!(error.to_string().contains("requires 'azure' feature"));
+    }
+
+    fn otlp_env(extra: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut env = HashMap::from([(
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
+            "https://manager.test/v1/logs".to_string(),
+        )]);
+        env.extend(
+            extra
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+        );
+        env
+    }
+
+    #[test]
+    fn log_exporter_reads_telemetry_credentials_from_env() {
+        let env = otlp_env(&[(
+            ENV_ALIEN_TELEMETRY_CREDENTIALS,
+            r#"{"url":"https://manager.test/v1/telemetry/credentials","audience":"mgr_1"}"#,
+        )]);
+
+        let exporter = LogExporter::from_env_vars(&env).unwrap();
+
+        let credentials = exporter.credentials().expect("credentials are configured");
+        assert_eq!(
+            credentials.url,
+            "https://manager.test/v1/telemetry/credentials"
+        );
+        assert_eq!(credentials.audience, "mgr_1");
+        assert_eq!(
+            exporter.to_otlp_config().unwrap().endpoint,
+            "https://manager.test/v1/logs"
+        );
+    }
+
+    #[test]
+    fn log_exporter_without_credentials_keeps_the_legacy_headers() {
+        let env = otlp_env(&[("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer legacy")]);
+
+        let exporter = LogExporter::from_env_vars(&env).unwrap();
+
+        assert!(exporter.credentials().is_none());
+        assert_eq!(
+            exporter.to_otlp_config().unwrap().headers["authorization"],
+            "Bearer legacy"
+        );
+    }
+
+    #[test]
+    fn unparseable_telemetry_credentials_fail_startup_instead_of_falling_back() {
+        let env = otlp_env(&[
+            (ENV_ALIEN_TELEMETRY_CREDENTIALS, "not json"),
+            ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer legacy"),
+        ]);
+
+        let error = LogExporter::from_env_vars(&env).unwrap_err();
+
+        assert!(
+            error.to_string().contains(ENV_ALIEN_TELEMETRY_CREDENTIALS),
+            "{error}"
+        );
     }
 
     fn clear_otlp_env_vars() {

@@ -1299,6 +1299,7 @@ mod tests {
         let mut monitoring_config = config;
         monitoring_config.monitoring = Some(alien_core::OtlpConfig {
             logs_endpoint: "https://example.com/v1/logs".to_string(),
+            credentials: None,
             logs_auth_header: "authorization=Bearer test".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,

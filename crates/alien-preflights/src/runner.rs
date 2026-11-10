@@ -492,7 +492,8 @@ impl PreflightRunner {
         // Drop the comparison projection before later awaits so it does not enlarge
         // the deployment future and exhaust the runner's worker stack.
         let mut authorization_mismatch: Option<String> = None;
-        let (direct_setup, imported_setup_authorized) = {
+        let mut evaluate_authorization = |target_stack: &Stack| -> Result<(bool, bool)> {
+            authorization_mismatch = None;
             let direct_setup =
                 setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
             let automatic_azure_runtime = !config.setup_run
@@ -501,13 +502,9 @@ impl PreflightRunner {
             // A direct setup's runtime still needs setup's authorization for the changes
             // only setup applies, such as its own management grant.
             let hashed_target = match old_stack {
-                Some(_) if !direct_setup || !config.setup_run => {
-                    Some(without_declined_live_resources(
-                        &mutated_stack,
-                        &config.input_values,
-                        platform,
-                    )?)
-                }
+                Some(_) if !direct_setup || !config.setup_run => Some(
+                    without_declined_live_resources(target_stack, &config.input_values, platform)?,
+                ),
                 _ => None,
             };
             let imported_setup_authorized = match (
@@ -554,7 +551,23 @@ impl PreflightRunner {
                     crate::compatibility::azure_setup::require_unchanged_setup(installed, target)?;
                 }
             }
-            (direct_setup, imported_setup_authorized)
+            Ok((direct_setup, imported_setup_authorized))
+        };
+        let (direct_setup, mut imported_setup_authorized) = evaluate_authorization(&mutated_stack)?;
+        // An installed deployment keeps its management profile until setup is rerun. A setup
+        // update authorization minted from the rerun's profile keeps the new grants.
+        let mutated_stack = match old_stack {
+            Some(installed) if !config.setup_run && !imported_setup_authorized => {
+                let kept = crate::mutations::management_permission_profile::without_uninstalled_setup_only_grants(
+                    installed,
+                    mutated_stack.clone(),
+                );
+                if kept != mutated_stack {
+                    imported_setup_authorized = evaluate_authorization(&kept)?.1;
+                }
+                kept
+            }
+            _ => mutated_stack,
         };
         let setup_update_authorized = direct_setup || imported_setup_authorized;
 

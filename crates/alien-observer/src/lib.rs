@@ -1,5 +1,7 @@
 #[cfg(feature = "aws")]
 mod aws;
+#[cfg(feature = "aws")]
+mod aws_metrics;
 #[cfg(feature = "azure")]
 mod azure;
 mod error;
@@ -21,9 +23,15 @@ use serde_json::Value as JsonValue;
 
 #[cfg(feature = "aws")]
 pub use aws::{aws_raw_identity, AwsObserveContext, AwsObserver};
+#[cfg(feature = "aws")]
+pub use aws_metrics::{
+    lambda_targets_from_state, LambdaFunctionTarget, LambdaMetricsBatch, LambdaMetricsPuller,
+    LambdaMetricsScope, MetricsWindow, GET_METRIC_DATA_ACTION, LAMBDA_NAMESPACE,
+    MAX_QUERIES_PER_CALL, METRICS_READ_PERMISSION_SET, PERIOD_SECONDS, WINDOW_SECONDS,
+};
 #[cfg(feature = "azure")]
 pub use azure::{azure_raw_identity, AzureObserveContext, AzureObserver};
-pub use error::Result;
+pub use error::{MetricsErrorData, MetricsResult, Result};
 #[cfg(feature = "gcp")]
 pub use gcp::{gcp_raw_identity, GcpObserveContext, GcpObserver};
 #[cfg(feature = "kubernetes")]

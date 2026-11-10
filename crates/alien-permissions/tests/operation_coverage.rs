@@ -270,6 +270,15 @@ fn critical_e2e_provider_operations_are_declared() {
             azure_predefined_roles: &[],
         },
         OperationCoverage {
+            permission_set_id: "observe/metrics-read",
+            aws_actions: &["cloudwatch:GetMetricData"],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
             permission_set_id: "vault/data-write",
             aws_actions: &["ssm:PutParameter", "ssm:DeleteParameter"],
             gcp_permissions: &["secretmanager.secrets.delete"],

@@ -538,6 +538,10 @@ fn generate_auto_management_profile(
         }
         if platform == Platform::Aws {
             permission_set_ids.insert("worker/dispatch-command".to_string());
+            // Installed with setup so a worker added later needs no setup update.
+            if config.stack_settings.telemetry.is_enabled() {
+                permission_set_ids.insert(METRICS_READ_PERMISSION_SET_ID.to_string());
+            }
         }
     }
 
@@ -671,6 +675,15 @@ fn generate_auto_management_profile(
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.telemetry.is_enabled() {
             permission_set_ids.insert(format!("{}/telemetry", permission_resource_type));
+        }
+
+        // Infrastructure metrics for new AWS installs. An installed deployment that lacks it keeps
+        // its profile until setup is rerun (see `without_uninstalled_setup_only_grants`).
+        if platform == Platform::Aws
+            && resource_type == "worker"
+            && config.stack_settings.telemetry.is_enabled()
+        {
+            permission_set_ids.insert(METRICS_READ_PERMISSION_SET_ID.to_string());
         }
 
         // Add command dispatch permissions for workers with commands_enabled = true.
@@ -930,6 +943,41 @@ fn add_cloud_heartbeat_permission(
 
 /// Lets the AWS Key controller probe a customer key's availability.
 pub(crate) const KEY_AVAILABILITY_PERMISSION_SET_ID: &str = "key/availability";
+const METRICS_READ_PERMISSION_SET_ID: &str = "observe/metrics-read";
+
+/// Grants only setup can give an installed deployment: the management role cannot change its own
+/// policies, and an update that asks for a grant the installed profile lacks fails with a setup
+/// requirement. A new feature's grant therefore reaches new installs, and an existing install
+/// keeps the profile it was set up with until setup is rerun (a setup run prepares the stack
+/// without calling this).
+const SETUP_ONLY_PERMISSION_SET_IDS: &[&str] = &[METRICS_READ_PERMISSION_SET_ID];
+
+/// The prepared stack without the setup-only grants the installed management profile lacks.
+pub(crate) fn without_uninstalled_setup_only_grants(old_stack: &Stack, mut stack: Stack) -> Stack {
+    let installed = |id: &str| management_profile_contains(old_stack.management(), id);
+    let uninstalled: Vec<&str> = SETUP_ONLY_PERMISSION_SET_IDS
+        .iter()
+        .copied()
+        .filter(|id| !installed(id))
+        .collect();
+    let installed_has_global_scope = old_stack
+        .management()
+        .profile()
+        .is_some_and(|profile| profile.0.contains_key("*"));
+    let ManagementPermissions::Extend(profile) = &mut stack.permissions.management else {
+        return stack;
+    };
+    for grants in profile.0.values_mut() {
+        grants.retain(|grant| !uninstalled.contains(&grant.id()));
+    }
+    if !installed_has_global_scope && profile.0.get("*").is_some_and(|grants| grants.is_empty()) {
+        profile.0.shift_remove("*");
+    }
+    if profile.0.is_empty() && matches!(old_stack.management(), ManagementPermissions::Auto) {
+        stack.permissions.management = ManagementPermissions::Auto;
+    }
+    stack
+}
 
 /// Management's use of a volume key: it creates, grows, restores and deletes the volumes but
 /// never decrypts with the key. The node that attaches a volume holds `key/native-volume`.
@@ -1257,6 +1305,120 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    fn worker_stack() -> Stack {
+        Stack::new("example".to_string())
+            .add(
+                Worker::new("api".to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("test".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    fn grants_metrics_read(stack: &Stack) -> bool {
+        stack.management().profile().is_some_and(|profile| {
+            profile
+                .0
+                .get("*")
+                .into_iter()
+                .flatten()
+                .any(|grant| grant.id() == METRICS_READ_PERMISSION_SET_ID)
+        })
+    }
+
+    #[tokio::test]
+    async fn infrastructure_metrics_read_is_part_of_aws_setup_with_telemetry_and_a_worker() {
+        let granted = |platform: Platform,
+                       telemetry: TelemetryMode,
+                       setup: alien_core::SetupManagement,
+                       stack: Stack| async move {
+            let mut config = deployment_config_for_management_permission_test();
+            config.stack_settings.telemetry = telemetry;
+            config.stack_settings.setup_management = setup;
+            let prepared = ManagementPermissionProfileMutation
+                .mutate(stack, &StackState::new(platform), &config)
+                .await
+                .expect("management profile");
+            grants_metrics_read(&prepared)
+        };
+        let manual = alien_core::SetupManagement::Manual;
+        let automatic = alien_core::SetupManagement::Automatic;
+
+        assert!(granted(Platform::Aws, TelemetryMode::Auto, manual, worker_stack()).await);
+        assert!(
+            granted(
+                Platform::Aws,
+                TelemetryMode::Auto,
+                automatic,
+                worker_stack()
+            )
+            .await
+        );
+        assert!(
+            granted(
+                Platform::Aws,
+                TelemetryMode::ApprovalRequired,
+                manual,
+                worker_stack()
+            )
+            .await
+        );
+        assert!(!granted(Platform::Aws, TelemetryMode::Off, manual, worker_stack()).await);
+        assert!(!granted(Platform::Aws, TelemetryMode::Off, automatic, worker_stack()).await);
+        assert!(!granted(Platform::Gcp, TelemetryMode::Auto, manual, worker_stack()).await);
+        assert!(!granted(Platform::Azure, TelemetryMode::Auto, manual, worker_stack()).await);
+        let no_worker = || Stack::new("example".to_string()).build();
+        assert!(
+            !granted(Platform::Aws, TelemetryMode::Auto, manual, no_worker()).await,
+            "no worker, no Lambda metrics to read"
+        );
+        assert!(
+            granted(Platform::Aws, TelemetryMode::Auto, automatic, no_worker()).await,
+            "automatic setup installs what a later worker needs"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installed_profile_without_the_metrics_grant_keeps_its_profile() {
+        let config = deployment_config_for_management_permission_test();
+        let state = StackState::new(Platform::Aws);
+        let target = ManagementPermissionProfileMutation
+            .mutate(worker_stack(), &state, &config)
+            .await
+            .expect("management profile");
+        assert!(grants_metrics_read(&target));
+
+        let mut installed = target.clone();
+        let ManagementPermissions::Extend(profile) = &mut installed.permissions.management else {
+            panic!("expected an extended management profile");
+        };
+        profile
+            .0
+            .get_mut("*")
+            .expect("stack-wide grants")
+            .retain(|grant| grant.id() != METRICS_READ_PERMISSION_SET_ID);
+
+        let kept = without_uninstalled_setup_only_grants(&installed, target.clone());
+        assert!(!grants_metrics_read(&kept));
+        assert_eq!(kept.management(), installed.management());
+        assert!(
+            !crate::compatibility::PermissionProfilesUnchangedCheck
+                .management_needs_setup(&installed, &kept, &config),
+            "an update of an installed deployment must not ask for setup"
+        );
+
+        let installed_with_it = target.clone();
+        assert_eq!(
+            without_uninstalled_setup_only_grants(&installed_with_it, target.clone()),
+            target,
+            "a deployment that has the grant keeps it"
+        );
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 mod normalization;
 
 use crate::error::{ErrorData, Result};
-use alien_core::ENV_ALIEN_RUNTIME_SECRETS;
+use alien_core::{ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_TELEMETRY_CREDENTIALS};
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     collections::HashMap,
@@ -21,6 +21,11 @@ use opentelemetry_sdk::{
 static OTLP_PROVIDER: LazyLock<Mutex<Option<SdkLoggerProvider>>> =
     LazyLock::new(|| Mutex::new(None));
 
+#[cfg(feature = "otlp")]
+pub mod credentials;
+#[cfg(feature = "otlp")]
+pub mod identity;
+
 const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
 
 /// Configuration for OTLP logging based on environment variables
@@ -30,6 +35,10 @@ pub struct OtlpConfig {
     pub headers: HashMap<String, String>,
     pub service_name: String,
     pub service_version: String,
+    /// When set, every export goes to the endpoint and with the authorization of these
+    /// short-lived credentials; `endpoint` and `headers` are not used.
+    #[cfg(feature = "otlp")]
+    pub grants: Option<credentials::TelemetryGrants>,
 }
 
 impl OtlpConfig {
@@ -72,6 +81,8 @@ impl OtlpConfig {
             headers,
             service_name,
             service_version,
+            #[cfg(feature = "otlp")]
+            grants: None,
         })
     }
 }
@@ -131,6 +142,48 @@ pub fn init_otlp_logging(
 
 fn runtime_otlp_credentials_are_vault_backed() -> bool {
     std::env::var_os(ENV_ALIEN_RUNTIME_SECRETS).is_some()
+        || std::env::var_os(ENV_ALIEN_TELEMETRY_CREDENTIALS).is_some()
+}
+
+/// Starts the log export credentials of a Worker on AWS or GCP. Proves the identity of the
+/// cloud account the Worker runs as; no other platform has such a proof.
+#[cfg(feature = "otlp")]
+pub async fn start_telemetry_grants(
+    env: &HashMap<String, String>,
+    credentials: &alien_core::OtlpCredentials,
+) -> Result<credentials::TelemetryGrants> {
+    use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_ID};
+    use std::sync::Arc;
+
+    let deployment_id = env
+        .get(ENV_ALIEN_DEPLOYMENT_ID)
+        .cloned()
+        .or_else(|| std::env::var(ENV_ALIEN_DEPLOYMENT_ID).ok())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "{ENV_ALIEN_DEPLOYMENT_ID} is required for log export credentials"
+                ),
+                field: Some(ENV_ALIEN_DEPLOYMENT_ID.to_string()),
+            })
+        })?;
+    let platform =
+        alien_bindings::get_platform_from_env(env).context(ErrorData::ConfigurationInvalid {
+            message: "The platform is required for log export credentials".to_string(),
+            field: Some(alien_core::ENV_ALIEN_DEPLOYMENT_TYPE.to_string()),
+        })?;
+    let prover: Arc<dyn identity::IdentityProver> = match platform {
+        #[cfg(feature = "aws")]
+        Platform::Aws => Arc::new(identity::AwsIdentity::from_env(env).await?),
+        Platform::Gcp => Arc::new(identity::GcpIdentity::from_env(env)?),
+        other => {
+            return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!("Log export credentials are not available on {other}"),
+                field: Some(alien_core::ENV_ALIEN_DEPLOYMENT_TYPE.to_string()),
+            }))
+        }
+    };
+    credentials::TelemetryGrants::start(credentials, deployment_id, prover).await
 }
 
 /// Initialize the app-log OTLP provider from already-resolved runtime config.
@@ -222,11 +275,14 @@ fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
         .with_http()
         .with_export_config(export_config);
 
-    // Configure headers if any
-    if !config.headers.is_empty() {
+    {
         use opentelemetry_otlp::WithHttpConfig as _;
 
-        exporter_builder = exporter_builder.with_headers(config.headers.clone());
+        if let Some(grants) = &config.grants {
+            exporter_builder = exporter_builder.with_http_client(grants.http_client());
+        } else if !config.headers.is_empty() {
+            exporter_builder = exporter_builder.with_headers(config.headers.clone());
+        }
     }
 
     let exporter = exporter_builder

@@ -13,8 +13,8 @@ use std::{collections::HashMap, process::Stdio, sync::Arc};
 use alien_bindings::BindingsProvider;
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
-    ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TELEMETRY_CREDENTIALS,
+    ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
@@ -228,7 +228,12 @@ pub async fn run(
             .log_exporter
             .clone()
             .with_runtime_secrets(&runtime_secrets);
-        if let Some(otlp_config) = log_exporter.to_otlp_config() {
+        if let Some(mut otlp_config) = log_exporter.to_otlp_config() {
+            #[cfg(feature = "otlp")]
+            if let Some(credentials) = log_exporter.credentials() {
+                otlp_config.grants =
+                    Some(crate::otlp::start_telemetry_grants(&config.env_vars, credentials).await?);
+            }
             init_otlp_logging_from_config(otlp_config)?;
         }
 
@@ -658,7 +663,11 @@ async fn start_application(
     // environment (the normal standalone Kubernetes path). Skipping an
     // explicit `cmd.env` is not enough: child processes inherit every parent
     // variable unless it is removed from the command environment.
-    for name in [ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS] {
+    for name in [
+        ENV_ALIEN_COMMANDS_TOKEN,
+        ENV_ALIEN_RUNTIME_SECRETS,
+        ENV_ALIEN_TELEMETRY_CREDENTIALS,
+    ] {
         cmd.env_remove(name);
     }
 
@@ -720,7 +729,10 @@ async fn start_application(
 }
 
 fn runtime_only_env(name: &str) -> bool {
-    matches!(name, ENV_ALIEN_RUNTIME_SECRETS | ENV_ALIEN_COMMANDS_TOKEN)
+    matches!(
+        name,
+        ENV_ALIEN_RUNTIME_SECRETS | ENV_ALIEN_COMMANDS_TOKEN | ENV_ALIEN_TELEMETRY_CREDENTIALS
+    )
 }
 
 fn command_push_config(
@@ -799,7 +811,10 @@ async fn load_runtime_secrets(
             })
         })?;
 
-    let logs_auth_secret = runtime_secrets_config.otlp_logs_auth_header;
+    // Workers with export credentials never read the legacy long-lived logs key.
+    let logs_auth_secret = runtime_secrets_config
+        .otlp_logs_auth_header
+        .filter(|_| config.log_exporter.credentials().is_none());
     let metrics_auth_secret = runtime_secrets_config.otlp_metrics_auth_header;
 
     if logs_auth_secret.is_none() && metrics_auth_secret.is_none() {

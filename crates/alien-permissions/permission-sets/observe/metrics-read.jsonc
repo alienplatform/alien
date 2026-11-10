@@ -1,0 +1,20 @@
+{
+  "id": "observe/metrics-read",
+  "description": "Read CloudWatch metric values for the functions of a deployment (infrastructure metrics)",
+  "platforms": {
+    "aws": [
+      {
+        "label": "read-metric-data",
+        "description": "Read metric values for the stack's Lambda functions. CloudWatch only accepts `*` as the resource for this action, so the grant covers every metric in the account. It returns numbers only (counts, durations, concurrency); it cannot read logs, payloads, environment variables or other data of any function.",
+        "grant": {
+          "actions": ["cloudwatch:GetMetricData"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ]
+  }
+}
