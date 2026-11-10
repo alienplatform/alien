@@ -3140,10 +3140,10 @@ platform = "aws"
         let values = write_kubernetes_helm_values(
             chart.path(),
             "https://manager.example.test",
-            &OperatorEnrollment {
+            Some(&OperatorEnrollment {
                 code: "ax_enroll_fixture",
                 audience: "https://manager.example.test",
-            },
+            }),
             "dep_fixture",
             "orders-eu",
             "korders",
@@ -3238,6 +3238,128 @@ platform = "aws"
             written["management"]["enrollmentCode"].as_str(),
             Some("ax_enroll_fixture")
         );
+    }
+
+    /// A manager mock for a Kubernetes install: the deployment, its release
+    /// stack, and an enrollment-code answer. The returned directory holds a
+    /// fake `helm` that records the values file it was given.
+    async fn kubernetes_install_with_code_answer(
+        status: u16,
+        body: serde_json::Value,
+    ) -> (Result<()>, Option<serde_json::Value>, usize) {
+        use std::os::unix::fs::PermissionsExt;
+        let server = MockServer::start_async().await;
+        let mut deployment = installed_deployment("running", Some("rel_k8s"));
+        deployment["platform"] = serde_json::json!("kubernetes");
+        deployment["stackState"] = serde_json::json!({
+            "platform": "kubernetes",
+            "resourcePrefix": "korders",
+            "resources": {}
+        });
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(deployment);
+            })
+            .await;
+        let mut release = mock_release("rel_k8s");
+        release["stack"]["kubernetes"] = release["stack"]["aws"].take();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_k8s");
+                then.status(200).json_body(release);
+            })
+            .await;
+        let code = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_demo/enrollment-code");
+                then.status(status).json_body(body);
+            })
+            .await;
+
+        let out = tempfile::tempdir().unwrap();
+        let helm = out.path().join("helm");
+        std::fs::write(
+            &helm,
+            format!(
+                "#!/bin/sh\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-f\" ]; then cp \"$a\" {out}/values.json; fi\n  prev=\"$a\"\ndone\necho \"$@\" > {out}/args\n",
+                out = out.path().display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helm, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let client = create_manager_client("ax_dg_fixture", &server.base_url()).unwrap();
+        let args =
+            UpArgs::parse_from(["deploy", "--name", "orders-eu", "--platform", "kubernetes"]);
+        let result = run_kubernetes_pull_model(
+            helm.to_str().unwrap(),
+            &client,
+            &args,
+            &server.base_url(),
+            "dep_demo",
+            "orders-eu",
+            &StackSettings::default(),
+            None,
+        )
+        .await;
+        let values = std::fs::read_to_string(out.path().join("values.json"))
+            .ok()
+            .map(|contents| serde_json::from_str(&contents).unwrap());
+        (result, values, code.hits_async().await)
+    }
+
+    /// Running `deploy` again with a group key, after the Operator enrolled,
+    /// upgrades the release without a new code and keeps its stored state.
+    #[tokio::test]
+    async fn kubernetes_deploy_of_an_enrolled_operator_upgrades_without_a_code() {
+        for status in [403, 409] {
+            let (result, values, hits) = kubernetes_install_with_code_answer(
+                status,
+                serde_json::json!({
+                    "code": "ENROLLMENT_KEY_EXISTS",
+                    "message": "Deployment 'dep_demo' already has an operator key",
+                    "retryable": false, "internal": false
+                }),
+            )
+            .await;
+            result.unwrap_or_else(|error| panic!("{status}: {error:?}"));
+            assert_eq!(hits, 1);
+            let values = values.expect("helm ran with a values file");
+            assert_eq!(values["management"]["enrollmentCode"], "");
+            assert_eq!(values["management"]["audience"], "");
+            // The chart keeps the installed encryption key when none is given.
+            assert_eq!(values["runtime"]["encryption"]["key"], "");
+            assert_eq!(values["management"]["deploymentId"], "dep_demo");
+        }
+    }
+
+    /// Any other failure to get a code is still a failure, and Helm never runs.
+    #[tokio::test]
+    async fn kubernetes_deploy_still_fails_when_the_code_request_fails() {
+        for (status, body) in [
+            (
+                500,
+                serde_json::json!({
+                    "code": "INTERNAL_ERROR", "message": "boom",
+                    "retryable": true, "internal": true
+                }),
+            ),
+            (
+                409,
+                serde_json::json!({
+                    "code": "SOMETHING_ELSE", "message": "other conflict",
+                    "retryable": false, "internal": false
+                }),
+            ),
+        ] {
+            let (result, values, _) = kubernetes_install_with_code_answer(status, body).await;
+            assert!(result.is_err(), "{status} must fail");
+            assert!(values.is_none(), "{status}: helm must not run");
+        }
     }
 
     #[tokio::test]
@@ -7019,6 +7141,7 @@ async fn run_pull_model(
     match platform {
         Platform::Kubernetes => {
             run_kubernetes_pull_model(
+                "helm",
                 client,
                 args,
                 manager_url,
@@ -7284,6 +7407,7 @@ async fn run_operator_foreground(
 }
 
 async fn run_kubernetes_pull_model(
+    helm: &str,
     client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
@@ -7304,27 +7428,42 @@ async fn run_kubernetes_pull_model(
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
 
     // The Helm values carry a one-hour, one-use code, never a deployment
-    // token. The Operator trades it for its own key on first start.
-    let enrollment = client
+    // token. The Operator trades it for its own key on first start. Once it has
+    // a key, a group key is refused a code, and the upgrade runs without one:
+    // the Operator keeps using the key it stored.
+    let enrollment = match client
         .issue_enrollment_code()
         .id(deployment_id)
         .send()
         .await
         .into_sdk_error()
         .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get an Operator enrollment code from the manager".to_string(),
-        })?
-        .into_inner();
+    {
+        Ok(response) => Some(response.into_inner()),
+        Err(error) if error.code == "ENROLLMENT_KEY_EXISTS" => {
+            output::info(
+                "The Operator is already enrolled; upgrading it without a new enrollment code.",
+            );
+            None
+        }
+        Err(error) => {
+            return Err(error.context(ErrorData::ConfigurationError {
+                message: "Failed to get an Operator enrollment code from the manager".to_string(),
+            }))
+        }
+    };
 
     let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
     let values_file = write_kubernetes_helm_values(
         chart_dir.path(),
         manager_url,
-        &OperatorEnrollment {
-            code: &enrollment.code,
-            audience: &enrollment.manager_audience,
-        },
+        enrollment
+            .as_ref()
+            .map(|enrollment| OperatorEnrollment {
+                code: &enrollment.code,
+                audience: &enrollment.manager_audience,
+            })
+            .as_ref(),
         deployment_id,
         deployment_name,
         &resource_prefix,
@@ -7335,6 +7474,7 @@ async fn run_kubernetes_pull_model(
     )?;
 
     helm_upgrade_install(
+        helm,
         chart_dir.path(),
         &values_file,
         &release,
@@ -7495,7 +7635,7 @@ struct OperatorEnrollment<'a> {
 fn write_kubernetes_helm_values(
     chart_dir: &Path,
     manager_url: &str,
-    enrollment: &OperatorEnrollment<'_>,
+    enrollment: Option<&OperatorEnrollment<'_>>,
     deployment_id: &str,
     deployment_name: &str,
     resource_prefix: &str,
@@ -7510,8 +7650,8 @@ fn write_kubernetes_helm_values(
     helm_settings.deployment_model = DeploymentModel::Pull;
     let values = serde_json::json!({
         "management": {
-            "enrollmentCode": enrollment.code,
-            "audience": enrollment.audience,
+            "enrollmentCode": enrollment.map_or("", |enrollment| enrollment.code),
+            "audience": enrollment.map_or("", |enrollment| enrollment.audience),
             "name": deployment_name,
             "url": manager_url,
             "deploymentId": deployment_id,
@@ -7525,8 +7665,11 @@ fn write_kubernetes_helm_values(
                 "tag": tag,
                 "pullPolicy": "IfNotPresent",
             },
+            // Left empty: the chart generates the key on the first install and
+            // keeps the installed one on every upgrade. A new key on an upgrade
+            // would be refused, since it would make the stored state unreadable.
             "encryption": {
-                "key": super::operator::generate_encryption_key_public(),
+                "key": "",
             }
         },
         "stackSettings": helm_settings,
@@ -7552,6 +7695,7 @@ fn write_kubernetes_helm_values(
 }
 
 async fn helm_upgrade_install(
+    helm: &str,
     chart_dir: &Path,
     values_file: &Path,
     release: &str,
@@ -7559,7 +7703,7 @@ async fn helm_upgrade_install(
     kubeconfig: Option<&str>,
     kube_context: Option<&str>,
 ) -> Result<()> {
-    let mut cmd = tokio::process::Command::new("helm");
+    let mut cmd = tokio::process::Command::new(helm);
     cmd.arg("upgrade")
         .arg("--install")
         .arg(release)

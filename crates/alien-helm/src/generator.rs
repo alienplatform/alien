@@ -6841,7 +6841,7 @@ spec:
             - name: OPERATOR_REGISTRY_SECRET
               value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
             {{- end }}
-            {{- else }}
+            {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
             {{- end }}
@@ -9775,6 +9775,67 @@ mod tests {
                 assert_eq!(String::from_utf8(auth).unwrap(), format!("prod:{password}"));
             }
         }
+    }
+
+    /// An upgrade of an enrolled Operator carries no enrollment code and no
+    /// token. The Operator then runs on the daily key stored in its runtime
+    /// volume, so the chart must not point it at a credential file that holds
+    /// nothing: the Operator refuses to start on an empty token file.
+    #[test]
+    fn an_upgrade_without_a_code_or_token_points_the_operator_at_no_credential_file() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let upgrade = enrolled.replace(
+            "  enrollmentCode: 'ax_enroll_example'\n",
+            "  enrollmentCode: ''\n",
+        );
+        assert_ne!(upgrade, enrolled, "the values carried the code");
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(upgrade.as_str()));
+        rendered.assert_ok("upgrade without a code");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let operator = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let env: Vec<&str> = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter_map(|variable| variable["name"].as_str())
+            .collect();
+        assert!(!env.contains(&"SYNC_TOKEN_FILE"), "{env:?}");
+        assert!(!env.contains(&"OPERATOR_ENROLLMENT_CODE_FILE"), "{env:?}");
     }
 
     #[test]

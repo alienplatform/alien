@@ -1984,7 +1984,7 @@ spec:
             - name: OPERATOR_REGISTRY_SECRET
               value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
             {{- end }}
-            {{- else }}
+            {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
             {{- end }}
