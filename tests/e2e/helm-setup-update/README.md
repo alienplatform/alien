@@ -19,8 +19,8 @@ Cases, each asserted against the deployment the manager stores:
 - a chart-only version bump with the same setup mints nothing;
 - `helm rollback` after success mints nothing and the deployment keeps running;
 - a chart built for another install channel is refused;
-- a rollback after the grant was minted leaves the update waiting, and the
-  upgrade to the right chart completes it;
+- a rollback, after the grant was minted, to a chart with a different setup
+  leaves the update waiting, and the upgrade to the right chart completes it;
 - `helm template --no-hooks | kubectl apply` completes the update;
 - the older-Helm fallback (`helm get values -o yaml > current.yaml`, then
   `-f current.yaml`) completes the update.

@@ -25,7 +25,14 @@ cleanup() {
   [ -z "$CREATED" ] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
-fail() { echo "FAIL: $*"; echo "--- manager log tail"; tail -30 "$W/manager.log"; exit 1; }
+# A failure inside `$(...)` (a chart that cannot be built) must stop the run,
+# not just its subshell: it signals the script, whose TERM trap exits.
+trap 'exit 1' TERM
+fail() {
+  { echo "FAIL: $*"; echo "--- manager log tail"; tail -30 "$W/manager.log"; } >&2
+  [ "$BASHPID" = "$$" ] || kill -TERM $$
+  exit 1
+}
 
 # --- cluster, operator image, manager -------------------------------------
 if kind get clusters | grep -qx "$CLUSTER"; then
@@ -96,10 +103,10 @@ chart() { # chart <n> <release id> <service accounts> -> path of the packaged ch
   for tag in $(curl -sf -u "x:$DGT" "$M/v2/charts/app/tags/list" | json "' '.join(d['tags'])"); do
     [ "$(curl -sf -u "x:$DGT" "$M/v2/charts/app/manifests/$tag" | json "d['annotations']['org.opencontainers.image.revision']")" = "$2" ] && version=$tag
   done
-  [ -n "${version:-}" ] || { fail "no chart is served for release $2"; } >&2
+  [ -n "${version:-}" ] || fail "no chart is served for release $2"
   d=$W/charts/$1-${TARGET:-served}; rm -rf "$d"; mkdir -p "$d"
   helm pull oci://$REG/charts/app --version "$version" --plain-http -d "$d" --untar >/dev/null
-  grep -q "setup.alien.dev/release-id: \"$2\"" "$d/app/Chart.yaml" || { fail "the chart for release $2 carries no setup"; } >&2
+  grep -q "setup.alien.dev/release-id: \"$2\"" "$d/app/Chart.yaml" || fail "the chart for release $2 carries no setup"
   python3 - "$d/app/values.yaml" "$3" <<'P'
 import sys
 p, ids = sys.argv[1], [i for i in sys.argv[2].split(",") if i]
@@ -126,6 +133,16 @@ eventually() { # until <description> <python expression over d and m> [seconds]
 holds() { # holds <description> <expression>: the condition stays true for 30 seconds
   for _ in $(seq 10); do [ "$(field "$2")" = True ] || fail "$1"; sleep 3; done; echo "PASS: $1"
 }
+revision() { helm --kube-context $CTX history app -n $NS -o json | python3 -c "import sys,json;print(max(r['revision'] for r in json.load(sys.stdin)))"; }
+operator_fingerprint() { # the setup fingerprint the running Operator was started with
+  $K get deploy -o json | python3 -c "
+import sys,json
+for d in json.load(sys.stdin)['items']:
+    for c in d['spec']['template']['spec']['containers']:
+        for e in c.get('env', []):
+            if e['name'] == 'OPERATOR_SETUP_FINGERPRINT': print(e['value'])"
+}
+chart_fingerprint() { tar -xzOf "$1" app/Chart.yaml | sed -n 's|.*setup.alien.dev/fingerprint: "\(.*\)"|\1|p'; }
 mints() { grep -c "Chart completes the setup update" "$W/manager.log" || true; }
 
 # --- install release 1 ----------------------------------------------------------
@@ -168,7 +185,7 @@ holds "that verdict stays while the release waits" "(m.get('cloudSetupRequired')
 R5=$(release execution,reader)
 eventually "waiting for release 5" "d.get('desiredReleaseId')=='$R5'"
 eventually "the verdict for release 4 is cleared once release 5 waits" "not m.get('cloudSetupRequired')"
-BEFORE_R5=$(helm --kube-context $CTX history app -n $NS -o json | python3 -c "import sys,json;print(max(r['revision'] for r in json.load(sys.stdin)))")
+BEFORE_R5=$(revision)
 upgrade "$(chart 5 "$R5" execution,reader)"
 eventually "helm upgrade completes the setup update" \
   "d['status']=='running' and d.get('currentReleaseId')=='$R5'"
@@ -191,11 +208,17 @@ holds "rollback after success keeps the deployment running" "d['status']=='runni
 # --- case: a chart for another install channel is refused ------------------------------------
 R6=$(release execution,reader,writer)
 eventually "waiting for release 6" "d.get('desiredReleaseId')=='$R6'"
+# The chart installed now (release 4's, after the rollback above) carries a
+# different setup than release 6; the rollback case below returns to it.
+BEFORE_R6=$(revision)
 upgrade "$(TARGET=other chart 6 "$R6" execution,reader,writer)"
 eventually "chart from another install channel refused" \
   "'different setup' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
 
-# --- case: rollback after the grant is minted leaves the update waiting ---------------------------
+# --- case: rolling back to a chart with another setup after the grant leaves the update waiting ---
+# The Operator keeps a grant only for the fingerprint it was started with, so
+# the rollback must reach a chart whose setup differs from release 6's. The
+# other-channel chart above is not one: it carries release 6's fingerprint.
 P6=$(chart 6 "$R6" execution,reader,writer)
 upgrade "$P6" &
 UPGRADE_PID=$!
@@ -203,7 +226,10 @@ GRANTED=
 for _ in $(seq 120); do [ "$(field "bool(m.get('setupUpdateAuthorization'))")" = True ] && { GRANTED=1; break; }; sleep 1; done
 [ -n "$GRANTED" ] || fail "no grant was issued for the rollback case"
 wait "$UPGRADE_PID" || true
-helm --kube-context $CTX rollback app -n $NS --wait >/dev/null
+helm --kube-context $CTX rollback app "$BEFORE_R6" -n $NS --wait >/dev/null
+ROLLED_FP=$(operator_fingerprint); P6_FP=$(chart_fingerprint "$P6")
+[ -n "$ROLLED_FP" ] && [ -n "$P6_FP" ] && [ "$ROLLED_FP" != "$P6_FP" ] \
+  || fail "the rollback did not reach a chart with another setup ('$ROLLED_FP' vs '$P6_FP')"
 holds "the grant does not apply to the rolled-back chart" "d['status']!='running' or d.get('currentReleaseId')!='$R6'"
 upgrade "$P6"
 eventually "upgrading to the right chart completes the update" "d['status']=='running' and d.get('currentReleaseId')=='$R6'"

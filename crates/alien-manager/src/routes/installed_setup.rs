@@ -1470,5 +1470,35 @@ pub(super) mod tests {
             .expect("the stale chart's refusal is stored");
         assert_eq!(refusal.reported_release_id, waiting.id);
         assert!(refusal.reason.contains(&cloud.id), "{}", refusal.reason);
+
+        // A release that changes only Live code keeps the chart's setup: the
+        // Operator's pod template, and so the running Operator, stays as it is.
+        let live_code = |image: &str| {
+            Stack::new("live-code".to_string())
+                .permission("runtime", alien_core::permissions::PermissionProfile::new())
+                .add(
+                    ServiceAccount::new("execution-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::Worker::new("api".to_string())
+                        .code(alien_core::WorkerCode::Image {
+                            image: image.to_string(),
+                        })
+                        .permissions("runtime".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let first = publish(live_code("example.com/api:1")).await;
+        let second = publish(live_code("example.com/api:2")).await;
+        let first = report_from_served_chart(&state, "live-code", &first.id).await;
+        let second = report_from_served_chart(&state, "live-code", &second.id).await;
+        assert_ne!(first.release_id, second.release_id);
+        assert_eq!(
+            first.setup_fingerprint, second.setup_fingerprint,
+            "a Live code change must not change the chart's setup"
+        );
     }
 }
