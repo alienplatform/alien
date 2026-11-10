@@ -72,20 +72,22 @@ Sandbox commands stream raw stdout and stderr frames with production-order seque
 ```python
 runtime = sandbox("runtime")
 instance = await runtime.create()
-stream = await runtime.run_command(
-    instance.sandbox_id,
-    "python",
-    ["-c", "print('hello')"],
-    timeout_ms=30_000,
-)
 try:
-    async for frame in stream:
-        if frame.data is not None:
-            print(frame.data.decode(errors="replace"), end="")
-        if frame.exit_code is not None and frame.exit_code != 0:
-            raise RuntimeError(f"command exited with {frame.exit_code}")
+    stream = await runtime.run_command(
+        instance.sandbox_id,
+        "python",
+        ["-c", "print('hello')"],
+        timeout_ms=30_000,
+    )
+    try:
+        async for frame in stream:
+            if frame.data is not None:
+                print(frame.data.decode(errors="replace"), end="")
+            if frame.exit_code is not None and frame.exit_code != 0:
+                raise RuntimeError(f"command exited with {frame.exit_code}")
+    finally:
+        await stream.close()
 finally:
-    await stream.close()
     await runtime.terminate(instance.sandbox_id)
 ```
 
