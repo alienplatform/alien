@@ -1,4 +1,5 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io::{self, Write};
 use std::time::{Duration as StdDuration, Instant};
@@ -19,7 +20,6 @@ use crate::ui::supports_ansi;
 
 const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 1000;
-const SEEN_KEYS_LIMIT: usize = 20_000;
 /// Rows requested per page. A larger `--limit` is collected over several pages.
 const PAGE_SIZE: usize = 500;
 /// A follow poll starts this far before the newest row seen, so rows indexed
@@ -711,52 +711,62 @@ impl Follower {
         }
     }
 
-    /// Logs not shown yet, oldest first. The first poll returns the newest
-    /// `limit` logs since the start time. Later polls read everything after the
-    /// newest log seen, oldest first, so a burst is never cut off by the limit.
+    /// Hands `emit` the logs not shown yet, oldest first. The first poll returns
+    /// the newest `limit` logs since the start time. Later polls read everything
+    /// after the newest log seen, one page at a time, so a burst is neither cut
+    /// off by the limit nor held in memory.
     async fn poll(
         &mut self,
         data: &mut DataClient,
         query: &LogsQuery,
         now: DateTime<Utc>,
-    ) -> Result<Vec<LogEntry>> {
-        let first = !self.polled;
-        let (body, max_rows) = if first {
+        emit: &mut dyn FnMut(LogEntry) -> Result<()>,
+    ) -> Result<()> {
+        let end = now.max(self.start);
+        if self.polled {
+            let body = query_body(query, OLDEST_FIRST, self.next_start(), end, PAGE_SIZE);
+            data.for_each_page(&body, |rows| self.accept(rows, emit))
+                .await?;
+        } else {
             let body = query_body(
                 query,
                 NEWEST_FIRST,
                 self.start,
-                now.max(self.start),
+                end,
                 self.limit.min(PAGE_SIZE),
             );
-            (body, self.limit)
-        } else {
-            let body = query_body(
-                query,
-                OLDEST_FIRST,
-                self.next_start(),
-                now.max(self.start),
-                PAGE_SIZE,
-            );
-            (body, usize::MAX)
-        };
-        let rows = data.query(&body, max_rows).await?.rows;
-        self.polled = true;
+            let rows = data.query(&body, self.limit).await?.rows;
+            self.accept(rows, emit)?;
+            self.polled = true;
+        }
+        if let Some(cutoff) = self.next_start_nanos() {
+            self.seen.forget_before(cutoff);
+        }
+        Ok(())
+    }
 
+    fn accept(
+        &mut self,
+        rows: Vec<Value>,
+        emit: &mut dyn FnMut(LogEntry) -> Result<()>,
+    ) -> Result<()> {
         let mut entries = rows.into_iter().map(log_entry_from_row).collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.timestamp_nanos.unwrap_or(i64::MIN));
-
-        let mut fresh = Vec::new();
         for entry in entries {
             if let Some(nanos) = entry.timestamp_nanos {
                 self.newest_nanos =
                     Some(self.newest_nanos.map_or(nanos, |newest| newest.max(nanos)));
             }
-            if self.seen.insert(log_key(&entry)) {
-                fresh.push(entry);
+            if self.seen.insert(log_key(&entry), entry.timestamp_nanos) {
+                emit(entry)?;
             }
         }
-        Ok(fresh)
+        Ok(())
+    }
+
+    fn next_start_nanos(&self) -> Option<i64> {
+        self.newest_nanos
+            .map(|newest| newest.saturating_sub(FOLLOW_OVERLAP_SECONDS * 1_000_000_000))
     }
 
     fn next_start(&self) -> DateTime<Utc> {
@@ -789,38 +799,45 @@ async fn follow_logs(
 
     let mut follower = Follower::new(start_time, limit);
     loop {
-        for entry in follower.poll(data, query, Utc::now()).await? {
-            if json {
-                emit_json_line(&serde_json::json!({
-                    "type": "log",
-                    "log": entry,
-                }))?;
-            } else {
-                render_human_log(&entry);
-            }
-        }
+        follower
+            .poll(data, query, Utc::now(), &mut |entry| {
+                if json {
+                    emit_json_line(&serde_json::json!({
+                        "type": "log",
+                        "log": entry,
+                    }))?;
+                } else {
+                    render_human_log(&entry);
+                }
+                Ok(())
+            })
+            .await?;
         tokio::time::sleep(interval).await;
     }
 }
 
+/// Keys of the logs a follow has shown that a later poll can still read again.
+/// A key is kept while its log lies inside the overlap window, however many
+/// logs that is, so a burst is never shown twice.
 #[derive(Default)]
 struct SeenLogKeys {
-    ordered: VecDeque<String>,
-    set: HashSet<String>,
+    timestamps: HashMap<String, i64>,
 }
 
 impl SeenLogKeys {
-    fn insert(&mut self, key: String) -> bool {
-        if !self.set.insert(key.clone()) {
-            return false;
-        }
-        self.ordered.push_back(key);
-        while self.ordered.len() > SEEN_KEYS_LIMIT {
-            if let Some(oldest) = self.ordered.pop_front() {
-                self.set.remove(&oldest);
+    fn insert(&mut self, key: String, timestamp_nanos: Option<i64>) -> bool {
+        match self.timestamps.entry(key) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(slot) => {
+                slot.insert(timestamp_nanos.unwrap_or(i64::MAX));
+                true
             }
         }
-        true
+    }
+
+    /// Drops the keys of logs older than `cutoff_nanos`, which no poll reads again.
+    fn forget_before(&mut self, cutoff_nanos: i64) {
+        self.timestamps.retain(|_, nanos| *nanos >= cutoff_nanos);
     }
 }
 
@@ -1369,7 +1386,7 @@ mod tests {
 
         let mut shown = Vec::new();
         for _ in 0..4 {
-            let fresh = follower.poll(&mut data, &query, Utc::now()).await.unwrap();
+            let fresh = poll_all(&mut follower, &mut data, &query).await;
             shown.push(fresh.into_iter().map(|log| log.message).collect::<Vec<_>>());
         }
 
@@ -1383,6 +1400,92 @@ mod tests {
         for request in &requests[1..] {
             assert_eq!(request.body["sortBy"], "timestampNanos");
         }
+    }
+
+    async fn poll_all(
+        follower: &mut Follower,
+        data: &mut DataClient,
+        query: &LogsQuery,
+    ) -> Vec<LogEntry> {
+        let mut shown = Vec::new();
+        follower
+            .poll(data, query, Utc::now(), &mut |entry| {
+                shown.push(entry);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        shown
+    }
+
+    #[tokio::test]
+    async fn follow_shows_each_page_before_reading_the_next() {
+        let server = TestServer::start(|number, _| match number {
+            0 => page(vec![], None),
+            1 => page(
+                (0..500).map(|index| native_row(T0 + index, "a")).collect(),
+                Some("more"),
+            ),
+            _ => page(vec![native_row(T0 + 500, "b")], None),
+        })
+        .await;
+        let mut data = server.data_client();
+        let start = DateTime::<Utc>::from_timestamp(1_699_999_000, 0).unwrap();
+        let mut follower = Follower::new(start, 10);
+        let query = match_all();
+        poll_all(&mut follower, &mut data, &query).await;
+
+        let mut queries_when_shown = Vec::new();
+        follower
+            .poll(&mut data, &query, Utc::now(), &mut |_| {
+                queries_when_shown.push(server.query_requests().len());
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(queries_when_shown.len(), 501);
+        assert_eq!(
+            queries_when_shown[0], 2,
+            "the first page is shown before the second is read"
+        );
+        assert_eq!(queries_when_shown[500], 3);
+    }
+
+    #[tokio::test]
+    async fn follow_does_not_repeat_a_burst_larger_than_any_cache() {
+        const BURST: i64 = 25_000;
+        // Every row lies inside the one-second overlap of the next poll.
+        let server = TestServer::start(|number, body| {
+            if number == 0 {
+                return page(vec![], None);
+            }
+            let offset: i64 = body["cursor"]
+                .as_str()
+                .map_or(0, |cursor| cursor.parse().unwrap());
+            let end = (offset + 500).min(BURST);
+            let next = (end < BURST).then(|| end.to_string());
+            page(
+                (offset..end)
+                    .map(|index| native_row(T0 + index, "burst"))
+                    .collect(),
+                next.as_deref(),
+            )
+        })
+        .await;
+        let mut data = server.data_client();
+        let start = DateTime::<Utc>::from_timestamp(1_699_999_000, 0).unwrap();
+        let mut follower = Follower::new(start, 10);
+        let query = match_all();
+        poll_all(&mut follower, &mut data, &query).await;
+
+        let first = poll_all(&mut follower, &mut data, &query).await;
+        let second = poll_all(&mut follower, &mut data, &query).await;
+        let third = poll_all(&mut follower, &mut data, &query).await;
+
+        assert_eq!(first.len(), BURST as usize);
+        assert!(second.is_empty(), "{} rows shown again", second.len());
+        assert!(third.is_empty());
     }
 
     #[tokio::test]
@@ -1412,12 +1515,8 @@ mod tests {
         let mut follower = Follower::new(start, 10);
         let query = match_all();
 
-        assert!(follower
-            .poll(&mut data, &query, Utc::now())
-            .await
-            .unwrap()
-            .is_empty());
-        let fresh = follower.poll(&mut data, &query, Utc::now()).await.unwrap();
+        assert!(poll_all(&mut follower, &mut data, &query).await.is_empty());
+        let fresh = poll_all(&mut follower, &mut data, &query).await;
 
         assert_eq!(fresh.len(), 650, "the limit only bounds the first fetch");
     }
@@ -1431,7 +1530,7 @@ mod tests {
         let query = match_all();
 
         for _ in 0..3 {
-            follower.poll(&mut data, &query, Utc::now()).await.unwrap();
+            poll_all(&mut follower, &mut data, &query).await;
         }
 
         assert_eq!(server.grant_requests().len(), 3);

@@ -130,6 +130,16 @@ pub enum ErrorData {
     )]
     LogDataGrantsUnsupported,
 
+    /// The grant request got an answer that is not a grant and has no readable error.
+    #[error(
+        code = "LOG_DATA_GRANT_UNREADABLE",
+        message = "The Alien server's answer to the log data grant request could not be read",
+        hint = "A server that is older than this CLI has no log data grants: update it or use an older CLI. Otherwise try again.",
+        retryable = "false",
+        internal = "false"
+    )]
+    LogDataGrantUnreadable,
+
     /// The caller cannot read the project's logs on this manager.
     #[error(
         code = "LOG_DATA_ACCESS_DENIED",

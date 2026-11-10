@@ -363,11 +363,33 @@ fn grant_failures_explain_what_to_do() {
     };
     let cases = [
         // An older server has no data grant route.
-        (404, None, "LOG_DATA_GRANTS_UNSUPPORTED", "doesn't support log queries with data grants yet; update the server or use an older CLI"),
-        (404, Some(api_error("NOT_FOUND", 404)), "LOG_DATA_GRANTS_UNSUPPORTED", "update the server or use an older CLI"),
-        (403, Some(api_error("FORBIDDEN", 403)), "LOG_DATA_ACCESS_DENIED", "don't have access to the logs of project 'prj_0000000000000000000000000001'"),
-        (409, Some(api_error("DATA_SERVICE_UNAVAILABLE", 409)), "LOG_DATA_SERVICE_NOT_CONFIGURED", "no log data service configured"),
-        (503, Some(api_error("MANAGER_OFFLINE", 503)), "LOG_MANAGER_OFFLINE", "is offline"),
+        // The status of a reply that is not an API error is not visible to the CLI.
+        (404, None, "LOG_DATA_GRANT_UNREADABLE", "could not be read"),
+        (503, None, "LOG_DATA_GRANT_UNREADABLE", "could not be read"),
+        (
+            404,
+            Some(api_error("NOT_FOUND", 404)),
+            "LOG_DATA_GRANTS_UNSUPPORTED",
+            "update the server or use an older CLI",
+        ),
+        (
+            403,
+            Some(api_error("FORBIDDEN", 403)),
+            "LOG_DATA_ACCESS_DENIED",
+            "don't have access to the logs of project 'prj_0000000000000000000000000001'",
+        ),
+        (
+            409,
+            Some(api_error("DATA_SERVICE_UNAVAILABLE", 409)),
+            "LOG_DATA_SERVICE_NOT_CONFIGURED",
+            "no log data service configured",
+        ),
+        (
+            503,
+            Some(api_error("MANAGER_OFFLINE", 503)),
+            "LOG_MANAGER_OFFLINE",
+            "is offline",
+        ),
     ];
     for (status, body, code, expected) in cases {
         let api = MockServer::start();

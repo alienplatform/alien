@@ -156,10 +156,11 @@ fn grant_error(
             api_failure(error, "Failed to request a log data grant")
         }
         (Some(404), _) => AlienError::new(ErrorData::LogDataGrantsUnsupported),
-        // The declared 404 body is parsed as an API error before the status is
-        // visible, so a plain-text 404 surfaces as a payload that is not a grant.
+        // The SDK parses a declared error body before the status is visible, so a
+        // reply that is not JSON, such as a plain-text 404 from an older server,
+        // surfaces as a payload that is not a grant. Its status is unknown.
         (None, SdkError::InvalidResponsePayload(body, _)) if !looks_like_grant(body) => {
-            AlienError::new(ErrorData::LogDataGrantsUnsupported)
+            AlienError::new(ErrorData::LogDataGrantUnreadable)
         }
         _ => api_failure(error, "Failed to request a log data grant"),
     }
@@ -256,6 +257,25 @@ impl DataClient {
             rows,
             num_hits: num_hits.unwrap_or(0),
         })
+    }
+
+    /// Run `body` and hand every page to `on_page` as it arrives, so a large
+    /// result is never held in memory. Stops when the matches run out.
+    pub(crate) async fn for_each_page(
+        &mut self,
+        body: &QueryBody,
+        mut on_page: impl FnMut(Vec<Value>) -> Result<()>,
+    ) -> Result<()> {
+        let mut page_body = body.clone();
+        loop {
+            let page = self.query_page(&page_body).await?;
+            let page_was_empty = page.rows.is_empty();
+            on_page(page.rows)?;
+            match page.next_cursor {
+                Some(cursor) if !page_was_empty => page_body.cursor = Some(cursor),
+                _ => return Ok(()),
+            }
+        }
     }
 
     async fn query_page(&mut self, body: &QueryBody) -> Result<QueryPage> {
@@ -719,14 +739,20 @@ mod tests {
     #[tokio::test]
     async fn grant_failures_say_what_to_do() {
         let cases = [
-            // An old server has no such route: empty or plain-text 404s, or a
-            // generic JSON 404.
-            (404, String::new(), "LOG_DATA_GRANTS_UNSUPPORTED"),
+            // A reply that is not an API error carries no readable status, so it
+            // is not blamed on an old server: empty or plain-text 404s and 503s.
+            (404, String::new(), "LOG_DATA_GRANT_UNREADABLE"),
             (
                 404,
                 "404 Not Found".to_string(),
-                "LOG_DATA_GRANTS_UNSUPPORTED",
+                "LOG_DATA_GRANT_UNREADABLE",
             ),
+            (
+                503,
+                "upstream unavailable".to_string(),
+                "LOG_DATA_GRANT_UNREADABLE",
+            ),
+            // An old server's generic JSON 404.
             (
                 404,
                 api_error("NOT_FOUND", 404),
@@ -768,7 +794,7 @@ mod tests {
         }
 
         let server = TestServer::start(|_, _| page(vec![], None, 0)).await;
-        server.fail_grants(404, "");
+        server.fail_grants(404, &api_error("NOT_FOUND", 404));
         let error = server.data_client().grant().await.unwrap_err();
         assert_eq!(
             error.message,
