@@ -501,6 +501,11 @@ export interface CreateSandboxOptions {
    * the id of the resulting sandbox.
    */
   sandboxId?: string
+  /**
+   * Opaque tenant key. No backend supports it yet: AWS refuses a request that sets it, Azure and
+   * GCP refuse it when they create a sandbox but ignore it when `getOrCreate` returns an existing
+   * one, and Kubernetes and Local ignore it (#1475).
+   */
   tenantKey?: string
   /** Environment every command in the sandbox starts with. */
   env?: Record<string, string>
