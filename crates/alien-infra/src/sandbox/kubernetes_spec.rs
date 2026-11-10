@@ -1,4 +1,4 @@
-//! Pod and NetworkPolicy specs for Kubernetes sandbox sessions.
+//! Pod specs for Kubernetes sandbox sessions.
 //!
 //! Kept separate from the controller because this is where the isolation guarantees live, and
 //! a manifest is checkable without a cluster. Every rule below traces to something measured on
@@ -246,9 +246,6 @@ pub fn capability_environment(public_key_base64: &str) -> Vec<EnvVar> {
     ]
 }
 
-/// Builds the egress NetworkPolicy for a sandbox.
-///
-/// Under `deny` there are no egress rules at all, which denies everything. Under `allow` the
 #[cfg(test)]
 mod tests {
     use super::*;

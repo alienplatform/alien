@@ -204,8 +204,8 @@ Gateway destination policies therefore do not constrain UDP or TCP DNS names sen
 directly to that resolver. A sandbox can encode data in those names even when
 ordinary direct connections are blocked. This is an accepted boundary, not an
 enforced DNS allowlist; deployments requiring DNS confidentiality must restrict
-resolver access at the backend network. The privileged Linux agent paths used by
-AWS and Local redirect command-UID UDP and TCP port 53 to the synthetic resolver,
+resolver access at the backend network. The privileged Linux agent path used by
+AWS redirects command-UID UDP and TCP port 53 to the synthetic resolver,
 which never forwards query names. System/control DNS and protection against
 guest-root compromise still depend on the external network boundary.
 

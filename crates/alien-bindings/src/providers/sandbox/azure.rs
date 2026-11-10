@@ -1627,7 +1627,8 @@ const MAX_SANDBOX_ID: usize = 63;
 /// The two operations a repeat could perform twice.
 ///
 /// `create` is a PUT to a collection with a server-minted id, so a second attempt makes a second
-/// sandbox — and with no enumeration verb, the first one has no id-holder and nothing to reap it.
+/// sandbox. The binding exposes no list, and the controller's lifetime reaper runs only for
+/// gateway groups, so the first one has no id-holder and nothing to reap it.
 const RUN_COMMAND: &str = "sandbox.runCommand";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
@@ -3518,8 +3519,9 @@ mod tests {
 
     /// A create whose response cannot be read owns a sandbox the caller has no id for.
     ///
-    /// Azure allocates the id and has no enumeration verb, so an abandoned sandbox has no
-    /// id-holder and nothing to reap it — it runs until someone finds it by hand.
+    /// Azure allocates the id, the binding exposes no list, and the controller's lifetime
+    /// reaper runs only for gateway groups, so an abandoned sandbox has no id-holder and nothing
+    /// to reap it — it runs until someone finds it by hand.
     #[tokio::test]
     async fn a_create_that_cannot_be_read_deletes_what_it_made() {
         let mut client = MockSandboxDataPlaneApi::new();
