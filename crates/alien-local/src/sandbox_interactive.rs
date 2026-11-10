@@ -636,10 +636,6 @@ fn validate(request: &StartRequest) -> Result<(), ControlError> {
 /// Output read before the pid line, in the order Docker delivered it.
 type Early = Vec<(bool, Vec<u8>)>;
 
-/// Reads the wrapper's line off the front of stderr, returning the pid, the start time and
-/// whatever output arrived around it. The line is the first thing on stderr, but Docker does not
-/// order stdout against stderr, so the program's first stdout can arrive before it and is kept,
-/// not refused.
 /// What has arrived ahead of the announcement, kept across a timed-out wait so the reading can
 /// go on where it stopped.
 #[derive(Default)]
@@ -648,9 +644,6 @@ struct Heard {
     early: Early,
 }
 
-/// Reads the wrapper's line off the front of stderr, returning the pid, the start time and
-/// whatever output arrived around it. The caller bounds the wait; a wait cut short leaves what
-/// was read in `heard`.
 /// Why a command's wrapper did not announce it.
 struct Unannounced {
     reason: String,
@@ -659,6 +652,10 @@ struct Unannounced {
     ended: bool,
 }
 
+/// Reads the wrapper's line off the front of stderr, returning the pid, the start time and
+/// whatever output arrived around it. The line is the first thing on stderr, but Docker does not
+/// order stdout against stderr, so the program's first stdout can arrive before it and is kept,
+/// not refused. The caller bounds the wait; a wait cut short leaves what was read in `heard`.
 async fn announcement(
     output: &mut Output,
     heard: &mut Heard,
