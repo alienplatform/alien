@@ -17,6 +17,7 @@ use super::migrations::{DeploymentGroups, Deployments};
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
+use crate::traits::{ReleaseChannelStore, ReleaseStore, DEFAULT_CHANNEL};
 
 /// Setup JSON for the `deployment_groups.setup` column; NULL when empty.
 fn setup_json(setup: &DeploymentGroupSetup) -> Result<Option<String>, AlienError> {
@@ -735,6 +736,71 @@ mod tests {
         assert!(!debug.contains("sentinel-secret-value"));
         assert!(!debug.contains("SECRET_TOKEN"));
         assert!(!debug.contains("sentinel-environment-secret"));
+    }
+}
+
+impl SqliteDeploymentStore {
+    /// Send a deployment that just reported Running on `current` to the release
+    /// it should run, when that release is newer.
+    ///
+    /// A release fans out once, when it is published, and skips deployments that
+    /// are still installing. Without this, a deployment that finishes installing
+    /// after a newer release was published would stay on the older one.
+    ///
+    /// The target is the one `release_for_deployment` picks: the deployment's
+    /// pin, else its channel's release, else (default channel only) the latest
+    /// release. Only a newer release is taken, so a deployment someone moved to
+    /// an older release stays there. The update is conditional on the row still
+    /// being settled with nothing queued, so it never overrides an update that
+    /// started in the meantime.
+    async fn target_newer_release(
+        &self,
+        caller: &crate::auth::Subject,
+        deployment_id: &str,
+        current: &str,
+    ) -> Result<(), AlienError> {
+        let channels = super::channel::SqliteReleaseChannelStore::new(self.db.clone());
+        let releases = super::release::SqliteReleaseStore::new(self.db.clone());
+
+        let routing = channels.deployment_routing(deployment_id).await?;
+        let target_id = match routing.pinned_release_id {
+            Some(pinned) => Some(pinned),
+            None => channels
+                .get_channel(&routing.channel)
+                .await?
+                .and_then(|channel| channel.current_release_id),
+        };
+        let target = match target_id {
+            Some(id) => releases.get_release(caller, &id).await?,
+            None if routing.channel == DEFAULT_CHANNEL => {
+                releases.get_latest_release(caller).await?
+            }
+            None => None,
+        };
+        let Some(target) = target else {
+            return Ok(());
+        };
+        if target.id == current {
+            return Ok(());
+        }
+        let Some(current_release) = releases.get_release(caller, current).await? else {
+            return Ok(());
+        };
+        if target.created_at <= current_release.created_at {
+            return Ok(());
+        }
+
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::DesiredReleaseId, target.id.as_str())
+            .value(Deployments::Status, "update-pending")
+            .value(Deployments::NextStepAfter, Option::<String>::None)
+            .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+            .and_where(Expr::col(Deployments::Status).eq("running"))
+            .and_where(Expr::col(Deployments::DesiredReleaseId).is_null())
+            .and_where(Expr::col(Deployments::CurrentReleaseId).eq(current))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
     }
 }
 
@@ -2130,6 +2196,13 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_where(Expr::col(Deployments::LockedBy).eq(&data.session as &str))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&lock_heartbeat_sql).await?;
+
+        if state.status == alien_core::DeploymentStatus::Running {
+            if let Some(current) = current_release_id.as_deref() {
+                self.target_newer_release(caller, &data.deployment_id, current)
+                    .await?;
+            }
+        }
 
         // Fetch and return the updated deployment. OSS has no operations-plugin
         // concept, so there is never a target bundle set to report back.
