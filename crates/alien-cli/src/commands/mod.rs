@@ -20,6 +20,7 @@ mod event_display;
 pub mod examples;
 pub mod init;
 pub mod logs;
+mod logs_data;
 pub mod logs_manager;
 pub mod onboard;
 #[cfg(feature = "platform")]
