@@ -221,12 +221,11 @@ impl LocalSandboxManager {
                     image.identity.uid, image.identity.gid, config.scratch_bytes
                 ),
             )])),
-            // The session needs no capability for itself: its user is not root, so it holds
-            // none in effect either way. CAP_KILL stays in the bounding set for one process, the
-            // signal shell, which runs as root and so holds it, and nothing else. It is what
-            // lets that shell stop the session's user, which root without it cannot. The
-            // command cannot gain it: it is not root, and no-new-privileges stops it from
-            // becoming root through a setuid binary.
+            // CAP_KILL is the one capability kept, and only root processes hold it: the idle
+            // loop and the signal shell. It is what lets that shell stop the session's user,
+            // which root without it cannot. Every command runs as the session's user (see
+            // `session_user`), so it holds none, and no-new-privileges stops it from becoming
+            // root through a setuid binary.
             cap_drop: Some(vec!["ALL".to_string()]),
             cap_add: Some(vec!["KILL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
@@ -240,7 +239,11 @@ impl LocalSandboxManager {
 
         let container_config = ContainerCreateBody {
             image: Some(image.id),
-            user: Some(format!("{}:{}", image.identity.uid, image.identity.gid)),
+            // Root, so that the signal shell, a root exec, holds CAP_KILL. Some Docker versions
+            // (20.10, for one) give an exec only the capabilities its container's user holds, so
+            // under a non-root container user a root exec holds none. No command runs as this user:
+            // each exec names its own.
+            user: Some(ROOT_USER.to_string()),
             // Docker can create/chmod WorkingDir after mounting tmpfs, resetting its owner.
             // Enter the session root on exec, after the mount has its final ownership.
             working_dir: Some("/".to_string()),
@@ -359,8 +362,7 @@ impl LocalSandboxManager {
                     cmd: Some(command.to_vec()),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    // Docker inherits the container's resolved, non-root identity.
-                    user: None,
+                    user: Some(self.session_user(container_id).await?),
                     working_dir: Some(SESSION_ROOT.to_string()),
                     ..Default::default()
                 },
@@ -446,7 +448,12 @@ impl LocalSandboxManager {
         };
         self.exec_attached(
             container_id,
-            attached_exec_options(command, working_dir, env, None),
+            attached_exec_options(
+                command,
+                working_dir,
+                env,
+                self.session_user(container_id).await?,
+            ),
         )
         .await
     }
@@ -469,10 +476,45 @@ impl LocalSandboxManager {
                 command,
                 SESSION_ROOT.to_string(),
                 &std::collections::BTreeMap::new(),
-                Some(ROOT_USER.to_string()),
+                ROOT_USER.to_string(),
             ),
         )
         .await
+    }
+
+    /// The user every command in the session runs as: the image's resolved, non-root identity,
+    /// which the session was created with. Named on each exec, because the container's own
+    /// user is root. Missing, it fails rather than fall back to root.
+    async fn session_user(&self, container_id: &str) -> Result<String> {
+        let failed = |operation: &str| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: operation.to_string(),
+            })
+        };
+        let inspected = self
+            .docker
+            .inspect_container(container_id, None)
+            .await
+            .into_alien_error()
+            .context(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: "inspect for the session's user".to_string(),
+            })?;
+        let env = inspected
+            .config
+            .and_then(|config| config.env)
+            .unwrap_or_default();
+        let id = |name: &str| {
+            env.iter()
+                .find_map(|entry| entry.strip_prefix(name)?.strip_prefix('='))
+                .and_then(|value| value.parse::<u32>().ok())
+        };
+        match (id("ALIEN_SANDBOX_EXEC_UID"), id("ALIEN_SANDBOX_EXEC_GID")) {
+            (Some(0), _) => Err(failed("the session's user is root")),
+            (Some(uid), Some(gid)) => Ok(format!("{uid}:{gid}")),
+            _ => Err(failed("the session has no recorded user")),
+        }
     }
 
     async fn exec_attached(
@@ -578,7 +620,7 @@ impl LocalSandboxManager {
                     attach_stdin: Some(true),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    user: None,
+                    user: Some(self.session_user(container_id).await?),
                     working_dir: Some(SESSION_ROOT.to_string()),
                     ..Default::default()
                 },
@@ -818,14 +860,14 @@ impl LocalSandboxManager {
 /// The user the signal shell runs as. Only root holds the one capability the container keeps.
 const ROOT_USER: &str = "0";
 
-/// An attached exec: an interactive command as the container's own user (`user` `None`), or
-/// the signal shell as root. Never privileged: that would hand every capability, and the
-/// devices, to a process inside a container the command controls.
+/// An attached exec: an interactive command as the session's user, or the signal shell as root.
+/// Never privileged: that would hand every capability, and the devices, to a process inside a
+/// container the command controls.
 fn attached_exec_options(
     command: &[String],
     working_dir: String,
     env: &std::collections::BTreeMap<String, String>,
-    user: Option<String>,
+    user: String,
 ) -> CreateExecOptions<String> {
     CreateExecOptions {
         cmd: Some(command.to_vec()),
@@ -837,8 +879,8 @@ fn attached_exec_options(
                 .map(|(name, value)| format!("{name}={value}"))
                 .collect(),
         ),
-        // `None` inherits the container's resolved, non-root identity.
-        user,
+        // Always named: the container's own user is root.
+        user: Some(user),
         privileged: Some(false),
         working_dir: Some(working_dir),
         ..Default::default()
@@ -916,18 +958,18 @@ mod tests {
             &["cat".to_string()],
             SESSION_ROOT.to_string(),
             &std::collections::BTreeMap::new(),
-            None,
+            "1000:1000".to_string(),
         );
         let shell = attached_exec_options(
             &["sh".to_string()],
             SESSION_ROOT.to_string(),
             &std::collections::BTreeMap::new(),
-            Some(ROOT_USER.to_string()),
+            ROOT_USER.to_string(),
         );
         for options in [&command, &shell] {
             assert_eq!(options.privileged, Some(false));
         }
-        assert_eq!(command.user, None, "a command runs as the container's user");
+        assert_eq!(command.user.as_deref(), Some("1000:1000"));
         assert_eq!(shell.user.as_deref(), Some("0"));
     }
 

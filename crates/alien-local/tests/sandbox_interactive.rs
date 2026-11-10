@@ -270,17 +270,21 @@ async fn state(sandbox: &dyn Sandbox, id: &str) -> SandboxState {
 async fn the_signal_shell_holds_only_cap_kill_and_the_command_cannot_kill_it() {
     const KEY: &str = "interactive-caps";
     let (_dir, sandbox, id) = local_session(KEY, 64).await;
-    // The signal shell is the one process in the session that runs as root; it starts before the
-    // first interactive command, this probe.
+    // Root runs the idle loop and the signal shell, which starts before the first interactive
+    // command, this probe. Every root process should hold CAP_KILL and nothing else, and refuse
+    // the command's kill.
     let probe = run(
         sandbox.as_ref(),
         &id,
-        "for p in /proc/[0-9]*; do \
-           if [ \"$(awk '/^Uid/ {print $2}' $p/status 2>/dev/null)\" = 0 ]; then shell=${p#/proc/}; fi; \
-         done; \
-         echo \"shell $(awk '/^CapEff/ {print $2}' /proc/$shell/status) uid 0\"; \
-         echo \"command $(awk '/^CapEff/ {print $2}' /proc/self/status)\"; \
-         if kill -KILL $shell 2>/dev/null; then echo killed; else echo refused; fi",
+        "echo \"command $(awk '/^CapEff/ {print $2}' /proc/self/status)\"; \
+         for p in /proc/[0-9]*; do \
+           [ \"$(awk '/^Uid/ {print $2}' $p/status 2>/dev/null)\" = 0 ] || continue; \
+           cap=$(awk '/^CapEff/ {print $2}' $p/status); \
+           if kill -KILL ${p#/proc/} 2>/dev/null; then echo \"root $cap killed\"; else echo \"root $cap refused\"; fi; \
+         done | sort -u; \
+         for p in /proc/[0-9]*; do \
+           [ \"$(awk '/^Uid/ {print $2}' $p/status 2>/dev/null)\" = 0 ] && tr '\\0' ' ' < $p/cmdline | grep -q '^sh -c while read -r g n t' && echo 'signal shell'; \
+         done",
     )
     .await;
     let _ = sandbox.terminate(&id).await;
@@ -288,7 +292,7 @@ async fn the_signal_shell_holds_only_cap_kill_and_the_command_cannot_kill_it() {
 
     let probe = probe.expect("the probe runs");
     assert_eq!(
-        probe, "shell 0000000000000020 uid 0\ncommand 0000000000000000\nrefused\n",
+        probe, "command 0000000000000000\nroot 0000000000000020 refused\nsignal shell\n",
         "the shell runs as root with CAP_KILL only; the command has no capability and is refused"
     );
 }
@@ -337,13 +341,29 @@ async fn a_command_that_takes_every_process_slot_still_meets_its_deadline() {
     let mut command = sandbox
         .run_interactive(
             &id,
-            sh(
-                "i=0; while [ $i -lt 64 ]; do sleep 600 & i=$((i+1)); done 2>/dev/null; \
-                 echo full; exec sleep 600",
-                Duration::from_secs(4),
-            ),
+            RunCommandRequest {
+                command: "python3".to_string(),
+                // Forks until the session refuses another process, then waits.
+                args: vec![
+                    "-c".to_string(),
+                    "import os, time\n\
+                     while True:\n\
+                     \x20   try:\n\
+                     \x20       pid = os.fork()\n\
+                     \x20   except OSError:\n\
+                     \x20       break\n\
+                     \x20   if pid == 0:\n\
+                     \x20       time.sleep(600)\n\
+                     \x20       os._exit(0)\n\
+                     print('full', flush=True)\n\
+                     time.sleep(600)\n"
+                        .to_string(),
+                ],
+                cwd: None,
+                env: Default::default(),
+                timeout: Duration::from_secs(4),
+            },
         )
-        .await
         .expect("starts");
     let (stdout, terminal) = drain(&mut command, Duration::from_secs(30)).await;
     let after = run(sandbox.as_ref(), &id, "echo alive").await;
