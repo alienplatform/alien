@@ -2089,6 +2089,53 @@ mod tests {
         let updated = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(updated.status, DeploymentStatus::Running);
 
+        // The Operator stored a claimless target that changes the approved
+        // configuration, then stopped before accepting it. When it comes back
+        // the manager sends `{}`. Replaying that target is new work: running it
+        // as a refresh would put an unapproved configuration in place.
+        let mut changed = config(true);
+        changed
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "MODE".to_string(),
+                value: "changed".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+        let session = state
+            .db
+            .get_sync_execution()
+            .await
+            .unwrap()
+            .expect("the sync loop stored its session")
+            .session;
+        state
+            .db
+            .set_sync_execution(
+                &session,
+                None,
+                Some(&alien_core::sync::TargetDeployment {
+                    release_info: release.clone(),
+                    config: changed,
+                }),
+            )
+            .await
+            .unwrap();
+        *response.lock().unwrap() = json!({});
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let replayed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            replayed.status,
+            DeploymentStatus::UpdatePending,
+            "a replayed target that changes the approved configuration must apply as an update"
+        );
+        run_deployment_until_idle(&state).await;
+        let reapplied = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(reapplied.status, DeploymentStatus::Running);
+
         server.abort();
         std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
