@@ -112,7 +112,6 @@ async fn run_to_completion(state: DeploymentState, config: DeploymentConfig) -> 
     .await
 }
 
-/// Helper to request retry on a failed deployment
 /// The record of a resource as JSON, without the test controller's count of Ready checks. An
 /// update reads the resources it leaves alone, and each read is one more check; nothing else
 /// about the record may change.
@@ -125,6 +124,7 @@ fn without_ready_checks(resource: &alien_core::StackResourceState) -> serde_json
     record
 }
 
+/// Helper to request retry on a failed deployment
 fn request_retry(state: &mut DeploymentState) {
     state.retry_requested = true;
 }
