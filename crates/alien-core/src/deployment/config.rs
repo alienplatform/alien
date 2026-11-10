@@ -189,13 +189,14 @@ pub struct DeploymentConfig {
 
 /// A value the manager holds, named by slot, with the digest the sender expects.
 ///
-/// The slot is `env:NAME` for an environment variable or `input:ID` for a stack
-/// input. An input's stored value is the JSON text of the input value.
+/// The slot is `env:NAME` for an environment variable, `input:ID` for a stack
+/// input, or `cenv.<container>.<NAME>` for a dynamic container's variable. An
+/// input's stored value is the JSON text of the input value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSlotRef {
-    /// `env:NAME` or `input:ID`.
+    /// `env:NAME`, `input:ID` or `cenv.<container>.<NAME>`.
     pub slot: String,
     /// Whether the value is a secret. The manager checks it against the stored kind.
     pub kind: EnvironmentVariableType,

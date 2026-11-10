@@ -1842,6 +1842,7 @@ pub(in crate::routes) mod tests {
             deleted: false,
             env: Default::default(),
             secret_env: Default::default(),
+            value_slots: None,
             health_check: None,
             suspended_reason: None,
         }

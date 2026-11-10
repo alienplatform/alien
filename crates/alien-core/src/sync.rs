@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
+    ValueSlotRef,
 };
 
 /// State of an Operator capability as observed inside the environment.
@@ -213,6 +214,15 @@ pub struct TargetDynamicContainer {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,
+    /// The container's variables its manager holds, as `cenv.<name>.<NAME>` slots with the
+    /// digests the sender planned with. When present, the manager adds exactly these values,
+    /// each checked against its kind and digest, and ignores anything else stored for the
+    /// container. When absent, the manager adds every value stored under the container's
+    /// prefix, as for senders that predate slot references. The manager removes the field
+    /// before the target reaches the Operator, so its API never carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub value_slots: Option<Vec<ValueSlotRef>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_check: Option<DynamicContainerHealthCheck>,
     /// Stop an installed workload when its release no longer admits the image.
@@ -999,6 +1009,7 @@ mod tests {
             deleted: false,
             env: BTreeMap::new(),
             secret_env: BTreeMap::from([("TOKEN".to_string(), "private-value".to_string())]),
+            value_slots: None,
             health_check: None,
             suspended_reason: None,
         };
