@@ -3375,7 +3375,7 @@ platform = "aws"
             let values = write_kubernetes_helm_values(
                 chart.path(),
                 "https://manager.example.test",
-                "ax_dep_fixture",
+                None,
                 "dep_fixture",
                 "orders-eu",
                 "korders",
