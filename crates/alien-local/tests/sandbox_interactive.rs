@@ -381,15 +381,17 @@ async fn a_command_that_takes_every_process_slot_still_meets_its_deadline() {
     assert_eq!(after.expect("its slots are free again"), "alive\n");
 }
 
-/// A child the command moves to a session of its own escapes the group kill and holds the output
-/// open. The deadline still holds: the sandbox session is killed from the host, the caller is
-/// told the whole session stopped, the session reports itself stopped, and later calls fail
-/// rather than hang.
+/// A child the command moves to a session of its own escapes the group kill, as it does on the
+/// cloud backends. The deadline still holds. Where Docker closes the output once the command
+/// itself exits, only the command ends and the session runs on. Where the escaped child holds
+/// the output open, the session is killed from the host: the caller is told the whole session
+/// stopped, the session reports itself stopped, and later calls fail rather than hang.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
-async fn a_command_whose_child_escapes_its_group_ends_with_its_session() {
+async fn a_command_whose_child_escapes_its_group_still_meets_its_deadline() {
     const KEY: &str = "interactive-escape";
     let (_dir, sandbox, id) = local_session(KEY, 64).await;
+    let started = tokio::time::Instant::now();
     let mut command = sandbox
         .run_interactive(
             &id,
@@ -401,13 +403,14 @@ async fn a_command_whose_child_escapes_its_group_ends_with_its_session() {
         .await
         .expect("starts");
     let (stdout, terminal) = drain(&mut command, Duration::from_secs(30)).await;
+    let ended_after = started.elapsed();
     let listed = state(sandbox.as_ref(), &id).await;
     let after = tokio::time::timeout(
         Duration::from_secs(30),
         run(sandbox.as_ref(), &id, "echo alive"),
     )
     .await
-    .expect("a call on a stopped session fails rather than hangs");
+    .expect("a later call answers rather than hangs");
     let _ = sandbox.terminate(&id).await;
     SandboxRoute::remove(KEY).await;
 
@@ -415,18 +418,23 @@ async fn a_command_whose_child_escapes_its_group_ends_with_its_session() {
     let error = terminal.expect_err("the deadline ends it");
     assert!(error.contains("timeoutExceeded"), "{error}");
     assert!(
-        error.contains("the whole session was stopped"),
-        "the caller is told the session, not only the command, ended: {error}"
+        ended_after < Duration::from_secs(20),
+        "the deadline held: {ended_after:?}"
     );
-    assert_eq!(
-        listed,
-        SandboxState::Terminated,
-        "a stopped session never reports running"
-    );
-    assert!(
-        after.is_err(),
-        "nothing runs in a stopped session: {after:?}"
-    );
+    if error.contains("the whole session was stopped") {
+        assert_eq!(
+            listed,
+            SandboxState::Terminated,
+            "a stopped session never reports running"
+        );
+        assert!(
+            after.is_err(),
+            "nothing runs in a stopped session: {after:?}"
+        );
+    } else {
+        assert_eq!(listed, SandboxState::Running);
+        assert_eq!(after.expect("the session runs on"), "alive\n");
+    }
 }
 
 /// Collects a one-shot command's stdout, failing on any exit other than 0.
