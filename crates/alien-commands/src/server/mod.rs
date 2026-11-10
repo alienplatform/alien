@@ -77,6 +77,24 @@ struct LeaseData {
     pub acquired_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub owner: String,
+    /// Set when a response claims the lease. A claimed lease is not handed to
+    /// another holder before it expires or is deleted.
+    #[serde(default)]
+    pub completing: bool,
+}
+
+/// Which lease a response is submitted under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedLease {
+    /// The response comes from the holder of this lease, and the caller proved
+    /// the lease id some other way (the signed response URL covers it). The
+    /// holder of a lease that expired without a successor may still report.
+    Lease(String),
+    /// The caller only claims this lease id, for example a bearer token with a
+    /// `lease_id` query. A lease record for exactly this lease must exist.
+    HeldLease(String),
+    /// The command was never leased (push delivery), so no lease may exist.
+    NeverLeased,
 }
 
 /// Deadline index data
@@ -259,10 +277,6 @@ impl CommandServer {
         hmac_valid && not_expired && within_max_lifetime
     }
 
-    /// Refuse a response from a lease that another lease has replaced. The
-    /// command is held by one lease at a time; a holder whose lease expired
-    /// without a successor may still report what it ran, but once the command
-    /// was leased again the new holder is the one running it.
     /// Whether the command is currently held by a lease, or was last held by
     /// one that expired. A response to such a command must name its lease.
     pub async fn command_is_leased(&self, command_id: &str) -> Result<bool> {
@@ -279,37 +293,151 @@ impl CommandServer {
             .is_some())
     }
 
-    pub async fn require_lease_not_superseded(
+    /// Claim the command's lease slot for a response, atomically.
+    ///
+    /// A command is held by one lease at a time. A holder whose lease expired
+    /// without a successor may still report what it ran, but once the command
+    /// was leased again the new holder is the one running it. The claim is a
+    /// conditional write on the lease record, so a lease taken between reading
+    /// it and answering cannot be overtaken: the claim then fails with
+    /// `LeaseSuperseded`.
+    ///
+    /// - A live lease record of the expected lease is rewritten as claimed,
+    ///   conditioned on the version that was read. It keeps its expiry, so a
+    ///   failed response does not extend it.
+    /// - An absent record (released, or expired without a successor) refuses a
+    ///   `HeldLease`. For a signed `Lease` it is replaced by a short claim
+    ///   written only if the key is still absent.
+    ///   Acquiring a lease also writes only if the key is absent, so the two
+    ///   cannot both succeed.
+    /// - Any other lease record, or any record when no lease is expected,
+    ///   refuses the response.
+    async fn claim_lease_for_response(
         &self,
         command_id: &str,
-        lease_id: &str,
+        expected: &ExpectedLease,
     ) -> Result<()> {
+        const CLAIM_SECS: u64 = 60;
+        const ATTEMPTS: usize = 8;
         let key = format!("cmd:{command_id}:lease");
-        let Some(entry) = self
-            .kv
-            .get(&key)
-            .await
-            .context(ErrorData::KvOperationFailed {
-                operation: "get".to_string(),
-                key,
-                message: "Failed to read the command lease".to_string(),
-            })?
-        else {
-            return Ok(());
+        let expected_id = match expected {
+            ExpectedLease::Lease(lease_id) | ExpectedLease::HeldLease(lease_id) => {
+                lease_id.as_str()
+            }
+            ExpectedLease::NeverLeased => "",
         };
-        let lease: LeaseData = serde_json::from_slice(&entry.value)
-            .into_alien_error()
-            .context(ErrorData::SerializationFailed {
-                message: "Failed to deserialize lease data".to_string(),
-                data_type: Some("LeaseData".to_string()),
-            })?;
-        if lease.lease_id == lease_id {
-            return Ok(());
+        let superseded = || {
+            AlienError::new(ErrorData::LeaseSuperseded {
+                command_id: command_id.to_string(),
+                lease_id: expected_id.to_string(),
+            })
+        };
+        let kv_error = |operation: &str, message: &str| ErrorData::KvOperationFailed {
+            operation: operation.to_string(),
+            key: key.clone(),
+            message: message.to_string(),
+        };
+        let serialize = |lease: &LeaseData| {
+            serde_json::to_vec(lease)
+                .into_alien_error()
+                .context(ErrorData::SerializationFailed {
+                    message: "Failed to serialize lease data".to_string(),
+                    data_type: Some("LeaseData".to_string()),
+                })
+        };
+
+        for _ in 0..ATTEMPTS {
+            let entry = self
+                .kv
+                .get(&key)
+                .await
+                .context(kv_error("get", "Failed to read the command lease"))?;
+            match entry {
+                Some(entry) => {
+                    let mut lease: LeaseData = serde_json::from_slice(&entry.value)
+                        .into_alien_error()
+                        .context(ErrorData::SerializationFailed {
+                            message: "Failed to deserialize lease data".to_string(),
+                            data_type: Some("LeaseData".to_string()),
+                        })?;
+                    if !matches!(
+                        expected,
+                        ExpectedLease::Lease(id) | ExpectedLease::HeldLease(id)
+                            if *id == lease.lease_id
+                    ) {
+                        return Err(superseded());
+                    }
+                    if lease.completing {
+                        return Ok(());
+                    }
+                    lease.completing = true;
+                    let remaining = (lease.expires_at - self.now()).num_seconds().max(1) as u64;
+                    let claimed = self
+                        .kv
+                        .put(
+                            &key,
+                            serialize(&lease)?,
+                            Some(PutOptions {
+                                ttl: Some(Duration::from_secs(remaining)),
+                                condition: PutCondition::Version(entry.version),
+                            }),
+                        )
+                        .await
+                        .context(kv_error("put", "Failed to claim the command lease"))?;
+                    if claimed {
+                        return Ok(());
+                    }
+                }
+                None => {
+                    // Nothing proves an unsigned lease id once its record is
+                    // gone, so it cannot report.
+                    if matches!(expected, ExpectedLease::HeldLease(_)) {
+                        return Err(superseded());
+                    }
+                    let now = self.now();
+                    let claim = LeaseData {
+                        lease_id: expected_id.to_string(),
+                        acquired_at: now,
+                        expires_at: now + chrono::Duration::seconds(CLAIM_SECS as i64),
+                        owner: "response".to_string(),
+                        completing: true,
+                    };
+                    let claimed = self
+                        .kv
+                        .put(
+                            &key,
+                            serialize(&claim)?,
+                            Some(PutOptions {
+                                ttl: Some(Duration::from_secs(CLAIM_SECS)),
+                                condition: PutCondition::Absent,
+                            }),
+                        )
+                        .await
+                        .context(kv_error("put", "Failed to claim the command lease"))?;
+                    if claimed {
+                        return Ok(());
+                    }
+                }
+            }
         }
-        Err(AlienError::new(ErrorData::LeaseSuperseded {
-            command_id: command_id.to_string(),
-            lease_id: lease_id.to_string(),
-        }))
+        Err(superseded())
+    }
+
+    /// Submit a command's response from the holder of `expected`. The lease is
+    /// claimed with a conditional write before anything is stored, so a lease
+    /// that was superseded, even a moment ago, cannot complete the command.
+    pub async fn submit_command_response_for_lease(
+        &self,
+        command_id: &str,
+        response: CommandResponse,
+        expected: ExpectedLease,
+    ) -> Result<()> {
+        self.claim_lease_for_response(command_id, &expected).await?;
+        self.submit_command_response(command_id, response).await?;
+        // A duplicate response to a finished command returns early above and
+        // leaves its claim behind; drop it rather than wait for the expiry.
+        let _ = self.delete_lease(command_id).await;
+        Ok(())
     }
 
     // =========================================================================
@@ -885,6 +1013,7 @@ impl CommandServer {
                 acquired_at: Utc::now(),
                 expires_at,
                 owner: deployment_id.to_string(),
+                completing: false,
             };
 
             let lease_key = format!("cmd:{}:lease", command_id);

@@ -447,6 +447,7 @@ async fn submit_response(
         Err(e) => return e.into_response(),
     };
 
+    let via_bearer = bearer_auth.is_some();
     if let Some(subject) = bearer_auth {
         // Standard Bearer auth path — commands-only receiver credentials are
         // bound to the exact command target, while legacy/admin credentials
@@ -505,21 +506,17 @@ async fn submit_response(
         }
     }
 
-    // A response names the lease it was issued for. A lease the command has
-    // since been handed on from does not complete it.
-    if let Some(lease_id) = query.lease_id.as_deref() {
-        if let Err(e) = state
-            .command_server
-            .require_lease_not_superseded(&command_id, lease_id)
-            .await
-        {
-            return e.into_response();
-        }
-    }
-
+    // A response is applied under the lease it names, or under "never leased"
+    // when it names none. The lease is checked in the same conditional write
+    // that claims it, so a lease taken a moment earlier cannot be overtaken.
+    let expected = match (query.lease_id, via_bearer) {
+        (Some(lease_id), true) => alien_commands::server::ExpectedLease::HeldLease(lease_id),
+        (Some(lease_id), false) => alien_commands::server::ExpectedLease::Lease(lease_id),
+        (None, _) => alien_commands::server::ExpectedLease::NeverLeased,
+    };
     match state
         .command_server
-        .submit_command_response(&command_id, request.response)
+        .submit_command_response_for_lease(&command_id, request.response, expected)
         .await
     {
         Ok(()) => StatusCode::OK.into_response(),
@@ -749,26 +746,37 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
+    let command = match state
+        .command_server
+        .get_command_access_context(&command_id)
+        .await
+    {
+        Ok(command) => command,
+        Err(e) => return e.into_response(),
+    };
     if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
-        let command = match state
-            .command_server
-            .get_command_access_context(&command_id)
-            .await
-        {
-            Ok(Some(command)) => command,
-            Ok(None) => {
-                return alien_error::AlienError::new(
-                    alien_commands::error::ErrorData::CommandNotFound { command_id },
-                )
-                .into_response();
-            }
-            Err(e) => return e.into_response(),
+        let Some(command) = command else {
+            return alien_error::AlienError::new(
+                alien_commands::error::ErrorData::CommandNotFound { command_id },
+            )
+            .into_response();
         };
         if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
             return e;
         }
-    } else if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
-        return e;
+    } else {
+        // The commands-only key never reaches a reserved operations target.
+        if let Some(command) = &command {
+            if !crate::auth::command_capability::commands_key_may_use_target(
+                &subject,
+                &command.target,
+            ) {
+                return ErrorData::forbidden("Access denied").into_response();
+            }
+        }
+        if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
+            return e;
+        }
     }
 
     match state.command_server.release_lease_by_id(&lease_id).await {

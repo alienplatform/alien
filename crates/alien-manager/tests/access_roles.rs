@@ -2089,6 +2089,206 @@ mod runtime_credentials {
         );
     }
 
+    /// A KV that hands the command to a new lease right after the lease record
+    /// is first read, the moment between checking a lease and acting on it.
+    #[derive(Debug)]
+    struct RacingKv {
+        inner: Arc<dyn alien_bindings::traits::Kv>,
+        armed: std::sync::atomic::AtomicBool,
+    }
+
+    impl alien_bindings::traits::Binding for RacingKv {}
+
+    #[async_trait]
+    impl alien_bindings::traits::Kv for RacingKv {
+        async fn get(
+            &self,
+            key: &str,
+        ) -> alien_bindings::Result<Option<alien_bindings::traits::KvEntry>> {
+            let entry = self.inner.get(key).await?;
+            if key.starts_with("cmd:")
+                && key.ends_with(":lease")
+                && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                let now = chrono::Utc::now();
+                let racer = json!({
+                    "lease_id": "lease_racer",
+                    "acquired_at": now,
+                    "expires_at": now + chrono::Duration::hours(1),
+                    "owner": "racer",
+                });
+                self.inner.delete(key, None).await?;
+                self.inner
+                    .put(
+                        key,
+                        serde_json::to_vec(&racer).unwrap(),
+                        Some(alien_bindings::traits::PutOptions {
+                            ttl: Some(std::time::Duration::from_secs(3600)),
+                            condition: alien_bindings::traits::PutCondition::Absent,
+                        }),
+                    )
+                    .await?;
+            }
+            Ok(entry)
+        }
+        async fn put(
+            &self,
+            key: &str,
+            value: Vec<u8>,
+            options: Option<alien_bindings::traits::PutOptions>,
+        ) -> alien_bindings::Result<bool> {
+            self.inner.put(key, value, options).await
+        }
+        async fn delete(
+            &self,
+            key: &str,
+            if_version: Option<&str>,
+        ) -> alien_bindings::Result<bool> {
+            self.inner.delete(key, if_version).await
+        }
+        async fn exists(&self, key: &str) -> alien_bindings::Result<bool> {
+            self.inner.exists(key).await
+        }
+        async fn scan_prefix(
+            &self,
+            prefix: &str,
+            limit: Option<usize>,
+            cursor: Option<String>,
+        ) -> alien_bindings::Result<alien_bindings::traits::ScanResult> {
+            self.inner.scan_prefix(prefix, limit, cursor).await
+        }
+    }
+
+    /// A command that is leased to someone else between the lease check and
+    /// the response write must not be completed by the holder it was taken from.
+    #[tokio::test]
+    async fn a_lease_taken_while_a_response_is_checked_refuses_that_response() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let racing = Arc::new(RacingKv {
+            inner: state.kv.clone(),
+            armed: std::sync::atomic::AtomicBool::new(false),
+        });
+        state.kv = racing.clone();
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let held = lease(&router, &bearer, &deployment_id).await;
+
+        racing
+            .armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let response = request(
+            &router,
+            &bearer,
+            "PUT",
+            &format!(
+                "/v1/commands/{}/response?lease_id={}",
+                created.command_id, held.lease_id
+            ),
+            serde_json::to_value(alien_core::SubmitResponseRequest {
+                response: alien_core::CommandResponse::success(b"late"),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded,
+            "the old lease must not complete a command that moved to another lease"
+        );
+    }
+
+    /// The commands key's lease_id is checked against the real lease record: a
+    /// made-up one on a command that was never leased is refused.
+    #[tokio::test]
+    async fn a_commands_key_with_a_made_up_lease_id_is_refused() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let response = request(
+            &router,
+            &token(Role::CommandsReceiver),
+            "PUT",
+            &format!(
+                "/v1/commands/{}/response?lease_id=lease_made_up",
+                created.command_id
+            ),
+            serde_json::to_value(alien_core::SubmitResponseRequest {
+                response: alien_core::CommandResponse::success(b"forged"),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    /// The commands key never reaches the reserved operations targets, so it
+    /// cannot release their leases either.
+    #[tokio::test]
+    async fn a_commands_key_cannot_release_the_lease_of_a_reserved_target() {
+        use alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID;
+        let (mut state, deployment_id, tmp) = state().await;
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target(
+                OPERATOR_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Daemon,
+            )
+            .await
+            .unwrap();
+        state.command_server = Arc::new(CommandServer::new(
+            state.kv.clone(),
+            Arc::new(
+                LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                    .unwrap(),
+            ),
+            Arc::new(NullCommandDispatcher),
+            registry,
+            "http://localhost:0/v1".to_owned(),
+            b"test-signing-key".to_vec(),
+        ));
+        state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.clone(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"hello"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some(OPERATOR_COMMAND_TARGET_ID.to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap();
+        let leased = state
+            .command_server
+            .acquire_lease(
+                &deployment_id,
+                &serde_json::from_value(json!({
+                    "deploymentId": deployment_id,
+                    "target": {"resourceId": OPERATOR_COMMAND_TARGET_ID, "resourceType": "daemon"},
+                    "maxLeases": 1,
+                    "leaseSeconds": 60
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(leased.leases.len(), 1);
+
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let response = request(
+            &router,
+            &token(Role::CommandsReceiver),
+            "POST",
+            &format!("/v1/commands/leases/{}/release", leased.leases[0].lease_id),
+            json!({}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
     /// Released receivers answer on the response URL they were handed, which
     /// names their lease, and never with a bearer. So a bearer answer must name
     /// its lease too: a commands key that leaves it out, or names a lease the
