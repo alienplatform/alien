@@ -1,14 +1,29 @@
 //! Helm charts served from the manager's OCI registry.
 //!
 //! Every release with a Kubernetes stack has an installable chart at
-//! `oci://<manager>/charts/<stack-id>`, version `1.0.<n>` for the n-th
-//! release. The chart comes pre-wired to this manager: its management URL,
-//! the Operator image, and pod log collection are defaults, so a customer
-//! installs it with a deployment-group token and their own infrastructure
-//! values only.
+//! `oci://<manager>/charts/<stack-id>`. The chart comes pre-wired to this
+//! manager: its management URL, the Operator image, and pod log collection
+//! are defaults, so a customer installs it with a deployment-group token and
+//! their own infrastructure values only.
 //!
 //! Charts are rendered on request from the release; rendering is
-//! deterministic, so the same release always yields the same digests.
+//! deterministic, so a release and an Operator image always yield the same
+//! digests. The chart version names both, `1.<n>.<operator>` for the n-th
+//! release, so a version never changes content and GitOps tools that pin or
+//! compare versions see an Operator upgrade as a new, higher version:
+//!
+//! - `<n>` counts every release, oldest first, so a newer release sorts
+//!   above an older one under any Operator image.
+//! - `<operator>` is the Operator image's release version as one number,
+//!   `MAJOR * 1_000_000 + MINOR * 1_000 + PATCH` (`v3.3.59` is `3003059`).
+//!   An image tag that isn't a release version (`dev`, `latest`) is `0`:
+//!   such a tag can move to other content, so its charts can't be immutable
+//!   either.
+//!
+//! A manager serves only the versions for its own Operator image. Other
+//! versions, including the `1.0.<n>` versions earlier managers served, are
+//! unknown: their content can't be reproduced here, and serving another
+//! chart under them is what made versions mutable.
 
 use std::{
     collections::HashMap,
@@ -73,6 +88,14 @@ impl ChartSettings {
         Self {
             operator_image,
             operator_upstream,
+        }
+    }
+
+    /// Tag of the Operator image charts install.
+    fn operator_tag(&self) -> &str {
+        match &self.operator_upstream {
+            Some(upstream) => &upstream.tag,
+            None => split_image(&self.operator_image).1,
         }
     }
 
@@ -142,7 +165,7 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
         None => return oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path"),
     };
 
-    let charts = match chart_releases(state, subject, name).await {
+    let charts = match chart_releases(state, &settings, subject, name).await {
         Ok(charts) => charts,
         Err(response) => return response,
     };
@@ -169,7 +192,12 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
             return oci_error(
                 StatusCode::NOT_FOUND,
                 "MANIFEST_UNKNOWN",
-                format!("chart '{name}' has no version '{reference}'"),
+                format!(
+                    "chart '{name}' has no version '{reference}'; this manager serves \
+                     versions 1.<release>.{} for its Operator image {}",
+                    operator_number(settings.operator_tag()),
+                    settings.operator_image
+                ),
             );
         };
         return match render(state, &settings, release, version) {
@@ -193,9 +221,9 @@ pub(crate) async fn served_bundle_sources(
     subject: &Subject,
     release: &ReleaseRecord,
 ) -> Result<Option<BundleSources>, Response> {
-    if state.charts.is_none() {
+    let Some(settings) = state.charts.as_deref() else {
         return Ok(None);
-    }
+    };
     let Some(stack) = release.stacks.get(&Platform::Kubernetes) else {
         return Err(oci_error(
             StatusCode::BAD_REQUEST,
@@ -204,7 +232,7 @@ pub(crate) async fn served_bundle_sources(
         ));
     };
     let name = stack.id().to_string();
-    let charts = chart_releases(state, subject, &name).await?;
+    let charts = chart_releases(state, settings, subject, &name).await?;
     let Some((version, _)) = charts.iter().find(|(_, r)| r.id == release.id) else {
         return Err(oci_error(
             StatusCode::NOT_FOUND,
@@ -251,6 +279,7 @@ fn visible_blob(
 /// oldest first, with the chart version each one publishes.
 async fn chart_releases(
     state: &AppState,
+    settings: &ChartSettings,
     subject: &Subject,
     name: &str,
 ) -> Result<Vec<(String, ReleaseRecord)>, Response> {
@@ -267,6 +296,7 @@ async fn chart_releases(
         })?;
     releases.retain(|release| state.authz.can_read_release(subject, release));
     releases.sort_by_key(|release| release.created_at);
+    let operator = operator_number(settings.operator_tag());
     Ok(releases
         .into_iter()
         .enumerate()
@@ -276,7 +306,7 @@ async fn chart_releases(
                 .get(&Platform::Kubernetes)
                 .is_some_and(|stack| stack.id() == name)
         })
-        .map(|(index, release)| (format!("1.0.{}", index + 1), release))
+        .map(|(index, release)| (format!("1.{}.{operator}", index + 1), release))
         .collect())
 }
 
@@ -318,10 +348,11 @@ fn render(
         "{registry_host}/{}",
         super::operator_image::OPERATOR_REPOSITORY
     );
-    let (repository, tag) = match &settings.operator_upstream {
-        Some(upstream) => (proxied_repository.as_str(), upstream.tag.as_str()),
-        None => split_image(&settings.operator_image),
+    let repository = match &settings.operator_upstream {
+        Some(_) => proxied_repository.as_str(),
+        None => split_image(&settings.operator_image).0,
     };
+    let tag = settings.operator_tag();
     let chart = apply_package_defaults(
         chart,
         &PackageDefaults {
@@ -427,6 +458,28 @@ fn blobs() -> std::sync::MutexGuard<'static, HashMap<String, Blob>> {
         .expect("chart blob cache is never held across a panic")
 }
 
+/// The Operator release version in `tag` (`v3.3.59` or `3.3.59`) as one
+/// number that sorts like the version: `3003059`. `0` for a tag that isn't a
+/// release version, or whose minor or patch doesn't fit in three digits.
+fn operator_number(tag: &str) -> u64 {
+    let numbers: Option<Vec<u64>> = tag
+        .strip_prefix('v')
+        .unwrap_or(tag)
+        .split('.')
+        .map(|part| {
+            let digits =
+                !part.is_empty() && part.len() <= 6 && part.bytes().all(|b| b.is_ascii_digit());
+            digits.then(|| part.parse().ok()).flatten()
+        })
+        .collect();
+    match numbers.as_deref() {
+        Some(&[major, minor, patch]) if minor < 1_000 && patch < 1_000 => {
+            major * 1_000_000 + minor * 1_000 + patch
+        }
+        _ => 0,
+    }
+}
+
 /// Split `repository:tag` (the tag after the last `:` that follows the last `/`).
 fn split_image(image: &str) -> (&str, &str) {
     let name_start = image.rfind('/').map_or(0, |i| i + 1);
@@ -443,7 +496,40 @@ fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>)
 
 #[cfg(test)]
 mod tests {
-    use super::split_image;
+    use super::{operator_number, split_image};
+
+    #[test]
+    fn operator_numbers_sort_like_operator_versions() {
+        assert_eq!(operator_number("v3.3.59"), 3_003_059);
+        assert_eq!(operator_number("3.3.59"), 3_003_059);
+        assert_eq!(operator_number("v0.0.1"), 1);
+        let ordered = [
+            "v3.3.57", "v3.3.59", "v3.3.999", "v3.4.0", "v3.10.2", "v4.0.0",
+        ];
+        for pair in ordered.windows(2) {
+            assert!(
+                operator_number(pair[0]) < operator_number(pair[1]),
+                "{} must sort below {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        for tag in [
+            "dev",
+            "latest",
+            "sha-0123abc",
+            "v3.3",
+            "v3.3.59.1",
+            "v3.3.59-rc.1",
+            "v3.3.1000",
+            "v3.1000.0",
+            "v+3.3.59",
+            "v3..59",
+            "v1234567.0.0",
+        ] {
+            assert_eq!(operator_number(tag), 0, "{tag}");
+        }
+    }
 
     #[test]
     fn splits_image_references_with_registry_ports() {
