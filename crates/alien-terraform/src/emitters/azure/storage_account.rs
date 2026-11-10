@@ -26,6 +26,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, AzureStorageAccount, ErrorData, ResourceLifecycle, Result, Storage,
+    AZURE_SIGNED_UPLOAD_HEADERS, SIGNED_UPLOAD_EXPOSED_HEADERS,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -67,11 +68,29 @@ impl TfEmitter for AzureStorageAccountEmitter {
             attr("versioning_enabled", versioning_enabled),
             attr("change_feed_enabled", Expression::Bool(false)),
         ];
-        if let Some(origins) = storage_cors_origins(ctx) {
-            let local_name = format!("{label}_cors_origins");
-            fragment.locals.insert(local_name.clone(), origins);
-            blob_properties.push(nested(cors_rule(&local_name)?));
-            body.push(nested(cors_limits(&local_name)?));
+        let read_local =
+            storage_cors_origins(ctx, |storage| &storage.cors_allowed_origins).map(|origins| {
+                let local_name = format!("{label}_cors_origins");
+                fragment.locals.insert(local_name.clone(), origins);
+                local_name
+            });
+        let upload_local =
+            storage_cors_origins(ctx, |storage| &storage.cors_upload_origins).map(|origins| {
+                let local_name = format!("{label}_cors_upload_origins");
+                fragment.locals.insert(local_name.clone(), origins);
+                local_name
+            });
+        if let Some(local_name) = &read_local {
+            blob_properties.push(nested(cors_rule(local_name, &READ_RULE)?));
+        }
+        if let Some(local_name) = &upload_local {
+            blob_properties.push(nested(cors_rule(local_name, &UPLOAD_RULE)?));
+        }
+        if read_local.is_some() || upload_local.is_some() {
+            body.push(nested(cors_limits(
+                read_local.as_deref(),
+                upload_local.as_deref(),
+            )?));
         }
         body.push(nested(block("blob_properties", blob_properties)));
         if let Some(key_label) = encryption_key_label {
@@ -204,15 +223,19 @@ impl TfEmitter for AzureStorageAccountEmitter {
     }
 }
 
-/// Azure CORS is shared by every container. Union enabled contributors into a
-/// single read-only rule, rather than competing account-wide configurations.
-fn storage_cors_origins(ctx: &EmitContext<'_>) -> Option<Expression> {
+/// Azure CORS is shared by every container. Union the origins enabled contributors
+/// declare for one rule (read or signed upload), rather than competing account-wide
+/// configurations.
+fn storage_cors_origins(
+    ctx: &EmitContext<'_>,
+    declared: impl Fn(&Storage) -> &Vec<String>,
+) -> Option<Expression> {
     let mut origins = Vec::new();
     for (_, entry) in ctx.stack.resources() {
         let Some(storage) = entry.config.downcast_ref::<Storage>() else {
             continue;
         };
-        origins.extend(storage.cors_allowed_origins.iter().map(|origin| {
+        origins.extend(declared(storage).iter().map(|origin| {
             (
                 entry.enabled_when.clone(),
                 Expression::String(origin.clone()),
@@ -233,7 +256,38 @@ fn storage_cors_origins(ctx: &EmitContext<'_>) -> Option<Expression> {
     Some(expression)
 }
 
-fn cors_rule(local_name: &str) -> Result<hcl::structure::Block> {
+/// The fixed part of a CORS rule; the origins come from a local.
+struct CorsRuleSettings {
+    methods: &'static [&'static str],
+    allowed_headers: &'static [&'static str],
+    exposed_headers: &'static [&'static str],
+}
+
+impl CorsRuleSettings {
+    /// What Azure counts toward its 2 KiB CORS limit, apart from the origins.
+    fn counted(&self) -> String {
+        format!(
+            "{}{}{}3600",
+            self.methods.join(","),
+            self.allowed_headers.join(","),
+            self.exposed_headers.join(",")
+        )
+    }
+}
+
+const READ_RULE: CorsRuleSettings = CorsRuleSettings {
+    methods: &["GET", "HEAD"],
+    allowed_headers: &["*"],
+    exposed_headers: &["ETag", "Content-Range", "Accept-Ranges"],
+};
+
+const UPLOAD_RULE: CorsRuleSettings = CorsRuleSettings {
+    methods: &["PUT"],
+    allowed_headers: AZURE_SIGNED_UPLOAD_HEADERS,
+    exposed_headers: SIGNED_UPLOAD_EXPOSED_HEADERS,
+};
+
+fn cors_rule(local_name: &str, settings: &CorsRuleSettings) -> Result<hcl::structure::Block> {
     let strings = |values: &[&str]| {
         Expression::Array(
             values
@@ -255,12 +309,9 @@ fn cors_rule(local_name: &str) -> Result<hcl::structure::Block> {
                 "content",
                 [
                     attr("allowed_origins", expr::traversal(["cors_rule", "value"])),
-                    attr("allowed_methods", strings(&["GET", "HEAD"])),
-                    attr("allowed_headers", strings(&["*"])),
-                    attr(
-                        "exposed_headers",
-                        strings(&["ETag", "Content-Range", "Accept-Ranges"]),
-                    ),
+                    attr("allowed_methods", strings(settings.methods)),
+                    attr("allowed_headers", strings(settings.allowed_headers)),
+                    attr("exposed_headers", strings(settings.exposed_headers)),
                     attr("max_age_in_seconds", Expression::from(3600)),
                 ],
             )),
@@ -271,12 +322,49 @@ fn cors_rule(local_name: &str) -> Result<hcl::structure::Block> {
     Ok(rule)
 }
 
-fn cors_limits(local_name: &str) -> Result<hcl::structure::Block> {
+fn cors_limits(
+    read_local: Option<&str>,
+    upload_local: Option<&str>,
+) -> Result<hcl::structure::Block> {
     // Azure limits all CORS settings, excluding XML tags, to 2 KiB. The
     // base64 length computes UTF-8 bytes instead of Terraform's character count.
-    let payload = format!(
-        "base64encode(join(\"\", [join(\",\", local.{local_name}), \"GET,HEAD*ETag,Content-Range,Accept-Ranges3600\"]))"
-    );
+    let rules: Vec<(&str, &CorsRuleSettings)> = read_local
+        .map(|local| (local, &READ_RULE))
+        .into_iter()
+        .chain(upload_local.map(|local| (local, &UPLOAD_RULE)))
+        .collect();
+    // A gate can leave a rule with no origins, and then `cors_rule` emits no rule, so its
+    // fixed settings don't count. The read-only payload keeps its original expression.
+    let counted: Vec<String> = rules
+        .iter()
+        .map(|(local, settings)| {
+            if upload_local.is_some() {
+                format!(
+                    "join(\",\", local.{local}), length(local.{local}) == 0 ? \"\" : \"{}\"",
+                    settings.counted()
+                )
+            } else {
+                format!("join(\",\", local.{local}), \"{}\"", settings.counted())
+            }
+        })
+        .collect();
+    let payload = format!("base64encode(join(\"\", [{}]))", counted.join(", "));
+    let origins = match rules.as_slice() {
+        [(local, _)] => format!("local.{local}"),
+        _ => format!(
+            "concat({})",
+            rules
+                .iter()
+                .map(|(local, _)| format!("local.{local}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let error_message = if upload_local.is_some() {
+        "Azure account-wide CORS origins must be nonempty, at most 256 characters each, contain no commas or line breaks, and fit with the read and upload rule settings within 2 KiB. Reduce the enabled containers' combined origins."
+    } else {
+        "Azure account-wide CORS origins must be nonempty, at most 256 characters each, contain no commas or line breaks, and fit with the read-rule settings within 2 KiB. Reduce the enabled containers' combined origins."
+    };
     Ok(block(
         "lifecycle",
         [nested(block(
@@ -285,14 +373,12 @@ fn cors_limits(local_name: &str) -> Result<hcl::structure::Block> {
                 attr(
                     "condition",
                     expr::parse(&format!(
-                        "alltrue([for origin in local.{local_name} : length(origin) > 0 && length(origin) <= 256 && length(regexall(\"[,\\r\\n]\", origin)) == 0]) && length({payload}) * 3 / 4 - length(regexall(\"=\", {payload})) <= 2048"
+                        "alltrue([for origin in {origins} : length(origin) > 0 && length(origin) <= 256 && length(regexall(\"[,\\r\\n]\", origin)) == 0]) && length({payload}) * 3 / 4 - length(regexall(\"=\", {payload})) <= 2048"
                     ))?,
                 ),
                 attr(
                     "error_message",
-                    Expression::from(
-                        "Azure account-wide CORS origins must be nonempty, at most 256 characters each, contain no commas or line breaks, and fit with the read-rule settings within 2 KiB. Reduce the enabled containers' combined origins.",
-                    ),
+                    Expression::from(error_message),
                 ),
             ],
         ))],

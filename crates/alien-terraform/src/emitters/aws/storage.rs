@@ -18,7 +18,8 @@ use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
     import::EmitContext, ErrorData, LifecycleRule, PermissionProfile, PermissionSetReference,
     RemoteStackManagement, Result, ServiceAccount, Storage, AWS_ABORT_INCOMPLETE_UPLOAD_DAYS,
-    AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
+    AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT, AWS_SIGNED_UPLOAD_HEADERS,
+    SIGNED_UPLOAD_EXPOSED_HEADERS,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -54,10 +55,12 @@ impl TfEmitter for AwsStorageEmitter {
             sandbox_bundle_writer(ctx, storage),
         ));
 
-        if !storage.cors_allowed_origins.is_empty() {
-            fragment
-                .resource_blocks
-                .push(cors(label, &storage.cors_allowed_origins));
+        if storage.has_cors() {
+            fragment.resource_blocks.push(cors(
+                label,
+                &storage.cors_allowed_origins,
+                &storage.cors_upload_origins,
+            ));
         }
         if storage.versioning {
             fragment.resource_blocks.push(versioning(label));
@@ -306,7 +309,7 @@ fn bucket_policy(label: &str, storage: &Storage, bundle_writer: Option<Expressio
     )
 }
 
-fn cors(label: &str, origins: &[String]) -> Block {
+fn cors(label: &str, read_origins: &[String], upload_origins: &[String]) -> Block {
     let strings = |values: &[&str]| {
         Expression::Array(
             values
@@ -315,31 +318,38 @@ fn cors(label: &str, origins: &[String]) -> Block {
                 .collect(),
         )
     };
-    resource_block(
-        "aws_s3_bucket_cors_configuration",
-        label,
-        [
-            attr("bucket", bucket_id(label)),
-            nested(block(
-                "cors_rule",
-                [
-                    attr(
-                        "allowed_origins",
-                        Expression::Array(
-                            origins.iter().cloned().map(Expression::String).collect(),
-                        ),
-                    ),
-                    attr("allowed_methods", strings(&["GET", "HEAD"])),
-                    attr("allowed_headers", strings(&["*"])),
-                    attr(
-                        "expose_headers",
-                        strings(&["ETag", "Content-Range", "Accept-Ranges"]),
-                    ),
-                    attr("max_age_seconds", Expression::from(3600)),
-                ],
-            )),
-        ],
-    )
+    let origins = |origins: &[String]| {
+        Expression::Array(origins.iter().cloned().map(Expression::String).collect())
+    };
+    let mut body = vec![attr("bucket", bucket_id(label))];
+    if !read_origins.is_empty() {
+        body.push(nested(block(
+            "cors_rule",
+            [
+                attr("allowed_origins", origins(read_origins)),
+                attr("allowed_methods", strings(&["GET", "HEAD"])),
+                attr("allowed_headers", strings(&["*"])),
+                attr(
+                    "expose_headers",
+                    strings(&["ETag", "Content-Range", "Accept-Ranges"]),
+                ),
+                attr("max_age_seconds", Expression::from(3600)),
+            ],
+        )));
+    }
+    if !upload_origins.is_empty() {
+        body.push(nested(block(
+            "cors_rule",
+            [
+                attr("allowed_origins", origins(upload_origins)),
+                attr("allowed_methods", strings(&["PUT"])),
+                attr("allowed_headers", strings(AWS_SIGNED_UPLOAD_HEADERS)),
+                attr("expose_headers", strings(SIGNED_UPLOAD_EXPOSED_HEADERS)),
+                attr("max_age_seconds", Expression::from(3600)),
+            ],
+        )));
+    }
+    resource_block("aws_s3_bucket_cors_configuration", label, body)
 }
 
 fn versioning(label: &str) -> Block {

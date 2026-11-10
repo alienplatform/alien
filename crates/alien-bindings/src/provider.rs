@@ -1543,6 +1543,11 @@ impl BindingsProviderApi for BindingsProvider {
                         binding_name,
                         config,
                         client.as_ref(),
+                        &self
+                            .client_config
+                            .gcp_config()
+                            .map(|gcp| gcp.project_id.clone())
+                            .unwrap_or_default(),
                     )
                     .await?;
                     Ok(Arc::new(ResolvedRedis::new(params)))

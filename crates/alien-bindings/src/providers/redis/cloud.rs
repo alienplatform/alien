@@ -73,15 +73,19 @@ pub(crate) async fn resolve_elasticache(
     )
 }
 
-/// `(location, instance id)` from `projects/<p>/locations/<l>/instances/<i>`.
+/// `(project, location, instance id)` from `projects/<p>/locations/<l>/instances/<i>`.
 #[cfg(feature = "gcp")]
-pub(crate) fn parse_instance_name(name: &str) -> Option<(String, String)> {
+pub(crate) fn parse_instance_name(name: &str) -> Option<(String, String, String)> {
     let parts: Vec<&str> = name.split('/').collect();
     match parts.as_slice() {
         ["projects", project, "locations", location, "instances", instance]
             if !project.is_empty() && !location.is_empty() && !instance.is_empty() =>
         {
-            Some((location.to_string(), instance.to_string()))
+            Some((
+                project.to_string(),
+                location.to_string(),
+                instance.to_string(),
+            ))
         }
         _ => None,
     }
@@ -94,7 +98,13 @@ fn newest_active_token(tokens: Vec<alien_gcp_clients::memorystore::AuthToken>) -
     tokens
         .into_iter()
         .filter(|token| token.state.as_deref() == Some("ACTIVE") && !token.token.is_empty())
-        .max_by(|a, b| a.create_time.cmp(&b.create_time))
+        .max_by_key(|token| {
+            // Google emits a varying number of fractional digits, so strings do not sort.
+            token
+                .create_time
+                .as_deref()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+        })
         .map(|token| token.token)
 }
 
@@ -103,14 +113,25 @@ pub(crate) async fn resolve_memorystore(
     binding_name: &str,
     binding: &alien_core::bindings::MemorystoreRedisBinding,
     memorystore: &dyn alien_gcp_clients::memorystore::MemorystoreApi,
+    client_project_id: &str,
 ) -> Result<RedisConnectionParams> {
     let name = locator(binding_name, "instanceName", &binding.instance_name)?;
-    let (location, instance) = parse_instance_name(&name).ok_or_else(|| {
+    let (project, location, instance) = parse_instance_name(&name).ok_or_else(|| {
         AlienError::new(ErrorData::config_invalid(
             binding_name,
             "instanceName must be projects/<project>/locations/<region>/instances/<id>",
         ))
     })?;
+    // The client reads from its own project, so a binding for another project would read the
+    // wrong instance's token (or fail confusingly).
+    if project != client_project_id {
+        return Err(AlienError::new(ErrorData::config_invalid(
+            binding_name,
+            format!(
+                "instanceName is in project '{project}' but the workload runs in '{client_project_id}'"
+            ),
+        )));
+    }
     let cas = binding
         .server_ca_certificates
         .clone()
@@ -376,9 +397,10 @@ mod tests {
         async fn reads_the_token_from_the_instance_and_verifies_against_the_binding_cas() {
             let memorystore =
                 memorystore_returning(vec![token("token-value", "ACTIVE", "2026-01-01T00:00:00Z")]);
-            let params = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
-                .await
-                .unwrap();
+            let params =
+                resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore, "p")
+                    .await
+                    .unwrap();
             assert_eq!(params.password, "token-value");
             assert_eq!(params.tls.ca_certificates(), [CA.to_string()]);
         }
@@ -392,19 +414,51 @@ mod tests {
                 token("new", "ACTIVE", "2026-03-01T00:00:00Z"),
                 token("newer-but-inactive", "CREATING", "2026-04-01T00:00:00Z"),
             ]);
-            let params = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
-                .await
-                .unwrap();
+            let params =
+                resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore, "p")
+                    .await
+                    .unwrap();
             assert_eq!(params.password, "new");
+        }
+
+        /// Fractional digits vary, so `.5Z` vs `.123456Z` must compare as times, not strings.
+        #[tokio::test]
+        async fn newest_token_compares_timestamps_not_strings() {
+            let memorystore = memorystore_returning(vec![
+                token("latest", "ACTIVE", "2026-01-01T00:00:00.9Z"),
+                token("earlier", "ACTIVE", "2026-01-01T00:00:00.123456Z"),
+                token("oldest", "ACTIVE", "2025-12-31T23:59:59.999999999Z"),
+            ]);
+            let params =
+                resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore, "p")
+                    .await
+                    .unwrap();
+            assert_eq!(params.password, "latest");
+        }
+
+        #[tokio::test]
+        async fn a_binding_for_another_project_is_rejected_before_any_read() {
+            let mut memorystore = MockMemorystoreApi::new();
+            memorystore.expect_list_auth_tokens().never();
+            let error = resolve_memorystore(
+                "cache",
+                &binding(vec![CA.to_string()]),
+                &memorystore,
+                "other",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, "BINDING_CONFIG_INVALID");
         }
 
         #[tokio::test]
         async fn no_active_token_is_an_invalid_credential() {
             let memorystore =
                 memorystore_returning(vec![token("t", "CREATING", "2026-01-01T00:00:00Z")]);
-            let error = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
-                .await
-                .unwrap_err();
+            let error =
+                resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore, "p")
+                    .await
+                    .unwrap_err();
             assert_eq!(error.code, "REDIS_CREDENTIAL_INVALID");
             assert!(!format!("{error:?}").contains("\"t\""));
         }
@@ -420,9 +474,10 @@ mod tests {
                     },
                 ))
             });
-            let error = resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore)
-                .await
-                .unwrap_err();
+            let error =
+                resolve_memorystore("cache", &binding(vec![CA.to_string()]), &memorystore, "p")
+                    .await
+                    .unwrap_err();
             assert_eq!(error.code, "REDIS_CREDENTIAL_RESOLUTION_FAILED");
         }
 
@@ -430,7 +485,7 @@ mod tests {
         async fn missing_cas_fail_before_any_token_read() {
             // The mock has no expectation, so a token read would panic.
             let memorystore = MockMemorystoreApi::new();
-            let error = resolve_memorystore("cache", &binding(vec![]), &memorystore)
+            let error = resolve_memorystore("cache", &binding(vec![]), &memorystore, "p")
                 .await
                 .unwrap_err();
             assert_eq!(error.code, "BINDING_CONFIG_INVALID");
@@ -440,7 +495,7 @@ mod tests {
         async fn a_malformed_instance_name_is_refused_before_any_call() {
             let mut bad = binding(vec![CA.to_string()]);
             bad.instance_name = BindingValue::value("test-cache".to_string());
-            let error = resolve_memorystore("cache", &bad, &MockMemorystoreApi::new())
+            let error = resolve_memorystore("cache", &bad, &MockMemorystoreApi::new(), "p")
                 .await
                 .unwrap_err();
             assert_eq!(error.code, "BINDING_CONFIG_INVALID");

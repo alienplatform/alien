@@ -944,6 +944,7 @@ async fn build_and_push_sandbox_base_image(
     let push_settings = manager_proxy_push_settings(
         &destination.registry_host,
         &destination.repository,
+        platform,
         &manager,
     )?;
     let publish_failed = || ErrorData::SandboxImagePublishFailed {

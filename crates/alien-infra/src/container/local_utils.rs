@@ -9,7 +9,8 @@
 use crate::error::{ErrorData, Result};
 use alien_core::bindings::{
     binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, KvBinding,
-    PostgresBinding, QueueBinding, RedisBinding, StorageBinding, VaultBinding, WorkerBinding,
+    PostgresBinding, QueueBinding, RedisBinding, SandboxBinding, StorageBinding, VaultBinding,
+    WorkerBinding,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::debug;
@@ -394,6 +395,120 @@ pub(super) fn rewrite_localhost_urls_for_container(
     Ok(())
 }
 
+/// Where a linked Local sandbox's token file is mounted in a container, one file per binding.
+const SANDBOX_TOKEN_DIR: &str = "/run/alien/sandbox";
+
+/// The bindings of the Local sandboxes a container links, as the controller resolved them from
+/// those links, once per sandbox. A sandbox linked more than once still gets one token mount:
+/// Docker refuses two mounts at the same container path.
+pub(super) fn linked_sandbox_bindings(
+    links: &[alien_core::ResourceRef],
+    env_vars: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let bindings: std::collections::BTreeMap<String, String> = links
+        .iter()
+        .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
+        .filter_map(|link| {
+            let key = binding_env_var_name(link.id());
+            env_vars.get(&key).map(|value| (key, value.clone()))
+        })
+        .collect();
+    bindings.into_iter().collect()
+}
+
+/// Makes each linked Local sandbox reachable from inside a container.
+///
+/// The binding points at the manager's route on loopback and at a token file on the host; neither
+/// exists inside the container. Its URL moves to `host.docker.internal` (the caller forwards the
+/// route there), and the one token file is mounted
+/// read-only (not its directory, which holds other sandboxes' tokens), with the binding pointed
+/// at the mount. The mount is shared with the host operator's identity because the file is
+/// readable by it alone, as Storage, KV and Vault mounts already are.
+///
+/// **Fails fast** on a cloud sandbox binding, as the other rewrites do. A token file that is not
+/// there yet is not mounted (Docker would create a directory in its place, which the route could
+/// then never write its token to): the sandbox is reported as a dependency that is not ready,
+/// because after a manager restart its next tick writes the token again.
+pub(super) fn mount_local_sandboxes_for_container(
+    container_id: &str,
+    sandbox_bindings: Vec<(String, String)>,
+    env_vars: &mut std::collections::HashMap<String, String>,
+    bind_mounts: &mut Vec<alien_local::BindMount>,
+) -> Result<()> {
+    for (binding_key, resolved) in sandbox_bindings {
+        let mut binding = serde_json::from_str::<SandboxBinding>(&resolved)
+            .into_alien_error()
+            .context(ErrorData::ResourceControllerConfigError {
+                resource_id: binding_key.clone(),
+                message: "A linked sandbox's binding is not a sandbox binding".into(),
+            })?;
+        let SandboxBinding::Local(local) = &mut binding else {
+            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: binding_key,
+                message: "Local platform containers cannot use cloud sandbox bindings".to_string(),
+            }));
+        };
+
+        if let BindingValue::Value(url) = &mut local.manager_url {
+            let mut endpoint = reqwest::Url::parse(url).into_alien_error().context(
+                ErrorData::ResourceControllerConfigError {
+                    resource_id: binding_key.clone(),
+                    message: "Invalid local sandbox route URL".into(),
+                },
+            )?;
+            if endpoint.host_str().is_some_and(|host| {
+                host == "localhost"
+                    || host
+                        .trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            }) {
+                endpoint
+                    .set_host(Some("host.docker.internal"))
+                    .into_alien_error()
+                    .context(ErrorData::ResourceControllerConfigError {
+                        resource_id: binding_key.clone(),
+                        message: "Rewrite local sandbox route URL for Docker".into(),
+                    })?;
+                *url = endpoint.as_str().trim_end_matches('/').to_string();
+            }
+        }
+        if let BindingValue::Value(host_path) = &local.token_path {
+            if !std::path::Path::new(host_path).is_file() {
+                debug!(resource = %binding_key, %host_path, "the linked sandbox's route has not written its token yet");
+                return Err(AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: container_id.to_string(),
+                    dependency_id: binding_key,
+                }));
+            }
+            let container_path = format!(
+                "{SANDBOX_TOKEN_DIR}/{}.token",
+                binding_key.to_ascii_lowercase()
+            );
+            bind_mounts.push(alien_local::BindMount {
+                host_path: std::path::PathBuf::from(host_path),
+                container_path: container_path.clone(),
+                resource_id: binding_key.clone(),
+                shared_with_host_workloads: true,
+                read_only: true,
+            });
+            local.token_path = BindingValue::value(container_path);
+        }
+
+        let rewritten = serde_json::to_string(&binding).into_alien_error().context(
+            ErrorData::ResourceControllerConfigError {
+                resource_id: binding_key.clone(),
+                message: "Failed to serialize Sandbox binding".to_string(),
+            },
+        )?;
+        debug!(resource = %binding_key, "Pointed the Local sandbox binding at the container's view");
+        // Written over whatever a deployment variable of the same name put there.
+        env_vars.insert(binding_key, rewritten);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +542,175 @@ mod tests {
                 matches!(actual.endpoint, BindingValue::Value(url) if url == format!("http://{expected}:4318/v1/local/queues/dep/localhost:jobs"))
             );
         }
+    }
+
+    fn local_sandbox_binding(token_path: &std::path::Path) -> SandboxBinding {
+        SandboxBinding::Local(alien_core::bindings::LocalSandboxBinding {
+            default_policy: None,
+            egress: None,
+            manager_url: BindingValue::value("http://127.0.0.1:40205".to_string()),
+            sandbox_key: BindingValue::value("code-key".to_string()),
+            token_path: BindingValue::value(token_path.display().to_string()),
+        })
+    }
+
+    #[test]
+    fn local_sandbox_binding_is_reachable_from_a_container() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        std::fs::write(&token, "t").unwrap();
+        let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let mut mounts = Vec::new();
+        mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts).unwrap();
+
+        let SandboxBinding::Local(actual) =
+            serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()
+        else {
+            panic!("sandbox transport changed");
+        };
+        assert_eq!(
+            actual.manager_url,
+            BindingValue::value("http://host.docker.internal:40205".to_string())
+        );
+        assert_eq!(
+            actual.token_path,
+            BindingValue::value("/run/alien/sandbox/alien_code_binding.token".to_string())
+        );
+        assert_eq!(
+            actual.sandbox_key,
+            BindingValue::value("code-key".to_string())
+        );
+        assert_eq!(mounts.len(), 1, "only the token file, never its directory");
+        assert_eq!(mounts[0].host_path, token);
+        assert_eq!(
+            mounts[0].container_path,
+            "/run/alien/sandbox/alien_code_binding.token"
+        );
+        assert!(mounts[0].read_only);
+        assert!(
+            mounts[0].shared_with_host_workloads,
+            "the file is the operator's alone"
+        );
+    }
+
+    /// A token the route has not written yet (a manager restart the sandbox has not caught up
+    /// with) waits for the sandbox instead of failing the container, and mounts nothing until
+    /// then. Once the token is there, the next attempt mounts it.
+    #[test]
+    fn a_token_not_written_yet_waits_for_the_sandbox_then_mounts() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        let linked = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+
+        let mut env = linked.clone();
+        let mut mounts = Vec::new();
+        let error =
+            mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts)
+                .expect_err("no token file yet");
+        assert_eq!(error.code, "DEPENDENCY_NOT_READY");
+        assert!(error.retryable);
+        assert!(
+            mounts.is_empty(),
+            "Docker would create a directory at a missing source"
+        );
+
+        std::fs::write(&token, "t").unwrap();
+        let mut env = linked;
+        mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts)
+            .expect("the token is there now");
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(mounts[0].host_path, token);
+    }
+
+    #[test]
+    fn cloud_sandbox_binding_is_rejected_in_a_local_container() {
+        let mut env = std::collections::HashMap::from([(
+            binding_env_var_name("code"),
+            serde_json::json!({
+                "service": "sandbox-aws",
+                "imageArn": "arn:aws:lambda:us-east-1:123456789012:microvm-image:x",
+                "imageVersion": "1.0",
+                "region": "us-east-1",
+            })
+            .to_string(),
+        )]);
+        let mut mounts = Vec::new();
+        assert!(
+            mount_local_sandboxes_for_container("web", resolved(&env), &mut env, &mut mounts)
+                .is_err()
+        );
+        assert!(mounts.is_empty());
+    }
+
+    /// A deployment variable shaped like a sandbox binding mounts nothing: neither a new
+    /// binding that names a host file, nor one written over a linked sandbox's binding.
+    #[test]
+    fn a_forged_sandbox_binding_mounts_no_host_file() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        std::fs::write(&token, "t").unwrap();
+        let secret = state.path().join("id_ed25519");
+        std::fs::write(&secret, "private key").unwrap();
+
+        let linked = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let sandbox_bindings = resolved(&linked);
+        let forged = serde_json::to_string(&local_sandbox_binding(&secret)).unwrap();
+        let mut env = linked;
+        env.insert(binding_env_var_name("fake"), forged.clone());
+        env.insert(binding_env_var_name("code"), forged.clone());
+
+        let mut mounts = Vec::new();
+        mount_local_sandboxes_for_container("web", sandbox_bindings, &mut env, &mut mounts)
+            .unwrap();
+
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(
+            mounts[0].host_path, token,
+            "only the linked sandbox's token"
+        );
+        assert_eq!(
+            env[&binding_env_var_name("fake")],
+            forged,
+            "an unlinked binding is left as it was, unmounted"
+        );
+        let SandboxBinding::Local(code) =
+            serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()
+        else {
+            panic!("sandbox transport changed");
+        };
+        assert_eq!(
+            code.token_path,
+            BindingValue::value("/run/alien/sandbox/alien_code_binding.token".to_string()),
+            "the linked binding replaces the variable written over it"
+        );
+    }
+
+    /// Linking the same sandbox twice mounts its token once; Docker refuses a container whose
+    /// mounts repeat a path.
+    #[test]
+    fn a_sandbox_linked_twice_mounts_its_token_once() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        std::fs::write(&token, "t").unwrap();
+        let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let link = alien_core::ResourceRef::new(alien_core::Sandbox::RESOURCE_TYPE, "code");
+        let unlinked = alien_core::ResourceRef::new(alien_core::Sandbox::RESOURCE_TYPE, "absent");
+
+        let bindings = linked_sandbox_bindings(&[link.clone(), link, unlinked], &env);
+        assert_eq!(bindings.len(), 1, "{bindings:?}");
+        assert_eq!(bindings[0].0, binding_env_var_name("code"));
+
+        let mut mounts = Vec::new();
+        mount_local_sandboxes_for_container("web", bindings, &mut env, &mut mounts).unwrap();
+        assert_eq!(mounts.len(), 1, "{mounts:?}");
+        assert_eq!(mounts[0].host_path, token);
+    }
+
+    /// The bindings as the controller resolved them from the container's links.
+    fn resolved(env: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
+        env.iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
     }
 
     #[test]

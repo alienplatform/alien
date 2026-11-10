@@ -1,5 +1,5 @@
 use alien_core::{BinaryTarget, Platform};
-use dockdash::{Arch, PushOptions};
+use dockdash::{Arch, MonolithicPushPolicy, PushOptions};
 
 /// Extension trait to add dockdash-specific functionality to BinaryTarget
 pub trait BinaryTargetExt {
@@ -115,6 +115,29 @@ pub struct PushSettings {
     pub destination_label: Option<String>,
     /// Push options (auth, protocol, etc.)
     pub options: PushOptions,
+}
+
+/// How to upload image blobs through a manager's registry proxy, for images of `platform`.
+///
+/// The proxy forwards each upload request unchanged to the registry the manager keeps for the
+/// platform, and the push client can't see which registry that is, so the platform decides:
+///
+/// - AWS images go to Amazon ECR, which refuses a large blob sent in one request (HTTP 413 for a
+///   440 MB layer; 180 MiB passed) and accepts chunked uploads.
+/// - GCP images go to Google Artifact Registry, which needs monolithic uploads.
+/// - Azure keeps the monolithic uploads it has always used.
+/// - Kubernetes, Machines and Local images go to the manager's default registry, which can be
+///   any of these, so they keep monolithic uploads too.
+pub fn registry_proxy_push_policy(platform: Platform) -> MonolithicPushPolicy {
+    match platform {
+        Platform::Aws => MonolithicPushPolicy::Never,
+        Platform::Gcp
+        | Platform::Azure
+        | Platform::Kubernetes
+        | Platform::Machines
+        | Platform::Local
+        | Platform::Test => MonolithicPushPolicy::Always,
+    }
 }
 
 impl BuildSettings {

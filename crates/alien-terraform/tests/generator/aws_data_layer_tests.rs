@@ -856,6 +856,25 @@ fn aws_storage_browser_cors() {
 }
 
 #[test]
+fn aws_storage_signed_upload_cors() {
+    let stack = Stack::new("browser-storage".to_string())
+        .add(
+            Storage::new("uploads".to_string())
+                .cors_allowed_origins(vec!["https://app.example.com".to_string()])
+                .cors_upload_origins(vec![
+                    "https://app.example.com".to_string(),
+                    "https://*.preview.example.com".to_string(),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    snapshot_module("aws_storage_signed_upload_cors", &module);
+    assert_terraform_valid(&module, "aws_storage_signed_upload_cors");
+}
+
+#[test]
 fn aws_retained_data_setup() {
     for encrypted in [false, true] {
         let mut storage = Storage::new("data".to_string()).versioning(true).build();

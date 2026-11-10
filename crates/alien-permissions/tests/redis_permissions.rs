@@ -366,8 +366,8 @@ fn gcp_context(resource: &str) -> PermissionContext {
         .with_region("us-east4")
 }
 
-/// Evaluates the `==` and `startsWith` clauses of a rendered Secret Manager condition against a
-/// secret (or secret version) resource name.
+/// Evaluates the `==` and `startsWith` clauses of a rendered Memorystore condition against a
+/// token-user resource name.
 fn gcp_condition_allows(expression: &str, secret_resource_name: &str) -> bool {
     let atom = |atom: &str| -> bool {
         let atom = atom.trim().trim_start_matches('(');

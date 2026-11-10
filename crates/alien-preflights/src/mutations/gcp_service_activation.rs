@@ -24,7 +24,7 @@ use tracing::{debug, info};
 /// - queue: pubsub.googleapis.com (Pub/Sub)
 /// - vault: secretmanager.googleapis.com (Secret Manager)
 /// - postgres: sqladmin.googleapis.com (Cloud SQL) + compute.googleapis.com (PSC) + secretmanager.googleapis.com (connection secret)
-/// - redis: memorystore.googleapis.com (Memorystore for Valkey) + networkconnectivity.googleapis.com (service connection policy) + secretmanager.googleapis.com (token copy)
+/// - redis: memorystore.googleapis.com (Memorystore for Valkey) + networkconnectivity.googleapis.com (service connection policy)
 /// - network: compute.googleapis.com (Compute Engine)
 /// - compute-cluster: compute.googleapis.com (Compute Engine)
 // Google documents these prerequisites for customer-owned workload federation.
@@ -297,11 +297,6 @@ impl GcpServiceActivationMutation {
                         "enable-service-consumer-management".to_string(),
                         "serviceconsumermanagement.googleapis.com".to_string(),
                     );
-                    // The server-generated token is copied into a Secret Manager secret.
-                    services.insert(
-                        "enable-secret-manager".to_string(),
-                        "secretmanager.googleapis.com".to_string(),
-                    );
                     services.insert(
                         "enable-compute-engine".to_string(),
                         "compute.googleapis.com".to_string(),
@@ -502,10 +497,13 @@ mod tests {
             "memorystore.googleapis.com",
             "networkconnectivity.googleapis.com",
             "serviceconsumermanagement.googleapis.com",
-            "secretmanager.googleapis.com",
             "compute.googleapis.com",
         ] {
             assert!(enabled.contains(api), "missing {api}");
         }
+        assert!(
+            !enabled.contains("secretmanager.googleapis.com"),
+            "Redis reads its token from Memorystore, not Secret Manager"
+        );
     }
 }

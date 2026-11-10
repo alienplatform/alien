@@ -4,7 +4,10 @@ use crate::git_utils::collect_git_metadata;
 use crate::output::print_json;
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
-use alien_build::{settings::PushSettings, ImageDestinations};
+use alien_build::{
+    settings::{registry_proxy_push_policy, PushSettings},
+    ImageDestinations,
+};
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
@@ -1626,7 +1629,7 @@ async fn build_proxy_push_settings(
         repo_name
     };
 
-    let settings = manager_proxy_push_settings(manager_url, &repo_name, manager)?;
+    let settings = manager_proxy_push_settings(manager_url, &repo_name, *platform, manager)?;
     let push_host = alien_core::image_rewrite::strip_url_scheme(manager_url).to_string();
     Ok((
         settings,
@@ -1689,9 +1692,7 @@ async fn provision_sandbox_push_repository(
         )
     };
     let sandbox = create_manager_repository(manager, &url, &body, key, "sandbox").await?;
-    Ok(Some(
-        manager_proxy_push_settings(manager_url, &sandbox, manager)?.repository,
-    ))
+    Ok(Some(manager_proxy_repository(manager_url, &sandbox)?.0))
 }
 
 /// Asks a hosted manager for the project's repository for AWS container and daemon images.
@@ -1711,7 +1712,7 @@ async fn provision_proxy_only_push_repository(
         "container",
     )
     .await?;
-    Ok(manager_proxy_push_settings(manager_url, &repository, manager)?.repository)
+    Ok(manager_proxy_repository(manager_url, &repository)?.0)
 }
 
 /// Creates (or finds) a repository through the manager and returns the name it answers with
@@ -1757,13 +1758,12 @@ async fn create_manager_repository(
         })
 }
 
-/// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
-/// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
-pub(crate) fn manager_proxy_push_settings(
+/// The full repository reference for `repository` on the manager's registry proxy, and the
+/// protocol to push to it with. Images go through the same proxy whatever the platform.
+fn manager_proxy_repository(
     registry_host: &str,
     repository: &str,
-    manager: &ManagerContext,
-) -> Result<PushSettings> {
+) -> Result<(String, ClientProtocol)> {
     // A manager served over plain HTTP (a trial install without a
     // certificate) must be pushed to over HTTP, whatever its host name.
     let plain_http = registry_host.starts_with("http://");
@@ -1776,7 +1776,18 @@ pub(crate) fn manager_proxy_push_settings(
     } else {
         protocol
     };
-    let repository = format!("{registry_host}/{repository}");
+    Ok((format!("{registry_host}/{repository}"), protocol))
+}
+
+/// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
+/// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
+pub(crate) fn manager_proxy_push_settings(
+    registry_host: &str,
+    repository: &str,
+    platform: Platform,
+    manager: &ManagerContext,
+) -> Result<PushSettings> {
+    let (repository, protocol) = manager_proxy_repository(registry_host, repository)?;
 
     // OCI speaks Basic — the token rides in the password slot, the
     // workspace rides in the username slot. OCI clients can't add custom
@@ -1798,10 +1809,7 @@ pub(crate) fn manager_proxy_push_settings(
         options: dockdash::PushOptions {
             auth,
             protocol,
-            // Always use monolithic push through the proxy. The proxy doesn't
-            // know the upstream registry type, and some registries (GAR) reject
-            // chunked PATCH uploads. Monolithic works with all registries.
-            monolithic_push: dockdash::MonolithicPushPolicy::Always,
+            monolithic_push: registry_proxy_push_policy(platform),
             ..Default::default()
         },
     })

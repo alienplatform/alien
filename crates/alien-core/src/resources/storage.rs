@@ -22,6 +22,40 @@ pub const AWS_LIFECYCLE_RULE_LIMIT: usize = 1000;
 /// collide with one.
 pub const AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID: &str = "abort-incomplete-uploads";
 
+/// Request headers an S3 CORS rule lets a browser send with a signed upload (`PUT` to a
+/// presigned URL): the content headers a signer may bind, and `x-amz-*`, which covers the
+/// checksums AWS SDKs add and `x-amz-meta-*`. S3 allows one `*` per header.
+pub const AWS_SIGNED_UPLOAD_HEADERS: &[&str] = &[
+    "Content-Type",
+    "Content-MD5",
+    "Content-Disposition",
+    "Content-Encoding",
+    "Cache-Control",
+    "x-amz-*",
+];
+
+/// Headers a GCS CORS rule lists for a signed upload. GCS uses one list (`responseHeader`)
+/// for both the request headers a browser may send and the response headers it may read,
+/// and matches each name exactly, so `x-goog-meta-*` headers can't be listed.
+pub const GCP_SIGNED_UPLOAD_HEADERS: &[&str] = &[
+    "Content-Type",
+    "Content-MD5",
+    "Content-Disposition",
+    "Content-Encoding",
+    "Cache-Control",
+    "x-goog-content-length-range",
+    "ETag",
+];
+
+/// Request headers an Azure Blob CORS rule lets a browser send with a signed upload (`PUT`
+/// to a SAS URL). `x-ms-*` covers `x-ms-blob-type`, which Put Blob requires, the
+/// `x-ms-blob-content-*` and `x-ms-meta-*` headers, and the `x-ms-version` and
+/// `x-ms-client-request-id` headers the Azure SDK sends.
+pub const AZURE_SIGNED_UPLOAD_HEADERS: &[&str] = &["Content-Type", "Content-MD5", "x-ms-*"];
+
+/// Response headers a browser may read after a signed upload.
+pub const SIGNED_UPLOAD_EXPOSED_HEADERS: &[&str] = &["ETag"];
+
 /// Defines a rule for managing the lifecycle of objects within a storage bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -120,6 +154,23 @@ pub struct Storage {
     #[builder(default)]
     pub cors_allowed_origins: Vec<String>,
 
+    /// Browser origins allowed to upload objects through signed URLs.
+    ///
+    /// When non-empty, providers also configure CORS for single-request `PUT` uploads from
+    /// these origins (a presigned or SAS URL, or one presigned multipart part) and expose
+    /// `ETag`. Allowed request headers: `Content-Type` and `Content-MD5` everywhere;
+    /// `Content-Disposition`, `Content-Encoding`, `Cache-Control` and `x-amz-*` on S3;
+    /// the same content headers and `x-goog-content-length-range` on Cloud Storage, which
+    /// can't allow `x-goog-meta-*`; `x-ms-*` on Azure. Uploads that start with `POST`, such
+    /// as multipart create and complete or resumable uploads, are not covered.
+    ///
+    /// Each origin is `*` or `scheme://host[:port]`; S3 also accepts one `*` wildcard, such
+    /// as `https://*.example.com`.
+    /// Omitted when empty to preserve existing serialized configurations and setup digests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub cors_upload_origins: Vec<String>,
+
     /// Object notification rules delivered into queues (at most 10).
     /// Omitted when empty to preserve existing serialized configurations and setup digests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -139,6 +190,11 @@ impl Storage {
     /// Returns the storage's unique identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Whether the storage asks for any browser CORS rule, for reads or for signed uploads.
+    pub fn has_cors(&self) -> bool {
+        !self.cors_allowed_origins.is_empty() || !self.cors_upload_origins.is_empty()
     }
 }
 
@@ -292,6 +348,30 @@ mod tests {
             serde_json::json!(["created"])
         );
         assert_eq!(serde_json::from_value::<Storage>(encoded).unwrap(), storage);
+    }
+
+    #[test]
+    fn upload_origins_round_trip_and_stay_out_of_existing_serialization() {
+        let declared = serde_json::json!({
+            "id": "uploads", "publicRead": false, "versioning": false,
+            "lifecycleRules": [], "corsAllowedOrigins": [],
+            "corsUploadOrigins": ["https://app.example.com"]
+        });
+        let storage: Storage = serde_json::from_value(declared.clone())
+            .expect("a storage declaration may allow signed browser uploads");
+        assert_eq!(storage.cors_upload_origins, ["https://app.example.com"]);
+        assert!(storage.has_cors());
+        assert_eq!(serde_json::to_value(&storage).unwrap(), declared);
+
+        let read_only = Storage::new("objects".to_string())
+            .cors_allowed_origins(vec!["https://app.example.com".into()])
+            .build();
+        assert!(read_only.has_cors());
+        assert!(serde_json::to_value(&read_only)
+            .unwrap()
+            .get("corsUploadOrigins")
+            .is_none());
+        assert!(!Storage::new("plain".to_string()).build().has_cors());
     }
 
     #[test]
