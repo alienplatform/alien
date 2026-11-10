@@ -440,12 +440,17 @@ impl InteractiveRegistry {
             tokio::time::timeout(ANNOUNCEMENT_WAIT, announcement(&mut output, &mut heard)).await;
         let ((process_group, started), pending) = match announced {
             Ok(Ok(announced)) => announced,
-            Ok(Err(reason)) => {
-                // Docker has started the exec, so the command may be running even though its
-                // wrapper did not say so as written. The id stays held until its output ends.
+            Ok(Err(Unannounced { reason, ended })) => {
                 drop(input);
-                tokio::spawn(outlast(output, reservation));
-                return Err(ControlError::Failed(reason));
+                if ended {
+                    // Docker says the exec is gone; the id stays held until it has said so.
+                    tokio::spawn(outlast(output, reservation));
+                    return Err(ControlError::Failed(reason));
+                }
+                // Docker has started the exec, so the command may be running, and nothing names
+                // its group to stop it by.
+                untracked(&manager, &container_id, output, reservation).await;
+                return Err(ControlError::Failed(format!("{reason}; {SESSION_STOPPED}")));
             }
             Err(_) => {
                 // The announcement may still come. Until the command is known to be gone, it is
@@ -646,14 +651,33 @@ struct Heard {
 /// Reads the wrapper's line off the front of stderr, returning the pid, the start time and
 /// whatever output arrived around it. The caller bounds the wait; a wait cut short leaves what
 /// was read in `heard`.
+/// Why a command's wrapper did not announce it.
+struct Unannounced {
+    reason: String,
+    /// Whether its output ended, which is Docker saying the exec is gone. Otherwise the command
+    /// may still be running.
+    ended: bool,
+}
+
 async fn announcement(
     output: &mut Output,
     heard: &mut Heard,
-) -> Result<((i64, String), Early), String> {
+) -> Result<((i64, String), Early), Unannounced> {
+    let failed = |reason: String| Unannounced {
+        reason,
+        ended: false,
+    };
     loop {
         match output.next().await {
-            None => return Err("the command wrapper ended before reporting a pid".to_string()),
-            Some(Err(error)) => return Err(format!("reading the command wrapper: {error}")),
+            None => {
+                return Err(Unannounced {
+                    reason: "the command wrapper ended before reporting a pid".to_string(),
+                    ended: true,
+                })
+            }
+            Some(Err(error)) => {
+                return Err(failed(format!("reading the command wrapper: {error}")))
+            }
             Some(Ok(bollard::container::LogOutput::StdOut { message })) => {
                 heard.early.push((true, message.to_vec()));
             }
@@ -662,7 +686,9 @@ async fn announcement(
                 if let Some(end) = heard.stderr.iter().position(|byte| *byte == b'\n') {
                     let line = String::from_utf8_lossy(&heard.stderr[..end]).into_owned();
                     let announced = parse_announcement(&line).ok_or_else(|| {
-                        format!("the command wrapper did not report a pid: {line:?}")
+                        failed(format!(
+                            "the command wrapper did not report a pid: {line:?}"
+                        ))
                     })?;
                     let rest = heard.stderr[end + 1..].to_vec();
                     let mut early = std::mem::take(&mut heard.early);
@@ -672,7 +698,9 @@ async fn announcement(
                     return Ok((announced, early));
                 }
                 if heard.stderr.len() > MAX_ANNOUNCEMENT {
-                    return Err("the command wrapper did not report a pid".to_string());
+                    return Err(failed(
+                        "the command wrapper did not report a pid".to_string(),
+                    ));
                 }
             }
             Some(Ok(_)) => {}
@@ -685,6 +713,40 @@ async fn announcement(
 async fn outlast(mut output: Output, reservation: Reservation) {
     while output.next().await.is_some() {}
     drop(reservation);
+}
+
+/// A started command that cannot be stopped by its group, because no group was announced and its
+/// output has not ended: its session is killed from the host, which ends it whatever it is. The
+/// id is released once that is done.
+async fn untracked(
+    manager: &LocalSandboxManager,
+    container_id: &str,
+    mut output: Output,
+    reservation: Reservation,
+) {
+    warn!(
+        container_id = %container_id,
+        "An interactive command started without reporting its process group; killing the session"
+    );
+    kill_session(manager, container_id).await;
+    let _ = tokio::time::timeout(KILL_SETTLE, async {
+        while output.next().await.is_some() {}
+    })
+    .await;
+    drop(reservation);
+}
+
+/// Kills the session's container from the host, asking again every `KILL_RETRY` while Docker
+/// refuses. Nothing in the container runs once it returns.
+async fn kill_session(manager: &LocalSandboxManager, container_id: &str) {
+    while let Err(error) = manager.kill_session(container_id).await {
+        warn!(
+            container_id = %container_id,
+            error = %error,
+            "Docker refused to kill a sandbox session that must stop; asking again"
+        );
+        tokio::time::sleep(KILL_RETRY).await;
+    }
 }
 
 /// A start that timed out waiting for the announcement: the command may be running anyway. If
@@ -700,7 +762,10 @@ async fn abandon(
 ) {
     let (process_group, started) = match announcement(&mut output, &mut heard).await {
         Ok((announced, _)) => announced,
-        Err(_) => return outlast(output, reservation).await,
+        Err(Unannounced { ended: true, .. }) => return outlast(output, reservation).await,
+        Err(Unannounced { ended: false, .. }) => {
+            return untracked(&manager, &container_id, output, reservation).await
+        }
     };
     let command = Command {
         container_id,
@@ -921,15 +986,7 @@ async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Out
         process_group = command.process_group,
         "An interactive command could not be stopped inside its session; killing the session"
     );
-    while let Err(error) = manager.kill_session(&command.container_id).await {
-        warn!(
-            container_id = %command.container_id,
-            error = %error,
-            "Docker refused to kill the session of an interactive command that would not stop; \
-             asking again"
-        );
-        tokio::time::sleep(KILL_RETRY).await;
-    }
+    kill_session(manager, &command.container_id).await;
     // Nothing in the container runs now. Its output ends as Docker notices; past the wait it is
     // dropped rather than waited on.
     if !drained {
