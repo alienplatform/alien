@@ -5,8 +5,12 @@ manager: a release adds a frozen resource, the deployment pauses, and an
 ordinary `helm upgrade` (or `helm template | kubectl apply`) to the chart for
 that release completes the update.
 
+Every chart is the one the manager serves for a release, with the setup it
+carries; only the install-channel case rewrites the setup target.
+
 Cases, each asserted against the deployment the manager stores:
 
+- a retry without a chart upgrade leaves the update waiting and mints nothing;
 - a chart for an older release than the one waiting is refused, with the
   release to use;
 - a chart for a release that adds a cloud resource is refused (cloud setup

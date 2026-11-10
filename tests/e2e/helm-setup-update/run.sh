@@ -87,24 +87,31 @@ release() { # release <service accounts> [storage] -> release id
     | api -XPOST $M/v1/releases -d @- | json "d['id']"
 }
 
-# --- charts: the manager's chart, stamped the way packaging does ------------
-chart() { # chart <n> <release id> <fingerprint> <service accounts> -> path of the packaged chart
-  local d=$W/charts/$1-$3; rm -rf "$d"; mkdir -p "$d"
-  helm pull oci://$REG/charts/app --version 1.0.$1 --plain-http -d "$d" --untar >/dev/null
-  python3 - "$d/app/values.yaml" "$4" <<'P'
+# --- charts: the manager's chart for a release, as it serves it ----------------
+# The setup the chart carries (release, target, fingerprint) is the manager's
+# own. Only TARGET rewrites the setup target, to stand for a chart from another
+# install channel.
+chart() { # chart <n> <release id> <service accounts> -> path of the packaged chart
+  local tag version d
+  for tag in $(curl -sf -u "x:$DGT" "$M/v2/charts/app/tags/list" | json "' '.join(d['tags'])"); do
+    [ "$(curl -sf -u "x:$DGT" "$M/v2/charts/app/manifests/$tag" | json "d['annotations']['org.opencontainers.image.revision']")" = "$2" ] && version=$tag
+  done
+  [ -n "${version:-}" ] || { fail "no chart is served for release $2"; } >&2
+  d=$W/charts/$1-${TARGET:-served}; rm -rf "$d"; mkdir -p "$d"
+  helm pull oci://$REG/charts/app --version "$version" --plain-http -d "$d" --untar >/dev/null
+  grep -q "setup.alien.dev/release-id: \"$2\"" "$d/app/Chart.yaml" || { fail "the chart for release $2 carries no setup"; } >&2
+  python3 - "$d/app/values.yaml" "$3" <<'P'
 import sys
 p, ids = sys.argv[1], [i for i in sys.argv[2].split(",") if i]
 s = open(p).read()
 s = s.replace("serviceAccounts:\n  {}", "serviceAccounts:\n" + "".join(f"  {i}: {{}}\n" for i in ids), 1)
 open(p, "w").write(s)
 P
-  cat >> "$d/app/Chart.yaml" <<Y
-annotations:
-  setup.alien.dev/release-id: "$2"
-  setup.alien.dev/target: "${TARGET:-helm}"
-  setup.alien.dev/fingerprint: "$3"
-  setup.alien.dev/fingerprint-version: "1"
-Y
+  if [ -n "${TARGET:-}" ]; then
+    sed "s|setup.alien.dev/target: .*|setup.alien.dev/target: \"$TARGET\"|" "$d/app/Chart.yaml" > "$d/Chart.yaml.new" && mv "$d/Chart.yaml.new" "$d/app/Chart.yaml"
+  fi
+  # Package it under the case number, whatever version the manager gave it.
+  sed "s/^version: .*/version: 1.0.$1/" "$d/app/Chart.yaml" > "$d/Chart.yaml.new" && mv "$d/Chart.yaml.new" "$d/app/Chart.yaml"
   helm package "$d/app" -d "$d" >/dev/null; echo "$d/app-1.0.$1.tgz"
 }
 upgrade() { helm --kube-context $CTX upgrade app "$1" -n $NS --set management.token="$DGT" --timeout 120s "${@:2}" >/dev/null; }
@@ -126,16 +133,23 @@ R1=$(release execution)
 DG=$(api -XPOST $M/v1/deployment-groups -d '{"name":"e2e"}' | json "d['id']")
 DGT=$(api -XPOST $M/v1/deployment-groups/$DG/tokens -d '{}' | json "d['token']")
 echo "$DGT" | helm registry login $REG --plain-http -u x --password-stdin >/dev/null
-helm --kube-context $CTX install app "$(chart 1 "$R1" fp-1 execution)" -n $NS --create-namespace \
+helm --kube-context $CTX install app "$(chart 1 "$R1" execution)" -n $NS --create-namespace \
   --set management.token="$DGT" --wait --timeout 180s >/dev/null
 eventually "release 1 installed and running" "d['status']=='running' and d.get('currentReleaseId')=='$R1'"
 
 # --- case: chart for an older release than the one waiting is refused --------------
 R2=$(release execution,reader)
 eventually "deployment pauses on a release it cannot apply" "d['status']=='update-failed' and d.get('desiredReleaseId')=='$R2'"
+# --- case: a retry without a chart upgrade does not complete the update -------------
+DEP=$(dep | json "d['id']")
+api -XPOST $M/v1/deployments/$DEP/retry >/dev/null
+holds "a retry without the upgrade leaves the update waiting" "d.get('currentReleaseId')=='$R1'"
+eventually "the retried update pauses again" "d['status']=='update-failed' and d.get('desiredReleaseId')=='$R2'"
+[ "$(mints)" = 0 ] || fail "a retry minted a grant"
+
 R3=$(release execution,reader,writer)
 eventually "waiting release moves to release 3" "d.get('desiredReleaseId')=='$R3'"
-upgrade "$(chart 2 "$R2" fp-2 execution,reader)"
+upgrade "$(chart 2 "$R2" execution,reader)"
 eventually "stale chart refused, naming the release to use" \
   "'waiting for release $R3' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
 [ "$(mints)" = 0 ] || fail "a stale chart minted a grant"
@@ -143,7 +157,7 @@ eventually "stale chart refused, naming the release to use" \
 # --- case: a release adding a cloud resource is refused ------------------------------
 R4=$(release execution archive)
 eventually "waiting for release 4" "d.get('desiredReleaseId')=='$R4'"
-upgrade "$(chart 4 "$R4" fp-4 execution)"
+upgrade "$(chart 4 "$R4" execution)"
 eventually "cloud resource change refused with the cloud setup message" \
   "'lives in your cloud account' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
 eventually "the waiting release is recorded as needing the cloud setup" \
@@ -155,14 +169,14 @@ R5=$(release execution,reader)
 eventually "waiting for release 5" "d.get('desiredReleaseId')=='$R5'"
 eventually "the verdict for release 4 is cleared once release 5 waits" "not m.get('cloudSetupRequired')"
 BEFORE_R5=$(helm --kube-context $CTX history app -n $NS -o json | python3 -c "import sys,json;print(max(r['revision'] for r in json.load(sys.stdin)))")
-upgrade "$(chart 5 "$R5" fp-5 execution,reader)"
+upgrade "$(chart 5 "$R5" execution,reader)"
 eventually "helm upgrade completes the setup update" \
   "d['status']=='running' and d.get('currentReleaseId')=='$R5'"
 $K get sa app-reader-sa >/dev/null || fail "the new service account was not created"
 
 # --- case: a chart-only bump mints nothing ----------------------------------------------
 M0=$(mints); POD=$($K get pods -l app.kubernetes.io/name=app -o name | head -1)
-B=$W/charts/bump; rm -rf "$B"; mkdir -p "$B"; cp -r "$W/charts/5-fp-5/app" "$B/app"
+B=$W/charts/bump; rm -rf "$B"; mkdir -p "$B"; cp -r "$W/charts/5-served/app" "$B/app"
 sed 's/^version: 1.0.5/version: 1.0.5-1/' "$B/app/Chart.yaml" > "$B/Chart.yaml.new" && mv "$B/Chart.yaml.new" "$B/app/Chart.yaml"; helm package "$B/app" -d "$B" >/dev/null
 upgrade "$B/app-1.0.5-1.tgz" --wait
 sleep 20
@@ -177,12 +191,12 @@ holds "rollback after success keeps the deployment running" "d['status']=='runni
 # --- case: a chart for another install channel is refused ------------------------------------
 R6=$(release execution,reader,writer)
 eventually "waiting for release 6" "d.get('desiredReleaseId')=='$R6'"
-upgrade "$(TARGET=other chart 6 "$R6" fp-6o execution,reader,writer)"
+upgrade "$(TARGET=other chart 6 "$R6" execution,reader,writer)"
 eventually "chart from another install channel refused" \
   "'different setup' in ((m.get('setupReportRefusal') or {}).get('reason',''))"
 
 # --- case: rollback after the grant is minted leaves the update waiting ---------------------------
-P6=$(chart 6 "$R6" fp-6 execution,reader,writer)
+P6=$(chart 6 "$R6" execution,reader,writer)
 upgrade "$P6" &
 UPGRADE_PID=$!
 GRANTED=
@@ -198,7 +212,7 @@ eventually "upgrading to the right chart completes the update" "d['status']=='ru
 R7=$(release execution,reader,writer,auditor)
 eventually "waiting for release 7" "d.get('desiredReleaseId')=='$R7'"
 helm --kube-context $CTX get values app -n $NS -o yaml > "$W/current.yaml"
-helm --kube-context $CTX upgrade app "$(chart 7 "$R7" fp-7 execution,reader,writer,auditor)" -n $NS -f "$W/current.yaml" --timeout 120s >/dev/null
+helm --kube-context $CTX upgrade app "$(chart 7 "$R7" execution,reader,writer,auditor)" -n $NS -f "$W/current.yaml" --timeout 120s >/dev/null
 rm -f "$W/current.yaml"
 eventually "the fallback (-o yaml values file) completes the update" "d['status']=='running' and d.get('currentReleaseId')=='$R7'"
 
@@ -206,7 +220,7 @@ eventually "the fallback (-o yaml values file) completes the update" "d['status'
 R8=$(release execution,reader,writer,auditor,billing)
 eventually "waiting for release 8" "d.get('desiredReleaseId')=='$R8'"
 KEY=$($K get secret app -o jsonpath='{.data.encryption-key}' | base64 -d)
-helm template app "$(chart 8 "$R8" fp-8 execution,reader,writer,auditor,billing)" -n $NS --no-hooks \
+helm template app "$(chart 8 "$R8" execution,reader,writer,auditor,billing)" -n $NS --no-hooks \
   --set management.token="$DGT" --set runtime.encryption.key="$KEY" | $K apply -f - >/dev/null
 eventually "helm template | kubectl apply completes the update" "d['status']=='running' and d.get('currentReleaseId')=='$R8'"
 
