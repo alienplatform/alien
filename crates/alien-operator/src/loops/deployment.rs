@@ -350,6 +350,10 @@ pub(crate) async fn run_deployment_continuously(
             AutomaticRetry::Idle => return Ok((0, Duration::ZERO)),
         }
     }
+    // Identifies this apply once it completes; the config itself is moved into
+    // enrichment below and cleared after an online apply.
+    let applying_target_hash =
+        crate::db::approved_target_hash(current.target_release.as_ref(), &base_config)?;
     let mut enriched_config = enrich_config(
         base_config,
         &state.config,
@@ -471,10 +475,7 @@ pub(crate) async fn run_deployment_continuously(
                 }
                 state
                     .db
-                    .set_installed_target_hash(&crate::db::approved_target_hash(
-                        current.current_release.as_ref(),
-                        &base_config,
-                    )?)
+                    .set_installed_target_hash(&applying_target_hash)
                     .await?;
             }
             // A disconnected Operator needs the installed config for health refreshes.
