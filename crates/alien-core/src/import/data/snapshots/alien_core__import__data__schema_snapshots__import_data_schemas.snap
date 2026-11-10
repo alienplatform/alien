@@ -2201,7 +2201,7 @@ expression: schemas
   },
   "gcp_redis": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "GCP Memorystore for Valkey registration data: the handles by which a setup-created instance is registered as a Frozen Redis resource. Setup owns the instance and the secret container; Alien copies the server-generated auth token into that secret, then refreshes and heartbeats the instance. The token itself is never carried.",
+    "description": "GCP Memorystore for Valkey registration data: the handles by which a setup-created instance is registered as a Frozen Redis resource. Setup owns the instance; Alien refreshes and heartbeats it. The auth token is never carried or copied: workloads read it from Memorystore.",
     "properties": {
       "endpointIp": {
         "description": "Private Service Connect endpoint IP (the binding host).",
@@ -2224,10 +2224,6 @@ expression: schemas
         "description": "Node type, such as `shared-core-nano`.",
         "type": "string"
       },
-      "passwordSecretName": {
-        "description": "Secret Manager secret that receives the auth token (never the token itself).",
-        "type": "string"
-      },
       "persistence": {
         "default": false,
         "description": "Whether RDB persistence is on.",
@@ -2239,6 +2235,10 @@ expression: schemas
         "minimum": 0.0,
         "type": "integer"
       },
+      "projectId": {
+        "description": "Project ID (not the number) that owns the instance. The workload's token grant is conditioned on the ID form of the instance name.",
+        "type": "string"
+      },
       "region": {
         "description": "Region the instance runs in.",
         "type": "string"
@@ -2249,8 +2249,8 @@ expression: schemas
       "engineVersion",
       "instanceName",
       "nodeType",
-      "passwordSecretName",
       "port",
+      "projectId",
       "region"
     ],
     "title": "GcpMemorystoreImportData",
