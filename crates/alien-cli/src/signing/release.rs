@@ -16,7 +16,9 @@ use alien_cli_common::setup_templates::{
     SetupRenderOptions,
 };
 use alien_cloudformation::RegistrationMode;
-use alien_core::release_statement::{release_body, signed_stack, ReleaseOptions};
+use alien_core::release_statement::{
+    check_deployer_env_mappings, release_body, signed_stack, ReleaseOptions,
+};
 use alien_core::{Platform, SetupPins, Stack, StackSigning};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
@@ -545,6 +547,9 @@ pub fn body(
     components: &BTreeMap<String, String>,
     setup: BTreeMap<String, SetupTemplate>,
 ) -> Result<ReleaseBody> {
+    check_deployer_env_mappings(stack, platform).context(ErrorData::SigningFailed {
+        message: format!("Can't sign the {} stack", platform.as_str()),
+    })?;
     release_body(
         platform,
         stack,

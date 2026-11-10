@@ -193,7 +193,8 @@ fn a_config_made_from_an_older_config_is_refused() {
     let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
     let signed = |sequence: u64, base: Option<(u64, &str)>| {
         let mut body = alien_signing::ConfigBody::default();
-        body.env.insert("LOG_LEVEL".to_string(), format!("level-{sequence}"));
+        body.env
+            .insert("LOG_LEVEL".to_string(), format!("level-{sequence}"));
         body.base = base.map(|(sequence, digest)| alien_signing::ConfigBase {
             sequence,
             digest: digest.to_string(),
@@ -226,11 +227,68 @@ fn a_config_made_from_an_older_config_is_refused() {
     );
     let other = format!("sha256:{}", "0".repeat(64));
     assert_eq!(
-        code(take(&signed(3, Some((second.sequence, other.as_str()))), &mut ledger)),
+        code(take(
+            &signed(3, Some((second.sequence, other.as_str()))),
+            &mut ledger
+        )),
         "SIGNING_BODY_REFUSED",
         "a base with another digest at the accepted sequence is a different config"
     );
     take(&signed(3, Some(second_at)), &mut ledger).expect("it builds on the second");
+}
+
+#[test]
+fn a_config_made_on_a_config_the_install_never_accepted_is_refused() {
+    let keys = keys();
+    let mut ledger = Ledger::new(PREFIX);
+    let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
+    let signed = |sequence: u64, base: Option<(u64, &str)>, level: &str| {
+        let mut body = alien_signing::ConfigBody::default();
+        body.env.insert("LOG_LEVEL".to_string(), level.to_string());
+        body.base = base.map(|(sequence, digest)| alien_signing::ConfigBase {
+            sequence,
+            digest: digest.to_string(),
+        });
+        statement("config/v1", PROJECT, Some(INSTALL), sequence, 1, body)
+            .sign_with("alice-laptop", &keys.admin)
+            .unwrap()
+    };
+    let mut release = release_body();
+    release.configurable.env.push("LOG_LEVEL".to_string());
+    let take = |statement: &alien_signing::SignedStatement, ledger: &mut Ledger| {
+        let verified = trust.verify_config(statement, &release, ledger, now())?;
+        ledger.raise(Kind::Config, verified.sequence, &verified.digest)?;
+        Ok::<_, alien_error::AlienError<alien_signing::ErrorData>>(verified)
+    };
+
+    // The install runs config 10. The control plane served config 5 when the
+    // developer signed config 20, so 20 names base 5 and the install refuses it.
+    let five = signed(5, None, "five");
+    let five_at = five.open().unwrap();
+    let ten = take(&signed(10, None, "ten"), &mut ledger).unwrap();
+    let ten_at = (ten.sequence, ten.digest.as_str());
+    let twenty = signed(20, Some((5, five_at.digest.as_str())), "twenty");
+    assert_eq!(code(take(&twenty, &mut ledger)), "SIGNING_BODY_REFUSED");
+
+    // The next edit starts from config 20, which the control plane now serves.
+    // Its base is newer than what the install runs, and it copied config 20's
+    // stale values, so accepting it would undo config 10.
+    let twenty_at = twenty.open().unwrap();
+    let twenty_one = signed(21, Some((20, twenty_at.digest.as_str())), "twenty");
+    let error = take(&twenty_one, &mut ledger).unwrap_err();
+    assert_eq!(code(Err::<(), _>(error.clone())), "SIGNING_BODY_REFUSED");
+    assert!(
+        error.message.contains("never accepted")
+            && error.message.contains("runs config sequence 10")
+            && error.message.contains("--from-config 10"),
+        "the refusal says which config to sign from: {}",
+        error.message
+    );
+    assert_eq!(ledger.floor(Kind::Config).unwrap().unwrap().sequence, 10);
+
+    // Signed again from the config the install runs, it is accepted.
+    take(&signed(22, Some(ten_at), "twenty-two"), &mut ledger)
+        .expect("a config made from the one the install runs");
 }
 
 #[test]

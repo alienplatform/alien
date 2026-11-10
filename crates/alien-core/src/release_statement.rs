@@ -162,6 +162,41 @@ pub fn release_body(
     Ok(body)
 }
 
+/// On the clouds a protected install delivers a deployer input's value one of two ways: a secret
+/// input's goes through the install's `deployer-secrets` vault, any other input's is read from
+/// the deployment's store as plain env. A mapping that asks for the other way would drop the
+/// value (a text input mapped as a secret has no vault slot) or put a secret where management
+/// reads it, so the developer's release build refuses it, where they see why. Kubernetes
+/// installs resolve each mapping's type from the install's own values and are not checked. Only
+/// the release build calls this: an install keeps running a release it already accepted.
+pub fn check_deployer_env_mappings(stack: &Stack, platform: Platform) -> Result<()> {
+    if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        return Ok(());
+    }
+    for input in stack.inputs.iter().filter(|input| {
+        input.applies_to(platform)
+            && input
+                .provided_by
+                .contains(&crate::StackInputProvider::Deployer)
+    }) {
+        let secret_kind = input.kind == crate::StackInputKind::Secret;
+        for mapping in &input.env {
+            if plain(input, mapping) == secret_kind {
+                return Err(statement_invalid(format!(
+                    "deployer input '{}' is {}, so its env '{}' can't be mapped as {}: a protected \
+                     install reads a deployer's secret input from its own secret store and every \
+                     other deployer input as plain env. Change the input's kind or the mapping's type",
+                    input.id,
+                    if secret_kind { "a secret" } else { "not a secret" },
+                    mapping.name,
+                    if secret_kind { "plain" } else { "a secret" },
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The stack a verified release carries, after checking it is for `platform`
 /// and that each code-bearing resource runs exactly the image of the workload
 /// of the same name.
@@ -1148,6 +1183,60 @@ mod tests {
     }
 
     #[test]
+    fn a_deployer_mapping_the_protected_install_would_drop_is_refused_when_signing() {
+        let build = |input: serde_json::Value| {
+            let mut stack = stack(&pinned());
+            stack.inputs = serde_json::from_value(serde_json::json!([input])).unwrap();
+            check_deployer_env_mappings(&stack, Platform::Aws)
+        };
+        let error = build(serde_json::json!(
+            {"id": "operatorNote", "kind": "string", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d",
+             "env": [{"name": "OPERATOR_NOTE", "type": "secret", "targetResources": ["api"]}]}
+        ))
+        .expect_err(
+            "a text input mapped as a secret has no vault slot, so its value would be dropped",
+        );
+        assert!(
+            error.message.contains("operatorNote") && error.message.contains("OPERATOR_NOTE"),
+            "{}",
+            error.message
+        );
+        build(serde_json::json!(
+            {"id": "apiKey", "kind": "secret", "providedBy": ["deployer"], "required": true,
+             "label": "l", "description": "d",
+             "env": [{"name": "API_KEY", "type": "plain", "targetResources": ["api"]}]}
+        ))
+        .expect_err("a secret input mapped as plain would be read from the deployment's store");
+
+        for input in [
+            serde_json::json!({"id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
+                "required": true, "label": "l", "description": "d",
+                "env": [{"name": "API_KEY", "targetResources": ["api"]}]}),
+            serde_json::json!({"id": "region", "kind": "string", "providedBy": ["deployer"],
+                "required": false, "label": "l", "description": "d",
+                "env": [{"name": "REGION", "type": "plain"}]}),
+            serde_json::json!({"id": "vendorNote", "kind": "string", "providedBy": ["developer"],
+                "required": false, "label": "l", "description": "d",
+                "env": [{"name": "VENDOR_NOTE", "type": "secret"}]}),
+        ] {
+            build(input).expect("the mapping matches how the install delivers the value");
+        }
+
+        let mut stack = stack(&pinned());
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "operatorNote", "kind": "string", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d",
+             "env": [{"name": "OPERATOR_NOTE", "type": "secret"}]}
+        ]))
+        .unwrap();
+        check_deployer_env_mappings(&stack, Platform::Kubernetes)
+            .expect("a Kubernetes install honours the mapping's type itself");
+        release_body(Platform::Aws, &stack, &production())
+            .expect("an install reading a release it accepted does not refuse it again");
+    }
+
+    #[test]
     fn a_stored_value_for_a_secret_input_does_not_change_the_signed_list() {
         let body = deployer_env_stack(serde_json::json!([
             {"id": "sharedKey", "kind": "secret", "providedBy": ["developer", "deployer"],
@@ -1307,7 +1396,9 @@ mod tests {
             let error = build(name, value).expect_err(name);
             assert_eq!(error.code, "SIGNING_WORKLOAD_REFUSED", "{name}");
             assert!(
-                error.message.contains("is set by the runtime, not by the control plane"),
+                error
+                    .message
+                    .contains("is set by the runtime, not by the control plane"),
                 "{name}: {}",
                 error.message
             );

@@ -98,7 +98,8 @@ NAMESPACE = "customer"
 RELEASE_NAME = "signed-e2e"
 CUSTOMER_DATABASE_URL = "postgres://db.customer.internal/app"
 PROJECT = "default"
-REPLAY_ATTACKS = ("older-signed-config", "config-without-base", "config-made-from-an-older-config")
+REPLAY_ATTACKS = ("older-signed-config", "config-without-base", "config-made-from-an-older-config",
+                  "config-made-from-a-refused-config")
 # The PIN the swtpm-backed device key is created with (read from the
 # environment by test builds of the CLI).
 DEVICE_PIN = "4321"
@@ -1212,7 +1213,15 @@ esac
                 "summary": "the manager sends a newer config made from the first config, which skips the one the install runs",
                 "sync": [{"op": "set", "path": ["signedConfig"], "value": self.signed_config(
                     {"inputs": {"logLevel": "debug"}}, base=older)}],
-                "refusal": r"refused the target.*it was made from config sequence.*but this install runs",
+                "refusal": r"refused the target.*signed on top of config sequence.*never accepted",
+            },
+            {
+                "name": "config-made-from-a-refused-config",
+                "summary": "the manager sends a config made from a newer config the install refused, whose stale values it copied",
+                "sync": [{"op": "set", "path": ["signedConfig"], "value": self.signed_config(
+                    {"inputs": {"logLevel": "debug"}},
+                    base=self.signed_config({"inputs": {"logLevel": "debug"}}))}],
+                "refusal": r"refused the target.*signed on top of config sequence.*never accepted",
             },
         ]
         level = self.log_level()

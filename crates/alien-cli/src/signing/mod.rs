@@ -655,16 +655,19 @@ pub fn check_statement(
     Ok(())
 }
 
-/// The body of the newest config statement the server holds for `install`,
-/// checked here: a config statement of this project for this install, not
-/// deny-listed, signed with the release role by the list version it names.
-/// `None` when there is none. The body names that statement as its base, so
-/// the install can refuse a change made on an older config. A newest statement that doesn't check out is
+/// The body of the config statement to build the next one on, checked here:
+/// a config statement of this project for this install, not deny-listed,
+/// signed with the release role by the list version it names. It is the
+/// newest statement the server holds, or the one at sequence `from` when the
+/// install runs an older one (it refused the newest). `None` when there is
+/// none. The body names that statement as its base; the install accepts a
+/// change only on the config it runs. A statement that doesn't check out is
 /// refused, so a change never drops what the last signed config set.
 pub fn latest_config(
     chain: &SignerChain,
     install: &alien_signing::InstallId,
     statements: &[SignedStatement],
+    from: Option<u64>,
     now: DateTime<Utc>,
 ) -> Result<Option<alien_signing::ConfigBody>> {
     let refused = |reason: String| {
@@ -680,7 +683,18 @@ pub fn latest_config(
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|error| refused(format!("a stored statement doesn't parse ({error})")))?;
     opened.sort_by_key(|opened| opened.sequence);
-    let Some(newest) = opened.pop() else {
+    let newest = match from {
+        Some(sequence) => {
+            let at = opened.iter().position(|opened| opened.sequence == sequence);
+            Some(opened.swap_remove(at.ok_or_else(|| {
+                refused(format!(
+                    "the server holds no config statement at sequence {sequence}"
+                ))
+            })?))
+        }
+        None => opened.pop(),
+    };
+    let Some(newest) = newest else {
         return Ok(None);
     };
     check_statement(chain, &newest, Kind::Config, Some(install), now).map_err(refused)?;
@@ -799,7 +813,10 @@ mod tests {
         let fingerprint = alien_signing::fingerprint(&v1.open().unwrap().digest);
         let chain = SignerChain::from_statements(&fingerprint, &[v1], now).unwrap();
         let install = alien_signing::InstallId::parse("aws:111122223333:us-east-1:acme").unwrap();
-        assert_eq!(latest_config(&chain, &install, &[], now).unwrap(), None);
+        assert_eq!(
+            latest_config(&chain, &install, &[], None, now).unwrap(),
+            None
+        );
 
         // set-env, then set-inputs built on it: both halves are kept.
         let env = alien_signing::ConfigBody {
@@ -807,7 +824,7 @@ mod tests {
             ..Default::default()
         };
         let first = config(&chain, &install, 10, env.clone(), 1);
-        let mut next = latest_config(&chain, &install, &[first.clone()], now)
+        let mut next = latest_config(&chain, &install, &[first.clone()], None, now)
             .unwrap()
             .unwrap();
         let first_opened = first.open().unwrap();
@@ -820,15 +837,24 @@ mod tests {
             "the change names the config it was made from"
         );
         assert_eq!(
-            alien_signing::ConfigBody { base: None, ..next.clone() },
+            alien_signing::ConfigBody {
+                base: None,
+                ..next.clone()
+            },
             env
         );
         next.inputs
             .insert("region".to_string(), serde_json::json!("eu"));
         let second = config(&chain, &install, 11, next, 1);
-        let latest = latest_config(&chain, &install, &[second.clone(), first.clone()], now)
-            .unwrap()
-            .unwrap();
+        let latest = latest_config(
+            &chain,
+            &install,
+            &[second.clone(), first.clone()],
+            None,
+            now,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(latest.env["LOG_LEVEL"], "debug");
         assert_eq!(latest.inputs["region"], "eu");
         assert_eq!(latest.base.as_ref().map(|base| base.sequence), Some(11));
@@ -836,7 +862,8 @@ mod tests {
         // A newer statement the server made up, or one for another install,
         // is refused rather than built on.
         let forged = config(&chain, &install, 12, Default::default(), 9);
-        let error = latest_config(&chain, &install, &[first.clone(), forged], now).unwrap_err();
+        let error =
+            latest_config(&chain, &install, &[first.clone(), forged], None, now).unwrap_err();
         assert!(
             error.message.contains("isn't signed by a release key"),
             "{}",
@@ -844,11 +871,53 @@ mod tests {
         );
         let other = alien_signing::InstallId::parse("aws:111122223333:us-east-1:other").unwrap();
         let elsewhere = config(&chain, &other, 13, Default::default(), 1);
-        let error = latest_config(&chain, &install, &[first, elsewhere], now).unwrap_err();
+        let error = latest_config(&chain, &install, &[first, elsewhere], None, now).unwrap_err();
         assert!(
             error
                 .message
                 .contains("not aws:111122223333:us-east-1:acme"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_change_can_be_built_on_the_config_the_install_runs() {
+        let now = Utc::now();
+        let v1 = list_v1(now);
+        let fingerprint = alien_signing::fingerprint(&v1.open().unwrap().digest);
+        let chain = SignerChain::from_statements(&fingerprint, &[v1], now).unwrap();
+        let install = alien_signing::InstallId::parse("aws:111122223333:us-east-1:acme").unwrap();
+        let body = |level: &str| alien_signing::ConfigBody {
+            env: [("LOG_LEVEL".to_string(), level.to_string())].into(),
+            ..Default::default()
+        };
+        // The install runs config 10; config 20 was refused but is the newest.
+        let accepted = config(&chain, &install, 10, body("accepted"), 1);
+        let refused = config(&chain, &install, 20, body("refused"), 1);
+        let stored = [accepted.clone(), refused];
+
+        let newest = latest_config(&chain, &install, &stored, None, now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(newest.env["LOG_LEVEL"], "refused");
+        assert_eq!(newest.base.as_ref().map(|base| base.sequence), Some(20));
+
+        let from = latest_config(&chain, &install, &stored, Some(10), now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(from.env["LOG_LEVEL"], "accepted");
+        assert_eq!(
+            from.base,
+            Some(alien_signing::ConfigBase {
+                sequence: 10,
+                digest: accepted.open().unwrap().digest,
+            })
+        );
+
+        let error = latest_config(&chain, &install, &stored, Some(15), now).unwrap_err();
+        assert!(
+            error.message.contains("no config statement at sequence 15"),
             "{}",
             error.message
         );

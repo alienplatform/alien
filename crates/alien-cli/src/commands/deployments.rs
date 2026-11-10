@@ -587,6 +587,12 @@ pub enum DeploymentsCmd {
         #[arg(long, conflicts_with_all = ["env", "secret", "env_targeted", "secret_targeted"])]
         clear: bool,
 
+        /// Sign on top of the config at this sequence instead of the newest
+        /// one, when a protected install refused the newest. The refusal
+        /// names the sequence it runs
+        #[arg(long)]
+        from_config: Option<u64>,
+
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
@@ -632,6 +638,12 @@ pub enum DeploymentsCmd {
         /// Input to reset to its default (can be used multiple times)
         #[arg(long)]
         clear: Vec<String>,
+
+        /// Sign on top of the config at this sequence instead of the newest
+        /// one, when a protected install refused the newest. The refusal
+        /// names the sequence it runs
+        #[arg(long)]
+        from_config: Option<u64>,
 
         /// Print the saved inputs as machine-readable JSON
         #[arg(long)]
@@ -1358,6 +1370,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             env_targeted,
             secret_targeted,
             clear,
+            from_config,
             yes,
             json,
             ..
@@ -1391,7 +1404,16 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 // signed inputs stay as they are.
                 let env: BTreeMap<String, String> =
                     parse_pairs(&env, "env", "KEY=VALUE")?.into_iter().collect();
-                return sign_config(&ctx, &target, &install, json, |body| body.env = env).await;
+                return sign_config(&ctx, &target, &install, json, from_config, |body| {
+                    body.env = env
+                })
+                .await;
+            }
+            if from_config.is_some() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "from-config".to_string(),
+                    message: "--from-config applies only to protected deployments, whose configs are signed.".to_string(),
+                }));
             }
             deployment_actions::set_environment_variables_task(
                 &target.client,
@@ -1419,6 +1441,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             secret_inputs,
             secret_input_files,
             clear,
+            from_config,
             json,
             ..
         } => {
@@ -1446,10 +1469,16 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                         message: format!("Input '{id}' is both set and cleared."),
                     }));
                 }
-                return sign_config(&ctx, &target, &install, json, |body| {
+                return sign_config(&ctx, &target, &install, json, from_config, |body| {
                     change_signed_inputs(body, inputs, &clear)
                 })
                 .await;
+            }
+            if from_config.is_some() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "from-config".to_string(),
+                    message: "--from-config applies only to protected deployments, whose configs are signed.".to_string(),
+                }));
             }
             deployment_actions::set_inputs_task(
                 &target.client,
@@ -1660,7 +1689,8 @@ async fn release_for_config(
 }
 
 /// Sign the deployment's next `config/v1` statement: its latest signed
-/// config, checked here, with `change` applied. The signer list is verified
+/// config (or the one at sequence `from_config`), checked here, with `change`
+/// applied. The signer list is verified
 /// from the fingerprint in `.alien/signing.json` first, and the result is
 /// checked against the deployment's signed release. The statement replaces
 /// the deployment's previous signed config.
@@ -1669,6 +1699,7 @@ async fn sign_config(
     target: &PlatformTarget,
     install: &ProtectedInstall,
     json: bool,
+    from_config: Option<u64>,
     change: impl FnOnce(&mut alien_signing::ConfigBody),
 ) -> Result<()> {
     let deployment = target.deployment.id.to_string();
@@ -1679,8 +1710,8 @@ async fn sign_config(
     let now = chrono::Utc::now();
     let (release_id, release) = release_for_config(ctx, target, &install.deployment).await?;
     let install = &install.id;
-    let mut body =
-        crate::signing::latest_config(&chain, install, &stored, now)?.unwrap_or_default();
+    let mut body = crate::signing::latest_config(&chain, install, &stored, from_config, now)?
+        .unwrap_or_default();
     change(&mut body);
     crate::signing::check_config_for_release(&chain, &release_id, &release, &body, now)?;
     let envelope =

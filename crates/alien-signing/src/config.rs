@@ -48,11 +48,11 @@ pub struct ConfigBase {
 }
 
 impl ConfigBody {
-    /// Refuse a config that doesn't build on the install's current config.
-    /// It must name a base once the install accepted a config, and the base
-    /// can't be older than that config or a different statement at its
-    /// sequence. A newer base is fine: the install may have missed the
-    /// configs in between.
+    /// Refuse a config that isn't made from the config the install runs.
+    /// Once the install accepted a config, the base must be exactly that
+    /// statement (sequence and digest). A newer base would let a config the
+    /// install refused, and the stale values it copied, undo what the
+    /// accepted config set.
     pub fn check_base(&self, floor: Option<&Entry>) -> Result<()> {
         let Some(floor) = floor else {
             return Ok(());
@@ -66,14 +66,14 @@ impl ConfigBody {
                 ),
             ));
         };
-        if base.sequence < floor.sequence
-            || (base.sequence == floor.sequence && base.digest != floor.digest)
-        {
+        if base.sequence != floor.sequence || base.digest != floor.digest {
             return Err(refused(
                 Kind::Config,
                 format!(
-                    "it was made from config sequence {}, but this install runs config sequence {}",
-                    base.sequence, floor.sequence
+                    "it was signed on top of config sequence {}, which this install never accepted; \
+                     this install runs config sequence {}. Sign it again from that config \
+                     (`--from-config {}` on set-env and set-inputs)",
+                    base.sequence, floor.sequence, floor.sequence
                 ),
             ));
         }
