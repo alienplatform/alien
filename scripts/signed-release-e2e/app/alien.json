@@ -11,63 +11,49 @@
     {
       "id": "logLevel",
       "kind": "string",
-      "providedBy": [
-        "developer"
-      ],
+      "providedBy": ["developer"],
       "required": false,
       "label": "Log level",
       "description": "Set by the developer for every deployment.",
       "env": [
         {
           "name": "LOG_LEVEL",
-          "targetResources": [
-            "app"
-          ]
+          "targetResources": ["app"]
         }
       ]
     },
     {
       "id": "databaseUrl",
       "kind": "string",
-      "providedBy": [
-        "deployer"
-      ],
+      "providedBy": ["deployer"],
       "required": false,
       "label": "Database URL",
       "description": "Set by the installer.",
       "env": [
         {
           "name": "DATABASE_URL",
-          "targetResources": [
-            "app"
-          ]
+          "targetResources": ["app"]
         }
       ]
     },
     {
       "id": "region",
       "kind": "string",
-      "providedBy": [
-        "deployer"
-      ],
+      "providedBy": ["deployer"],
       "required": false,
       "label": "Region",
       "description": "Left unset by the installer.",
       "env": [
         {
           "name": "REGION",
-          "targetResources": [
-            "app"
-          ]
+          "targetResources": ["app"]
         }
       ]
     },
     {
       "id": "mode",
       "kind": "string",
-      "providedBy": [
-        "deployer"
-      ],
+      "providedBy": ["deployer"],
       "required": false,
       "label": "Mode",
       "description": "Has a default the release signs.",
@@ -78,27 +64,21 @@
       "env": [
         {
           "name": "MODE",
-          "targetResources": [
-            "app"
-          ]
+          "targetResources": ["app"]
         }
       ]
     },
     {
       "id": "apiToken",
       "kind": "secret",
-      "providedBy": [
-        "deployer"
-      ],
+      "providedBy": ["deployer"],
       "required": false,
       "label": "API token",
       "description": "A secret the installer stores in the cluster.",
       "env": [
         {
           "name": "API_TOKEN",
-          "targetResources": [
-            "app"
-          ]
+          "targetResources": ["app"]
         }
       ]
     }
