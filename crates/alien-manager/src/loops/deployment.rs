@@ -1504,7 +1504,17 @@ impl DeploymentLoop {
                 },
             )
             .await?;
-        Ok(outcome.record)
+        let mut record = outcome.record;
+        // Credential-retry bookkeeping is saved this way for Running deployments too.
+        crate::release_targeting::retarget_if_settled(
+            self.deployment_store.as_ref(),
+            self.release_store.as_ref(),
+            self.release_channels.as_deref(),
+            &Subject::system(),
+            &mut record,
+        )
+        .await?;
+        Ok(record)
     }
 }
 
