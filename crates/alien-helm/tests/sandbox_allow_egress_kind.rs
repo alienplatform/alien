@@ -4,8 +4,9 @@
 //! there must be refused before anything is provisioned.
 //!
 //! Both tests run in the `Kind lifecycle` workflow, each against its own disposable cluster:
-//! - the refusal on a cluster made by Kind v0.32, whose kindnet does not enforce NetworkPolicy;
-//! - the admission on the workflow's main cluster, made by Kind v0.31, whose kindnet does.
+//! - the refusal on a single-node cluster whose CNI is plain `ptp` with no policy controller, so
+//!   NetworkPolicy objects are accepted and ignored;
+//! - the admission on the workflow's main cluster, whose kindnet enforces NetworkPolicy.
 
 use alien_core::{
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
