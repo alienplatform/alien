@@ -4,10 +4,12 @@
 //! `cargo test -p alien-local --test sandbox_interactive -- --ignored --nocapture`
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use alien_bindings::providers::sandbox::local::LocalSandbox;
 use alien_bindings::traits::{
     CommandOutput, CreateSandboxRequest, InteractiveCommand, RunCommandRequest, Sandbox,
+    SandboxState,
 };
 use alien_core::bindings::{BindingValue, LocalSandboxBinding};
 use alien_local::{LocalSandboxManager, SandboxEgressMode, SandboxRoute, SandboxSessionConfig};
@@ -157,7 +159,7 @@ async fn language_bindings_drive_interactive_commands_against_local() {
 }
 
 /// One session on its own sandbox, through the same binding the cases use.
-async fn local_session(sandbox_key: &str) -> (TempDir, Arc<dyn Sandbox>, String) {
+async fn local_session(sandbox_key: &str, pids_limit: i64) -> (TempDir, Arc<dyn Sandbox>, String) {
     let dir = TempDir::new().expect("temp dir");
     let manager = Arc::new(
         LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker must be reachable"),
@@ -171,7 +173,7 @@ async fn local_session(sandbox_key: &str) -> (TempDir, Arc<dyn Sandbox>, String)
             image: IMAGE.to_string(),
             cpu_cores: 0.5,
             memory_bytes: 268_435_456,
-            pids_limit: Some(64),
+            pids_limit: Some(pids_limit),
             scratch_bytes: 16_777_216,
             egress: SandboxEgressMode::Deny,
             preview_ports: Vec::new(),
@@ -201,7 +203,7 @@ async fn local_session(sandbox_key: &str) -> (TempDir, Arc<dyn Sandbox>, String)
     (dir, sandbox, instance.sandbox_id)
 }
 
-fn sh(script: &str, timeout: std::time::Duration) -> RunCommandRequest {
+fn sh(script: &str, timeout: Duration) -> RunCommandRequest {
     RunCommandRequest {
         command: "/bin/sh".to_string(),
         args: vec!["-c".to_string(), script.to_string()],
@@ -215,7 +217,7 @@ fn sh(script: &str, timeout: std::time::Duration) -> RunCommandRequest {
 /// item: the exit code, or the error's text.
 async fn drain(
     command: &mut InteractiveCommand,
-    within: std::time::Duration,
+    within: Duration,
 ) -> (String, Result<i32, String>) {
     let deadline = tokio::time::Instant::now() + within;
     let mut stdout = Vec::new();
@@ -240,86 +242,168 @@ async fn drain(
     }
 }
 
-/// The command runs as the session's user and kills everything that user may signal. The shell
-/// that enforces its deadline runs as root, so it survives, and the deadline holds on the first
-/// stop: the stream ends in the timeout, not in a kill that could not be confirmed.
+/// Runs a short command to its end and returns its stdout, or why it could not run.
+async fn run(sandbox: &dyn Sandbox, id: &str, script: &str) -> Result<String, String> {
+    let mut command = sandbox
+        .run_interactive(id, sh(script, Duration::from_secs(20)))
+        .await
+        .map_err(|error| error.to_string())?;
+    match drain(&mut command, Duration::from_secs(30)).await {
+        (stdout, Ok(0)) => Ok(stdout),
+        (stdout, other) => Err(format!("{other:?}, stdout {stdout:?}")),
+    }
+}
+
+async fn state(sandbox: &dyn Sandbox, id: &str) -> SandboxState {
+    sandbox
+        .get(id)
+        .await
+        .expect("the session lists")
+        .expect("the session is still listed")
+        .state
+}
+
+/// The signal shell holds `CAP_KILL` and nothing else; the command holds nothing and so cannot
+/// kill the shell meant to stop it.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
-async fn a_command_cannot_kill_the_shell_that_enforces_its_deadline() {
+async fn the_signal_shell_holds_only_cap_kill_and_the_command_cannot_kill_it() {
+    const KEY: &str = "interactive-caps";
+    let (_dir, sandbox, id) = local_session(KEY, 64).await;
+    // The signal shell is the one process in the session that runs as root; it starts before the
+    // first interactive command, this probe.
+    let probe = run(
+        sandbox.as_ref(),
+        &id,
+        "for p in /proc/[0-9]*; do \
+           if [ \"$(awk '/^Uid/ {print $2}' $p/status 2>/dev/null)\" = 0 ]; then shell=${p#/proc/}; fi; \
+         done; \
+         echo \"shell $(awk '/^CapEff/ {print $2}' /proc/$shell/status) uid 0\"; \
+         echo \"command $(awk '/^CapEff/ {print $2}' /proc/self/status)\"; \
+         if kill -KILL $shell 2>/dev/null; then echo killed; else echo refused; fi",
+    )
+    .await;
+    let _ = sandbox.terminate(&id).await;
+    SandboxRoute::remove(KEY).await;
+
+    let probe = probe.expect("the probe runs");
+    assert_eq!(
+        probe, "shell 0000000000000020 uid 0\ncommand 0000000000000000\nrefused\n",
+        "the shell runs as root with CAP_KILL only; the command has no capability and is refused"
+    );
+}
+
+/// The command kills everything its user may signal. The signal shell is not among them, so the
+/// deadline holds from inside: only the command ends, and its session runs on.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_command_that_kills_all_it_can_still_meets_its_deadline() {
     const KEY: &str = "interactive-sweep";
-    let (_dir, sandbox, id) = local_session(KEY).await;
+    let (_dir, sandbox, id) = local_session(KEY, 64).await;
     let mut command = sandbox
         .run_interactive(
             &id,
             sh(
                 "kill -KILL -1 2>/dev/null; echo swept; exec sleep 600",
-                std::time::Duration::from_secs(3),
+                Duration::from_secs(3),
             ),
         )
         .await
         .expect("starts");
-    let (stdout, terminal) = drain(&mut command, std::time::Duration::from_secs(30)).await;
+    let (stdout, terminal) = drain(&mut command, Duration::from_secs(30)).await;
+    let after = run(sandbox.as_ref(), &id, "echo alive").await;
+    let listed = state(sandbox.as_ref(), &id).await;
     let _ = sandbox.terminate(&id).await;
     SandboxRoute::remove(KEY).await;
 
     assert_eq!(stdout, "swept\n");
     let error = terminal.expect_err("the deadline ends it");
     assert!(error.contains("timeoutExceeded"), "{error}");
+    assert!(
+        !error.contains("whole session"),
+        "only the command ended: {error}"
+    );
+    assert_eq!(after.expect("the session runs on"), "alive\n");
+    assert_eq!(listed, SandboxState::Running);
+}
+
+/// The command takes every process slot in its session. The signal shell started before it and
+/// starts nothing to kill it, so the deadline still holds from inside and frees the slots.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_command_that_takes_every_process_slot_still_meets_its_deadline() {
+    const KEY: &str = "interactive-pids";
+    let (_dir, sandbox, id) = local_session(KEY, 24).await;
+    let mut command = sandbox
+        .run_interactive(
+            &id,
+            sh(
+                "i=0; while [ $i -lt 64 ]; do sleep 600 & i=$((i+1)); done 2>/dev/null; \
+                 echo full; exec sleep 600",
+                Duration::from_secs(4),
+            ),
+        )
+        .await
+        .expect("starts");
+    let (stdout, terminal) = drain(&mut command, Duration::from_secs(30)).await;
+    let after = run(sandbox.as_ref(), &id, "echo alive").await;
+    let _ = sandbox.terminate(&id).await;
+    SandboxRoute::remove(KEY).await;
+
+    assert_eq!(stdout, "full\n");
+    let error = terminal.expect_err("the deadline ends it");
+    assert!(error.contains("timeoutExceeded"), "{error}");
+    assert!(
+        !error.contains("whole session"),
+        "stopped from inside: {error}"
+    );
+    assert_eq!(after.expect("its slots are free again"), "alive\n");
 }
 
 /// A child the command moves to a session of its own escapes the group kill and holds the output
-/// open. The deadline still holds: after the retried stops fail, the whole session is killed from
-/// the host, and nothing runs in it afterwards.
+/// open. The deadline still holds: the sandbox session is killed from the host, the caller is
+/// told the whole session stopped, the session reports itself stopped, and later calls fail
+/// rather than hang.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
 async fn a_command_whose_child_escapes_its_group_ends_with_its_session() {
     const KEY: &str = "interactive-escape";
-    let (_dir, sandbox, id) = local_session(KEY).await;
+    let (_dir, sandbox, id) = local_session(KEY, 64).await;
     let mut command = sandbox
         .run_interactive(
             &id,
             sh(
                 "setsid sleep 600 & echo spawned; exec sleep 600",
-                std::time::Duration::from_secs(2),
+                Duration::from_secs(2),
             ),
         )
         .await
         .expect("starts");
-    let (stdout, terminal) = drain(&mut command, std::time::Duration::from_secs(30)).await;
-    assert_eq!(stdout, "spawned\n");
-    let error = terminal.expect_err("the deadline ends it");
-    assert!(
-        error.contains("killFailed"),
-        "the escaped child holds the output, so the stop is not confirmed: {error}"
-    );
-
-    // Two retried stops of 10s each, 5s apart, then the session is killed.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
-    loop {
-        let ran = match sandbox
-            .run_command(&id, sh("echo alive", std::time::Duration::from_secs(10)))
-            .await
-        {
-            Err(_) => false,
-            Ok(mut output) => {
-                let mut ok = false;
-                while let Some(item) = output.next().await {
-                    if matches!(item, Ok(CommandOutput::Exit { code: 0, .. })) {
-                        ok = true;
-                    }
-                }
-                ok
-            }
-        };
-        if !ran {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the session still ran commands 120s after the escaped child's deadline"
-        );
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
+    let (stdout, terminal) = drain(&mut command, Duration::from_secs(30)).await;
+    let listed = state(sandbox.as_ref(), &id).await;
+    let after = tokio::time::timeout(
+        Duration::from_secs(30),
+        run(sandbox.as_ref(), &id, "echo alive"),
+    )
+    .await
+    .expect("a call on a stopped session fails rather than hangs");
     let _ = sandbox.terminate(&id).await;
     SandboxRoute::remove(KEY).await;
+
+    assert_eq!(stdout, "spawned\n");
+    let error = terminal.expect_err("the deadline ends it");
+    assert!(error.contains("timeoutExceeded"), "{error}");
+    assert!(
+        error.contains("the whole session was stopped"),
+        "the caller is told the session, not only the command, ended: {error}"
+    );
+    assert_eq!(
+        listed,
+        SandboxState::Terminated,
+        "a stopped session never reports running"
+    );
+    assert!(
+        after.is_err(),
+        "nothing runs in a stopped session: {after:?}"
+    );
 }

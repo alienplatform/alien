@@ -74,6 +74,9 @@ pub struct SandboxSessionHandle {
     pub session_id: String,
     /// Docker container backing it
     pub container_id: String,
+    /// Whether the container is running. One that stopped does not start again: there is no
+    /// restart policy, and a session killed from the host stays stopped.
+    pub running: bool,
 }
 
 /// One frame of a running command's output.
@@ -218,7 +221,14 @@ impl LocalSandboxManager {
                     image.identity.uid, image.identity.gid, config.scratch_bytes
                 ),
             )])),
+            // The session needs no capability for itself: its user is not root, so it holds
+            // none in effect either way. CAP_KILL stays in the bounding set for one process, the
+            // signal shell, which runs as root and so holds it, and nothing else. It is what
+            // lets that shell stop the session's user, which root without it cannot. The
+            // command cannot gain it: it is not root, and no-new-privileges stops it from
+            // becoming root through a setuid binary.
             cap_drop: Some(vec!["ALL".to_string()]),
+            cap_add: Some(vec!["KILL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
             pids_limit: config.pids_limit,
             memory: Some(config.memory_bytes),
@@ -279,6 +289,7 @@ impl LocalSandboxManager {
         Ok(SandboxSessionHandle {
             session_id: session_id.to_string(),
             container_id: created.id,
+            running: true,
         })
     }
 
@@ -433,30 +444,33 @@ impl LocalSandboxManager {
             Some(path) => resolve_dir_in_root(path)?,
             None => SESSION_ROOT.to_string(),
         };
-        // Docker inherits the container's resolved, non-root identity.
-        self.exec_attached(container_id, command, working_dir, env, None, false)
-            .await
+        self.exec_attached(
+            container_id,
+            attached_exec_options(command, working_dir, env, None),
+        )
+        .await
     }
 
-    /// Starts `command` as root with every capability, stdin attached, for the session's signal
-    /// shell.
+    /// Starts the session's signal shell: `command` as root, stdin attached, never privileged.
     ///
-    /// Root, because the session's own user can kill anything that runs as that user, including
-    /// a shell it was meant to be stopped by. Every capability, because the session drops them
-    /// all and root without `CAP_KILL` cannot signal another user's process. Only a fixed script
-    /// the manager wrote runs this way, reading only what the manager sends it.
-    pub async fn exec_privileged(
+    /// Root, because the session's user can kill anything that runs as that user, including the
+    /// shell meant to stop it. As root in a container that keeps only `CAP_KILL`, the shell
+    /// holds that one capability: it can signal the session's user, and the session's user,
+    /// holding none, cannot signal it. The root filesystem is read-only, so the command cannot
+    /// replace what the shell runs.
+    pub async fn exec_signal_shell(
         &self,
         container_id: &str,
         command: &[String],
     ) -> Result<InteractiveExec> {
         self.exec_attached(
             container_id,
-            command,
-            SESSION_ROOT.to_string(),
-            &std::collections::BTreeMap::new(),
-            Some("0".to_string()),
-            true,
+            attached_exec_options(
+                command,
+                SESSION_ROOT.to_string(),
+                &std::collections::BTreeMap::new(),
+                Some(ROOT_USER.to_string()),
+            ),
         )
         .await
     }
@@ -464,32 +478,11 @@ impl LocalSandboxManager {
     async fn exec_attached(
         &self,
         container_id: &str,
-        command: &[String],
-        working_dir: String,
-        env: &std::collections::BTreeMap<String, String>,
-        user: Option<String>,
-        privileged: bool,
+        options: CreateExecOptions<String>,
     ) -> Result<InteractiveExec> {
         let exec = self
             .docker
-            .create_exec(
-                container_id,
-                CreateExecOptions {
-                    cmd: Some(command.to_vec()),
-                    attach_stdin: Some(true),
-                    attach_stdout: Some(true),
-                    attach_stderr: Some(true),
-                    env: Some(
-                        env.iter()
-                            .map(|(name, value)| format!("{name}={value}"))
-                            .collect(),
-                    ),
-                    user,
-                    privileged: Some(privileged),
-                    working_dir: Some(working_dir),
-                    ..Default::default()
-                },
-            )
+            .create_exec(container_id, options)
             .await
             .into_alien_error()
             .context(ErrorData::SandboxSessionFailed {
@@ -741,6 +734,8 @@ impl LocalSandboxManager {
                 Some(SandboxSessionHandle {
                     session_id,
                     container_id: container.id?,
+                    running: container.state
+                        == Some(bollard::models::ContainerSummaryStateEnum::RUNNING),
                 })
             })
             .collect())
@@ -820,6 +815,36 @@ impl LocalSandboxManager {
 /// would let a caller name any file in the image, and the session root is the only writable
 /// area anyway.
 /// A command started by [`LocalSandboxManager::exec_interactive`].
+/// The user the signal shell runs as. Only root holds the one capability the container keeps.
+const ROOT_USER: &str = "0";
+
+/// An attached exec: an interactive command as the container's own user (`user` `None`), or
+/// the signal shell as root. Never privileged: that would hand every capability, and the
+/// devices, to a process inside a container the command controls.
+fn attached_exec_options(
+    command: &[String],
+    working_dir: String,
+    env: &std::collections::BTreeMap<String, String>,
+    user: Option<String>,
+) -> CreateExecOptions<String> {
+    CreateExecOptions {
+        cmd: Some(command.to_vec()),
+        attach_stdin: Some(true),
+        attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        env: Some(
+            env.iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect(),
+        ),
+        // `None` inherits the container's resolved, non-root identity.
+        user,
+        privileged: Some(false),
+        working_dir: Some(working_dir),
+        ..Default::default()
+    }
+}
+
 pub struct InteractiveExec {
     /// Docker's id for the exec, to read its exit code once output ends
     pub exec_id: String,
@@ -882,6 +907,29 @@ fn resolve_in_root(path: &str) -> Result<String> {
 mod tests {
     use super::*;
     use httpmock::prelude::*;
+
+    /// A privileged exec would hand every capability to a process in a container the command
+    /// controls. Neither attached exec asks for one, and only the signal shell runs as root.
+    #[test]
+    fn no_attached_exec_is_privileged_and_only_the_signal_shell_is_root() {
+        let command = attached_exec_options(
+            &["cat".to_string()],
+            SESSION_ROOT.to_string(),
+            &std::collections::BTreeMap::new(),
+            None,
+        );
+        let shell = attached_exec_options(
+            &["sh".to_string()],
+            SESSION_ROOT.to_string(),
+            &std::collections::BTreeMap::new(),
+            Some(ROOT_USER.to_string()),
+        );
+        for options in [&command, &shell] {
+            assert_eq!(options.privileged, Some(false));
+        }
+        assert_eq!(command.user, None, "a command runs as the container's user");
+        assert_eq!(shell.user.as_deref(), Some("0"));
+    }
 
     #[tokio::test]
     async fn a_failed_inspection_cleanup_does_not_keep_sessions_alive() {

@@ -30,6 +30,22 @@ struct SessionBody {
     session_id: String,
     #[allow(dead_code)]
     container_id: String,
+    /// Absent from a manager that predates it, which reported every session it listed.
+    #[serde(default = "running_by_default")]
+    running: bool,
+}
+
+fn running_by_default() -> bool {
+    true
+}
+
+/// A Local session runs until its container stops, and a stopped one never starts again.
+fn session_state(session: &SessionBody) -> SandboxState {
+    if session.running {
+        SandboxState::Running
+    } else {
+        SandboxState::Terminated
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,8 +341,8 @@ impl Sandbox for LocalSandbox {
             .await?;
 
         Ok(SandboxInstance {
+            state: session_state(&created),
             sandbox_id: created.session_id,
-            state: SandboxState::Running,
             generation: 1,
         })
     }
@@ -361,8 +377,8 @@ impl Sandbox for LocalSandbox {
         Ok(sessions
             .into_iter()
             .map(|session| SandboxInstance {
+                state: session_state(&session),
                 sandbox_id: session.session_id,
-                state: SandboxState::Running,
                 generation: 1,
             })
             .collect())

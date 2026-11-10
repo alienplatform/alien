@@ -8,10 +8,11 @@
 //!
 //! Signals go through a shell kept running in each container, started before the container's
 //! first command and using only builtins, so a command that takes every process slot in the
-//! container cannot keep it from being stopped. It runs as root with `CAP_KILL`, so the
-//! command, which runs as the session's user, cannot kill it. A command that still cannot be
-//! confirmed stopped, as when a child it moved to a session of its own holds its output open,
-//! has its whole session killed from the host.
+//! container cannot keep it from being stopped. It runs as root, which in a session container
+//! holds `CAP_KILL` and nothing else, so it can signal the session's user while the command,
+//! running as that user with no capability at all, cannot signal it. A command that still cannot
+//! be stopped from inside, as when a child it moved to a session of its own holds its output
+//! open, has its whole session killed from the host, which runs nothing in the container.
 //!
 //! Signals need the command's process group, and Docker reports only a host pid. The command is
 //! started under a one-line shell that writes its own pid and start time to stderr and then
@@ -72,7 +73,7 @@ const WRAPPER: &str = "f() { printf '%s %s\\n' \"$$\" \"${20}\" >&2; }; \
 /// signalled, 3 when the group no longer exists or what has its number is not the command (its
 /// leader's start time differs), 2 when the signal failed. It uses only builtins, so it starts no
 /// process: a command that has taken every process slot in the container cannot keep it from
-/// killing that command. It runs as root with every capability, so the command cannot kill it,
+/// killing that command. It runs as root, holding only `CAP_KILL`, so the command cannot kill it
 /// and it can signal the session's user. `kill -SIG -N` is the one spelling dash and busybox
 /// both take.
 const SIGNAL_SHELL: &str = "while read -r g n t; do r=0; \
@@ -88,17 +89,16 @@ const SIGNAL_ANSWER_WAIT: Duration = Duration::from_secs(5);
 /// How long the start waits for the wrapper to announce the pid.
 const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(10);
 
-/// How long to wait for the output to end after the group was killed.
-const KILL_SETTLE: Duration = Duration::from_secs(10);
+/// How long the kill of a command's group may take to run, and then to end its output, before
+/// its session is killed from the host instead.
+const KILL_SETTLE: Duration = Duration::from_secs(5);
 
-/// How long to wait between attempts to stop a command that could not be confirmed stopped, as
-/// when the container's signal shell has ended and a new one cannot start.
+/// How long to wait before asking Docker again to kill a session it refused to kill.
 const KILL_RETRY: Duration = Duration::from_secs(5);
 
-/// How many retried stops may fail before the command's whole session is killed from the host.
-/// Each failure is a group kill that did not end the output within `KILL_SETTLE`, as when a
-/// child the command moved to a session of its own holds the output open.
-const STOPS_BEFORE_SESSION_KILL: u32 = 2;
+/// What the terminal frame says when a command was ended by killing its whole session.
+const SESSION_STOPPED: &str = "it could not be stopped inside its sandbox session, so the whole \
+     session was stopped: every command in it has ended, and the session will not run again";
 
 type Output = std::pin::Pin<
     Box<
@@ -223,7 +223,7 @@ impl SignalShells {
             return Ok(Arc::clone(shell));
         }
         let InteractiveExec { input, output, .. } = manager
-            .exec_privileged(
+            .exec_signal_shell(
                 container_id,
                 &["sh".to_string(), "-c".to_string(), SIGNAL_SHELL.to_string()],
             )
@@ -714,7 +714,7 @@ async fn abandon(
         process_group,
         started,
     };
-    stop_until_gone(&manager, &command, &mut output).await;
+    stop(&manager, &command, &mut output).await;
     drop(reservation);
 }
 
@@ -831,134 +831,103 @@ async fn pump(
         },
     };
 
-    // Whether the command is known to be gone, and the frame that ends the stream, if any.
-    let (gone, terminal) = match ending {
-        Ending::Exited => (
-            true,
-            Some(match manager.exec_exit_code(&exec_id).await {
-                Ok(Some(code)) => Frame::Exit {
-                    code: i32::try_from(code).unwrap_or(-1),
-                    truncated: false,
-                },
-                Ok(None) => Frame::Error {
-                    code: "waitFailed".to_string(),
-                    message: "the command's output ended without an exit code".to_string(),
-                },
-                Err(error) => Frame::Error {
-                    code: "waitFailed".to_string(),
-                    message: error.to_string(),
-                },
-            }),
-        ),
-        Ending::Departed => (stop(&manager, &command, &mut output).await, None),
+    let terminal = match ending {
+        Ending::Exited => Some(match manager.exec_exit_code(&exec_id).await {
+            Ok(Some(code)) => Frame::Exit {
+                code: i32::try_from(code).unwrap_or(-1),
+                truncated: false,
+            },
+            Ok(None) => Frame::Error {
+                code: "waitFailed".to_string(),
+                message: "the command's output ended without an exit code".to_string(),
+            },
+            Err(error) => Frame::Error {
+                code: "waitFailed".to_string(),
+                message: error.to_string(),
+            },
+        }),
+        Ending::Departed => {
+            stop(&manager, &command, &mut output).await;
+            None
+        }
         Ending::TimedOut => {
-            let gone = stop(&manager, &command, &mut output).await;
-            let frame = if gone {
-                Frame::Error {
-                    code: "timeoutExceeded".to_string(),
-                    message: format!("exceeded its {}ms timeout", timeout.as_millis()),
-                }
-            } else {
-                // Reported only once the command has verifiably stopped; it has not.
-                Frame::Error {
-                    code: "killFailed".to_string(),
-                    message: format!(
-                        "exceeded its {}ms timeout and could not be confirmed stopped",
-                        timeout.as_millis()
-                    ),
-                }
-            };
-            (gone, Some(frame))
+            let exceeded = format!("exceeded its {}ms timeout", timeout.as_millis());
+            Some(Frame::Error {
+                code: "timeoutExceeded".to_string(),
+                message: match stop(&manager, &command, &mut output).await {
+                    Stopped::Command => exceeded,
+                    Stopped::Session => format!("{exceeded}; {SESSION_STOPPED}"),
+                },
+            })
         }
-        Ending::Failed(message) => {
-            let gone = stop(&manager, &command, &mut output).await;
-            (
-                gone,
-                Some(Frame::Error {
-                    code: "outputReadFailed".to_string(),
-                    message,
-                }),
-            )
-        }
+        Ending::Failed(reason) => Some(Frame::Error {
+            code: "outputReadFailed".to_string(),
+            message: match stop(&manager, &command, &mut output).await {
+                Stopped::Command => reason,
+                Stopped::Session => format!("{reason}; {SESSION_STOPPED}"),
+            },
+        }),
     };
 
-    if gone {
-        // The output has ended, so Docker has reaped the exec: release the id before the
-        // terminal frame, which a slow reader can hold off indefinitely.
-        drop(reservation);
-        if let Some(terminal) = terminal {
-            let _ = frames.send(terminal).await;
-        }
-        return;
-    }
-    // Not confirmed stopped: the caller hears so now, but the id stays held, and counts against
-    // the session's limit, until the command is gone.
-    if let Some(terminal) = terminal {
-        tokio::spawn(async move {
-            let _ = frames.send(terminal).await;
-        });
-    }
-    tokio::time::sleep(KILL_RETRY).await;
-    stop_until_gone(&manager, &command, &mut output).await;
+    // The command is gone: release the id before the terminal frame, which a slow reader can
+    // hold off indefinitely.
     drop(reservation);
-}
-
-/// Stops the command, trying again every `KILL_RETRY` until its output has ended. After
-/// `STOPS_BEFORE_SESSION_KILL` failed attempts the command's session is killed from the host,
-/// which ends every process in it and with them the output. A signal shell that has ended is
-/// replaced on the next attempt.
-async fn stop_until_gone(manager: &LocalSandboxManager, command: &Command, output: &mut Output) {
-    let mut attempts = 0u32;
-    while !stop(manager, command, output).await {
-        attempts += 1;
-        if attempts == 1 {
-            warn!(
-                container_id = %command.container_id,
-                process_group = command.process_group,
-                "An interactive command could not be confirmed stopped; its slot stays taken and \
-                 the stop is retried"
-            );
-        }
-        if attempts >= STOPS_BEFORE_SESSION_KILL {
-            warn!(
-                container_id = %command.container_id,
-                process_group = command.process_group,
-                "An interactive command survived {attempts} stops; killing its session"
-            );
-            match manager.kill_session(&command.container_id).await {
-                Ok(()) => {
-                    // Nothing in the container is running now. Its output ends as Docker
-                    // notices; past the wait, it is dropped rather than waited on.
-                    let drain = async { while output.next().await.is_some() {} };
-                    let _ = tokio::time::timeout(KILL_SETTLE, drain).await;
-                    return;
-                }
-                Err(error) => warn!(
-                    container_id = %command.container_id,
-                    error = %error,
-                    "Killing the session of an interactive command that would not stop failed; \
-                     retrying"
-                ),
-            }
-        }
-        tokio::time::sleep(KILL_RETRY).await;
+    if let Some(terminal) = terminal {
+        let _ = frames.send(terminal).await;
     }
 }
 
-/// Kills the command's group and waits for its output to end, which is Docker saying the exec's
-/// process is gone. Returns whether that was confirmed.
+/// How a command was stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stopped {
+    /// Its group was killed from inside the container, and its output ended
+    Command,
+    /// It could not be stopped from inside, so its whole session was killed from the host
+    Session,
+}
+
+/// Stops the command, and returns only once nothing of it can still run.
+///
+/// First its group is killed from inside the container, by the signal shell. If that kill
+/// cannot run, or the output is still open `KILL_SETTLE` after it (a child moved to a session of
+/// its own can hold it), the session's container is killed from the host. That runs nothing
+/// inside the container and ends every process there, so a command cannot defeat it. A kill
+/// Docker refuses is asked again every `KILL_RETRY`, with the command's id still held.
 ///
 /// The output is drained while the kill runs, not after: an unread exec holds Docker's copy of
-/// its output, and until that copy moves the container's other execs (the kill among them) and
+/// its output, and until that copy moves, the container's other execs (the kill among them) and
 /// its exit can stall behind it.
-async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Output) -> bool {
-    let kill = kill_group(manager, command, "KILL");
+async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Output) -> Stopped {
     let drain = async { while output.next().await.is_some() {} };
-    tokio::time::timeout(KILL_SETTLE, async {
-        let _ = tokio::join!(kill, drain);
-    })
-    .await
-    .is_ok()
+    tokio::pin!(drain);
+    let killed = tokio::select! {
+        () = &mut drain => return Stopped::Command,
+        killed = tokio::time::timeout(KILL_SETTLE, kill_group(manager, command, "KILL")) => killed,
+    };
+    // Gone already counts: the group no longer exists, though its output may still be open.
+    let signalled = matches!(killed, Ok(Ok(())) | Ok(Err(ControlError::NotRunning)));
+    if signalled && tokio::time::timeout(KILL_SETTLE, &mut drain).await.is_ok() {
+        return Stopped::Command;
+    }
+
+    warn!(
+        container_id = %command.container_id,
+        process_group = command.process_group,
+        "An interactive command could not be stopped inside its session; killing the session"
+    );
+    while let Err(error) = manager.kill_session(&command.container_id).await {
+        warn!(
+            container_id = %command.container_id,
+            error = %error,
+            "Docker refused to kill the session of an interactive command that would not stop; \
+             asking again"
+        );
+        tokio::time::sleep(KILL_RETRY).await;
+    }
+    // Nothing in the container runs now. Its output ends as Docker notices; past the wait it is
+    // dropped rather than waited on.
+    let _ = tokio::time::timeout(KILL_SETTLE, &mut drain).await;
+    Stopped::Session
 }
 
 #[cfg(all(test, target_os = "linux"))]

@@ -93,6 +93,9 @@ pub struct SessionBody {
     pub session_id: String,
     /// Docker container backing it
     pub container_id: String,
+    /// Whether the session's container is running. One that stopped, as when a command that
+    /// would not stop had its session killed, does not run again.
+    pub running: bool,
 }
 
 /// One output frame.
@@ -445,6 +448,7 @@ async fn create_session(
     Ok(Json(SessionBody {
         session_id: handle.session_id,
         container_id: handle.container_id,
+        running: handle.running,
     }))
 }
 
@@ -466,6 +470,7 @@ async fn list_sessions(
             .map(|handle| SessionBody {
                 session_id: handle.session_id,
                 container_id: handle.container_id,
+                running: handle.running,
             })
             .collect(),
     ))
