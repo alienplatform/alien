@@ -357,6 +357,7 @@ async fn sync_with_manager(
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
+        installed_setup: reported_installed_setup(&state.config),
     };
     let mut sync_input = SyncInput::builder(sync_request);
     if let Some(operator_image) = operator_image.cloned() {
@@ -839,6 +840,64 @@ fn logs_capability(
     })
 }
 
+/// The setup the installed chart carries, with the release read from the chart's
+/// file now: a chart upgrade updates it without restarting the Operator. When
+/// the file cannot be read the report is skipped rather than naming a release
+/// the chart may no longer be built from.
+fn reported_installed_setup(
+    config: &crate::OperatorConfig,
+) -> Option<alien_core::sync::InstalledSetup> {
+    reported_installed_setup_with(config, |path| std::fs::read_to_string(path))
+}
+
+/// The fingerprint and release live in separate files, so a chart upgrade can
+/// land between reading the two. The fingerprint is checked again after the
+/// release is read: a swap before the second read changes it and the report is
+/// skipped, and a swap after it means the release was read from the old chart.
+fn reported_installed_setup_with(
+    config: &crate::OperatorConfig,
+    mut read: impl FnMut(&std::path::Path) -> std::io::Result<String>,
+) -> Option<alien_core::sync::InstalledSetup> {
+    let mut setup = config.installed_setup.clone()?;
+    let mut fingerprint_matches = |read: &mut dyn FnMut(
+        &std::path::Path,
+    ) -> std::io::Result<String>| {
+        let Some(path) = config.setup_fingerprint_file.as_ref() else {
+            return true;
+        };
+        match read(path) {
+            Ok(fingerprint) if fingerprint.trim() == setup.setup_fingerprint => true,
+            // The mounted chart was upgraded to a different setup while this
+            // pod still runs the old one: the release would name the new
+            // chart next to the old fingerprint.
+            Ok(_) => false,
+            Err(error) => {
+                warn!(path = %path.display(), %error, "Cannot read the installed setup fingerprint; not reporting the installed setup");
+                false
+            }
+        }
+    };
+    if !fingerprint_matches(&mut read) {
+        return None;
+    }
+    if let Some(path) = config.setup_release_file.as_ref() {
+        match read(path) {
+            Ok(release) if !release.trim().is_empty() => {
+                setup.release_id = release.trim().to_string()
+            }
+            Ok(_) => return None,
+            Err(error) => {
+                warn!(path = %path.display(), %error, "Cannot read the installed release; not reporting the installed setup");
+                return None;
+            }
+        }
+        if !fingerprint_matches(&mut read) {
+            return None;
+        }
+    }
+    Some(setup)
+}
+
 /// Granted only when the chart bound the dynamic container Role: the manager
 /// sends container targets to Operators that report this, so a namespace-only
 /// install without that access must not claim it.
@@ -923,6 +982,7 @@ fn apply_manager_control_state(
         local_state.protocol_version = manager_state.protocol_version;
     }
     let policy_changed = apply_manager_deletion_policy(local_state, manager_state);
+    let authorization_changed = apply_manager_setup_authorization(local_state, manager_state);
     if manager_state_is_delete_command(manager_state)
         && !local_state_is_delete_or_deleted(local_state)
     {
@@ -951,7 +1011,7 @@ fn apply_manager_control_state(
         return true;
     }
 
-    protocol_changed || policy_changed
+    protocol_changed || policy_changed || authorization_changed
 }
 
 /// The manager authorizes the deletion policy. The operator keeps its own resource
@@ -970,6 +1030,35 @@ fn apply_manager_deletion_policy(
         return false;
     }
     local.deletion_policy = manager.deletion_policy;
+    true
+}
+
+/// The manager decides, from the chart's report, whether a setup update may
+/// run; the Operator runs it. Takes the manager's authorization into the local
+/// state until the update it names has run.
+fn apply_manager_setup_authorization(
+    local_state: &mut alien_core::DeploymentState,
+    manager_state: &alien_core::DeploymentState,
+) -> bool {
+    let Some(authorization) = manager_state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
+    else {
+        return false;
+    };
+    let already_ran = local_state
+        .current_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref())
+        == Some(authorization.release_id.as_str());
+    let Some(local) = local_state.runtime_metadata.as_mut() else {
+        return false;
+    };
+    if already_ran || local.setup_update_authorization.as_ref() == Some(authorization) {
+        return false;
+    }
+    local.setup_update_authorization = Some(authorization.clone());
     true
 }
 
@@ -996,6 +1085,95 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    /// A chart upgrade to a new release with the same setup rewrites the release
+    /// file in place; the next report names the new release.
+    #[test]
+    fn the_report_names_the_release_the_chart_file_holds_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("setup-release-id");
+        std::fs::write(&file, "rel_1\n").unwrap();
+        let fp_file = dir.path().join("setup-fingerprint");
+        std::fs::write(&fp_file, "fp").unwrap();
+        let config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .sync(SyncConfig {
+                url: "http://localhost:1".parse().unwrap(),
+                token: "t".into(),
+            })
+            .data_dir(dir.path().to_str().unwrap())
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .installed_setup(alien_core::sync::InstalledSetup {
+                release_id: "rel_1".into(),
+                setup_target: "helm".into(),
+                setup_fingerprint: "fp".into(),
+                setup_fingerprint_version: 1,
+                release_name: None,
+                namespace: None,
+            })
+            .setup_release_file(file.clone())
+            .setup_fingerprint_file(fp_file.clone())
+            .build();
+        assert_eq!(
+            super::reported_installed_setup(&config).unwrap().release_id,
+            "rel_1"
+        );
+        std::fs::write(&file, "rel_2\n").unwrap();
+        let report = super::reported_installed_setup(&config).unwrap();
+        assert_eq!(report.release_id, "rel_2");
+        assert_eq!(report.setup_fingerprint, "fp");
+        // A setup-changing upgrade rewrote the mounted chart under this old pod.
+        std::fs::write(&file, "rel_3\n").unwrap();
+        std::fs::write(&fp_file, "fp_new").unwrap();
+        assert!(super::reported_installed_setup(&config).is_none());
+        std::fs::write(&fp_file, "fp").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        assert!(super::reported_installed_setup(&config).is_none());
+    }
+
+    /// The two files are read one after the other. An upgrade that lands
+    /// between the reads must not produce a report that names the new release
+    /// next to this pod's fingerprint.
+    #[test]
+    fn an_upgrade_between_the_two_file_reads_skips_the_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let release_file = dir.path().join("setup-release-id");
+        let fp_file = dir.path().join("setup-fingerprint");
+        let config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .sync(SyncConfig {
+                url: "http://localhost:1".parse().unwrap(),
+                token: "t".into(),
+            })
+            .data_dir(dir.path().to_str().unwrap())
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .installed_setup(alien_core::sync::InstalledSetup {
+                release_id: "rel_1".into(),
+                setup_target: "helm".into(),
+                setup_fingerprint: "fp".into(),
+                setup_fingerprint_version: 1,
+                release_name: None,
+                namespace: None,
+            })
+            .setup_release_file(release_file.clone())
+            .setup_fingerprint_file(fp_file.clone())
+            .build();
+        // The chart is swapped right after the release file is read.
+        let mut swapped = false;
+        let report = super::reported_installed_setup_with(&config, |path| {
+            if path == release_file {
+                swapped = true;
+                return Ok("rel_new".to_string());
+            }
+            Ok(if swapped { "fp_new" } else { "fp" }.to_string())
+        });
+        assert!(report.is_none());
+        // Without a swap the same reads produce the report.
+        let report = super::reported_installed_setup_with(&config, |path| {
+            Ok(if path == release_file { "rel_1" } else { "fp" }.to_string())
+        });
+        assert_eq!(report.unwrap().release_id, "rel_1");
+    }
+
     use std::{
         collections::{BTreeMap, HashMap},
         sync::{
@@ -2682,6 +2860,63 @@ mod tests {
             &manager_state
         ));
         assert!(local_state.retry_requested);
+    }
+
+    #[test]
+    fn takes_the_managers_setup_authorization_until_the_update_ran() {
+        let authorization = alien_core::SetupUpdateAuthorization {
+            nonce: "n".into(),
+            baseline_frozen_digest: "a".into(),
+            target_frozen_digest: "b".into(),
+            release_id: "rel_2".into(),
+            setup_target: "helm".into(),
+            setup_fingerprint: "fp".into(),
+            setup_fingerprint_version: 1,
+        };
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("s".to_string()).build(),
+        };
+        let local = |current: &str| DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::UpdateFailed,
+            current_release: Some(release(current)),
+            target_release: Some(release("rel_2")),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                setup_update_authorization: Some(authorization.clone()),
+                ..Default::default()
+            }),
+            ..local("rel_1")
+        };
+
+        let mut waiting = local("rel_1");
+        assert!(apply_manager_control_state(&mut waiting, &manager_state));
+        assert_eq!(
+            waiting.runtime_metadata.unwrap().setup_update_authorization,
+            Some(authorization)
+        );
+        // Already taken: nothing to write again.
+        let mut again = manager_state.clone();
+        assert!(!apply_manager_control_state(&mut again, &manager_state));
+
+        // The authorized release already runs: the grant is spent.
+        let mut done = local("rel_2");
+        assert!(!apply_manager_control_state(&mut done, &manager_state));
+        assert!(done
+            .runtime_metadata
+            .unwrap()
+            .setup_update_authorization
+            .is_none());
     }
 
     #[test]

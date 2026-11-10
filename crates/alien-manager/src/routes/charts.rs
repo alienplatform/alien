@@ -331,6 +331,7 @@ fn render(
             log_collector: Some(LogCollectorDefault::PodApi),
             // Pulls through the manager authenticate with the install token.
             registry_pull_secret: settings.operator_upstream.is_some(),
+            setup: None,
         },
     )
     .map_err(|e| render_failed(format!("failed to apply chart defaults: {e}")))?;

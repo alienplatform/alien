@@ -75,6 +75,7 @@ async fn persist_remote_storage_state(fixture: &Fixture) {
                 setup_fingerprint_version: 1,
                 activation_status: None,
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: Default::default(),
             },
         )
@@ -360,6 +361,7 @@ async fn move_current_release(fixture: &Fixture, stack: Stack) {
                 setup_fingerprint_version: 1,
                 activation_status: None,
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: Default::default(),
             },
         )
@@ -449,6 +451,7 @@ async fn state_keeps_a_sandbox(fixture: &Fixture, binding: serde_json::Value) {
                 setup_fingerprint_version: 1,
                 activation_status: None,
                 schedule_reconciliation: false,
+                expected_updated_at: None,
                 input_values: Default::default(),
             },
         )

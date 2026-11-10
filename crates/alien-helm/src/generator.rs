@@ -5926,6 +5926,12 @@ data:
   stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
+  {{- with .Chart.Annotations }}
+  {{- if index . "setup.alien.dev/release-id" }}
+  setup-release-id: {{ index . "setup.alien.dev/release-id" | quote }}
+  setup-fingerprint: {{ index . "setup.alien.dev/fingerprint" | quote }}
+  {{- end }}
+  {{- end }}
 "#
     .to_string()
 }
@@ -6755,6 +6761,20 @@ spec:
               value: "helm"
             - name: OPERATOR_HELM_RELEASE
               value: {{ .Release.Name | quote }}
+            {{- with .Chart.Annotations }}
+            {{- if index . "setup.alien.dev/fingerprint" }}
+            - name: OPERATOR_SETUP_RELEASE_FILE
+              value: /etc/deployment/config/setup-release-id
+            - name: OPERATOR_SETUP_FINGERPRINT_FILE
+              value: /etc/deployment/config/setup-fingerprint
+            - name: OPERATOR_SETUP_TARGET
+              value: {{ index . "setup.alien.dev/target" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT
+              value: {{ index . "setup.alien.dev/fingerprint" | quote }}
+            - name: OPERATOR_SETUP_FINGERPRINT_VERSION
+              value: {{ index . "setup.alien.dev/fingerprint-version" | quote }}
+            {{- end }}
+            {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
@@ -9652,6 +9672,138 @@ runtime:
             }
             assert!(cleanup_pods > 0, "{label} rendered no cleanup hooks");
         }
+    }
+
+    /// The operator Deployment's pod template and the setup release file the
+    /// chart's config ConfigMap carries, from a rendered chart.
+    fn rendered_operator_pod_and_release_file(
+        chart: &HelmChart,
+    ) -> (serde_json::Value, Option<String>) {
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("operator pod render");
+        let documents: Vec<serde_json::Value> =
+            serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|document| {
+                    serde_json::to_value(YamlValue::deserialize(document).expect("valid YAML"))
+                        .unwrap()
+                })
+                .collect();
+        let pod = documents
+            .iter()
+            .find(|d| {
+                d["kind"] == "Deployment"
+                    && d["spec"]["template"]["spec"]["containers"]
+                        .as_array()
+                        .is_some_and(|containers| {
+                            containers.iter().any(|c| {
+                                c["env"].as_array().is_some_and(|env| {
+                                    env.iter().any(|v| v["name"] == "OPERATOR_HELM_RELEASE")
+                                })
+                            })
+                        })
+            })
+            .expect("operator Deployment")["spec"]["template"]
+            .clone();
+        let release_file = documents
+            .iter()
+            .find_map(|d| d["data"]["stack-settings.json"].is_string().then(|| d))
+            .and_then(|d| d["data"]["setup-release-id"].as_str().map(str::to_string));
+        (pod, release_file)
+    }
+
+    #[test]
+    fn operator_carries_the_setup_the_chart_was_built_for_without_restarting_per_release() {
+        let packaged = |release_id, fingerprint| {
+            crate::apply_package_defaults(
+                sample_product_chart(),
+                &crate::PackageDefaults {
+                    version: Some("1.5.0"),
+                    management_url: None,
+                    operator_image: None,
+                    log_collector: None,
+                    registry_pull_secret: false,
+                    setup: Some(crate::SetupDefault {
+                        release_id,
+                        target: "helm",
+                        fingerprint,
+                        fingerprint_version: 3,
+                    }),
+                },
+            )
+            .expect("package defaults")
+        };
+
+        let (pod_2, file_2) =
+            rendered_operator_pod_and_release_file(&packaged("rel_2", "sha256:abc"));
+        let env: std::collections::BTreeMap<String, String> = pod_2["spec"]["containers"][0]["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                (
+                    v["name"].as_str().unwrap().to_string(),
+                    v["value"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(env["OPERATOR_SETUP_TARGET"], "helm");
+        assert_eq!(env["OPERATOR_SETUP_FINGERPRINT"], "sha256:abc");
+        assert_eq!(env["OPERATOR_SETUP_FINGERPRINT_VERSION"], "3");
+        assert_eq!(
+            env["OPERATOR_SETUP_RELEASE_FILE"],
+            "/etc/deployment/config/setup-release-id"
+        );
+        assert_eq!(file_2.as_deref(), Some("rel_2"));
+
+        // A new release with the same setup changes the release file only: the
+        // pod template, and so the running Operator, stays as it is.
+        let (pod_3, file_3) =
+            rendered_operator_pod_and_release_file(&packaged("rel_3", "sha256:abc"));
+        assert_eq!(file_3.as_deref(), Some("rel_3"));
+        assert_eq!(
+            pod_2, pod_3,
+            "the same setup must not change the pod template"
+        );
+
+        // A changed setup changes the pod template and restarts the Operator.
+        let (pod_4, _) = rendered_operator_pod_and_release_file(&packaged("rel_4", "sha256:def"));
+        assert_ne!(pod_2, pod_4);
+
+        // A chart built without a setup carries none of it.
+        let without = crate::apply_package_defaults(
+            sample_product_chart(),
+            &crate::PackageDefaults {
+                version: Some("1.5.0"),
+                management_url: None,
+                operator_image: None,
+                log_collector: None,
+                registry_pull_secret: false,
+                setup: None,
+            },
+        )
+        .expect("package defaults");
+        let (pod, file) = rendered_operator_pod_and_release_file(&without);
+        assert!(file.is_none());
+        assert!(!serde_json::to_string(&pod)
+            .unwrap()
+            .contains("OPERATOR_SETUP_FINGERPRINT"));
+        let chart_yaml = &without
+            .files
+            .iter()
+            .find(|(path, _)| path.as_str() == "Chart.yaml")
+            .expect("Chart.yaml")
+            .1;
+        assert!(chart_yaml.contains("alien.dev/remote-operator-lifecycle"));
     }
 
     #[test]
