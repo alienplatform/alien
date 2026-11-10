@@ -13,7 +13,7 @@ use crate::refreshing::{
     RefreshingWorker,
 };
 use crate::traits::{
-    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage,
+    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage, Redis,
     Sandbox, Storage, Vault, Worker,
 };
 use std::collections::HashMap;
@@ -224,6 +224,14 @@ impl Bindings {
     /// connection pool rather than calling this per query.
     pub async fn postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
         self.provider.load_postgres(binding_name).await
+    }
+
+    /// Loads the connection details for a linked Redis server.
+    ///
+    /// Like Postgres this returns no operations: use the returned URL or fields with your
+    /// own Redis client.
+    pub async fn redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>> {
+        self.provider.load_redis(binding_name).await
     }
 
     /// Loads a linked sandbox for running untrusted code.

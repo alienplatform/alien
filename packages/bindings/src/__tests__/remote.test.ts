@@ -70,6 +70,9 @@ function fakeRemoteAddon() {
   })
   const terminate = vi.fn<RawSandboxHandle["terminate"]>(async () => {})
   const sandbox: RawSandboxHandle = {
+    runInteractive: async () => {
+      throw new Error("not used by this test")
+    },
     updateEgress: async () => {},
     capabilities: () => ["files", "reconnect"],
     sessionCapabilities: async sandboxId => {
@@ -132,6 +135,10 @@ function fakeRemoteAddon() {
     }
 
     async postgres(): Promise<RawPostgresHandle> {
+      throw new Error("unused")
+    }
+
+    async redis(): Promise<never> {
       throw new Error("unused")
     }
 

@@ -82,10 +82,11 @@ pub struct JoinArgs {
     #[arg(long, conflicts_with = "token")]
     pub token_file: Option<PathBuf>,
 
-    /// Capacity group this host should join. Defaults to the only group the
-    /// deployment declares, or to "general" when it declares none.
-    #[arg(long)]
-    pub capacity_group: Option<String>,
+    /// Pool this host should join. Defaults to the only pool the deployment
+    /// declares, or to "general" when it declares none. `--capacity-group` is
+    /// the older name for this flag.
+    #[arg(long, alias = "capacity-group")]
+    pub pool: Option<String>,
 
     /// Optional physical or logical zone label for this host.
     #[arg(long)]
@@ -1192,8 +1193,8 @@ fn resolve_capacity_group(
     args: &JoinArgs,
     wrapped_token: Option<&WrappedJoinToken>,
 ) -> Result<String> {
-    if let Some(value) = args.capacity_group.as_deref() {
-        return normalize_non_empty("capacity-group", value);
+    if let Some(value) = args.pool.as_deref() {
+        return normalize_non_empty("pool", value);
     }
     let Some(groups) = wrapped_token
         .and_then(|token| token.capacity_groups.as_ref())
@@ -1205,9 +1206,9 @@ fn resolve_capacity_group(
     match (names.next(), names.next()) {
         (Some(only), None) => Ok(only.clone()),
         _ => Err(AlienError::new(ErrorData::ValidationError {
-            field: "capacity-group".to_string(),
+            field: "pool".to_string(),
             message: format!(
-                "this deployment declares several capacity groups; pass --capacity-group with one of: {}",
+                "this deployment declares several pools; pass --pool with one of: {}",
                 groups.keys().cloned().collect::<Vec<_>>().join(", ")
             ),
         })),
@@ -1227,9 +1228,9 @@ fn capacity_group_requirements<'a>(
     };
     groups.get(capacity_group).map(Some).ok_or_else(|| {
         AlienError::new(ErrorData::ValidationError {
-            field: "capacity-group".to_string(),
+            field: "pool".to_string(),
             message: format!(
-                "capacity group '{capacity_group}' is not declared by this deployment; pass --capacity-group with one of: {}",
+                "pool '{capacity_group}' is not declared by this deployment; pass --pool with one of: {}",
                 groups.keys().cloned().collect::<Vec<_>>().join(", ")
             ),
         })
@@ -1270,7 +1271,7 @@ fn check_capacity_group_requirements(
         AlienError::new(ErrorData::ValidationError {
             field: "token.capacityGroups".to_string(),
             message: format!(
-                "capacity group '{capacity_group}' has an invalid CPU value '{}'",
+                "pool '{capacity_group}' has an invalid CPU value '{}'",
                 requirements.cpu
             ),
         })
@@ -1313,14 +1314,14 @@ fn check_capacity_group_requirements(
 
     if shortfalls.is_empty() {
         output::info(&format!(
-            "Host meets the requirements of capacity group '{capacity_group}'"
+            "Host meets the requirements of pool '{capacity_group}'"
         ));
         return Ok(());
     }
     Err(AlienError::new(ErrorData::ValidationError {
         field: "host".to_string(),
         message: format!(
-            "this host does not meet the requirements of capacity group '{capacity_group}':\n  - {}",
+            "this host does not meet the requirements of pool '{capacity_group}':\n  - {}",
             shortfalls.join("\n  - ")
         ),
     }))
@@ -3259,7 +3260,7 @@ mod tests {
         JoinArgs {
             token: Some("jt_secret".to_string()),
             token_file: None,
-            capacity_group: Some("general".to_string()),
+            pool: Some("general".to_string()),
             zone: None,
             network_interface: None,
             wireguard_endpoint: None,
@@ -3705,7 +3706,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let args = JoinArgs {
             token: Some(" jt_secret ".to_string()),
-            capacity_group: Some(" gpu ".to_string()),
+            pool: Some(" gpu ".to_string()),
             zone: Some(" rack-1 ".to_string()),
             bundle_url: None,
             dry_run: true,
@@ -4131,7 +4132,7 @@ mod tests {
         .expect_err("an 8 GiB root disk should be refused for a 20 GiB group");
         assert_eq!(
             error.message,
-            "Validation failed for host: this host does not meet the requirements of capacity group 'general':\n  \
+            "Validation failed for host: this host does not meet the requirements of pool 'general':\n  \
              - container storage at /var/lib/containerd (filesystem mounted at /): needs 20 GiB \
              (at least 17 GiB after partition and filesystem overhead), found 6.7 GiB"
         );
@@ -4193,7 +4194,7 @@ mod tests {
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert_eq!(
             error.message,
-            "Validation failed for host: this host does not meet the requirements of capacity group 'general':\n  \
+            "Validation failed for host: this host does not meet the requirements of pool 'general':\n  \
              - CPU architecture: needs x86_64, found arm64\n  \
              - CPU: needs 4 cores, found 2\n  \
              - memory: needs 8 GiB (at least 7.2 GiB reported by the kernel), found 4 GiB\n  \
@@ -4244,7 +4245,7 @@ mod tests {
         .expect_err("the only empty disk is smaller than the chosen size");
         assert_eq!(
             error.message,
-            "Validation failed for host: this host does not meet the requirements of capacity group 'general':\n  \
+            "Validation failed for host: this host does not meet the requirements of pool 'general':\n  \
              - additional empty disk: needs a disk of at least 1024 GiB with no partitions, no filesystem and no mounts; \
              found /dev/nvme0n1 (100 GiB, has partitions), /dev/sdb (500 GiB, empty but too small)"
         );
@@ -4335,7 +4336,7 @@ mod tests {
             .expect_err("an undeclared group should be rejected");
         assert_eq!(
             error.message,
-            "Validation failed for capacity-group: capacity group 'general' is not declared by this deployment; pass --capacity-group with one of: builders, workers"
+            "Validation failed for pool: pool 'general' is not declared by this deployment; pass --pool with one of: builders, workers"
         );
     }
 
@@ -4347,7 +4348,7 @@ mod tests {
             token: Some(wrapped_join_token_with_groups(serde_json::json!({
                 "default": pool_requirements(None),
             }))),
-            capacity_group: None,
+            pool: None,
             control_plane_url: None,
             cluster_id: None,
             ..test_join_args()
@@ -4377,7 +4378,7 @@ mod tests {
                 "builders": pool_requirements(None),
                 "workers": pool_requirements(None),
             }))),
-            capacity_group: None,
+            pool: None,
             control_plane_url: None,
             cluster_id: None,
             ..test_join_args()
@@ -4387,7 +4388,7 @@ mod tests {
             .expect_err("several groups need an explicit choice");
         assert_eq!(
             error.message,
-            "Validation failed for capacity-group: this deployment declares several capacity groups; pass --capacity-group with one of: builders, workers"
+            "Validation failed for pool: this deployment declares several pools; pass --pool with one of: builders, workers"
         );
     }
 
@@ -4395,7 +4396,7 @@ mod tests {
     fn join_without_a_group_keeps_general_for_tokens_without_groups() {
         let dir = tempfile::tempdir().expect("temp dir");
         let args = JoinArgs {
-            capacity_group: None,
+            pool: None,
             ..test_join_args()
         };
 
@@ -4564,7 +4565,7 @@ mod tests {
         )
         .expect("returning to profiles must retain the checked formatted disk");
 
-        legacy_args.capacity_group = Some("other".to_string());
+        legacy_args.pool = Some("other".to_string());
         let changed_legacy = build_join_request(
             &legacy_args,
             None,
@@ -4577,7 +4578,7 @@ mod tests {
         );
 
         let mut changed_group = args;
-        changed_group.capacity_group = Some("larger".to_string());
+        changed_group.pool = Some("larger".to_string());
         changed_group.token = Some(wrapped_join_token_with_groups(serde_json::json!({
             "larger": pool_requirements(Some(50)),
         })));
@@ -5026,7 +5027,7 @@ mod tests {
         let manifest = test_manifest();
         let args = JoinArgs {
             token: Some("jt_new".to_string()),
-            capacity_group: Some("gpu".to_string()),
+            pool: Some("gpu".to_string()),
             zone: Some("rack-2".to_string()),
             install_root: root.path().to_path_buf(),
             ..test_join_args()

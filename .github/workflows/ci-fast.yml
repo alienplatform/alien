@@ -92,6 +92,7 @@ jobs:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
               - '.cargo/**'
+              - '.config/hakari.toml'
               - 'crates/**'
               - 'packages/**'
               - 'client-sdks/**'
@@ -365,6 +366,13 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
+      - name: Local Redis integration tests
+        if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_core == 'true'
+        # Runs the pinned Valkey image through the runner's Docker engine: start, password,
+        # persistence across restarts, settings changes, recovery and delete. About a minute
+        # plus one image pull; the tests are `#[ignore]`d so the default run needs no Docker.
+        run: cargo nextest run --locked -p alien-local --test redis_integration --run-ignored only --test-threads 1 --no-tests=fail
+
       - name: Enable user namespaces for sandbox security tests
         if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_agent == 'true'
         # These tests exercise nested user namespaces after dropping privileges.
@@ -599,6 +607,20 @@ jobs:
         # the gate focused on generated behavior and schema content.
         run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk packages/permissions/generated
 
+      - name: Check alien.toml fixtures match the TypeScript SDK
+        # The differential fixtures pair each alien.toml with the stack its alien.ts builds.
+        # Regenerating expected.json from the SDK source fails the job when an SDK change
+        # leaves a snapshot stale.
+        run: |
+          bash crates/alien-stack-toml/tests/fixtures/regenerate.sh
+          git diff --exit-code -- crates/alien-stack-toml/tests/fixtures
+
+      - name: Bare-metal worker example tests
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        # The example is a standalone Cargo workspace, so the repository's cargo commands skip it.
+        working-directory: examples/bare-metal-worker
+        run: cargo test --locked
+
   rust-check:
     name: Rust check
     needs: [pr-conventions, changes]
@@ -659,6 +681,43 @@ jobs:
 
       - name: Check every package and target
         run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
+
+  workspace-hack:
+    name: Workspace-hack up to date
+    needs: [pr-conventions, changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 15
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari@0.9.39
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      # The workspace-hack crate unifies dependency features so single-crate
+      # cargo commands reuse the workspace build cache. If either command fails,
+      # run `cargo hakari generate && cargo hakari manage-deps` and commit the result.
+      - name: Check workspace-hack contents
+        run: cargo hakari generate --diff
+
+      - name: Check workspace-hack dependencies
+        run: cargo hakari manage-deps --dry-run
 
   worker-integration:
     name: Worker integration
@@ -755,7 +814,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, typescript, worker-integration]
+    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

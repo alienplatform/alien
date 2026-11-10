@@ -223,6 +223,40 @@ export function externalPostgresBindingEnv(bindingName: string): void {
   })
 }
 
+/**
+ * The connection fields every Redis fixture uses. The password contains URL-special
+ * characters so the resolved URL proves they are percent-encoded.
+ */
+export const REDIS_FIXTURE = {
+  host: "cache.internal",
+  port: 6379,
+  username: "default",
+  password: "a!b*c'd(e)f@/",
+} as const
+
+/** Build the env for a `local-redis` binding (plaintext, as the local dev server). */
+export function localRedisBindingEnv(bindingName: string): void {
+  installBindingEnv({
+    ...LOCAL_DEPLOYMENT_ENV,
+    [bindingEnvVarName(bindingName)]: JSON.stringify({
+      service: "local-redis",
+      ...REDIS_FIXTURE,
+    }),
+  })
+}
+
+/** Build the env for an `external` Redis binding; `tls` defaults to true. */
+export function externalRedisBindingEnv(bindingName: string, tls?: boolean): void {
+  installBindingEnv({
+    ...LOCAL_DEPLOYMENT_ENV,
+    [bindingEnvVarName(bindingName)]: JSON.stringify({
+      service: "external",
+      ...REDIS_FIXTURE,
+      ...(tls === undefined ? {} : { tls }),
+    }),
+  })
+}
+
 /** Build the env for a local linked-container binding. */
 export function localContainerBindingEnv(bindingName: string): void {
   installBindingEnv({

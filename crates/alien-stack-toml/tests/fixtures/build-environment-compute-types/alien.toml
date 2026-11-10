@@ -1,0 +1,27 @@
+name = "acme-build-sizes"
+platforms = ["aws"]
+
+[storage.cache]
+
+# Without a compute type the default applies.
+[build-environment.default-size]
+
+[build-environment.small]
+compute-type = "small"
+
+[build-environment.medium]
+compute-type = "medium"
+permissions = "shared"
+
+[build-environment.large]
+compute-type = "large"
+permissions = "shared"
+links = ["cache"]
+
+[build-environment.extra-large]
+compute-type = "x-large"
+env-file = "build.env"
+env = { CI = "true" }
+
+[permissions.shared]
+cache = ["storage/data-read"]

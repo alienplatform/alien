@@ -1,0 +1,115 @@
+{
+  "dynamicContainerImageResources": [
+    "api",
+    "scheduler"
+  ],
+  "id": "acme-dynamic-images",
+  "permissions": {
+    "profiles": {
+      "api": {},
+      "scheduler": {},
+      "unlisted": {}
+    }
+  },
+  "resources": {
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/api:3.1.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "api",
+        "ports": [
+          {
+            "port": 8080
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "scheduler": {
+      "config": {
+        "id": "scheduler",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/scheduler:3.1.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "scheduler",
+        "ports": [
+          {
+            "port": 9090
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "unlisted": {
+      "config": {
+        "id": "unlisted",
+        "type": "container",
+        "code": {
+          "image": "ghcr.io/acme/unlisted:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "1",
+          "min": "1"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [],
+        "memory": {
+          "desired": "1Gi",
+          "min": "1Gi"
+        },
+        "permissions": "unlisted",
+        "ports": [
+          {
+            "port": 7070
+          }
+        ],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

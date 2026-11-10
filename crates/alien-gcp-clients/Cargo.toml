@@ -31,6 +31,7 @@ utoipa = { workspace = true, optional = true }
 
 # GCP specific dependencies
 jwt-simple = { version = "0.13.0", default-features = false, features = ["pure-rust"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 rand = { workspace = true }

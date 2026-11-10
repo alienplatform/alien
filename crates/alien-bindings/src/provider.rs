@@ -4,15 +4,16 @@ use crate::{
     error::{binding_env_var, ErrorData, Result},
     providers::postgres::runtime::PostgresRuntime,
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Key, Kv, Postgres, Queue,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Key, Kv, Postgres, Queue, Redis,
         ServiceAccount, Storage, Vault, Worker,
     },
 };
 
 #[cfg(feature = "aws")]
 use crate::providers::queue::aws_sqs::{create_http_client as create_sqs_http_client, AwsSqsQueue};
+use crate::providers::redis::ResolvedRedis;
 use alien_client_config::ClientConfigExt;
-use alien_core::bindings::PostgresBinding;
+use alien_core::bindings::{PostgresBinding, RedisBinding};
 use alien_core::{ClientConfig, Platform, StackState, ENV_OPERATOR_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -38,6 +39,14 @@ pub struct BindingsProvider {
     /// Each value is a `Box<Arc<dyn Trait>>` erased via `Any`.
     cache: Arc<RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>>,
     postgres: Arc<PostgresRuntime>,
+    /// Azure Managed Redis client, created on first use and reused so its token cache
+    /// survives across binding loads.
+    #[cfg(feature = "azure")]
+    azure_managed_redis:
+        tokio::sync::OnceCell<Arc<dyn alien_azure_clients::managed_redis::ManagedRedisApi>>,
+    /// Memorystore client for reading a Redis instance's token, reused across binding loads.
+    #[cfg(feature = "gcp")]
+    gcp_memorystore: tokio::sync::OnceCell<Arc<dyn alien_gcp_clients::memorystore::MemorystoreApi>>,
 }
 
 /// Environment-backed provider that defers cloud client configuration until the
@@ -99,6 +108,10 @@ impl BindingsProvider {
             bindings,
             cache: Arc::new(RwLock::new(HashMap::new())),
             postgres,
+            #[cfg(feature = "azure")]
+            azure_managed_redis: tokio::sync::OnceCell::new(),
+            #[cfg(feature = "gcp")]
+            gcp_memorystore: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -509,6 +522,11 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
         self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_postgres(binding_name).await
+    }
+
+    async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>> {
+        self.ensure_binding_present(binding_name)?;
+        self.provider().await?.load_redis(binding_name).await
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
@@ -1472,6 +1490,117 @@ impl BindingsProviderApi for BindingsProvider {
         self.postgres.load(binding_name, &binding).await
     }
 
+    async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>> {
+        let binding: RedisBinding = self.parse_binding(binding_name, "Redis")?;
+        match &binding {
+            RedisBinding::Local(_) | RedisBinding::External(_) => Ok(Arc::new(
+                ResolvedRedis::from_inline_binding(binding_name, &binding)?,
+            )),
+            RedisBinding::ElastiCache(config) => {
+                #[cfg(feature = "aws")]
+                {
+                    // Resolved on every load so a rotated token is picked up.
+                    let secrets = self.postgres.aws_secrets().await?;
+                    let params = crate::providers::redis::cloud::resolve_elasticache(
+                        binding_name,
+                        config,
+                        secrets.as_ref(),
+                    )
+                    .await?;
+                    Ok(Arc::new(ResolvedRedis::new(params)))
+                }
+                #[cfg(not(feature = "aws"))]
+                {
+                    let _ = config;
+                    Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                        feature: "aws".to_string(),
+                    }))
+                }
+            }
+            RedisBinding::Memorystore(config) => {
+                #[cfg(feature = "gcp")]
+                {
+                    let client = self
+                        .gcp_memorystore
+                        .get_or_try_init(|| async {
+                            let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
+                                AlienError::new(ErrorData::ClientConfigInvalid {
+                                    platform: Platform::Gcp,
+                                    message: "GCP config not available".to_string(),
+                                })
+                            })?;
+                            Ok::<_, AlienError<ErrorData>>(Arc::new(
+                                alien_gcp_clients::memorystore::MemorystoreClient::new(
+                                    crate::http_client::create_http_client(),
+                                    gcp_config.clone(),
+                                ),
+                            )
+                                as Arc<dyn alien_gcp_clients::memorystore::MemorystoreApi>)
+                        })
+                        .await?;
+                    // Read on every load so a rotated token is picked up.
+                    let params = crate::providers::redis::cloud::resolve_memorystore(
+                        binding_name,
+                        config,
+                        client.as_ref(),
+                        &self
+                            .client_config
+                            .gcp_config()
+                            .map(|gcp| gcp.project_id.clone())
+                            .unwrap_or_default(),
+                    )
+                    .await?;
+                    Ok(Arc::new(ResolvedRedis::new(params)))
+                }
+                #[cfg(not(feature = "gcp"))]
+                {
+                    let _ = config;
+                    Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                        feature: "gcp".to_string(),
+                    }))
+                }
+            }
+            RedisBinding::AzureManagedRedis(config) => {
+                #[cfg(feature = "azure")]
+                {
+                    let client = self
+                        .azure_managed_redis
+                        .get_or_try_init(|| async {
+                            let azure_config =
+                                self.client_config.azure_config().ok_or_else(|| {
+                                    AlienError::new(ErrorData::ClientConfigInvalid {
+                                        platform: Platform::Azure,
+                                        message: "Azure config not available".to_string(),
+                                    })
+                                })?;
+                            Ok::<_, AlienError<ErrorData>>(Arc::new(
+                                alien_azure_clients::managed_redis::AzureManagedRedisClient::new(
+                                    crate::http_client::create_http_client(),
+                                    alien_azure_clients::AzureTokenCache::new(azure_config.clone()),
+                                ),
+                            )
+                                as Arc<dyn alien_azure_clients::managed_redis::ManagedRedisApi>)
+                        })
+                        .await?;
+                    let params = crate::providers::redis::cloud::resolve_azure_managed_redis(
+                        binding_name,
+                        config,
+                        client.as_ref(),
+                    )
+                    .await?;
+                    Ok(Arc::new(ResolvedRedis::new(params)))
+                }
+                #[cfg(not(feature = "azure"))]
+                {
+                    let _ = config;
+                    Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                        feature: "azure".to_string(),
+                    }))
+                }
+            }
+        }
+    }
+
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
         if let Some(cached) = self
             .get_cached::<Arc<dyn Queue>>("queue", binding_name)
@@ -2081,7 +2210,8 @@ impl BindingsProviderApi for BindingsProvider {
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
-                ).with_agent(azure_binding.agent);
+                )
+                .with_agent(azure_binding.agent);
                 if let Some(manager) = egress_manager {
                     sandbox = sandbox.with_egress_manager(
                         manager,

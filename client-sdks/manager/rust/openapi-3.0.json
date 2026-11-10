@@ -750,38 +750,6 @@
         }
       }
     },
-    "/v1/deployments/{id}/enrollment-code": {
-      "post": {
-        "tags": [
-          "identity"
-        ],
-        "summary": "Issue the code that `management.enrollmentCode` carries into a Helm install.",
-        "operationId": "issueEnrollmentCode",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Deployment ID",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssuedEnrollmentCode"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/deployments/{id}/info": {
       "get": {
         "tags": [
@@ -1297,97 +1265,6 @@
             "bearer": []
           }
         ]
-      }
-    },
-    "/v1/identity/enroll": {
-      "post": {
-        "tags": [
-          "identity"
-        ],
-        "operationId": "enrollRuntimeIdentity",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IdentityEnrollmentRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IdentityEnrollmentResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/identity/exchange": {
-      "post": {
-        "tags": [
-          "identity"
-        ],
-        "summary": "Exchange a verified component proof for one bounded runtime purpose.",
-        "operationId": "exchangeRuntimeIdentity",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IdentityExchangeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Bounded runtime credential",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssuedRuntimeCredential"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/identity/rotate": {
-      "post": {
-        "tags": [
-          "identity"
-        ],
-        "operationId": "rotateRuntimeIdentity",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IdentityRotationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IdentityRotationResponse"
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/v1/initialize": {
@@ -2419,9 +2296,14 @@
                 "description": "Absent for older Operators. This report has no secret values.",
                 "nullable": true
               },
-              "installedConfigMissing": {
-                "type": "boolean",
-                "description": "The Operator runs a settled release but lost its config (it cleared\nit in token mode, then enrolled). Answered with the current release."
+              "installedSetup": {
+                "nullable": true,
+                "description": "The setup the installed chart carries. An observation the manager may\nact on under its own rules; never a grant.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/InstalledSetup"
+                  }
+                ]
               },
               "maxSupportedDeploymentProtocolVersion": {
                 "type": "integer",
@@ -2447,10 +2329,6 @@
                     "$ref": "#/components/schemas/OperatorImageReport"
                   }
                 ]
-              },
-              "pullSecretRefreshed": {
-                "type": "boolean",
-                "description": "The Operator rewrote the pull Secret its Deployment references from\nits own registry pull credential. Sent on every sync while that holds.\nThe manager keeps the deployment token until it sees this."
               }
             }
           }
@@ -5049,6 +4927,58 @@
           "type": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "AzureManagedRedisBinding": {
+        "type": "object",
+        "description": "Azure Managed Redis binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "databaseResourceId"
+        ],
+        "properties": {
+          "databaseResourceId": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "ARM resource ID of the database; its access key is read with `listKeys`\nat load time."
+          },
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "AzureManagedRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "clusterName",
+          "config",
+          "metrics"
+        ],
+        "properties": {
+          "clusterName": {
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/RedisObservedConfig"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/RedisMetricsSample"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
           }
         }
       },
@@ -7959,6 +7889,58 @@
           }
         }
       },
+      "ElastiCacheRedisBinding": {
+        "type": "object",
+        "description": "AWS ElastiCache binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "passwordSecretArn"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "passwordSecretArn": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Secrets Manager ARN of the AUTH token; resolved at load time."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "ElasticacheRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "replicationGroupId",
+          "config",
+          "metrics"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/RedisObservedConfig"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/RedisMetricsSample"
+          },
+          "replicationGroupId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          }
+        }
+      },
       "EndpointAccess": {
         "type": "string",
         "description": "Reachability of the deployment's public endpoints, fixed at setup.",
@@ -8322,6 +8304,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/RedisBinding",
+                "description": "External Redis binding (operator-provided Redis-compatible server)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External Redis binding (operator-provided Redis-compatible server)"
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/ExternalAiBinding",
                 "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
               },
@@ -8430,6 +8435,46 @@
           "verify-full",
           "disable"
         ]
+      },
+      "ExternalRedisBinding": {
+        "type": "object",
+        "description": "Operator-provided server binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "password": {
+            "oneOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalPasswordSecretKeyRef"
+                  }
+                ]
+              }
+            ],
+            "description": "Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the\npassword from the Secret as an environment variable, which the SDK inserts after it\nparses the binding, so any character is safe."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "tls": {
+            "type": "boolean",
+            "description": "Connect over TLS. Defaults to true."
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
       },
       "FailureDomainSelection": {
         "type": "object",
@@ -9822,112 +9867,6 @@
           "daemon"
         ]
       },
-      "IdentityEnrollmentRequest": {
-        "type": "object",
-        "description": "A client must durably save the corresponding key before sending this request.",
-        "required": [
-          "code",
-          "initialKeyHash"
-        ],
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "initialKeyHash": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "IdentityEnrollmentResponse": {
-        "type": "object",
-        "required": [
-          "deploymentId",
-          "componentId",
-          "expiresAt",
-          "revision"
-        ],
-        "properties": {
-          "componentId": {
-            "type": "string"
-          },
-          "deploymentId": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        },
-        "additionalProperties": false
-      },
-      "IdentityExchangeRequest": {
-        "type": "object",
-        "required": [
-          "deploymentId",
-          "purpose",
-          "proof"
-        ],
-        "properties": {
-          "deploymentId": {
-            "type": "string",
-            "description": "Selects the binding to verify; never establishes membership by itself."
-          },
-          "proof": {
-            "$ref": "#/components/schemas/RuntimeIdentityProof"
-          },
-          "purpose": {
-            "$ref": "#/components/schemas/RuntimePurpose"
-          }
-        },
-        "additionalProperties": false
-      },
-      "IdentityRotationRequest": {
-        "type": "object",
-        "description": "A client saves its generated successor before the atomic hash replacement.",
-        "required": [
-          "deploymentId",
-          "key",
-          "successorHash"
-        ],
-        "properties": {
-          "deploymentId": {
-            "type": "string"
-          },
-          "key": {
-            "type": "string"
-          },
-          "successorHash": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "IdentityRotationResponse": {
-        "type": "object",
-        "description": "No successor credential or hash is disclosed to a retired key holder.",
-        "required": [
-          "expiresAt",
-          "revision"
-        ],
-        "properties": {
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        },
-        "additionalProperties": false
-      },
       "ImportSourceKind": {
         "type": "string",
         "description": "Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
@@ -10069,47 +10008,43 @@
           }
         }
       },
-      "IssuedEnrollmentCode": {
+      "InstalledSetup": {
         "type": "object",
-        "description": "A one-hour, one-use code that enrolls the deployment's operator.",
+        "description": "The setup an installed chart was built for, read from the Operator's own\nenvironment. It changes only when the chart's setup changes.",
         "required": [
-          "deploymentId",
-          "code",
-          "expiresAt",
-          "managerAudience"
+          "releaseId",
+          "setupTarget",
+          "setupFingerprint",
+          "setupFingerprintVersion"
         ],
         "properties": {
-          "code": {
-            "type": "string"
-          },
-          "deploymentId": {
-            "type": "string"
-          },
-          "expiresAt": {
+          "namespace": {
             "type": "string",
-            "format": "date-time"
+            "description": "Kubernetes namespace of the Helm release.",
+            "nullable": true
           },
-          "managerAudience": {
+          "releaseId": {
             "type": "string",
-            "description": "The audience the operator must use for this manager."
-          }
-        },
-        "additionalProperties": false
-      },
-      "IssuedRuntimeCredential": {
-        "type": "object",
-        "description": "Response credential and its hard deadline. Never log or persist a debug dump.",
-        "required": [
-          "token",
-          "expiresAt"
-        ],
-        "properties": {
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
+            "description": "Release the chart was built from."
           },
-          "token": {
-            "type": "string"
+          "releaseName": {
+            "type": "string",
+            "description": "Helm release name the chart is installed as.",
+            "nullable": true
+          },
+          "setupFingerprint": {
+            "type": "string",
+            "description": "Setup compatibility fingerprint embedded in the chart."
+          },
+          "setupFingerprintVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fingerprint algorithm version.",
+            "minimum": 0
+          },
+          "setupTarget": {
+            "type": "string",
+            "description": "Setup target the chart was generated for."
           }
         }
       },
@@ -12453,6 +12388,59 @@
           }
         }
       },
+      "LocalRedisBinding": {
+        "type": "object",
+        "description": "Local Valkey binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "password": {
+            "type": "string"
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "LocalRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version",
+          "processRunning"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "processRunning": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "LocalRuntimeEventSnapshot": {
         "type": "object",
         "required": [
@@ -13365,6 +13353,63 @@
           }
         }
       },
+      "MemorystoreRedisBinding": {
+        "type": "object",
+        "description": "GCP Memorystore binding.",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "serverCaCertificates",
+          "instanceName"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "instanceName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Full instance name `projects/<project ID>/locations/<region>/instances/<id>`. The SDK\nreads the default user's token from Memorystore when it loads the binding."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "serverCaCertificates": {
+            "$ref": "#/components/schemas/BindingValue_Vec_String",
+            "description": "Instance CA certificates (PEM), including every root accepted during a rotation."
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "MemorystoreRedisHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "instanceName",
+          "config",
+          "metrics"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/RedisObservedConfig"
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/RedisMetricsSample"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RedisHeartbeatStatus"
+          }
+        }
+      },
       "MetricSample": {
         "type": "object",
         "required": [
@@ -13626,7 +13671,7 @@
               },
               "private_endpoint_subnet_name": {
                 "type": "string",
-                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused.",
+                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server or Azure Managed Redis). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres or Redis resource; otherwise unused.",
                 "nullable": true
               },
               "private_subnet_name": {
@@ -15154,6 +15199,258 @@
           }
         }
       },
+      "RedisBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ElastiCacheRedisBinding",
+                "description": "AWS ElastiCache for Valkey (primary endpoint + AUTH token secret ARN)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "elasticache"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS ElastiCache for Valkey (primary endpoint + AUTH token secret ARN)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MemorystoreRedisBinding",
+                "description": "GCP Memorystore for Valkey (PSC address + CA + secret name)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "memorystore"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Memorystore for Valkey (PSC address + CA + secret name)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureManagedRedisBinding",
+                "description": "Azure Managed Redis (private endpoint host + database resource ID)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "azure-managed-redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Managed Redis (private endpoint host + database resource ID)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalRedisBinding",
+                "description": "Operator-provided server (Kubernetes, on-prem, or cloud override)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "external"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Operator-provided server (Kubernetes, on-prem, or cloud override)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalRedisBinding",
+                "description": "Local Valkey container."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local Valkey container."
+          }
+        ],
+        "description": "Connection details for a Redis-compatible server, one variant per backend.\n\nService tags are unique across all binding enums (serde dispatches on\n`service` alone), so the key-value store's `redis` tag is not reused."
+      },
+      "RedisHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ElasticacheRedisHeartbeatData",
+                "description": "AWS ElastiCache for Valkey."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "elasticache"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS ElastiCache for Valkey."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MemorystoreRedisHeartbeatData",
+                "description": "GCP Memorystore for Valkey."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "memorystore"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Memorystore for Valkey."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureManagedRedisHeartbeatData",
+                "description": "Azure Managed Redis."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "azureManagedRedis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Managed Redis."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalRedisHeartbeatData",
+                "description": "Local Valkey container."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local Valkey container."
+          }
+        ],
+        "description": "Heartbeat data for a Redis resource. Everything comes from the cloud's\nmanagement and metrics APIs; the manager never opens a Redis connection."
+      },
+      "RedisHeartbeatStatus": {
+        "type": "object",
+        "description": "Same fields as every other resource heartbeat status.",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
       "RedisKvBinding": {
         "type": "object",
         "description": "Redis KV binding configuration",
@@ -15182,6 +15479,90 @@
                 "$ref": "#/components/schemas/BindingValue_String"
               }
             ]
+          }
+        }
+      },
+      "RedisMetricsSample": {
+        "type": "object",
+        "description": "One sample of the numbers that matter for a Redis server. A field is `None`\nwhen the cloud did not return that metric in the window.",
+        "properties": {
+          "connectedClients": {
+            "type": "number",
+            "format": "double",
+            "description": "Connected clients at the end of the window.",
+            "nullable": true
+          },
+          "evictions": {
+            "type": "number",
+            "format": "double",
+            "description": "Keys evicted during the sampled window.",
+            "nullable": true
+          },
+          "memoryUsedPercent": {
+            "type": "number",
+            "format": "double",
+            "description": "Memory used as a percentage of the configured maximum (0-100).",
+            "nullable": true
+          },
+          "replicationLagSeconds": {
+            "type": "number",
+            "format": "double",
+            "description": "Replication lag in seconds, when a replica exists.",
+            "nullable": true
+          }
+        }
+      },
+      "RedisObservedConfig": {
+        "type": "object",
+        "description": "Configuration the controller reads back from the cloud, to compare with the\ndesired configuration.",
+        "properties": {
+          "authEnabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "engineVersion": {
+            "type": "string",
+            "description": "Engine name and version as the cloud reports it.",
+            "nullable": true
+          },
+          "evictionPolicy": {
+            "type": "string",
+            "nullable": true
+          },
+          "nodeType": {
+            "type": "string",
+            "description": "Node type or SKU name.",
+            "nullable": true
+          },
+          "persistenceEnabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "publicNetworkAccess": {
+            "type": "boolean",
+            "description": "Azure only: true when the server accepts connections from the public internet.",
+            "nullable": true
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Replicas behind the primary.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "tlsEnabled": {
+            "type": "boolean",
+            "nullable": true
           }
         }
       },
@@ -16783,6 +17164,24 @@
             ],
             "properties": {
               "data": {
+                "$ref": "#/components/schemas/RedisHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "redis"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
                 "$ref": "#/components/schemas/VaultHeartbeatData"
               },
               "resourceType": {
@@ -17099,205 +17498,6 @@
             "description": "URL where deployments submit responses"
           }
         }
-      },
-      "RuntimeIdentityProof": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "An audience-signed STS GetCallerIdentity request.",
-            "required": [
-              "presignedUrl",
-              "type"
-            ],
-            "properties": {
-              "presignedUrl": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "aws"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "A metadata identity token for this manager's audience.",
-            "required": [
-              "idToken",
-              "type"
-            ],
-            "properties": {
-              "idToken": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "gcp"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "A bounded parent session; it cannot renew itself.",
-            "required": [
-              "token",
-              "type"
-            ],
-            "properties": {
-              "token": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "session"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "The explicit daily-key exception for enrolled components.",
-            "required": [
-              "key",
-              "type"
-            ],
-            "properties": {
-              "key": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "dailyKey"
-                ]
-              }
-            }
-          }
-        ],
-        "description": "Proof material is intentionally not Debug: providers must never log it."
-      },
-      "RuntimePurpose": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "Ingest telemetry for the recorded deployment.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "telemetry"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Reconcile the recorded operator deployment.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "operatorSync"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Pull deployment images through the registry receiver.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "registryPull"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Connect the recorded operator tunnel.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "operatorTunnel"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Receive the operator's fixed operations queue.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "operatorOperations"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Relay commands to one app worker, without dispatch or administrative rights.",
-            "required": [
-              "target",
-              "type"
-            ],
-            "properties": {
-              "target": {
-                "$ref": "#/components/schemas/CommandTarget"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "operationRelay"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Receive commands for one app-owned target.",
-            "required": [
-              "target",
-              "type"
-            ],
-            "properties": {
-              "target": {
-                "$ref": "#/components/schemas/CommandTarget"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "receiveCommands"
-                ]
-              }
-            }
-          }
-        ],
-        "description": "Runtime operations cannot administer deployments or mint credentials."
       },
       "S3StorageBinding": {
         "type": "object",

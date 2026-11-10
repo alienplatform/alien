@@ -1,0 +1,10 @@
+name = "acme-management-extend"
+platforms = ["aws", "gcp"]
+
+[storage.reports]
+[queue.jobs]
+
+[management-permissions.extend]
+"*" = ["storage/management", "queue/management"]
+reports = ["storage/data-read"]
+jobs = ["queue/data-read", { id = "acme/jobs-audit", description = "Audit the jobs queue.", platforms = { gcp = [{ grant = { permissions = ["pubsub.topics.get"] }, binding = { stack = { scope = "projects/${projectId}" } } }] } }]

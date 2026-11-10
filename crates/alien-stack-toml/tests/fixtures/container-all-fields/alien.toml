@@ -1,0 +1,36 @@
+name = "acme-ledger"
+platforms = ["aws", "gcp"]
+
+[pool.general]
+cpu = 4
+memory = "16Gi"
+machines = 2
+
+[kv.cache]
+
+[container.ledger]
+image = "ghcr.io/acme/ledger:3.1.0"
+pool = "general"
+command = ["ledger", "serve", "--verbose"]
+commands-enabled = true
+cpu = { default = 2, allowed = [1, 4] }
+memory = { default = "4Gi", allowed = ["2Gi", "16Gi"] }
+ephemeral-storage = "20Gi"
+gpu = { type = "nvidia-l4", count = 1 }
+ports = [9090, 9091]
+public-endpoints.api = { port = 8080, host-label = "ledger", wildcard-subdomains = true }
+tunnel = 7000
+egress = "internet"
+security = { profile = "restricted", run-as-user = 10001, run-as-group = 10002, read-only-root-filesystem = true }
+persistent-storage = { size = "100Gi", mount-path = "/var/lib/ledger", encryption-key = "data-key", backups = { interval = "6h", retention = 14 } }
+autoscaling = { min = 2, desired = 3, max = 12, target-cpu-percent = 65, target-memory-percent = 75, target-http-in-flight-per-replica = 100, max-http-p95-latency = "250ms" }
+health-check = { port = 8080, path = "/ready", method = "HEAD", timeout = "2s", failure-threshold = 5 }
+kubernetes-liveness-probe = { path = "/livez", port = 8080 }
+kubernetes-readiness-probe = { path = "/readyz", port = 8080 }
+kubernetes-secret-mounts = [{ secret-name = "ledger-tls", mount-path = "/etc/ledger/tls" }]
+stop-grace-period = "5m"
+links = ["cache"]
+permissions = { cache = ["kv/data-read", "kv/data-write"] }
+env = { LOG_LEVEL = "debug", WORKER_THREADS = 4, TRACE = true }
+
+[key.data-key]

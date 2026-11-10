@@ -21,6 +21,7 @@ pub use aws::dynamodb::{DynamoDbApi, DynamoDbClient};
 pub use aws::ec2::{Ec2Api, Ec2Client};
 pub use aws::ecr::{EcrApi, EcrClient};
 pub use aws::eks::{EksApi, EksClient};
+pub use aws::elasticache::{ElastiCacheApi, ElastiCacheClient};
 pub use aws::eventbridge::{EventBridgeApi, EventBridgeClient};
 pub use aws::iam::{IamApi, IamClient};
 pub use aws::kms::{KmsApi, KmsClient};

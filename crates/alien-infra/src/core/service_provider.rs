@@ -21,6 +21,7 @@ use alien_aws_clients::{
     kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
     lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient},
+    elasticache::{ElastiCacheApi, ElastiCacheClient},
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
@@ -42,6 +43,8 @@ use alien_azure_clients::{
     disks::{AzureManagedDisksClient, ManagedDisksApi},
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
+    managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
+    monitor::{AzureMonitorClient, MonitorApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
         AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
@@ -73,6 +76,10 @@ use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
+    monitoring::{MonitoringApi, MonitoringClient},
+    memorystore::{
+        MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
+    },
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
@@ -215,6 +222,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn SecretsManagerApi>>;
     async fn get_aws_rds_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn RdsApi>>;
+    async fn get_aws_elasticache_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ElastiCacheApi>>;
     async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
     async fn get_aws_logs_client(
         &self,
@@ -283,6 +294,12 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>>;
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>>;
+    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>>;
+    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>>;
+    fn get_gcp_service_connection_policy_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ServiceConnectionPolicyApi>>;
     fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn FirestoreApi>>;
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
@@ -355,6 +372,11 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>>;
+    fn get_azure_managed_redis_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedRedisApi>>;
+    fn get_azure_monitor_client(&self, config: &AzureClientConfig) -> Result<Arc<dyn MonitorApi>>;
     fn get_azure_snapshots_client(
         &self,
         config: &AzureClientConfig,
@@ -506,6 +528,13 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_local_kv_manager(&self) -> Option<Arc<alien_local::LocalKvManager>>;
     #[cfg(not(feature = "local"))]
     fn get_local_kv_manager(&self) -> Option<Arc<()>> {
+        None
+    }
+
+    #[cfg(feature = "local")]
+    fn get_local_redis_manager(&self) -> Option<Arc<alien_local::LocalRedisManager>>;
+    #[cfg(not(feature = "local"))]
+    fn get_local_redis_manager(&self) -> Option<Arc<()>> {
         None
     }
 
@@ -962,6 +991,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_elasticache_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ElastiCacheApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ElastiCacheClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_autoscaling_client(
         &self,
         config: &AwsClientConfig,
@@ -1208,6 +1253,30 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>> {
+        Ok(Arc::new(MemorystoreClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>> {
+        Ok(Arc::new(MonitoringClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_service_connection_policy_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ServiceConnectionPolicyApi>> {
+        Ok(Arc::new(ServiceConnectionPolicyClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     fn get_gcp_cloud_scheduler_client(
         &self,
         config: &GcpClientConfig,
@@ -1358,6 +1427,23 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>> {
         Ok(Arc::new(AzureFlexibleServerClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_managed_redis_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedRedisApi>> {
+        Ok(Arc::new(AzureManagedRedisClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_monitor_client(&self, config: &AzureClientConfig) -> Result<Arc<dyn MonitorApi>> {
+        Ok(Arc::new(AzureMonitorClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))
@@ -1731,6 +1817,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     #[cfg(feature = "local")]
     fn get_local_kv_manager(&self) -> Option<Arc<alien_local::LocalKvManager>> {
         self.local_bindings.as_ref().map(|p| p.kv_manager().clone())
+    }
+
+    #[cfg(feature = "local")]
+    fn get_local_redis_manager(&self) -> Option<Arc<alien_local::LocalRedisManager>> {
+        self.local_bindings
+            .as_ref()
+            .map(|p| p.redis_manager().clone())
     }
 
     #[cfg(feature = "local")]

@@ -219,6 +219,19 @@
     }
   },
   {
+    "Sid": "CreateElasticacheServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::123456789012:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "elasticache.amazonaws.com"
+      }
+    }
+  },
+  {
     "Sid": "PassSandboxBuildRole",
     "Effect": "Allow",
     "Action": ["iam:PassRole"],

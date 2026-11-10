@@ -34,6 +34,7 @@ pub mod service_account_impersonate_validation;
 pub mod single_exposed_port_check;
 pub mod single_queue_trigger;
 pub mod stack_inputs;
+pub mod storage_cors;
 pub mod storage_lifecycle_rules;
 pub mod storage_notifications;
 pub mod trigger_edge_ownership;
@@ -41,6 +42,7 @@ pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
 pub mod valid_resource_dependencies;
 pub mod volume_backups;
+pub mod redis_persistence;
 pub mod worker_memory;
 
 pub use allowed_user_resources::AllowedUserResourcesCheck;
@@ -71,6 +73,7 @@ pub use service_account_impersonate_validation::ServiceAccountImpersonateValidat
 pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use stack_inputs::{StackInputPlatformsCheck, StackInputsDefinitionCheck};
+pub use storage_cors::StorageCorsCheck;
 pub use storage_lifecycle_rules::StorageLifecycleRulesCheck;
 pub use storage_notifications::StorageNotificationsCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
@@ -82,6 +85,7 @@ pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };
 pub use volume_backups::VolumeBackupsCheck;
+pub use redis_persistence::RedisPersistenceCheck;
 pub use worker_memory::WorkerMemoryCheck;
 
 pub mod kubernetes_compute;

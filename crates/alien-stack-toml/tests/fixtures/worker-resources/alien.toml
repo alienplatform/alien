@@ -1,0 +1,28 @@
+name = "acme-worker-resources"
+platforms = ["aws", "gcp"]
+
+# A size is read as bytes and stored as mebibytes; a bare number is megabytes.
+[worker.sized]
+image = "ghcr.io/acme/sized:1.0.0"
+memory = "1536Mi"
+timeout = "90s"
+concurrency-limit = 5
+
+[worker.megabytes]
+image = "ghcr.io/acme/megabytes:1.0.0"
+memory = 512
+timeout = 45
+
+# Nothing set: the platform defaults apply.
+[worker.defaults]
+image = "ghcr.io/acme/defaults:1.0.0"
+
+[worker.hour]
+image = "ghcr.io/acme/hour:1.0.0"
+timeout = "1h"
+readiness-probe = { path = "/up" }
+
+[worker.probed]
+image = "ghcr.io/acme/probed:1.0.0"
+public-endpoints = ["main"]
+readiness-probe = { method = "HEAD" }

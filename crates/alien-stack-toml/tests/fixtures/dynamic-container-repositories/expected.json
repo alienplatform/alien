@@ -1,0 +1,27 @@
+{
+  "dynamicContainerRepositories": [
+    "ghcr.io/acme/runner",
+    "registry.acme.example:5000/team/tools/builder",
+    "docker.io/library/alpine",
+    "us-docker.pkg.dev/acme-prod/images/sandbox-base"
+  ],
+  "id": "acme-dynamic-repositories",
+  "resources": {
+    "data": {
+      "config": {
+        "id": "data",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

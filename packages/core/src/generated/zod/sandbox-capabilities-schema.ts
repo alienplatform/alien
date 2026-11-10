@@ -13,6 +13,7 @@ export const SandboxCapabilitiesSchema = z.object({
 "egressDeny": z.boolean().describe("Whether a declared `deny` is actually enforced, rather than accepted and dropped.\nIt covers routed traffic; the `deny` mode says where DNS still resolves."),
 "enforcedLimits": z.boolean().describe("The platform enforces the declared cpu, memory and disk ceilings"),
 "files": z.boolean().describe("Files can be moved in and out of a sandbox"),
+"interactiveCommands": z.boolean().describe("A running command takes input on stdin, can be signalled, and streams its output as it is\nwritten, so a caller can drive a REPL, a language server or a tool protocol over it."),
 "jobs": z.boolean().describe("A command can be started, polled and cancelled across separate calls, so it outlives the\none that started it. False where nothing inside the sandbox owns the process in between."),
 "pauseResume": z.boolean().describe("Sandbox state can be paused and resumed"),
 "preview": z.boolean().describe("An authenticated, port-scoped capability to reach a service inside the sandbox"),

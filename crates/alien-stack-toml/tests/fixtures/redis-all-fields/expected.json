@@ -1,0 +1,55 @@
+{
+  "id": "acme-redis",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the session cache.",
+      "env": [],
+      "id": "sessions_enabled",
+      "kind": "boolean",
+      "label": "Create session cache",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    }
+  ],
+  "resources": {
+    "cache-key": {
+      "config": {
+        "id": "cache-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "sessions": {
+      "config": {
+        "id": "sessions",
+        "type": "redis",
+        "encryptionKey": {
+          "id": "cache-key",
+          "type": "key"
+        },
+        "evictionPolicy": "allkeys-lru",
+        "highAvailability": true,
+        "memory": "4Gi",
+        "persistence": true
+      },
+      "dependencies": [],
+      "description": "Session store for the web tier.",
+      "displayName": "Session cache",
+      "enabledWhen": "sessions_enabled",
+      "lifecycle": "live",
+      "remoteAccess": true
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

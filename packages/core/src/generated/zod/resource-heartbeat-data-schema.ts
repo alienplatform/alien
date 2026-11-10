@@ -20,6 +20,7 @@ import { KvHeartbeatDataSchema } from "./kv-heartbeat-data-schema.js";
 import { NetworkHeartbeatDataSchema } from "./network-heartbeat-data-schema.js";
 import { PostgresHeartbeatDataSchema } from "./postgres-heartbeat-data-schema.js";
 import { QueueHeartbeatDataSchema } from "./queue-heartbeat-data-schema.js";
+import { RedisHeartbeatDataSchema } from "./redis-heartbeat-data-schema.js";
 import { RemoteStackManagementHeartbeatDataSchema } from "./remote-stack-management-heartbeat-data-schema.js";
 import { SandboxHeartbeatDataSchema } from "./sandbox-heartbeat-data-schema.js";
 import { ServiceAccountHeartbeatDataSchema } from "./service-account-heartbeat-data-schema.js";
@@ -73,6 +74,11 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
                 return PostgresHeartbeatDataSchema
               },
 "resourceType": z.enum(["postgres"])
+    }), z.object({
+    get "data"(){
+                return RedisHeartbeatDataSchema.describe("Heartbeat data for a Redis resource. Everything comes from the cloud's\nmanagement and metrics APIs; the manager never opens a Redis connection.")
+              },
+"resourceType": z.enum(["redis"])
     }), z.object({
     get "data"(){
                 return VaultHeartbeatDataSchema

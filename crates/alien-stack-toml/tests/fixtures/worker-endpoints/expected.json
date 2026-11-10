@@ -1,0 +1,100 @@
+{
+  "id": "acme-worker-endpoints",
+  "permissions": {
+    "profiles": {
+      "api": {},
+      "sites": {},
+      "private": {}
+    }
+  },
+  "resources": {
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/api:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "api",
+        "publicEndpoints": [
+          {
+            "name": "api",
+            "wildcardSubdomains": false
+          },
+          {
+            "name": "webhooks",
+            "wildcardSubdomains": false
+          }
+        ],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "sites": {
+      "config": {
+        "id": "sites",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/sites:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "sites",
+        "publicEndpoints": [
+          {
+            "hostLabel": "@",
+            "name": "marketing",
+            "wildcardSubdomains": false
+          },
+          {
+            "hostLabel": "customers",
+            "name": "customers",
+            "wildcardSubdomains": true
+          },
+          {
+            "name": "docs",
+            "wildcardSubdomains": false
+          }
+        ],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "private": {
+      "config": {
+        "id": "private",
+        "type": "worker",
+        "code": {
+          "image": "ghcr.io/acme/private:1.0.0",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "environment": {},
+        "links": [],
+        "memoryMb": 512,
+        "permissions": "private",
+        "publicEndpoints": [],
+        "timeoutSeconds": 180,
+        "triggers": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

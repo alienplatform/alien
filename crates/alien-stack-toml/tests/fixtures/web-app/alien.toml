@@ -1,0 +1,24 @@
+#:schema https://alien.dev/schemas/alien.toml.json
+name = "acme-app"
+platforms = ["aws", "gcp", "azure"]
+
+[kv.sessions]
+
+[queue.emails]
+
+[container.web]
+build = { toolchain = "docker" }
+cpu = 1
+memory = "1Gi"
+public-endpoints.web = { port = 3000 }
+health-check = { path = "/health" }
+autoscaling = { min = 2, max = 10 }
+env = { PORT = 3000, NODE_ENV = "production" }
+links = ["sessions", "emails"]
+permissions = { sessions = ["kv/data-read", "kv/data-write"], emails = ["queue/data-write"] }
+
+[worker.mailer]
+build = { toolchain = "rust", binary-name = "mailer", src = "crates/mailer" }
+triggers = [{ queue = "emails" }]
+links = ["emails"]
+permissions = { emails = ["queue/data-read"] }

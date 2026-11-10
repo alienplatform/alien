@@ -1,0 +1,24 @@
+name = "acme-runtime"
+platforms = ["machines"]
+
+# Each runtime setting alone.
+[daemon.host-network]
+image = "ghcr.io/acme/net:1.0.0"
+runtime = { network-mode = "host" }
+
+[daemon.host-pid]
+image = "ghcr.io/acme/pid:1.0.0"
+runtime = { pid-namespace = "host" }
+
+[daemon.privileged]
+image = "ghcr.io/acme/privileged:1.0.0"
+runtime = { privileged = true }
+
+[daemon.unprivileged]
+image = "ghcr.io/acme/unprivileged:1.0.0"
+runtime = { privileged = false, user = "1000:1000" }
+
+# Mounts: the options are optional.
+[daemon.mounts]
+image = "ghcr.io/acme/mounts:1.0.0"
+runtime = { mounts = [{ source = "/var/run/docker.sock", target = "/var/run/docker.sock" }, { source = "/proc", target = "/host/proc", options = "ro" }] }

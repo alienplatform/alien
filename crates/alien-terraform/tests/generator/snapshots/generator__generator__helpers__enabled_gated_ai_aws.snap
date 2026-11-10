@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 229
 expression: buf
 ---
 === versions.tf ===
@@ -43,7 +42,8 @@ variable "name" {
 
 variable "token" {
   type        = string
-  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  description = "Not used: this module does not register the deployment."
+  default     = null
   sensitive   = true
 }
 
@@ -453,22 +453,22 @@ resource "aws_iam_role" "execution_sa" {
   }
 }
 
-resource "aws_iam_policy" "execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021" {
+resource "aws_iam_policy" "execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7" {
   count  = var.input_fixture_enabled ? 1 : 0
-  name   = length(format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-b4b83021")) <= 128 ? format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-b4b83021") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-b4b83021"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-b4b83021")), 0, 8))
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AiInvoke", Effect = "Allow", Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock-mantle:CreateInference"], Resource = ["arn:aws:bedrock:*::foundation-model/*", "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*", "arn:aws:bedrock-mantle:*:${data.aws_caller_identity.current.account_id}:project/default"] }] })
+  name   = length(format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-282b26b7")) <= 128 ? format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-282b26b7") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-282b26b7"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa-input-fixture-enabled-8849ea05-setup-282b26b7")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AiInvoke", Effect = "Allow", Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock-mantle:CreateInference", "bedrock-mantle:ListModels"], Resource = ["arn:aws:bedrock:*::foundation-model/*", "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*", "arn:aws:bedrock-mantle:*:${data.aws_caller_identity.current.account_id}:project/default"] }] })
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-resource "aws_iam_role_policy_attachment" "execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021_attachment" {
+resource "aws_iam_role_policy_attachment" "execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7_attachment" {
   count      = var.input_fixture_enabled ? 1 : 0
   role       = aws_iam_role.execution_sa.name
-  policy_arn = aws_iam_policy.execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021[0].arn
+  policy_arn = aws_iam_policy.execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7[0].arn
   depends_on = [
-    aws_iam_policy.execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021
+    aws_iam_policy.execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7
   ]
 
   lifecycle {
@@ -479,7 +479,7 @@ resource "aws_iam_role_policy_attachment" "execution_sa_input_fixture_enabled_88
 resource "terraform_data" "execution_sa_input_fixture_enabled_8849ea05_setup_policies_barrier" {
   count = var.input_fixture_enabled ? 1 : 0
   triggers_replace = [
-    aws_iam_role_policy_attachment.execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021_attachment[0].id
+    aws_iam_role_policy_attachment.execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7_attachment[0].id
   ]
 
   lifecycle {
@@ -494,7 +494,7 @@ resource "aws_iam_role_policy" "execution_sa_ai_fixture_set_0" {
   role   = aws_iam_role.execution_sa.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021_attachment
+    aws_iam_role_policy_attachment.execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7_attachment
   ]
 }
 
@@ -502,7 +502,6 @@ resource "aws_iam_role_policy" "execution_sa_ai_fixture_set_0" {
 resource "terraform_data" "deployment_registration" {
   input = {
     platform                    = local.deployment_platform
-    token                       = var.token
     name                        = var.name
     resource_prefix             = local.resource_prefix
     setup_target                = ""
@@ -519,8 +518,8 @@ resource "terraform_data" "deployment_registration" {
   }
   depends_on = [
     aws_iam_role.execution_sa,
-    aws_iam_policy.execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021,
-    aws_iam_role_policy_attachment.execution_sa_input_fixture_enabled_8849ea05_setup_b4b83021_attachment,
+    aws_iam_policy.execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7,
+    aws_iam_role_policy_attachment.execution_sa_input_fixture_enabled_8849ea05_setup_282b26b7_attachment,
     terraform_data.execution_sa_input_fixture_enabled_8849ea05_setup_policies_barrier,
     aws_iam_role_policy.execution_sa_ai_fixture_set_0
   ]
@@ -606,7 +605,6 @@ This module creates setup-owned infrastructure, grants the management access nee
 
 Required:
 
-- `token`: install token from the setup page.
 - `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.
 
 Common optional settings:
@@ -635,7 +633,6 @@ Use your organization's normal backend and approval workflow. A typical local re
 
 ```bash
 export TF_VAR_name="matrix-stack"
-export TF_VAR_token="..."
 terraform init
 terraform validate
 terraform plan -out=tfplan
@@ -652,7 +649,7 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
-- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+- `deployment_id`: emitted only when Terraform performs registration.
 ## Retain AWS setup data during uninstall
 
 Setup-owned S3 buckets, DynamoDB tables and ECR repositories are protected against replacement and destroy. This includes empty resources. Their KMS keys survive with them. Aurora PostgreSQL, its managed password secret, writer instance, parameter group, security group, subnet group and setup-created network are deleted during teardown, without a final database snapshot. Their KMS keys remain retained. Apply this package to the existing installation before teardown; older state may still allow destructive deletion. Removing data declarations from an installed configuration is not supported by this helper. `prevent_destroy` protection disappears when a block is removed; keep the installed declarations until whole-setup detachment. Never bypass protection to force a replacement.

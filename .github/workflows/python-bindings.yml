@@ -59,7 +59,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - name: Install test tools
-        run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'ruff>=0.13,<1' types-grpcio types-protobuf
+        run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'redis>=5,<8' 'ruff>=0.13,<1' types-grpcio types-protobuf
       - name: Install protoc for the real local queue owner fixture
         uses: arduino/setup-protoc@v3
         with:

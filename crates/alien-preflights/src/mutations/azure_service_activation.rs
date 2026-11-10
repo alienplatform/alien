@@ -21,6 +21,7 @@ use tracing::{debug, info};
 /// - artifact-registry: Microsoft.ContainerRegistry
 /// - queue: Microsoft.ServiceBus
 /// - postgres: Microsoft.DBforPostgreSQL + Microsoft.Network (private endpoint)
+/// - redis: Microsoft.Cache + Microsoft.Network (private endpoint)
 pub struct AzureServiceActivationMutation;
 
 #[async_trait]
@@ -188,6 +189,18 @@ impl AzureServiceActivationMutation {
                         "Microsoft.Network".to_string(),
                     );
                 }
+                "redis" => {
+                    services.insert(
+                        "enable-cache".to_string(),
+                        "Microsoft.Cache".to_string(),
+                    );
+                    // Private-only: a private endpoint and the `privatelink.redis.azure.net`
+                    // zone are `Microsoft.Network`. Shares the `network` arm's key.
+                    services.insert(
+                        "enable-network".to_string(),
+                        "Microsoft.Network".to_string(),
+                    );
+                }
                 "kubernetes-cluster" => {
                     services.insert(
                         "enable-container-service".to_string(),
@@ -245,6 +258,28 @@ mod tests {
         assert_eq!(
             services.get("enable-servicebus").map(String::as_str),
             Some("Microsoft.ServiceBus")
+        );
+    }
+
+    #[test]
+    fn azure_redis_registers_the_cache_and_network_providers() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                alien_core::Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let services =
+            AzureServiceActivationMutation.get_required_services(&stack, Platform::Azure);
+
+        assert_eq!(
+            services.get("enable-cache").map(String::as_str),
+            Some("Microsoft.Cache")
+        );
+        assert_eq!(
+            services.get("enable-network").map(String::as_str),
+            Some("Microsoft.Network")
         );
     }
 

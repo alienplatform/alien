@@ -27,11 +27,14 @@ import type {
   RawCommandFrame,
   RawCommandStreamHandle,
   RawContainerHandle,
+  RawInteractiveCommandHandle,
   RawKeyHandle,
   RawKvHandle,
   RawPostgresConnection,
   RawPostgresHandle,
   RawQueueHandle,
+  RawRedisConnection,
+  RawRedisHandle,
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
   RawSandboxHandle,
@@ -41,7 +44,9 @@ import type {
 } from "./loader.js"
 import type {
   CommandFrame,
+  CommandSignal,
   Container,
+  InteractiveCommand,
   JobPoll,
   Key,
   KeyOptions,
@@ -55,6 +60,8 @@ import type {
   PresignedRequest,
   Queue,
   QueueMessage,
+  Redis,
+  RedisConnection,
   RemoteStorage,
   Sandbox,
   SandboxInstance,
@@ -353,6 +360,58 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         }
       },
     }),
+    runInteractive: async (sandboxId, command, options) => {
+      const raw: RawInteractiveCommandHandle = await guard(handle, raw =>
+        raw.runInteractive(
+          sandboxId,
+          command,
+          options.args ?? [],
+          options.timeoutMs,
+          options.cwd ?? null,
+          options.env ?? null,
+        ),
+      )
+      const call = async <T>(run: () => Promise<T>): Promise<T> => {
+        try {
+          return await run()
+        } catch (err) {
+          throw unwrapNapiError(err)
+        }
+      }
+      let finished = false
+      const close = () => call(() => raw.close())
+      // Pulls are chained so two concurrent `next()` calls cannot read the stream out of order.
+      let tail: Promise<unknown> = Promise.resolve()
+      const interactive: InteractiveCommand = {
+        write: data => call(() => raw.write(typeof data === "string" ? Buffer.from(data) : data)),
+        closeStdin: () => call(() => raw.closeStdin()),
+        signal: (signal: CommandSignal) => call(() => raw.signal(signal)),
+        close,
+        [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
+          return {
+            next() {
+              const pull = tail.then(async (): Promise<IteratorResult<CommandFrame, undefined>> => {
+                if (finished) return { done: true, value: undefined }
+                const next = await call(() => raw.next())
+                if (next === null) {
+                  finished = true
+                  return { done: true, value: undefined }
+                }
+                return { done: false, value: frame(next) }
+              })
+              tail = pull.catch(() => undefined)
+              return pull
+            },
+            async return() {
+              finished = true
+              await close()
+              return { done: true, value: undefined }
+            },
+          }
+        },
+      }
+      return interactive
+    },
     readFile: (sandboxId, path) => guard(handle, raw => raw.readFile(sandboxId, path)),
     writeFiles: (sandboxId, files) =>
       guard(handle, async raw => {
@@ -600,6 +659,32 @@ function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
   }
 }
 
+/** Map the Rust-resolved connection to client TLS options. */
+function toRedisConnection(raw: RawRedisConnection): RedisConnection {
+  let tls: RedisConnection["tls"] = false
+  if (raw.tls) {
+    tls = {}
+    if (raw.caCertificates.length > 0) tls.ca = [...raw.caCertificates]
+    if (raw.serverName) tls.servername = raw.serverName
+  }
+  return {
+    url: raw.url,
+    host: raw.host,
+    port: raw.port,
+    username: raw.username,
+    password: raw.password,
+    database: 0,
+    tls,
+  }
+}
+
+function makeRedis(handle: () => Promise<RawRedisHandle>): Redis {
+  return {
+    connection: (): Promise<RedisConnection> =>
+      guard(handle, async raw => toRedisConnection(raw.connection())),
+  }
+}
+
 /** The public factory surface. */
 export interface Factories {
   storage(name: string): Storage
@@ -609,6 +694,7 @@ export interface Factories {
   vault(name: string): Vault
   container(name: string): Container
   postgres(name: string): Postgres
+  redis(name: string): Redis
   sandbox(name: string): Sandbox
 }
 
@@ -623,6 +709,7 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
     vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
     container: name => makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
     postgres: name => makePostgres(lazyHandle(async () => (await getBindings()).postgres(name))),
+    redis: name => makeRedis(lazyHandle(async () => (await getBindings()).redis(name))),
     sandbox: name => makeSandbox(lazyHandle(async () => (await getBindings()).sandbox(name))),
   }
 }

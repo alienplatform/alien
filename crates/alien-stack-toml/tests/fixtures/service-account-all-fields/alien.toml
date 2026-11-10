@@ -1,0 +1,54 @@
+name = "acme-identity"
+platforms = ["aws", "gcp", "azure"]
+
+[service-account.deployer]
+display-name = "Deployer identity"
+description = "Identity the release pipeline assumes."
+lifecycle = "live"
+remote-access = true
+
+[[service-account.deployer.stack-permission-sets]]
+id = "acme/release-read"
+description = "Read release artifacts across the stack."
+
+[[service-account.deployer.stack-permission-sets.platforms.aws]]
+label = "Read artifacts"
+description = "Allows reading release objects."
+effect = "Allow"
+grant = { actions = ["s3:GetObject", "s3:ListBucket"] }
+binding = { stack = { resources = ["arn:aws:s3:::${stackPrefix}-*"], not-resources = ["arn:aws:s3:::${stackPrefix}-scratch/*"], condition = { StringEquals = { "aws:ResourceTag/team" = "acme", "aws:RequestedRegion" = ["us-east-1", "eu-west-1"] } } } }
+
+[[service-account.deployer.stack-permission-sets.platforms.aws]]
+effect = "Deny"
+grant = { actions = ["s3:DeleteObject"] }
+binding = { resource = { resources = ["arn:aws:s3:::${stackPrefix}-archive/*"], not-resources = ["arn:aws:s3:::${stackPrefix}-archive/keep/*"], condition = { Bool = { "aws:SecureTransport" = "false" } } } }
+
+[[service-account.deployer.stack-permission-sets.platforms.gcp]]
+label = "Read buckets"
+description = "Allows reading release buckets."
+grant = { permissions = ["storage.objects.get"], predefined-roles = ["roles/storage.objectViewer"] }
+binding = { stack = { scope = "projects/${projectId}", condition = { title = "release only", expression = "resource.name.startsWith('projects/_/buckets/acme-')" } } }
+
+[[service-account.deployer.stack-permission-sets.platforms.gcp]]
+grant = { permissions = ["storage.objects.list"] }
+binding = { resource = { scope = "projects/${projectId}/buckets/${resourceName}", condition = { title = "named bucket", expression = "resource.name.endsWith('-archive')" } } }
+
+[[service-account.deployer.stack-permission-sets.platforms.azure]]
+label = "Read blobs"
+description = "Allows reading release blobs."
+grant = { actions = ["Microsoft.Storage/storageAccounts/read"], data-actions = ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"], residual-permissions = ["Microsoft.Storage/storageAccounts/listKeys/action"] }
+binding = { stack = { scope = "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}" } }
+
+[[service-account.deployer.stack-permission-sets.platforms.azure]]
+grant = { data-actions = ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"] }
+binding = { resource = { scope = "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}" } }
+
+[[service-account.deployer.stack-permission-sets]]
+id = "acme/empty"
+description = "A set no platform grants anything for."
+platforms = {}
+
+[service-account.deployer.resource-permission-sets]
+archive = [{ id = "acme/archive-read", description = "Read the archive bucket.", platforms = { aws = [{ grant = { actions = ["s3:GetObject"] }, binding = { resource = { resources = ["arn:aws:s3:::${stackPrefix}-archive/*"] } } }] } }]
+
+[service-account.plain]

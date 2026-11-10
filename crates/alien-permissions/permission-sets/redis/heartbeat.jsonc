@@ -1,0 +1,105 @@
+{
+  "id": "redis/heartbeat",
+  "description": "Allows readonly monitoring and health checks for redis resources",
+  "platforms": {
+    "aws": [
+      {
+        "label": "check-elasticache-health",
+        "description": "Read replication group state and the memory, eviction and connection metrics.",
+        "grant": {
+          "actions": [
+            "elasticache:DescribeReplicationGroups",
+            "elasticache:DescribeCacheClusters",
+            "elasticache:DescribeCacheParameters",
+            "elasticache:ListTagsForResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:replicationgroup:${stackPrefix}-${resourceName}",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}-*",
+              "arn:aws:elasticache:${awsRegion}:${awsAccountId}:parametergroup:${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        // CloudWatch metric reads support no resource-level scoping and must be granted on
+        // Resource "*": in a statement that lists ElastiCache ARNs they would be denied. The read
+        // returns numeric time series only.
+        "label": "read-metrics",
+        "description": "Read the memory, eviction and connection metrics.",
+        "grant": {
+          "actions": ["cloudwatch:GetMetricData"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        // Read-only confirmation that the server security group still admits 6379 only from
+        // the stack. AWS requires Resource "*" for this discovery API.
+        "label": "describe-security-groups",
+        "description": "Read the server security group state to verify the network boundary stays intact.",
+        "grant": {
+          "actions": ["ec2:DescribeSecurityGroups"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "check-memorystore-health",
+        "description": "Read Memorystore instance metadata and its metrics.",
+        "grant": {
+          "permissions": [
+            "memorystore.instances.get",
+            "memorystore.instances.list",
+            "monitoring.timeSeries.list"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "check-managed-redis-health",
+        "description": "Read Managed Redis metadata and its metrics.",
+        "grant": {
+          "predefinedRoles": ["Reader", "Monitoring Reader"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Cache/redisEnterprise/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

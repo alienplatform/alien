@@ -33,6 +33,6 @@ pub use generator::{
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,
-    PackageDefaults,
+    PackageDefaults, SetupDefault,
 };
 pub use registry::HelmRegistry;

@@ -1,0 +1,39 @@
+name = "acme-workload-keys"
+platforms = ["machines", "aws"]
+
+[input.api_token]
+kind = "secret"
+label = "API token"
+description = "Token the worker and the packager present to the control plane."
+
+[input.region]
+kind = "string"
+provided-by = "deployer"
+label = "Region"
+description = "Region the worker reports from."
+
+# A port is a number, or a table with the number in it.
+[container.ported]
+image = "ghcr.io/acme/ported:1.0.0"
+cpu = 1
+memory = "1Gi"
+ports = [{ port = 8080 }, 9090]
+
+# A daemon takes the same display keys as the other kinds, and its endpoint a protocol.
+[daemon.described]
+image = "ghcr.io/acme/described:1.0.0"
+description = "Resident agent that relays HTTP."
+remote-access = true
+public-endpoints = { relay = { port = 7000, protocol = "http" } }
+
+# A worker takes env files and inputs in its env, a display name and a lifecycle.
+[worker.configured]
+image = "ghcr.io/acme/configured:1.0.0"
+display-name = "Configured worker"
+lifecycle = "frozen"
+env-file = ["config/base.env", "config/regional.env"]
+env = { MODE = "worker", API_TOKEN = { input = "api_token" }, REGION = { input = "region", type = "plain" } }
+
+[build-environment.packager]
+env-file = ["config/base.env", "config/regional.env"]
+env = { CHANNEL = "stable", API_TOKEN = { input = "api_token" }, REGION = { input = "region", type = "plain" } }

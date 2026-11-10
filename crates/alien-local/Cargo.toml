@@ -7,6 +7,8 @@ license-file.workspace = true
 bon = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
+hex = { workspace = true }
+flate2 = { workspace = true }
 libc = "0.2"
 # Alien crates
 alien-core = { workspace = true }
@@ -82,6 +84,7 @@ thiserror = { workspace = true }
 container-registry = { workspace = true, features = ["test-support"] }
 # Secret type used by container-registry auth
 sec = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 httpmock = { workspace = true }
@@ -96,3 +99,4 @@ reqwest = { workspace = true, features = ["json"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 workspace_root = { workspace = true }
 alien-build = { workspace = true }
+alien-sandbox-conformance = { workspace = true, features = ["local"] }

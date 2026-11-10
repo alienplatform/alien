@@ -1,0 +1,51 @@
+name = "acme-access"
+platforms = ["aws", "gcp"]
+
+[storage.uploads]
+
+[queue.jobs]
+
+[kv.sessions]
+
+# A shared profile, named by the containers that use it.
+[permissions.reader]
+uploads = ["storage/data-read"]
+sessions = ["kv/data-read"]
+
+# Grants written on the container make a profile named after it.
+[container.writer]
+image = "ghcr.io/acme/writer:1.0.0"
+cpu = 1
+memory = "1Gi"
+links = ["uploads", "jobs"]
+permissions = { uploads = ["storage/data-read", "storage/data-write"], jobs = ["queue/data-write"] }
+
+# A named profile, shared with another container.
+[container.viewer]
+image = "ghcr.io/acme/viewer:1.0.0"
+cpu = 1
+memory = "1Gi"
+links = ["uploads", "sessions"]
+permissions = "reader"
+
+[container.auditor]
+image = "ghcr.io/acme/auditor:1.0.0"
+cpu = 1
+memory = "1Gi"
+permissions = "reader"
+
+# Nothing written: an empty profile named after the container.
+[container.plain]
+image = "ghcr.io/acme/plain:1.0.0"
+cpu = 1
+memory = "1Gi"
+
+# Grants for every resource of a type: a profile can use "*".
+[permissions.everything]
+"*" = ["storage/data-read", "kv/data-read"]
+
+[container.sweeper]
+image = "ghcr.io/acme/sweeper:1.0.0"
+cpu = 1
+memory = "1Gi"
+permissions = "everything"

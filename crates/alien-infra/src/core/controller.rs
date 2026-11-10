@@ -1102,6 +1102,11 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "local")]
         "LocalPostgresController" => deser!(crate::postgres::LocalPostgresController),
 
+        // Redis controllers: only Local is built in tree; cloud controllers register their
+        // deserializers out-of-tree.
+        #[cfg(feature = "local")]
+        "LocalRedisController" => deser!(crate::redis::LocalRedisController),
+
         // Queue controllers
         #[cfg(feature = "aws")]
         "AwsQueueController" => deser!(crate::queue::aws::AwsQueueController),
@@ -1777,5 +1782,31 @@ mod tests {
             restored_local.binding.is_none(),
             "the skipped binding must deserialize back to None"
         );
+    }
+
+    // Guards deserializer registration for the in-tree Local Redis controller: a missing
+    // entry makes a live deployment fail with "unknown controller type" until this test.
+    #[cfg(feature = "local")]
+    #[test]
+    fn local_redis_controller_state_round_trips() {
+        use alien_core::bindings::RedisBinding;
+
+        const PASSWORD: &str = "round-trip-secret-must-not-persist";
+        let mut controller = crate::redis::LocalRedisController::default();
+        controller.port = Some(6380);
+        controller.binding = Some(RedisBinding::local("127.0.0.1", 6380, "default", PASSWORD));
+
+        let value = serialize_controller(&controller).expect("controller serializes");
+        assert!(!serde_json::to_string(&value).unwrap().contains(PASSWORD));
+
+        let restored =
+            deserialize_controller(value).expect("LocalRedisController must deserialize");
+        assert_eq!(restored.controller_type(), "LocalRedisController");
+        let restored_local = restored
+            .as_any()
+            .downcast_ref::<crate::redis::LocalRedisController>()
+            .expect("restored controller is a LocalRedisController");
+        assert_eq!(restored_local.port, Some(6380));
+        assert!(restored_local.binding.is_none());
     }
 }

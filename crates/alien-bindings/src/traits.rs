@@ -752,6 +752,140 @@ pub trait Postgres: Binding {
     }
 }
 
+/// TLS settings for a Redis connection.
+///
+/// `Enabled` with no CA certificates uses the runtime's system trust store. A set of CA
+/// certificates replaces it (Memorystore signs with a per-instance CA). `server_name`
+/// is only set when the certificate does not match the host being dialed.
+#[derive(Clone, PartialEq, Eq)]
+pub enum RedisTlsPolicy {
+    /// Plain TCP (Local only, or an explicit opt-out on an external server).
+    Disabled,
+    /// TLS with verification.
+    Enabled {
+        ca_certificates: Arc<[String]>,
+        server_name: Option<String>,
+    },
+}
+
+impl std::fmt::Debug for RedisTlsPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("Disabled"),
+            Self::Enabled {
+                ca_certificates,
+                server_name,
+            } => f
+                .debug_struct("Enabled")
+                .field("ca_certificate_count", &ca_certificates.len())
+                .field("server_name", server_name)
+                .finish(),
+        }
+    }
+}
+
+impl RedisTlsPolicy {
+    /// TLS verified against the system trust store.
+    pub fn system_roots() -> Self {
+        Self::Enabled {
+            ca_certificates: Arc::default(),
+            server_name: None,
+        }
+    }
+
+    /// TLS verified against the given PEM roots. Every entry must be a PEM certificate.
+    pub fn with_ca_certificates(
+        ca_certificates: Vec<String>,
+    ) -> std::result::Result<Self, InvalidPostgresCaCertificates> {
+        if ca_certificates.is_empty()
+            || ca_certificates.iter().any(|certificate| {
+                let certificate = certificate.trim();
+                !certificate.starts_with("-----BEGIN CERTIFICATE-----")
+                    || !certificate.ends_with("-----END CERTIFICATE-----")
+            })
+        {
+            return Err(InvalidPostgresCaCertificates);
+        }
+        Ok(Self::Enabled {
+            ca_certificates: ca_certificates.into(),
+            server_name: None,
+        })
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        matches!(self, Self::Enabled { .. })
+    }
+
+    /// PEM-encoded roots; empty when TLS is off or uses the system trust store.
+    pub fn ca_certificates(&self) -> &[String] {
+        match self {
+            Self::Disabled => &[],
+            Self::Enabled {
+                ca_certificates, ..
+            } => ca_certificates,
+        }
+    }
+}
+
+/// Resolved connection details for a Redis server. The database is always 0.
+#[derive(Clone)]
+pub struct RedisConnectionParams {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub tls: RedisTlsPolicy,
+}
+
+// Hand-written Debug so the resolved password never reaches logs or error chains.
+impl std::fmt::Debug for RedisConnectionParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisConnectionParams")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("tls", &self.tls)
+            .finish()
+    }
+}
+
+impl RedisConnectionParams {
+    /// `redis://` or `rediss://` URL with the password percent-encoded, so a generated
+    /// password with URL-special characters cannot corrupt it.
+    pub fn connection_url(&self) -> String {
+        // A bare IPv6 address must be bracketed to separate it from the port.
+        let host = if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!(
+            "{}://{}:{}@{}:{}/0",
+            if self.tls.is_enabled() {
+                "rediss"
+            } else {
+                "redis"
+            },
+            encode_userinfo(&self.username),
+            encode_userinfo(&self.password),
+            host,
+            self.port,
+        )
+    }
+}
+
+/// Connection-only Redis binding. Like Postgres it ships no gRPC service: the
+/// application uses its own Redis client against the resolved details.
+pub trait Redis: Binding {
+    fn connection_params(&self) -> &RedisConnectionParams;
+
+    /// `rediss://` connection URL, derived from `connection_params` and never stored.
+    fn connection_url(&self) -> String {
+        self.connection_params().connection_url()
+    }
+}
+
 /// A precondition for a KV put operation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum PutCondition {
@@ -1301,6 +1435,59 @@ pub enum CommandOutput {
     },
 }
 
+/// The signal names an interactive command accepts.
+pub use alien_core::sandbox_signal::CommandSignal;
+
+/// The input half of an interactive command: its stdin and its signals.
+///
+/// Shared, so a caller can write from one task while another reads output. Writes from several
+/// tasks at once are applied in the order they take the handle, each one whole.
+#[async_trait]
+pub trait CommandInput: Send + Sync + std::fmt::Debug {
+    /// Writes bytes to the command's stdin.
+    ///
+    /// Returns once the sandbox has handed every byte to the command's stdin pipe, which is the
+    /// backpressure: a command that is not reading holds the write rather than the bytes piling up
+    /// in between. A lost answer is retried without writing anything twice.
+    ///
+    /// A write that is cancelled, or fails, may already have delivered part of its bytes. The next
+    /// write then fails with `stdinInterrupted`, sending nothing, and the one after continues the
+    /// stream from what the command actually took. Nothing is ever skipped or sent twice.
+    async fn write(&self, data: &[u8]) -> Result<()>;
+
+    /// Closes stdin, so a program reading to end of input sees it and finishes. Closing again, or
+    /// after the command has ended, is not an error.
+    async fn close_stdin(&self) -> Result<()>;
+
+    /// Sends a signal to the command's process group. Once the command has been reaped this fails
+    /// with `commandNotRunning`, even before its terminal frame has been read: a signal never
+    /// reaches a process that is not the command.
+    async fn signal(&self, signal: CommandSignal) -> Result<()>;
+}
+
+/// A running interactive command. Requires `interactiveCommands`.
+///
+/// `output` is the same stream `run_command` returns: frames as the command writes them, with
+/// backpressure, then exactly one terminal item. Output is framed per write rather than per line,
+/// so a prompt with no newline after it reaches the caller while the program waits on it.
+/// Dropping `output` ends the command, as it does for `run_command`; dropping `input` only drops
+/// a handle, and stdin stays open until it is closed or the command ends.
+pub struct InteractiveCommand {
+    /// stdin and signals
+    pub input: Arc<dyn CommandInput>,
+    /// stdout, stderr and the terminal item
+    pub output: futures::stream::BoxStream<'static, Result<CommandOutput>>,
+}
+
+impl std::fmt::Debug for InteractiveCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InteractiveCommand")
+            .field("input", &self.input)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The id a started job answers to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -1449,6 +1636,27 @@ pub trait Sandbox: Binding {
         request: RunCommandRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
 
+    /// Starts a command the caller can write to and signal while it runs. Requires
+    /// `interactiveCommands`.
+    ///
+    /// The request's timeout bounds the command as it does for `run_command`. The call returns
+    /// once the command has started, so the first write cannot arrive before it exists. A start
+    /// that goes unanswered is `SANDBOX_OUTCOME_UNKNOWN`, as for `run_command`.
+    async fn run_interactive(
+        &self,
+        _sandbox_id: &str,
+        _request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::OperationNotSupported {
+                operation: "sandbox.runInteractive".to_string(),
+                reason: "this sandbox backend has no interactive commands; check the \
+                         interactiveCommands capability before calling"
+                    .to_string(),
+            },
+        ))
+    }
+
     /// Starts a command as a job, which outlives the call that started it. Requires `jobs`.
     ///
     /// A start that goes unanswered is `SANDBOX_OUTCOME_UNKNOWN` and not retryable: the sandbox
@@ -1545,6 +1753,13 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// identity. Resolution happens once per load, so the returned handle is synchronous.
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>>;
 
+    /// Given a binding identifier, builds a Redis implementation.
+    ///
+    /// Local and External carry their password inline; cloud variants carry a locator for
+    /// it and read the value from the cloud's secret store during this call, using the
+    /// workload's own identity.
+    async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>>;
+
     /// Given a binding identifier, builds a Queue implementation.
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>>;
 
@@ -1576,7 +1791,22 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use super::CreateSandboxRequest;
+    use super::{CreateSandboxRequest, RedisConnectionParams, RedisTlsPolicy};
+
+    #[test]
+    fn a_redis_url_brackets_an_ipv6_host() {
+        let params = |host: &str| RedisConnectionParams {
+            host: host.to_string(),
+            port: 6379,
+            username: "default".to_string(),
+            password: "pw".to_string(),
+            tls: RedisTlsPolicy::Disabled,
+        };
+        assert_eq!(params("::1").connection_url(), "redis://default:pw@[::1]:6379/0");
+        assert_eq!(params("[::1]").connection_url(), "redis://default:pw@[::1]:6379/0");
+        assert_eq!(params("10.0.0.5").connection_url(), "redis://default:pw@10.0.0.5:6379/0");
+        assert_eq!(params("host.example").host, "host.example");
+    }
 
     /// A field this struct does not know is a caller asking for something it will not get, and
     /// the field it would most want is the one that bounds the sandbox. Read as "absent",

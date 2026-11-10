@@ -17,6 +17,21 @@ pub enum ErrorData {
     )]
     StackInputInvalid { input_id: String, reason: String },
 
+    /// A stack definition field written in authoring shorthand cannot be resolved.
+    #[error(
+        code = "STACK_DEFINITION_INVALID",
+        message = "Invalid {field}: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    StackDefinitionInvalid {
+        /// Authoring path of the field, as the TypeScript SDK names it (for example `dataDisk.size.min`).
+        field: String,
+        /// Why the value cannot be used.
+        reason: String,
+    },
+
     /// Federation metadata cannot safely identify the intended trust or target.
     #[error(
         code = "GCP_FEDERATION_INVALID",

@@ -337,7 +337,7 @@ fn aws_data_key_exempts_only_native_encryption_services_for_management() {
     assert_eq!(
         direct["Condition"]["StringNotLike"],
         serde_json::json!({
-            "kms:ViaService": ["ec2.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"]
+            "kms:ViaService": ["ec2.*.amazonaws.com", "elasticache.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"]
         })
     );
 }
@@ -643,6 +643,57 @@ fn aws_storage_emits_browser_read_cors() {
         serde_json::json!(["ETag", "Content-Range", "Accept-Ranges"])
     );
     assert_eq!(cors_rule["MaxAge"], 3600);
+}
+
+#[test]
+fn aws_storage_emits_a_signed_upload_rule_after_the_read_rule() {
+    for (read, upload) in [
+        (
+            vec!["https://console.example.com".to_string()],
+            vec!["https://console.example.com".to_string()],
+        ),
+        (vec![], vec!["https://*.example.com".to_string()]),
+    ] {
+        let stack = Stack::new("storage-cors".to_string())
+            .add(
+                Storage::new("data".to_string())
+                    .cors_allowed_origins(read.clone())
+                    .cors_upload_origins(upload.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let yaml = render_built_ins(
+            &stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            "aws storage upload CORS",
+        );
+        let template: serde_json::Value =
+            serde_yaml::from_str(&yaml).expect("template YAML should parse");
+        let rules = template["Resources"]["Data"]["Properties"]["CorsConfiguration"]["CorsRules"]
+            .as_array()
+            .expect("CORS rules")
+            .clone();
+        let mut expected = Vec::new();
+        if !read.is_empty() {
+            expected.push(serde_json::json!({
+                "AllowedHeaders": ["*"],
+                "AllowedMethods": ["GET", "HEAD"],
+                "AllowedOrigins": read,
+                "ExposedHeaders": ["ETag", "Content-Range", "Accept-Ranges"],
+                "MaxAge": 3600,
+            }));
+        }
+        expected.push(serde_json::json!({
+            "AllowedHeaders": ["Content-Type", "Content-MD5", "Content-Disposition", "Content-Encoding", "Cache-Control", "x-amz-*"],
+            "AllowedMethods": ["PUT"],
+            "AllowedOrigins": upload,
+            "ExposedHeaders": ["ETag"],
+            "MaxAge": 3600,
+        }));
+        assert_eq!(rules, expected);
+    }
 }
 
 #[test]

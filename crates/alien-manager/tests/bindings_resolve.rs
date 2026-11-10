@@ -239,6 +239,7 @@ fn test_stack(platform: Platform) -> Stack {
                 versioning: false,
                 lifecycle_rules: Vec::new(),
                 cors_allowed_origins: Vec::new(),
+                cors_upload_origins: Vec::new(),
                 notifications: Vec::new(),
                 encryption_key: None,
             },

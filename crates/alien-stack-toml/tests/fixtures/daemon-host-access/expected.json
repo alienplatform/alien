@@ -1,0 +1,76 @@
+{
+  "id": "acme-host",
+  "resources": {
+    "installer": {
+      "config": {
+        "id": "installer",
+        "type": "daemon",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "installer",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": [],
+        "runtime": {
+          "mounts": [
+            {
+              "source": "/",
+              "target": "/host"
+            }
+          ],
+          "networkMode": "host",
+          "pidNamespace": "host",
+          "privileged": true,
+          "user": "0"
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "plain": {
+      "config": {
+        "id": "plain",
+        "type": "daemon",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "plain",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "publicEndpoints": []
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines"
+  ]
+}

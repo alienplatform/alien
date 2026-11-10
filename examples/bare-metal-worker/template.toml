@@ -1,0 +1,3 @@
+name = "bare-metal-worker"
+description = "Rust job worker for Linux servers, alien.toml"
+language = "Rust"

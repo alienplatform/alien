@@ -1,0 +1,21 @@
+name = "acme-search"
+platforms = ["aws"]
+
+[experimental.aws-opensearch.catalog]
+display-name = "Catalog search"
+description = "Vector index over the product catalog."
+lifecycle = "live"
+remote-access = true
+enabled-when = "search_enabled"
+collection-type = "vector-search"
+capacity = { indexing = { min-ocu = 2, max-ocu = 8 }, search = { min-ocu = 2, max-ocu = 32 } }
+
+[experimental.aws-opensearch.logs]
+capacity = { search = { max-ocu = 16 } }
+
+[input.search_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create catalog search"
+description = "Whether this deployment gets the catalog search collection."
+default = true

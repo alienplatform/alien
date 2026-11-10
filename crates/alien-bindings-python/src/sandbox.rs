@@ -192,6 +192,63 @@ impl CommandStreamHandle {
     }
 }
 
+/// A running interactive command: its output stream and its stdin and signals.
+///
+/// A thin handle over the Rust command. Output is read exactly as `run_command`'s is; closing
+/// the output ends the command.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone)]
+pub(crate) struct InteractiveCommandHandle {
+    output: CommandStreamHandle,
+    input: Arc<dyn alien_bindings::traits::CommandInput>,
+}
+
+fn parse_signal(name: &str) -> PyResult<alien_bindings::traits::CommandSignal> {
+    serde_json::from_value(serde_json::Value::String(name.to_string())).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown signal '{name}'; expected interrupt, terminate, kill, hangup, quit, user1 or user2"
+        ))
+    })
+}
+
+#[pymethods]
+impl InteractiveCommandHandle {
+    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let output = self.output.clone();
+        future_into_py(py, async move { output.next_frame().await })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let output = self.output.clone();
+        future_into_py(py, async move {
+            output.close_stream().await;
+            Ok(())
+        })
+    }
+
+    fn write<'py>(&self, py: Python<'py>, data: Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
+        let input = self.input.clone();
+        future_into_py(py, async move {
+            input.write(&data).await.map_err(map_alien_error)
+        })
+    }
+
+    fn close_stdin<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let input = self.input.clone();
+        future_into_py(py, async move {
+            input.close_stdin().await.map_err(map_alien_error)
+        })
+    }
+
+    fn signal<'py>(&self, py: Python<'py>, signal: String) -> PyResult<Bound<'py, PyAny>> {
+        let signal = parse_signal(&signal)?;
+        let input = self.input.clone();
+        future_into_py(py, async move {
+            input.signal(signal).await.map_err(map_alien_error)
+        })
+    }
+}
+
 #[pyclass]
 pub(crate) struct SandboxHandle {
     pub(crate) inner: Arc<dyn Sandbox>,
@@ -247,6 +304,7 @@ fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
         (value.files, "files"),
         (value.reconnect, "reconnect"),
         (value.jobs, "jobs"),
+        (value.interactive_commands, "interactiveCommands"),
         (value.pause_resume, "pauseResume"),
         (value.preview, "preview"),
         (value.domain_egress_rules, "domainEgressRules"),
@@ -393,6 +451,34 @@ impl SandboxHandle {
                 .await
                 .map_err(map_alien_error)?;
             Ok(CommandStreamHandle::new(frames))
+        })
+    }
+
+    #[pyo3(signature = (sandbox_id, command, args, timeout_ms, cwd=None, env=None))]
+    #[allow(clippy::too_many_arguments)] // Keep parity with run_command's Python API.
+    fn run_interactive<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        command: String,
+        args: Vec<String>,
+        timeout_ms: u64,
+        cwd: Option<String>,
+        env: Option<HashMap<String, String>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let command = inner
+                .run_interactive(
+                    &sandbox_id,
+                    command_request(command, args, timeout_ms, cwd, env),
+                )
+                .await
+                .map_err(map_alien_error)?;
+            Ok(InteractiveCommandHandle {
+                output: CommandStreamHandle::new(command.output),
+                input: command.input,
+            })
         })
     }
 

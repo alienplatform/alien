@@ -25,6 +25,8 @@ const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     // postgres/provision creates a runtime (system-generated) DB security group and authorizes
     // 5432 ingress, so its mutating EC2 actions must carry the stack/resource tag conditions.
     "postgres/provision",
+    // redis/provision does the same for its Redis security group and ElastiCache objects.
+    "redis/provision",
 ];
 
 #[test]

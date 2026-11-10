@@ -9,7 +9,7 @@ It exercises a more realistic shape than a single worker:
 - `worker`: background processor that consumes Redis jobs, updates Postgres, and writes derived artifacts to object storage.
 - `scheduler`: periodic process that calls `http://api:3000/internal/maintenance` using Kubernetes namespace-local DNS.
 - `postgres`: `postgres:16-alpine` with `10Gi` persistent storage mounted at `/data`.
-- `redis`: `redis:7-alpine`, modeled as a normal container for now. TODO: replace this with a first-class `alien.Redis` resource when that exists.
+- `redis`: `redis:7-alpine`, modeled as a normal container. TODO: on Kubernetes, `alien.Redis` uses a customer-provided Redis through an external binding (there is no managed Redis to create there), so this stack keeps the container until a chart-provisioned Redis exists (follow-up).
 - `files`: Alien `Storage` resource used by `api` and `worker`.
 
 Only `gateway` is public. The other services are reachable by namespace-local

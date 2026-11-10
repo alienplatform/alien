@@ -36,3 +36,4 @@ clap = { workspace = true, features = ["derive", "env"] }
 utoipa = { workspace = true, features = ["axum_extras"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
 sha2 = "0.10"
+workspace-hack = { version = "0.1", path = "../../../../crates/workspace-hack" }

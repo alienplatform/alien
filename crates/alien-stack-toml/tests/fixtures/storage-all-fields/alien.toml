@@ -1,0 +1,38 @@
+name = "acme-storage"
+platforms = ["aws", "gcp"]
+
+[key.bucket-key]
+display-name = "Bucket key"
+
+[queue.uploads]
+lifecycle = "live"
+
+[queue.exports]
+lifecycle = "live"
+
+[storage.reports]
+display-name = "Reports"
+description = "Customer-facing report archive."
+lifecycle = "live"
+remote-access = true
+enabled-when = "reports_enabled"
+versioning = true
+public-read = true
+encryption-key = "bucket-key"
+cors-allowed-origins = ["https://app.acme.example", "https://admin.acme.example"]
+cors-upload-origins = ["https://app.acme.example"]
+lifecycle-rules = [
+  { prefix = "tmp/", days = 7 },
+  { days = 365 },
+]
+notifications = [
+  { queue = "uploads", prefix = "incoming/", suffix = ".csv" },
+  { queue = "exports", events = ["created"], prefix = "outgoing/" },
+]
+
+[input.reports_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create reports bucket"
+description = "Whether this deployment gets the reports bucket."
+default = true

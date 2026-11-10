@@ -9,9 +9,12 @@
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
-    "@alienplatform/sdk": "workspace:*",
     "@alienplatform/core": "workspace:*",
-    "hono": "^4.0.0"
+    "@alienplatform/sdk": "workspace:*",
+    "bullmq": "^5.0.0",
+    "hono": "^4.0.0",
+    "ioredis": "^5.4.0",
+    "redis": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

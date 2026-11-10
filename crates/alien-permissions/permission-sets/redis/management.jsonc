@@ -1,0 +1,7 @@
+{
+  "id": "redis/management",
+  "description": "Nothing beyond redis/heartbeat on every cloud: the management identity never reads a Redis password.",
+  "platforms": {
+    "gcp": []
+  }
+}

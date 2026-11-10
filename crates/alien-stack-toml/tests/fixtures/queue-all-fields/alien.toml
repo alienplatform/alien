@@ -1,0 +1,17 @@
+name = "acme-queue"
+platforms = ["aws", "gcp", "azure"]
+
+[queue.main]
+display-name = "Primary queue"
+description = "The queue the acme services share."
+lifecycle = "live"
+remote-access = true
+enabled-when = "queue_enabled"
+
+[input.queue_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create queue"
+description = "Whether this deployment gets the queue."
+default = false
+platforms = ["aws"]

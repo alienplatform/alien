@@ -1,0 +1,51 @@
+name = "sandbox-runtime"
+platforms = ["machines", "aws"]
+
+[pool.general]
+cpu = 4
+memory = "16Gi"
+ephemeral-storage = "20Gi"
+architecture = "x86_64"
+nested-virtualization = true
+machines = { default = 2, allowed = [1, 5] }
+
+[daemon.loader]
+build = { toolchain = "rust", binary-name = "loader" }
+pool = "general"
+cpu = 2
+memory = "4Gi"
+host-access = true          # privileged, host pid and network, / at /host, uid 0
+stop-grace-period = "24h"
+health-check = { port = 18082, path = "/health" }
+env = { RUST_LOG = "info", AUTH_ACCESS_KEY = { input = "auth_access_key" }, TAILNET_AUTH_KEY = { input = "tailnet_auth_key" } }
+env-file = ["deploy/loader.env", "deploy/overrides.env"]
+links = ["snapshots"]
+
+[daemon.loader.public-endpoints]
+api = { port = 8080, host-label = "@" }
+shares = { port = 8080, host-label = "shares", wildcard-subdomains = true }
+
+[storage.snapshots]
+enabled-when = "snapshots_enabled"
+
+[input.snapshots_enabled]
+kind = "boolean"
+provided-by = "deployer"
+label = "Create snapshots"
+description = "Whether this deployment gets the snapshots storage bucket."
+default = true
+platforms = ["aws"]
+
+[input.auth_access_key]
+kind = "secret"
+label = "Auth access key"
+description = "Key the loader presents to the auth service."
+
+[input.tailnet_auth_key]
+kind = "secret"
+required = false
+label = "Tailnet auth key"
+platforms = ["machines"]
+
+# Kept so upgrades of existing deployments don't need setup again.
+[permissions.loader]

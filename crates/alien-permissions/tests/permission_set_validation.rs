@@ -385,8 +385,10 @@ fn is_known_aws_dataset_gap(action: &str) -> bool {
         // bedrock-mantle (the OpenAI/Anthropic-compatible inference endpoint) is newer
         // than the pinned dataset snapshot, which carries no entry for the service at
         // all. The action is real: AWS's own AmazonBedrockMantleInferenceAccess managed
-        // policy grants bedrock-mantle:CreateInference.
+        // policy grants bedrock-mantle:CreateInference, and the AWS Service Authorization
+        // Reference lists bedrock-mantle:ListModels (List access, project resource).
         | "bedrock-mantle:CreateInference"
+        | "bedrock-mantle:ListModels"
     )
 }
 
@@ -452,6 +454,9 @@ fn validate_gcp_permissions(
 /// reference both omit them, so neither is evidence a name is wrong — delete one from a grant only
 /// after IAM refuses to create a role naming it.
 const GCP_UNPUBLISHED_PERMISSIONS: &[&str] = &[
+    // Memorystore for Valkey auth tokens. Listed under Memorystore Admin in the public role
+    // reference; the dataset mirror predates them.
+    "memorystore.authTokens.list",
     // Agent-platform sandbox environments and their templates, in preview.
     "aiplatform.sandboxEnvironmentTemplates.create",
     "aiplatform.sandboxEnvironmentTemplates.delete",

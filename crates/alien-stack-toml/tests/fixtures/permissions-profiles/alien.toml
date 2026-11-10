@@ -1,0 +1,23 @@
+name = "acme-permissions"
+platforms = ["aws", "gcp"]
+
+[storage.reports]
+[storage.archive]
+[kv.cache]
+[queue.jobs]
+[vault.secrets]
+
+[permissions.reader]
+"*" = ["storage/data-read", "kv/data-read"]
+reports = ["storage/data-write"]
+cache = ["kv/data-write", "kv/data-read"]
+
+[permissions.processor]
+"*" = ["queue/data-read"]
+jobs = ["queue/data-write", { id = "acme/jobs-metrics", description = "Publish job metrics.", platforms = { aws = [{ grant = { actions = ["cloudwatch:PutMetricData"] }, binding = { stack = { resources = ["*"] } } }] } }]
+secrets = ["vault/data-read"]
+
+[permissions.archivist]
+archive = ["storage/data-read", "storage/data-write"]
+
+[permissions.idle]

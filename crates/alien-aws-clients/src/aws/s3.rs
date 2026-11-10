@@ -1,6 +1,7 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, RequestBuilderExt, Result};
+use alien_core::{AWS_SIGNED_UPLOAD_HEADERS, SIGNED_UPLOAD_EXPOSED_HEADERS};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bon::Builder;
@@ -38,8 +39,14 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
     async fn get_bucket_policy(&self, bucket: &str) -> Result<GetBucketPolicyOutput>;
     async fn get_bucket_acl(&self, bucket: &str) -> Result<GetBucketAclOutput>;
     async fn put_bucket_versioning(&self, bucket: &str, status: VersioningStatus) -> Result<()>;
-    /// Replaces browser-read CORS, or deletes it when no origins are supplied.
-    async fn set_bucket_read_cors(&self, bucket: &str, origins: &[String]) -> Result<()>;
+    /// Replaces the bucket's browser CORS: a read rule (`GET`, `HEAD`) for `read_origins` and
+    /// a signed-upload rule (`PUT`) for `upload_origins`. Deletes it when both are empty.
+    async fn set_bucket_cors(
+        &self,
+        bucket: &str,
+        read_origins: &[String],
+        upload_origins: &[String],
+    ) -> Result<()>;
 
     async fn put_public_access_block(
         &self,
@@ -784,28 +791,52 @@ impl S3Api for S3Client {
         .await
     }
 
-    async fn set_bucket_read_cors(&self, bucket: &str, origins: &[String]) -> Result<()> {
+    async fn set_bucket_cors(
+        &self,
+        bucket: &str,
+        read_origins: &[String],
+        upload_origins: &[String],
+    ) -> Result<()> {
         self.credentials.ensure_fresh().await?;
-        let (method, body, operation) = if origins.is_empty() {
+        let (method, body, operation) = if read_origins.is_empty() && upload_origins.is_empty() {
             (Method::DELETE, String::new(), "DeleteBucketCors")
         } else {
             let mut body = String::from(
-                "<CORSConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><CORSRule>",
+                "<CORSConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
             );
-            for origin in origins {
-                body.push_str("<AllowedOrigin>");
-                body.push_str(&Self::escape_xml(origin));
-                body.push_str("</AllowedOrigin>");
+            let push_origins = |body: &mut String, origins: &[String]| {
+                for origin in origins {
+                    body.push_str("<AllowedOrigin>");
+                    body.push_str(&Self::escape_xml(origin));
+                    body.push_str("</AllowedOrigin>");
+                }
+            };
+            if !read_origins.is_empty() {
+                body.push_str("<CORSRule>");
+                push_origins(&mut body, read_origins);
+                body.push_str("<AllowedMethod>GET</AllowedMethod><AllowedMethod>HEAD</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader><ExposeHeader>Content-Range</ExposeHeader><ExposeHeader>Accept-Ranges</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>");
             }
-            body.push_str("<AllowedMethod>GET</AllowedMethod><AllowedMethod>HEAD</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader><ExposeHeader>Content-Range</ExposeHeader><ExposeHeader>Accept-Ranges</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule></CORSConfiguration>");
+            if !upload_origins.is_empty() {
+                body.push_str("<CORSRule>");
+                push_origins(&mut body, upload_origins);
+                body.push_str("<AllowedMethod>PUT</AllowedMethod>");
+                for header in AWS_SIGNED_UPLOAD_HEADERS {
+                    body.push_str(&format!("<AllowedHeader>{header}</AllowedHeader>"));
+                }
+                for header in SIGNED_UPLOAD_EXPOSED_HEADERS {
+                    body.push_str(&format!("<ExposeHeader>{header}</ExposeHeader>"));
+                }
+                body.push_str("<MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>");
+            }
+            body.push_str("</CORSConfiguration>");
             (Method::PUT, body, "PutBucketCors")
         };
         let mut builder = self
             .client
-            .request(method, self.url(bucket, "?cors"))
+            .request(method.clone(), self.url(bucket, "?cors"))
             .host(&self.host(bucket))
             .content_sha256(&body);
-        if !origins.is_empty() {
+        if method == Method::PUT {
             builder = builder
                 .content_type_xml()
                 .header(

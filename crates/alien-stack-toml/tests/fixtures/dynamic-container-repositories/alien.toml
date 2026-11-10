@@ -1,0 +1,10 @@
+name = "acme-dynamic-repositories"
+platforms = ["aws", "gcp"]
+dynamic-container-repositories = [
+  "ghcr.io/acme/runner",
+  "registry.acme.example:5000/team/tools/builder",
+  "docker.io/library/alpine",
+  "us-docker.pkg.dev/acme-prod/images/sandbox-base",
+]
+
+[storage.data]

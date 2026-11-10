@@ -23,6 +23,7 @@ mod key;
 mod kv;
 mod postgres;
 mod queue;
+mod redis;
 mod sandbox;
 mod service_account;
 mod storage;
@@ -53,6 +54,10 @@ pub use postgres::{
 pub use queue::{
     LocalHttpQueueBinding, LocalQueueBinding, PubSubQueueBinding, QueueBinding,
     ServiceBusQueueBinding, SqsQueueBinding,
+};
+pub use redis::{
+    AzureManagedRedisBinding, ElastiCacheRedisBinding, ExternalRedisBinding, LocalRedisBinding,
+    MemorystoreRedisBinding, RedisBinding,
 };
 pub use sandbox::{
     AwsSandboxBinding, AzureSandboxBinding, GcpAgentPlatformSandboxBinding,

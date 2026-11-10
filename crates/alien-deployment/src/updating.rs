@@ -268,11 +268,20 @@ pub async fn handle_update_pending(
 
     // Run deployment-time preflights: compatibility checks + mutations + runtime checks
     // Store the mutated stack to use for the actual update and for future compatibility checks
-    let setup_update_authorization = current
+    let recorded_setup_update_authorization = current
         .runtime_metadata
         .as_ref()
-        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref());
+    let setup_update_authorization = recorded_setup_update_authorization
         .filter(|authorization| Some(authorization.release_id.as_str()) == target_release_id);
+    info!(
+        authorization_present = recorded_setup_update_authorization.is_some(),
+        authorization_release_id = recorded_setup_update_authorization
+            .map(|authorization| authorization.release_id.as_str()),
+        target_release_id,
+        kept_for_target_release = setup_update_authorization.is_some(),
+        "setup update authorization release filter"
+    );
     let (mutated_stack, _deployment_summary, setup_update_authorized) = runner
         .run_deployment_time_preflights(
             target_stack.clone(),

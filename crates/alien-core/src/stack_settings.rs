@@ -163,10 +163,10 @@ pub enum NetworkSettings {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         application_gateway_subnet_name: Option<String>,
         /// Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
-        /// Postgres Flexible Server). A Private Endpoint must not share the private
+        /// Postgres Flexible Server or Azure Managed Redis). A Private Endpoint must not share the private
         /// subnet, which is already claimed by the Container Apps environment's
         /// `infrastructure_subnet_id`. Required only when the stack contains a
-        /// Postgres resource; otherwise unused.
+        /// Postgres or Redis resource; otherwise unused.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_endpoint_subnet_name: Option<String>,
     },

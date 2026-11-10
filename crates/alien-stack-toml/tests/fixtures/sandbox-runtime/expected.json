@@ -1,0 +1,191 @@
+{
+  "id": "sandbox-runtime",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the snapshots storage bucket.",
+      "env": [],
+      "id": "snapshots_enabled",
+      "kind": "boolean",
+      "label": "Create snapshots",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "description": "Key the loader presents to the auth service.",
+      "env": [
+        {
+          "name": "AUTH_ACCESS_KEY",
+          "targetResources": [
+            "loader"
+          ]
+        }
+      ],
+      "id": "auth_access_key",
+      "kind": "secret",
+      "label": "Auth access key",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "description": "",
+      "env": [
+        {
+          "name": "TAILNET_AUTH_KEY",
+          "targetResources": [
+            "loader"
+          ]
+        }
+      ],
+      "id": "tailnet_auth_key",
+      "kind": "secret",
+      "label": "Tailnet auth key",
+      "platforms": [
+        "machines"
+      ],
+      "providedBy": [
+        "developer"
+      ],
+      "required": false,
+      "validation": {}
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "loader": {}
+    }
+  },
+  "resources": {
+    "compute": {
+      "config": {
+        "id": "compute",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "general",
+            "maxSize": 2,
+            "minSize": 2,
+            "nestedVirtualization": true,
+            "profile": {
+              "architecture": "x86_64",
+              "cpu": "4",
+              "ephemeralStorageBytes": 21474836480,
+              "memoryBytes": 17179869184
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 2,
+                "max": 5,
+                "min": 1
+              },
+              "type": "fixed"
+            }
+          }
+        ]
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "snapshots": {
+      "config": {
+        "id": "snapshots",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "enabledWhen": "snapshots_enabled",
+      "lifecycle": "frozen"
+    },
+    "loader": {
+      "config": {
+        "id": "loader",
+        "type": "daemon",
+        "cluster": "compute",
+        "code": {
+          "src": ".",
+          "toolchain": {
+            "binaryName": "loader",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "2",
+          "min": "2"
+        },
+        "environment": {
+          "LOADER_HOST_ROOT": "/host",
+          "LOADER_STATE_DIR": "/host/var/lib/sandbox-loader-v2",
+          "LOADER_HEALTH_LISTEN": "127.0.0.1:18082",
+          "LOADER_GREETING": "hello # not a comment",
+          "RUST_LOG": "info"
+        },
+        "healthCheck": {
+          "path": "/health",
+          "port": 18082
+        },
+        "links": [
+          {
+            "id": "snapshots",
+            "type": "storage"
+          }
+        ],
+        "memory": {
+          "desired": "4Gi",
+          "min": "4Gi"
+        },
+        "pool": "general",
+        "publicEndpoints": [
+          {
+            "hostLabel": "@",
+            "name": "api",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          },
+          {
+            "hostLabel": "shares",
+            "name": "shares",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": true
+          }
+        ],
+        "runtime": {
+          "mounts": [
+            {
+              "source": "/",
+              "target": "/host"
+            }
+          ],
+          "networkMode": "host",
+          "pidNamespace": "host",
+          "privileged": true,
+          "user": "0"
+        },
+        "stopGracePeriodSeconds": 86400
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws"
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "id": "acme-management-extend",
+  "permissions": {
+    "management": {
+      "extend": {
+        "*": [
+          "storage/management",
+          "queue/management"
+        ],
+        "reports": [
+          "storage/data-read"
+        ],
+        "jobs": [
+          "queue/data-read",
+          {
+            "description": "Audit the jobs queue.",
+            "id": "acme/jobs-audit",
+            "platforms": {
+              "gcp": [
+                {
+                  "binding": {
+                    "stack": {
+                      "scope": "projects/${projectId}"
+                    }
+                  },
+                  "grant": {
+                    "permissions": [
+                      "pubsub.topics.get"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "profiles": {}
+  },
+  "resources": {
+    "reports": {
+      "config": {
+        "id": "reports",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp"
+  ]
+}

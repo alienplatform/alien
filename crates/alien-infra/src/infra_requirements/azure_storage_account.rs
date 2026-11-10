@@ -19,7 +19,8 @@ use alien_core::{
     AzureStorageAccount, AzureStorageAccountEndpoints, AzureStorageAccountHeartbeatData,
     AzureStorageAccountOutputs, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus, Storage, StorageHeartbeatStatus,
+    ResourceStatus, Storage, StorageHeartbeatStatus, AZURE_SIGNED_UPLOAD_HEADERS,
+    SIGNED_UPLOAD_EXPOSED_HEADERS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -998,39 +999,59 @@ struct SharedCapabilities {
     public: bool,
     versioning: bool,
     origins: BTreeSet<String>,
+    upload_origins: BTreeSet<String>,
     lifecycle: BTreeSet<(String, String, u32)>,
 }
 
 impl SharedCapabilities {
     fn revision(&self) -> String {
         // BTreeSet makes declaration order and duplicate contributors irrelevant.
-        format!(
+        let revision = format!(
             "{}:{}:{:?}:{:?}",
             self.public, self.versioning, self.origins, self.lifecycle
-        )
+        );
+        // Accounts without signed-upload origins keep the revision older controllers stored.
+        if self.upload_origins.is_empty() {
+            revision
+        } else {
+            format!("{revision}:{:?}", self.upload_origins)
+        }
     }
 
     fn cors(&self) -> CorsRules {
-        CorsRules {
-            cors_rules: if self.origins.is_empty() {
-                vec![]
-            } else {
-                vec![CorsRule {
-                    allowed_origins: self.origins.iter().cloned().collect(),
-                    allowed_methods: vec![
-                        CorsRuleAllowedMethodsItem::Get,
-                        CorsRuleAllowedMethodsItem::Head,
-                    ],
-                    allowed_headers: vec!["*".into()],
-                    exposed_headers: vec![
-                        "ETag".into(),
-                        "Content-Range".into(),
-                        "Accept-Ranges".into(),
-                    ],
-                    max_age_in_seconds: 3600,
-                }]
-            },
+        let mut cors_rules = Vec::new();
+        if !self.origins.is_empty() {
+            cors_rules.push(CorsRule {
+                allowed_origins: self.origins.iter().cloned().collect(),
+                allowed_methods: vec![
+                    CorsRuleAllowedMethodsItem::Get,
+                    CorsRuleAllowedMethodsItem::Head,
+                ],
+                allowed_headers: vec!["*".into()],
+                exposed_headers: vec![
+                    "ETag".into(),
+                    "Content-Range".into(),
+                    "Accept-Ranges".into(),
+                ],
+                max_age_in_seconds: 3600,
+            });
         }
+        if !self.upload_origins.is_empty() {
+            cors_rules.push(CorsRule {
+                allowed_origins: self.upload_origins.iter().cloned().collect(),
+                allowed_methods: vec![CorsRuleAllowedMethodsItem::Put],
+                allowed_headers: AZURE_SIGNED_UPLOAD_HEADERS
+                    .iter()
+                    .map(|header| header.to_string())
+                    .collect(),
+                exposed_headers: SIGNED_UPLOAD_EXPOSED_HEADERS
+                    .iter()
+                    .map(|header| header.to_string())
+                    .collect(),
+                max_age_in_seconds: 3600,
+            });
+        }
+        CorsRules { cors_rules }
     }
 }
 
@@ -1071,6 +1092,9 @@ fn shared_capabilities(ctx: &ResourceControllerContext<'_>) -> Result<SharedCapa
         result
             .origins
             .extend(storage.cors_allowed_origins.iter().cloned());
+        result
+            .upload_origins
+            .extend(storage.cors_upload_origins.iter().cloned());
     }
     if result.lifecycle.len() > 100 {
         return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1078,23 +1102,20 @@ fn shared_capabilities(ctx: &ResourceControllerContext<'_>) -> Result<SharedCapa
             message: "Combined Azure lifecycle declarations exceed 100 rules".into(),
         }));
     }
-    if result.origins.iter().any(|origin| {
-        origin.is_empty() || origin.chars().count() > 256 || origin.contains([',', '\r', '\n'])
-    }) {
+    if result
+        .origins
+        .iter()
+        .chain(&result.upload_origins)
+        .any(|origin| {
+            origin.is_empty() || origin.chars().count() > 256 || origin.contains([',', '\r', '\n'])
+        })
+    {
         return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
             resource_id: ctx.desired_config.id().to_owned(), message: "Azure CORS origins must be nonempty, at most 256 characters, and contain no commas or line breaks".into(),
         }));
     }
     let cors = result.cors();
-    // Azure's 2 KiB limit covers origins, methods and headers in the rule.
-    let size: usize = cors
-        .cors_rules
-        .iter()
-        .map(|rule| {
-            rule.allowed_origins.join(",").len()
-                + "GET,HEAD*ETag,Content-Range,Accept-Ranges3600".len()
-        })
-        .sum();
+    let size = cors_settings_size(&cors);
     if size > 2048 {
         return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
             resource_id: ctx.desired_config.id().to_owned(),
@@ -1104,6 +1125,26 @@ fn shared_capabilities(ctx: &ResourceControllerContext<'_>) -> Result<SharedCapa
         }));
     }
     Ok(result)
+}
+
+/// The size Azure counts toward its 2 KiB CORS limit: the origins, methods, headers and max
+/// age of every rule, without the XML around them.
+fn cors_settings_size(cors: &CorsRules) -> usize {
+    cors.cors_rules
+        .iter()
+        .map(|rule| {
+            let methods: Vec<String> = rule
+                .allowed_methods
+                .iter()
+                .map(|method| method.to_string())
+                .collect();
+            rule.allowed_origins.join(",").len()
+                + methods.join(",").len()
+                + rule.allowed_headers.join(",").len()
+                + rule.exposed_headers.join(",").len()
+                + rule.max_age_in_seconds.to_string().len()
+        })
+        .sum()
 }
 
 impl AzureStorageAccountController {
@@ -1404,6 +1445,68 @@ mod shared_settings_tests {
                 serde_json::json!(["GET", "HEAD"])
             );
         }
+    }
+
+    #[test]
+    fn upload_origins_add_a_put_rule_without_changing_read_only_revisions() {
+        let mut capabilities = SharedCapabilities::default();
+        capabilities.origins.insert("https://one.example".into());
+        // The revision older controllers stored for this account.
+        assert_eq!(
+            capabilities.revision(),
+            r#"false:false:{"https://one.example"}:{}"#
+        );
+        let read_only = capabilities.cors();
+        // The size the read rule was budgeted at before upload rules existed.
+        assert_eq!(
+            cors_settings_size(&read_only),
+            "https://one.example".len() + "GET,HEAD*ETag,Content-Range,Accept-Ranges3600".len()
+        );
+
+        capabilities
+            .upload_origins
+            .insert("https://one.example".into());
+        assert_ne!(
+            capabilities.revision(),
+            r#"false:false:{"https://one.example"}:{}"#
+        );
+        let cors = capabilities.cors();
+        assert_eq!(
+            serde_json::to_value(&cors).unwrap()["corsRules"],
+            serde_json::json!([
+                {
+                    "allowedOrigins": ["https://one.example"],
+                    "allowedMethods": ["GET", "HEAD"],
+                    "allowedHeaders": ["*"],
+                    "exposedHeaders": ["ETag", "Content-Range", "Accept-Ranges"],
+                    "maxAgeInSeconds": 3600
+                },
+                {
+                    "allowedOrigins": ["https://one.example"],
+                    "allowedMethods": ["PUT"],
+                    "allowedHeaders": ["Content-Type", "Content-MD5", "x-ms-*"],
+                    "exposedHeaders": ["ETag"],
+                    "maxAgeInSeconds": 3600
+                }
+            ])
+        );
+        assert_eq!(
+            cors_settings_size(&cors),
+            cors_settings_size(&read_only)
+                + "https://one.example".len()
+                + "PUTContent-Type,Content-MD5,x-ms-*ETag3600".len()
+        );
+
+        let upload_only = SharedCapabilities {
+            upload_origins: capabilities.upload_origins.clone(),
+            ..Default::default()
+        };
+        let rules = upload_only.cors().cors_rules;
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].allowed_methods,
+            vec![CorsRuleAllowedMethodsItem::Put]
+        );
     }
 
     #[tokio::test]

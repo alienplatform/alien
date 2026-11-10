@@ -31,6 +31,10 @@
     "frozen": true,
     "live": true
   },
+  "redis": {
+    "frozen": true,
+    "live": true
+  },
   "sandbox": {
     "frozen": true,
     "live": true

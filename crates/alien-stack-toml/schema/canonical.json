@@ -1,0 +1,3161 @@
+{
+  "components": {
+    "Ai": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "Architecture": {
+      "enum": [
+        "arm64",
+        "x86_64"
+      ],
+      "type": "string"
+    },
+    "ArtifactRegistry": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "replicationRegions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AuthoredAutoscaling": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "$ref": "#/components/schemas/ComputeChoice"
+        },
+        "min": {
+          "$ref": "#/components/schemas/ComputeChoice"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "AuthoredEnvMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "targetResources": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/StackInputEnvironmentVariableType"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "AuthoredInput": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/InputValue"
+            }
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "env": {
+          "items": {
+            "$ref": "#/components/schemas/AuthoredEnvMapping"
+          },
+          "type": "array"
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generate": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/StackInputGenerate"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/components/schemas/StackInputKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "max": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/InputValue"
+            }
+          ]
+        },
+        "maxItems": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxLength": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/InputValue"
+            }
+          ]
+        },
+        "minItems": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minLength": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pattern": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "placeholder": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platforms": {
+          "items": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "providedBy": {
+          "items": {
+            "$ref": "#/components/schemas/StackInputProvider"
+          },
+          "type": "array"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "when": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/StackInputCondition"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "label"
+      ],
+      "type": "object"
+    },
+    "AuthoredPool": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/Architecture"
+            }
+          ]
+        },
+        "autoscaling": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/AuthoredAutoscaling"
+            }
+          ]
+        },
+        "cpu": {
+          "$ref": "#/components/schemas/CpuAmount"
+        },
+        "dataDisk": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/DataDiskSize"
+            }
+          ]
+        },
+        "ephemeralStorage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureDomainSpread": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "gpu": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/GpuSpec"
+            }
+          ]
+        },
+        "machines": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ComputeChoice"
+            }
+          ]
+        },
+        "memory": {
+          "type": "string"
+        },
+        "nestedVirtualization": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cpu",
+        "memory"
+      ],
+      "type": "object"
+    },
+    "AwsConditionValue": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "AwsOpenSearch": {
+      "additionalProperties": false,
+      "properties": {
+        "capacity": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/AwsOpenSearchCapacity"
+            }
+          ]
+        },
+        "collectionType": {
+          "$ref": "#/components/schemas/AwsOpenSearchCollectionType"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AwsOpenSearchCapacity": {
+      "additionalProperties": false,
+      "properties": {
+        "indexing": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/AwsOpenSearchCapacityRange"
+            }
+          ]
+        },
+        "search": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/AwsOpenSearchCapacityRange"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AwsOpenSearchCapacityRange": {
+      "additionalProperties": false,
+      "properties": {
+        "maxOcu": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minOcu": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AwsOpenSearchCollectionType": {
+      "enum": [
+        "search",
+        "vectorSearch"
+      ],
+      "type": "string"
+    },
+    "AwsPermissionEffect": {
+      "enum": [
+        "Allow",
+        "Deny"
+      ],
+      "type": "string"
+    },
+    "AwsPlatformPermission": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/components/schemas/BindingConfiguration_AwsBindingSpec"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effect": {
+          "$ref": "#/components/schemas/AwsPermissionEffect"
+        },
+        "grant": {
+          "$ref": "#/components/schemas/PermissionGrant"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "grant",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "AzurePlatformPermission": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/components/schemas/BindingConfiguration_AzureBindingSpec"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grant": {
+          "$ref": "#/components/schemas/PermissionGrant"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "grant",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "BindingConfiguration_AwsBindingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/AwsConditionValue"
+                },
+                "type": "object"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "notResources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "resources"
+          ],
+          "type": "object"
+        },
+        "stack": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/AwsConditionValue"
+                },
+                "type": "object"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "notResources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "resources"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "BindingConfiguration_AzureBindingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "additionalProperties": false,
+          "properties": {
+            "scope": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        },
+        "stack": {
+          "additionalProperties": false,
+          "properties": {
+            "scope": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "BindingConfiguration_GcpBindingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/GcpCondition"
+                }
+              ]
+            },
+            "scope": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        },
+        "stack": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/GcpCondition"
+                }
+              ]
+            },
+            "scope": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "Build": {
+      "additionalProperties": false,
+      "properties": {
+        "computeType": {
+          "$ref": "#/components/schemas/ComputeType"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/ResourceRef"
+          },
+          "type": "array"
+        },
+        "permissions": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "links",
+        "permissions"
+      ],
+      "type": "object"
+    },
+    "CapacityGroup": {
+      "properties": {
+        "dataDiskGibRange": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ComputeChoiceRange"
+            }
+          ]
+        },
+        "groupId": {
+          "type": "string"
+        },
+        "instanceType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxSize": {
+          "type": "integer"
+        },
+        "minSize": {
+          "type": "integer"
+        },
+        "nestedVirtualization": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "profile": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/MachineProfile"
+            }
+          ]
+        },
+        "scalePolicy": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/CapacityGroupScalePolicy"
+            }
+          ]
+        }
+      },
+      "required": [
+        "groupId",
+        "minSize",
+        "maxSize"
+      ],
+      "type": "object"
+    },
+    "CapacityGroupScalePolicy": {
+      "oneOf": [
+        {
+          "properties": {
+            "machines": {
+              "$ref": "#/components/schemas/ComputeChoiceRange"
+            },
+            "type": {
+              "enum": [
+                "fixed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "machines",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "max": {
+              "$ref": "#/components/schemas/ComputeChoiceRange"
+            },
+            "min": {
+              "$ref": "#/components/schemas/ComputeChoiceRange"
+            },
+            "type": {
+              "enum": [
+                "autoscale"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "min",
+            "max",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ComputeChoice": {
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "$ref": "#/components/schemas/ComputeChoiceRange"
+        }
+      ]
+    },
+    "ComputeChoiceRange": {
+      "properties": {
+        "default": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        },
+        "min": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "default"
+      ],
+      "type": "object"
+    },
+    "ComputeCluster": {
+      "additionalProperties": false,
+      "properties": {
+        "capacityGroups": {
+          "items": {
+            "$ref": "#/components/schemas/CapacityGroup"
+          },
+          "type": "array"
+        },
+        "containerCidr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dynamicContainerPool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureDomainSpread": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "nodePermissions": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/PermissionProfile"
+            }
+          ]
+        },
+        "nodePermissionsPlatforms": {
+          "items": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "selectedFailureDomains": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "capacityGroups"
+      ],
+      "type": "object"
+    },
+    "ComputeType": {
+      "enum": [
+        "small",
+        "medium",
+        "large",
+        "x-large"
+      ],
+      "type": "string"
+    },
+    "Container": {
+      "additionalProperties": false,
+      "properties": {
+        "autoscaling": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerAutoscaling"
+            }
+          ]
+        },
+        "cluster": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "$ref": "#/components/schemas/ContainerCode"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "commandsEnabled": {
+          "type": "boolean"
+        },
+        "cpu": {
+          "$ref": "#/components/schemas/ResourceSpec"
+        },
+        "egress": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerEgress"
+            }
+          ]
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "ephemeralStorage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gpu": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerGpuSpec"
+            }
+          ]
+        },
+        "healthCheck": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/HealthCheck"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kubernetesLivenessProbe": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/KubernetesHttpProbe"
+            }
+          ]
+        },
+        "kubernetesReadinessProbe": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/KubernetesHttpProbe"
+            }
+          ]
+        },
+        "kubernetesSecretMounts": {
+          "items": {
+            "$ref": "#/components/schemas/KubernetesSecretMount"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/ResourceRef"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "$ref": "#/components/schemas/ResourceSpec"
+        },
+        "permissions": {
+          "type": "string"
+        },
+        "persistentStorage": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/PersistentStorage"
+            }
+          ]
+        },
+        "pool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/components/schemas/ContainerPort"
+          },
+          "type": "array"
+        },
+        "publicEndpoints": {
+          "items": {
+            "$ref": "#/components/schemas/PublicEndpoint"
+          },
+          "type": "array"
+        },
+        "replicas": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resourceChoices": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerResourceChoices"
+            }
+          ]
+        },
+        "security": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerSecurity"
+            }
+          ]
+        },
+        "stateful": {
+          "type": "boolean"
+        },
+        "stopGracePeriodSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tunnel": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerTunnel"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "links",
+        "ports",
+        "code",
+        "cpu",
+        "memory",
+        "permissions"
+      ],
+      "type": "object"
+    },
+    "ContainerAutoscaling": {
+      "properties": {
+        "desired": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        },
+        "maxHttpP95LatencyMs": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min": {
+          "type": "integer"
+        },
+        "targetCpuPercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "targetHttpInFlightPerReplica": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "targetMemoryPercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "min",
+        "desired",
+        "max"
+      ],
+      "type": "object"
+    },
+    "ContainerCode": {
+      "oneOf": [
+        {
+          "properties": {
+            "image": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "image",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "src": {
+              "type": "string"
+            },
+            "toolchain": {
+              "$ref": "#/components/schemas/ToolchainConfig"
+            },
+            "type": {
+              "enum": [
+                "source"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "src",
+            "toolchain",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ContainerEgress": {
+      "enum": [
+        "internet"
+      ],
+      "type": "string"
+    },
+    "ContainerGpuSpec": {
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "count"
+      ],
+      "type": "object"
+    },
+    "ContainerPort": {
+      "properties": {
+        "port": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "ContainerResourceChoices": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceChoiceRange"
+            }
+          ]
+        },
+        "memory": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceChoiceRange"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ContainerSecurity": {
+      "properties": {
+        "profile": {
+          "$ref": "#/components/schemas/ContainerSecurityProfile"
+        },
+        "readOnlyRootFilesystem": {
+          "type": "boolean"
+        },
+        "runAsGroup": {
+          "type": "integer"
+        },
+        "runAsUser": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile",
+        "runAsUser",
+        "runAsGroup",
+        "readOnlyRootFilesystem"
+      ],
+      "type": "object"
+    },
+    "ContainerSecurityProfile": {
+      "enum": [
+        "restricted"
+      ],
+      "type": "string"
+    },
+    "ContainerTunnel": {
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "CpuAmount": {
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "CustomPluginOperationsConfig": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/PluginOperationsConfig"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Daemon": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "$ref": "#/components/schemas/DaemonCode"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "commandsEnabled": {
+          "type": "boolean"
+        },
+        "cpu": {
+          "$ref": "#/components/schemas/ResourceSpec"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "healthCheck": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/HealthCheck"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/ResourceRef"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "$ref": "#/components/schemas/ResourceSpec"
+        },
+        "permissions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publicEndpoints": {
+          "items": {
+            "$ref": "#/components/schemas/PublicEndpoint"
+          },
+          "type": "array"
+        },
+        "runtime": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/DaemonRuntime"
+            }
+          ]
+        },
+        "stopGracePeriodSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "links",
+        "code"
+      ],
+      "type": "object"
+    },
+    "DaemonCode": {
+      "oneOf": [
+        {
+          "properties": {
+            "image": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "image",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "src": {
+              "type": "string"
+            },
+            "toolchain": {
+              "$ref": "#/components/schemas/ToolchainConfig"
+            },
+            "type": {
+              "enum": [
+                "source"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "src",
+            "toolchain",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DaemonRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "mounts": {
+          "items": {
+            "$ref": "#/components/schemas/DaemonRuntimeMount"
+          },
+          "type": "array"
+        },
+        "networkMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pidNamespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privileged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DaemonRuntimeMount": {
+      "additionalProperties": false,
+      "properties": {
+        "options": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "DataDiskRequirement": {
+      "properties": {
+        "sizeBytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "DataDiskSize": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "properties": {
+            "default": {
+              "type": "string"
+            },
+            "max": {
+              "type": "string"
+            },
+            "min": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "min",
+            "default",
+            "max"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EgressPolicy": {
+      "oneOf": [
+        {
+          "enum": [
+            "internet"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "allow"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Email": {
+      "additionalProperties": false,
+      "properties": {
+        "domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "events": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/EmailEvents"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "inbound": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/EmailInbound"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "EmailEvents": {
+      "additionalProperties": false,
+      "properties": {
+        "queue": {
+          "$ref": "#/components/schemas/ResourceRef"
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "type": "object"
+    },
+    "EmailInbound": {
+      "additionalProperties": false,
+      "properties": {
+        "storage": {
+          "$ref": "#/components/schemas/ResourceRef"
+        }
+      },
+      "required": [
+        "storage"
+      ],
+      "type": "object"
+    },
+    "ExposeProtocol": {
+      "enum": [
+        "http",
+        "tcp"
+      ],
+      "type": "string"
+    },
+    "GcpCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "expression"
+      ],
+      "type": "object"
+    },
+    "GcpPlatformPermission": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/components/schemas/BindingConfiguration_GcpBindingSpec"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grant": {
+          "$ref": "#/components/schemas/PermissionGrant"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "grant",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "GpuSpec": {
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "count"
+      ],
+      "type": "object"
+    },
+    "HealthCheck": {
+      "properties": {
+        "failureThreshold": {
+          "type": "integer"
+        },
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeoutSeconds": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "HttpMethod": {
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "HEAD",
+        "OPTIONS",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "InputValue": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "Key": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "KubernetesHttpProbe": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "port"
+      ],
+      "type": "object"
+    },
+    "KubernetesSecretMount": {
+      "properties": {
+        "mountPath": {
+          "type": "string"
+        },
+        "secretName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "secretName",
+        "mountPath"
+      ],
+      "type": "object"
+    },
+    "Kv": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "LifecycleRule": {
+      "additionalProperties": false,
+      "properties": {
+        "days": {
+          "type": "integer"
+        },
+        "prefix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "days"
+      ],
+      "type": "object"
+    },
+    "MachineProfile": {
+      "properties": {
+        "architecture": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/Architecture"
+            }
+          ]
+        },
+        "cpu": {
+          "type": "string"
+        },
+        "dataDisk": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/DataDiskRequirement"
+            }
+          ]
+        },
+        "ephemeralStorageBytes": {
+          "type": "integer"
+        },
+        "gpu": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/GpuSpec"
+            }
+          ]
+        },
+        "memoryBytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpu",
+        "memoryBytes",
+        "ephemeralStorageBytes"
+      ],
+      "type": "object"
+    },
+    "ManagementPermissions": {
+      "oneOf": [
+        {
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "properties": {
+            "extend": {
+              "$ref": "#/components/schemas/PermissionProfile"
+            }
+          },
+          "required": [
+            "extend"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "override": {
+              "$ref": "#/components/schemas/PermissionProfile"
+            }
+          },
+          "required": [
+            "override"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OperationApproval": {
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/OperationApprovalDecision"
+        },
+        {
+          "properties": {
+            "decision": {
+              "$ref": "#/components/schemas/OperationApprovalDecision"
+            },
+            "maxRisk": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "decision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OperationApprovalDecision": {
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
+    },
+    "OperationSettingValue": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "properties": {
+            "input": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "resources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "resources"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "env": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OperationsConfig": {
+      "properties": {
+        "custom": {
+          "items": {
+            "$ref": "#/components/schemas/CustomPluginOperationsConfig"
+          },
+          "type": "array"
+        },
+        "plugins": {
+          "additionalProperties": {
+            "$ref": "#/components/schemas/PluginOperationsConfig"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "PermissionGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dataActions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "predefinedRoles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "residualPermissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PermissionProfile": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/components/schemas/PermissionSetReference"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "PermissionSet": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "platforms": {
+          "$ref": "#/components/schemas/PlatformPermissions"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "platforms"
+      ],
+      "type": "object"
+    },
+    "PermissionSetReference": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/components/schemas/PermissionSet"
+        }
+      ]
+    },
+    "PermissionsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "management": {
+          "$ref": "#/components/schemas/ManagementPermissions"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/components/schemas/PermissionProfile"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "profiles"
+      ],
+      "type": "object"
+    },
+    "PersistentStorage": {
+      "properties": {
+        "backups": {
+          "$ref": "#/components/schemas/VolumeBackups"
+        },
+        "encryptionKey": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceRef"
+            }
+          ]
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "size",
+        "mountPath"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "enum": [
+        "aws",
+        "gcp",
+        "azure",
+        "kubernetes",
+        "machines",
+        "local"
+      ],
+      "type": "string"
+    },
+    "PlatformPermissions": {
+      "additionalProperties": false,
+      "properties": {
+        "aws": {
+          "items": {
+            "$ref": "#/components/schemas/AwsPlatformPermission"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "azure": {
+          "items": {
+            "$ref": "#/components/schemas/AzurePlatformPermission"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "gcp": {
+          "items": {
+            "$ref": "#/components/schemas/GcpPlatformPermission"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PluginOperationsConfig": {
+      "properties": {
+        "approval": {
+          "additionalProperties": {
+            "$ref": "#/components/schemas/OperationApproval"
+          },
+          "type": "object"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/components/schemas/OperationSettingValue"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "Postgres": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/PostgresBackend"
+            }
+          ]
+        },
+        "cpu": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "encryptionKey": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceRef"
+            }
+          ]
+        },
+        "highAvailability": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "memory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "storage": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "PostgresBackend": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "auroraServerlessV2"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PublicEndpoint": {
+      "properties": {
+        "hostLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/components/schemas/ExposeProtocol"
+        },
+        "wildcardSubdomains": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "port",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "Queue": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "QueueBatchConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maxMessages": {
+          "type": "integer"
+        },
+        "maxWindowSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxMessages",
+        "maxWindowSeconds"
+      ],
+      "type": "object"
+    },
+    "ReadinessProbe": {
+      "properties": {
+        "method": {
+          "$ref": "#/components/schemas/HttpMethod"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Redis": {
+      "additionalProperties": false,
+      "properties": {
+        "encryptionKey": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceRef"
+            }
+          ]
+        },
+        "evictionPolicy": {
+          "$ref": "#/components/schemas/RedisEvictionPolicy"
+        },
+        "highAvailability": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "memory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "persistence": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "RedisEvictionPolicy": {
+      "enum": [
+        "noeviction",
+        "allkeys-lru",
+        "allkeys-lfu",
+        "allkeys-random",
+        "volatile-lru",
+        "volatile-lfu",
+        "volatile-random",
+        "volatile-ttl"
+      ],
+      "type": "string"
+    },
+    "ResourceChoiceRange": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "string"
+        },
+        "max": {
+          "type": "string"
+        },
+        "min": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "default"
+      ],
+      "type": "object"
+    },
+    "ResourceRef": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/components/schemas/ResourceType"
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "type": "object"
+    },
+    "ResourceSpec": {
+      "properties": {
+        "desired": {
+          "type": "string"
+        },
+        "min": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "min",
+        "desired"
+      ],
+      "type": "object"
+    },
+    "ResourceType": {
+      "type": "string"
+    },
+    "Sandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/components/schemas/SandboxCode"
+        },
+        "defaultPolicy": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/EgressPolicy"
+            }
+          ]
+        },
+        "egress": {
+          "$ref": "#/components/schemas/SandboxEgress"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/components/schemas/SandboxLifecyclePolicy"
+        },
+        "limits": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/SandboxLimits"
+            }
+          ]
+        },
+        "previewPorts": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "privateBaseImage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privilegedSupervisor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/SandboxPrivilegedSupervisor"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "egress",
+        "lifecycle"
+      ],
+      "type": "object"
+    },
+    "SandboxCode": {
+      "oneOf": [
+        {
+          "properties": {
+            "image": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "image",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "src": {
+              "type": "string"
+            },
+            "toolchain": {
+              "$ref": "#/components/schemas/ToolchainConfig"
+            },
+            "type": {
+              "enum": [
+                "source"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "src",
+            "toolchain",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SandboxEgress": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "internet"
+          ],
+          "type": "string"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "deny"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "allow"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "domains": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "mode": {
+                  "enum": [
+                    "allowDomains"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domains",
+                "mode"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "SandboxLifecyclePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "idlePauseSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxLifetimeSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SandboxLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "string"
+        },
+        "disk": {
+          "type": "string"
+        },
+        "maxProcesses": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cpu",
+        "memory",
+        "disk"
+      ],
+      "type": "object"
+    },
+    "SandboxPrivilegedSupervisor": {
+      "additionalProperties": false,
+      "properties": {
+        "commandUid": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "commandUid"
+      ],
+      "type": "object"
+    },
+    "ServiceAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "resourcePermissionSets": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionSet"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "stackPermissionSets": {
+          "items": {
+            "$ref": "#/components/schemas/PermissionSet"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "stackPermissionSets"
+      ],
+      "type": "object"
+    },
+    "StackInputCondition": {
+      "properties": {
+        "equals": {
+          "type": "boolean"
+        },
+        "input": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "StackInputEnvironmentVariableType": {
+      "enum": [
+        "plain",
+        "secret"
+      ],
+      "type": "string"
+    },
+    "StackInputGenerate": {
+      "properties": {
+        "length": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "length"
+      ],
+      "type": "object"
+    },
+    "StackInputKind": {
+      "enum": [
+        "string",
+        "secret",
+        "number",
+        "integer",
+        "boolean",
+        "enum",
+        "stringList"
+      ],
+      "type": "string"
+    },
+    "StackInputProvider": {
+      "enum": [
+        "developer",
+        "deployer"
+      ],
+      "type": "string"
+    },
+    "Storage": {
+      "additionalProperties": false,
+      "properties": {
+        "corsAllowedOrigins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "corsUploadOrigins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "encryptionKey": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ResourceRef"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "lifecycleRules": {
+          "items": {
+            "$ref": "#/components/schemas/LifecycleRule"
+          },
+          "type": "array"
+        },
+        "notifications": {
+          "items": {
+            "$ref": "#/components/schemas/StorageNotification"
+          },
+          "type": "array"
+        },
+        "publicRead": {
+          "type": "boolean"
+        },
+        "versioning": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "StorageNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/components/schemas/StorageNotificationEvent"
+          },
+          "type": "array"
+        },
+        "prefix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "queue": {
+          "$ref": "#/components/schemas/ResourceRef"
+        },
+        "suffix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "type": "object"
+    },
+    "StorageNotificationEvent": {
+      "enum": [
+        "created"
+      ],
+      "type": "string"
+    },
+    "ToolchainConfig": {
+      "oneOf": [
+        {
+          "properties": {
+            "binaryName": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "rust"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "binaryName",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binaryName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "typescript"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "package": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pythonVersion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "python"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "buildArgs": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "dockerfile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "docker"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Vault": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "VolumeBackups": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "intervalHours": {
+          "type": "integer"
+        },
+        "retentionDays": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Worker": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/components/schemas/WorkerCode"
+        },
+        "commandsEnabled": {
+          "type": "boolean"
+        },
+        "concurrencyLimit": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/ResourceRef"
+          },
+          "type": "array"
+        },
+        "memoryMb": {
+          "type": "integer"
+        },
+        "permissions": {
+          "type": "string"
+        },
+        "publicEndpoints": {
+          "items": {
+            "$ref": "#/components/schemas/WorkerPublicEndpoint"
+          },
+          "type": "array"
+        },
+        "readinessProbe": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ReadinessProbe"
+            }
+          ]
+        },
+        "timeoutSeconds": {
+          "type": "integer"
+        },
+        "triggers": {
+          "items": {
+            "$ref": "#/components/schemas/WorkerTrigger"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "links",
+        "triggers",
+        "permissions",
+        "code"
+      ],
+      "type": "object"
+    },
+    "WorkerCode": {
+      "oneOf": [
+        {
+          "properties": {
+            "image": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "image",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "src": {
+              "type": "string"
+            },
+            "toolchain": {
+              "$ref": "#/components/schemas/ToolchainConfig"
+            },
+            "type": {
+              "enum": [
+                "source"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "src",
+            "toolchain",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkerPublicEndpoint": {
+      "properties": {
+        "hostLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "wildcardSubdomains": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WorkerTrigger": {
+      "oneOf": [
+        {
+          "properties": {
+            "batch": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/QueueBatchConfig"
+                }
+              ]
+            },
+            "queue": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "type": {
+              "enum": [
+                "queue"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "queue",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "events": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "storage": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "type": {
+              "enum": [
+                "storage"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "storage",
+            "events",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cron": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "schedule"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "cron",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}
