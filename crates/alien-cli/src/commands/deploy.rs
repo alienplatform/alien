@@ -775,7 +775,7 @@ async fn create_self_deployment(
     } else {
         None
     };
-    let create_response = match create_deployment_in_group(
+    let (create_response, withheld) = match create_deployment_in_group(
         &auth,
         &workspace,
         &base_url,
@@ -786,7 +786,7 @@ async fn create_self_deployment(
     )
     .await
     {
-        Ok(response) => response,
+        Ok(created) => created,
         Err(error) => {
             return Err(settle_group_after_refusal(
                 &auth.client,
@@ -799,6 +799,15 @@ async fn create_self_deployment(
             .await);
         }
     };
+    // The deployment exists from here on, so a failure below is not a refused
+    // create and the group is not cleaned up.
+    store_withheld_answers(
+        auth.sdk_client(),
+        &workspace.name,
+        &create_response.deployment.id,
+        &withheld,
+    )
+    .await?;
     let deployment_token = create_response.token.ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "Server did not return deployment token".to_string(),
@@ -1010,7 +1019,7 @@ async fn create_deployment_in_group(
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
     project_id: &str,
-) -> Result<CreateDeploymentApiResponse> {
+) -> Result<(CreateDeploymentApiResponse, WithheldAnswers)> {
     let session = create_first_party_deployment_session(
         &auth.client,
         base_url,
@@ -1018,9 +1027,7 @@ async fn create_deployment_in_group(
         deployment_group_id,
     )
     .await?;
-    create_first_party_deployment(
-        auth.sdk_client(),
-        &workspace.name,
+    create_first_party_deployment_without_storing_answers(
         base_url,
         &session.token,
         resolved_args,
@@ -1137,6 +1144,9 @@ fn first_party_inputs_request_body(
     })
 }
 
+/// The answers a deploy holds back from the create request, by input id.
+type WithheldAnswers = serde_json::Map<String, serde_json::Value>;
+
 /// Creates a deployment from a first-party session. Only the answers to
 /// boolean inputs go to the hosted inputs endpoint: the platform plans
 /// resources from them, a boolean is never a secret, and the manager can start
@@ -1148,15 +1158,15 @@ fn first_party_inputs_request_body(
 /// rest. An older platform that validates and stores inputs itself and
 /// refuses the create for a missing required input gets that one answer back
 /// in the inputs, once.
-async fn create_first_party_deployment(
-    client: &alien_platform_api::Client,
-    workspace: &str,
+/// The caller stores the returned answers: once the deployment exists, a
+/// failure to store them is not a refused create.
+async fn create_first_party_deployment_without_storing_answers(
     base_url: &str,
     session_token: &str,
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
     project_id: &str,
-) -> Result<CreateDeploymentApiResponse> {
+) -> Result<(CreateDeploymentApiResponse, WithheldAnswers)> {
     let mut inputs = HashMap::new();
     let mut withheld = serde_json::Map::new();
     for (id, value) in resolved_args.input_values.clone() {
@@ -1195,11 +1205,7 @@ async fn create_first_party_deployment(
         match send_group_session_create(base_url, session_token, resolved_args, args, project_id)
             .await?
         {
-            Ok(response) => {
-                store_withheld_answers(client, workspace, &response.deployment.id, &withheld)
-                    .await?;
-                return Ok(response);
-            }
+            Ok(response) => return Ok((response, withheld)),
             Err(error) => {
                 let Some(input) = value_access::missing_required_input(&error, &withheld) else {
                     return Err(group_session_create_failed(&error));
@@ -1210,6 +1216,28 @@ async fn create_first_party_deployment(
             }
         }
     }
+}
+
+#[cfg(test)]
+async fn create_first_party_deployment(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    base_url: &str,
+    session_token: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<CreateDeploymentApiResponse> {
+    let (response, withheld) = create_first_party_deployment_without_storing_answers(
+        base_url,
+        session_token,
+        resolved_args,
+        args,
+        project_id,
+    )
+    .await?;
+    store_withheld_answers(client, workspace, &response.deployment.id, &withheld).await?;
+    Ok(response)
 }
 
 #[cfg(test)]

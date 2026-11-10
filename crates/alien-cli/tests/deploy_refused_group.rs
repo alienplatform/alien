@@ -6,7 +6,7 @@
 //! make.
 
 use httpmock::{
-    Method::{DELETE, GET, POST, PUT},
+    Method::{DELETE, GET, PATCH, POST, PUT},
     Mock, MockServer,
 };
 use serde_json::{json, Value};
@@ -23,6 +23,10 @@ struct Run {
 }
 
 fn run_deploy(server: &MockServer) -> Run {
+    run_deploy_with(server, &["--machines"])
+}
+
+fn run_deploy_with(server: &MockServer, extra_args: &[&str]) -> Run {
     let home = TempDir::new().unwrap();
     let checkout = TempDir::new().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_alien"));
@@ -45,7 +49,8 @@ fn run_deploy(server: &MockServer) -> Run {
     let output = command
         .args(["--base-url", &server.base_url()])
         .args(["--project", "demo-project"])
-        .args(["deploy", "--name", "refused-1", "--machines"])
+        .args(["deploy", "--name", "refused-1"])
+        .args(extra_args)
         .output()
         .unwrap();
     Run {
@@ -198,4 +203,66 @@ fn reports_a_group_it_could_not_delete() {
         "{}",
         run.text
     );
+}
+
+/// The deployment is created, then saving the answers held back from the
+/// create fails. The deployment exists, so the group is not empty and must stay.
+#[test]
+fn keeps_the_group_when_saving_inputs_fails_after_the_deployment_was_created() {
+    const DEPLOYMENT_ID: &str = "dep_0c0ffee0c0ffee0c0ffee0c0ffee";
+    let api = MockServer::start();
+    mock_refusing_platform(
+        &api,
+        json!({"id": GROUP_ID, "projectId": PROJECT, "created": true}),
+    );
+    // A local deployment is not prepared before it is created, so the create
+    // itself goes through.
+    api.mock(|when, then| {
+        when.method(POST).path("/v1/deployments");
+        then.status(200).json_body(json!({
+            "deployment": {"id": DEPLOYMENT_ID},
+            "token": "deployment-token"
+        }));
+    });
+    api.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/v1/deployments/{DEPLOYMENT_ID}/inputs"));
+        then.status(200).json_body(json!({
+            "inputs": [], "providedInputIds": [], "heldInputIds": [], "values": {}
+        }));
+    });
+    api.mock(|when, then| {
+        when.method(PATCH)
+            .path(format!("/v1/deployments/{DEPLOYMENT_ID}/inputs"));
+        then.status(500)
+            .json_body(json!({"code": "INTERNAL", "message": "storage is down"}));
+    });
+    let delete = mock_delete_group(&api, 200);
+
+    let run = run_deploy_with(
+        &api,
+        &["--platform", "local", "--secret-input", "api_key=hunter2"],
+    );
+
+    assert!(!run.success, "deploy should fail: {}", run.text);
+    delete.assert_hits(0);
+    assert!(
+        run.text.contains(&format!(
+            "Deployment '{DEPLOYMENT_ID}' was created, but the answers for api_key were not stored"
+        )),
+        "the existing message names the deployment: {}",
+        run.text
+    );
+    assert!(
+        run.text
+            .contains(&format!("alien deployments set-inputs {DEPLOYMENT_ID}")),
+        "{}",
+        run.text
+    );
+    assert!(
+        !run.text.contains("No deployment was created"),
+        "{}",
+        run.text
+    );
+    assert!(!run.text.contains("empty deployment group"), "{}", run.text);
 }
