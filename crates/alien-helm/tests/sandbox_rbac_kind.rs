@@ -24,22 +24,23 @@ use std::{
 };
 
 const RELEASE: &str = "sandbox-rbac";
-/// Every (release, namespace) the test installs, one install per namespace: a chart with
-/// sandboxes also creates namespaced objects with fixed names (the sandbox NetworkPolicies), so
-/// Helm refuses a second install of it in the same namespace. The first two share a release name
-/// across namespaces. The last two use release names that contain the chart name, so they are the
-/// full name unchanged, and agree on their first 45 characters, past where the role name
-/// truncates the full name.
-const INSTALLS: [(&str, &str); 4] = [
-    (RELEASE, "alien-sandbox-rbac-a"),
-    (RELEASE, "alien-sandbox-rbac-b"),
+/// Every (release, namespace, sandbox id) the test installs. The first two share a release name
+/// across namespaces. The last two share a namespace and are different stacks: a stack's sandbox
+/// objects are named after its sandbox ids, so Helm refuses a second copy of one stack in a
+/// namespace. Their release names contain the chart name, so they are the full name unchanged,
+/// and agree on their first 45 characters, past where the role name truncates the full name.
+const INSTALLS: [(&str, &str, &str); 4] = [
+    (RELEASE, "alien-sandbox-rbac-a", "agent"),
+    (RELEASE, "alien-sandbox-rbac-b", "agent"),
     (
         "sandbox-rbac-tenant-with-a-long-install-name-one",
         "alien-sandbox-rbac-c",
+        "agent",
     ),
     (
         "sandbox-rbac-tenant-with-a-long-install-name-two",
-        "alien-sandbox-rbac-d",
+        "alien-sandbox-rbac-c",
+        "worker",
     ),
 ];
 
@@ -50,13 +51,13 @@ struct Cleanup<'a> {
 impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         // Best effort on the way out of a disposable cluster; the assertions already ran.
-        for (release, namespace) in INSTALLS {
+        for (release, namespace, _) in INSTALLS {
             let _ = Command::new("helm")
                 .args(["--kube-context", self.context, "uninstall", release])
                 .args(["--namespace", namespace, "--ignore-not-found", "--no-hooks"])
                 .output();
         }
-        for (_, namespace) in INSTALLS {
+        for (_, namespace, _) in INSTALLS {
             let _ = Command::new("kubectl")
                 .args(["--context", self.context, "delete", "namespace", namespace])
                 .args(["--ignore-not-found", "--wait=false"])
@@ -121,10 +122,10 @@ fn eventually_can(context: &str, subject: &str, verb: &str, resource: &str) -> b
     }
 }
 
-fn write_chart(directory: &Path) {
+fn write_chart(directory: &Path, sandbox_id: &str) {
     let stack = Stack::new(RELEASE.to_string())
         .add(
-            Sandbox::new("agent".to_string())
+            Sandbox::new(sandbox_id.to_string())
                 .code(SandboxCode::Image {
                     image: "ubuntu:24.04".to_string(),
                     bundled_from: None,
@@ -200,13 +201,16 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
         "refusing to install into a non-kind context: {context}"
     );
     let directory = tempfile::tempdir().expect("chart directory");
-    write_chart(directory.path());
-    let chart = directory.path().to_str().expect("chart path");
     let _cleanup = Cleanup { context: &context };
 
     // No --wait: only the RBAC the chart creates is under test, not the Operator pod. A later
     // install fails here if it shares a cluster-scoped name with an earlier one.
-    for (release, namespace) in INSTALLS {
+    for (release, namespace, sandbox_id) in INSTALLS {
+        let chart_directory = directory.path().join(sandbox_id);
+        if !chart_directory.exists() {
+            write_chart(&chart_directory, sandbox_id);
+        }
+        let chart = chart_directory.to_str().expect("chart path");
         run_ok(
             "helm",
             &[
@@ -236,7 +240,7 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
         INSTALLS.len(),
         "each install needs its own sandbox ClusterRoleBinding: {bindings:?}"
     );
-    for (release, namespace) in INSTALLS {
+    for (release, namespace, _) in INSTALLS {
         let (binding, role, _, _, account) = bindings
             .iter()
             .find(|(_, _, binding_release, subject_namespace, _)| {

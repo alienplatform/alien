@@ -181,9 +181,10 @@ spec:
 /// namespaced Role cannot grant it and authorization fails closed at the first claim without this.
 fn broker_rbac() -> String {
     // Cluster-scoped names must differ per install: one cluster can run several copies of the
-    // same chart in different namespaces, and a shared name would refuse the second install or
-    // rebind the role away from the first. The namespace hash mirrors the heartbeat ClusterRole.
-    r#"{{- $suffix := printf "sandbox-broker-%s" (sha256sum .Release.Namespace | trunc 8) -}}
+    // same chart in different namespaces, or several charts in one namespace, and a shared name
+    // would refuse the second install or rebind the role away from the first. The full name is
+    // truncated to fit, so the hash covers the namespace and the whole full name.
+    r#"{{- $suffix := printf "sandbox-broker-%s" (printf "%s/%s" .Release.Namespace (include "deployment.fullname" .) | sha256sum | trunc 8) -}}
 {{- $name := printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
