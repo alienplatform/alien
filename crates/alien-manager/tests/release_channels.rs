@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{Platform, StackSettings};
+use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseChannelStore, SqliteReleaseStore,
@@ -129,6 +129,61 @@ impl Fixture {
             .unwrap();
         self.channels.roll_out_channel(channel, &id).await.unwrap();
         id
+    }
+
+    /// A deployment that is still provisioning `release`, as one created while
+    /// that release was the latest.
+    async fn provisioning_deployment(&self, name: &str, release: &str) -> String {
+        let id = self.running_deployment(name).await;
+        let conn = self.db.conn().lock().await;
+        conn.execute(
+            "UPDATE deployments SET status = 'provisioning', current_release_id = NULL, desired_release_id = ?1 WHERE id = ?2",
+            (release, id.as_str()),
+        )
+        .await
+        .unwrap();
+        id
+    }
+
+    /// Report the deployment Running on `release`, as the deployment loop does
+    /// when provisioning finishes.
+    async fn report_running(&self, id: &str, release: &str) {
+        let state = DeploymentState {
+            status: DeploymentStatus::Running,
+            platform: Platform::Kubernetes,
+            current_release: Some(ReleaseInfo {
+                release_id: Some(release.to_string()),
+                version: None,
+                description: None,
+                stack: alien_core::Stack::new("app".to_string()).build(),
+            }),
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        self.deployments
+            .reconcile(
+                &admin(),
+                ReconcileData {
+                    deployment_id: id.to_string(),
+                    session: "loop".to_string(),
+                    execution_claim: None,
+                    state,
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .unwrap();
     }
 
     async fn desired(&self, id: &str) -> (Option<String>, String) {
@@ -321,4 +376,51 @@ async fn channel_release_reaches_failed_local_startup_without_restarting_cloud_s
             (platform == "local").then_some(release.as_str())
         );
     }
+}
+
+#[tokio::test]
+async fn deployment_that_finishes_installing_takes_the_release_published_meanwhile() {
+    let f = Fixture::new().await;
+    let r1 = f.publish(DEFAULT_CHANNEL).await;
+    let a = f.provisioning_deployment("a", &r1).await;
+    let pinned = f.provisioning_deployment("pinned", &r1).await;
+    let staging = f.provisioning_deployment("staging", &r1).await;
+    f.channels.create_channel("staging", None).await.unwrap();
+    f.channels
+        .set_deployment_routing(
+            &pinned,
+            &DeploymentRouting {
+                channel: DEFAULT_CHANNEL.to_string(),
+                pinned_release_id: Some(r1.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    f.channels
+        .set_deployment_routing(
+            &staging,
+            &DeploymentRouting {
+                channel: "staging".to_string(),
+                pinned_release_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // A release published while they provision reaches none of them.
+    let r2 = f.publish(DEFAULT_CHANNEL).await;
+    assert_eq!(f.desired(&a).await.0.as_deref(), Some(r1.as_str()));
+
+    // Finishing on r1 sends the unpinned deployment on to r2. The pinned one
+    // stays on its pin and the one on an empty channel is not sent another
+    // channel's release.
+    for id in [&a, &pinned, &staging] {
+        f.report_running(id, &r1).await;
+    }
+    assert_eq!(
+        f.desired(&a).await,
+        (Some(r2.clone()), "update-pending".to_string())
+    );
+    assert_eq!(f.desired(&pinned).await, (None, "running".to_string()));
+    assert_eq!(f.desired(&staging).await, (None, "running".to_string()));
 }
