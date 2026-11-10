@@ -199,21 +199,21 @@ fn with_installed_service_accounts(stack: &Stack, state: &StackState) -> Stack {
         // The executor sets `previous_config` when an update starts and never clears it, so it
         // names the applied account only while that update is in flight or after it failed.
         // Otherwise `config` is what was applied: a failed heartbeat leaves it in place, and a
-        // deletion keeps the role until it is gone. An account that never finished creating is
-        // judged as desired.
+        // deletion keeps the role until it is gone. An account that never finished creating, or
+        // whose role was deleted, is recreated from the desired account and judged as desired.
         let applied: Option<&Resource> = match saved.status {
             ResourceStatus::Running
             | ResourceStatus::RefreshFailed
             | ResourceStatus::Deleting
             | ResourceStatus::DeleteFailed
-            | ResourceStatus::TeardownRequired
-            | ResourceStatus::Deleted => Some(&saved.config),
+            | ResourceStatus::TeardownRequired => Some(&saved.config),
             ResourceStatus::Updating | ResourceStatus::UpdateFailed => {
                 saved.previous_config.as_ref()
             }
             ResourceStatus::Pending
             | ResourceStatus::Provisioning
-            | ResourceStatus::ProvisionFailed => None,
+            | ResourceStatus::ProvisionFailed
+            | ResourceStatus::Deleted => None,
         };
         let Some(installed) = applied.and_then(|config| config.downcast_ref::<ServiceAccount>())
         else {
