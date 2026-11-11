@@ -18,6 +18,16 @@ use crate::{
 /// Container in the Operator Deployment that runs the Operator.
 const OPERATOR_CONTAINER: &str = "operator";
 
+/// The image to run: the manager's target, moved to the site registry on a mirrored install.
+fn resolve_target(target_image: &str, image_registry: Option<&str>) -> String {
+    match image_registry {
+        Some(registry) => {
+            alien_core::image_rewrite::rewrite_to_site_registry(target_image, registry)
+        }
+        None => target_image.to_string(),
+    }
+}
+
 /// Move the Operator's own Deployment to `target_image` if it runs another.
 pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
     let Some(deployment_name) = state.config.self_update_deployment.as_deref() else {
@@ -29,14 +39,8 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
         })
     })?;
     // The manager advertises its own registry; a mirrored install pulls every image from its mirror.
-    let mirrored;
-    let target_image = match state.config.image_registry.as_deref() {
-        Some(registry) => {
-            mirrored = alien_core::image_rewrite::rewrite_to_site_registry(target_image, registry);
-            mirrored.as_str()
-        }
-        None => target_image,
-    };
+    let target_image = resolve_target(target_image, state.config.image_registry.as_deref());
+    let target_image = target_image.as_str();
     let failed = |message: &str| ErrorData::ConfigurationError {
         message: format!("self-update of Deployment '{deployment_name}': {message}"),
     };
@@ -75,4 +79,23 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
         .await
         .context(failed("updating the Deployment"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_target;
+
+    #[test]
+    fn mirrored_install_pulls_the_target_from_its_mirror() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let target = format!("registry.example.com/alien/operator@{digest}");
+        let resolved = resolve_target(&target, Some("mirror.local:5000/site"));
+        assert!(resolved.starts_with("mirror.local:5000/"), "{resolved}");
+        assert!(resolved.ends_with(&format!("@{digest}")), "{resolved}");
+    }
+
+    #[test]
+    fn unmirrored_install_keeps_the_target() {
+        assert_eq!(resolve_target("r.io/op:1", None), "r.io/op:1");
+    }
 }
