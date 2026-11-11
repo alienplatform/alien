@@ -7597,6 +7597,16 @@
           "name": {
             "type": "string"
           },
+          "operatorBehindTarget": {
+            "type": "boolean",
+            "description": "Whether that Operator is older than the Operator this manager's charts\ninstall, so the next chart version would upgrade it. Absent when the\nOperator version is unknown, isn't a release version, or this manager\nserves no charts.",
+            "nullable": true
+          },
+          "operatorVersion": {
+            "type": "string",
+            "description": "Version of the Operator that last reported this deployment.",
+            "nullable": true
+          },
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },

@@ -987,7 +987,10 @@ mod object_data_tests {
             &["*"],
             &["s3:GetObj?ct"],
         ] {
-            assert!(permission_set_uses_aws_object_data(&aws_set(actions)), "{actions:?}");
+            assert!(
+                permission_set_uses_aws_object_data(&aws_set(actions)),
+                "{actions:?}"
+            );
         }
         for actions in [
             &["s3:ListBucket", "s3:GetBucketLocation"][..],
@@ -996,13 +999,30 @@ mod object_data_tests {
             &["s3:GetBucket*"],
             &["kms:*"],
         ] {
-            assert!(!permission_set_uses_aws_object_data(&aws_set(actions)), "{actions:?}");
+            assert!(
+                !permission_set_uses_aws_object_data(&aws_set(actions)),
+                "{actions:?}"
+            );
         }
-        for id in ["storage/data-read", "storage/data-write", "storage/remote-data-write"] {
-            assert!(permission_set_uses_aws_object_data(get_permission_set(id).unwrap()), "{id}");
+        for id in [
+            "storage/data-read",
+            "storage/data-write",
+            "storage/remote-data-write",
+        ] {
+            assert!(
+                permission_set_uses_aws_object_data(get_permission_set(id).unwrap()),
+                "{id}"
+            );
         }
-        for id in ["storage/heartbeat", "storage/management", "storage/provision"] {
-            assert!(!permission_set_uses_aws_object_data(get_permission_set(id).unwrap()), "{id}");
+        for id in [
+            "storage/heartbeat",
+            "storage/management",
+            "storage/provision",
+        ] {
+            assert!(
+                !permission_set_uses_aws_object_data(get_permission_set(id).unwrap()),
+                "{id}"
+            );
         }
     }
 }

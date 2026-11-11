@@ -18,6 +18,51 @@ pub async fn prepare_direct_setup_update(
     client_config: &ClientConfig,
     existing_metadata: &alien_core::RuntimeMetadata,
 ) -> Result<alien_core::RuntimeMetadata> {
+    let mut metadata = prepare_setup_update(
+        target_stack,
+        stack_state,
+        config,
+        client_config,
+        existing_metadata,
+        Some(alien_core::InitialSetupAuthority::DirectSetup),
+    )
+    .await?;
+    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+    Ok(metadata)
+}
+
+/// Re-prepare the setup a failed first install runs against a corrective
+/// release, for an install whose frozen resources an external setup engine
+/// (a Helm chart) owns. The frozen-resource compatibility check against the
+/// installed prepared stack still applies and refuses a release that changes
+/// what the installed setup provides, so only a release with the same frozen
+/// setup is accepted. The install keeps its recorded setup authority.
+pub async fn prepare_imported_setup_retry(
+    target_stack: Stack,
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+    existing_metadata: &alien_core::RuntimeMetadata,
+) -> Result<alien_core::RuntimeMetadata> {
+    prepare_setup_update(
+        target_stack,
+        stack_state,
+        config,
+        client_config,
+        existing_metadata,
+        None,
+    )
+    .await
+}
+
+async fn prepare_setup_update(
+    target_stack: Stack,
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+    existing_metadata: &alien_core::RuntimeMetadata,
+    setup_authority: Option<alien_core::InitialSetupAuthority>,
+) -> Result<alien_core::RuntimeMetadata> {
     let mut config = config.clone();
     // Automatic installations answer from the requested inputs. Manual setup
     // preserves recorded choices, but a new gate must use the setup inputs:
@@ -78,7 +123,7 @@ pub async fn prepare_direct_setup_update(
             client_config,
             existing_metadata.prepared_stack.as_ref(),
             existing_metadata.setup_update_authorization.as_ref(),
-            Some(alien_core::InitialSetupAuthority::DirectSetup),
+            setup_authority,
         )
         .await
         .context(ErrorData::PreflightChecksFailed)?;
@@ -90,7 +135,6 @@ pub async fn prepare_direct_setup_update(
         stack_state.platform,
     )?;
     let mut metadata = existing_metadata.clone();
-    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
     metadata.prepared_stack = Some(mutated_stack);
     metadata.persisted_gate_answers = persisted_gate_answers;
     metadata.setup_update_authorization = None;
@@ -205,6 +249,11 @@ pub async fn handle_pending(
         .as_ref()
         .and_then(|release| release.release_id.clone());
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
+    // The setup-time AI access answers are recorded before this step runs; a fresh metadata
+    // record must not drop them.
+    if let Some(previous) = current.runtime_metadata.as_ref() {
+        runtime_metadata.ai_access_checks = previous.ai_access_checks.clone();
+    }
 
     // Inject environment variables into the prepared stack for validation
     let mut mutated_stack_with_env = mutated_stack;

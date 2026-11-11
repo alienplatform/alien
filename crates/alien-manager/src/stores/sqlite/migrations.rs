@@ -421,6 +421,15 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             channel TEXT NOT NULL,
             pinned_release_id TEXT
         )",
+        "CREATE TABLE IF NOT EXISTS release_charts (
+            release_id TEXT NOT NULL,
+            version TEXT NOT NULL,
+            manifest BLOB NOT NULL,
+            config BLOB NOT NULL,
+            archive BLOB NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (release_id, version)
+        )",
         "CREATE TABLE IF NOT EXISTS deployment_values (
             scope TEXT NOT NULL,
             slot TEXT NOT NULL,

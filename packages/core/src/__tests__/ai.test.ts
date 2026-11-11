@@ -26,4 +26,15 @@ describe("AI", () => {
     expect(r.config).not.toHaveProperty("external")
     expect(r.config.id).toBe("llm")
   })
+
+  it("omits models unless declared, and keeps them in order with required defaulting to false", () => {
+    expect(new AI("llm").build().config).not.toHaveProperty("models")
+    const r = new AI("llm")
+      .models([{ id: "claude-sonnet-4-6", required: true }, { id: "claude-haiku-4-5" }])
+      .build()
+    expect(r.config.models).toEqual([
+      { id: "claude-sonnet-4-6", required: true },
+      { id: "claude-haiku-4-5", required: false },
+    ])
+  })
 })

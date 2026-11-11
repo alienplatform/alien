@@ -8,7 +8,7 @@ use alien_core::{
     import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_error::AlienError;
-use alien_permissions::key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY};
+use alien_permissions::key_access::{cryptography_service_accounts, key_access_plan};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -18,6 +18,11 @@ impl TfEmitter for GcpKeyEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let key = downcast::<Key>(ctx, Key::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let plan = key_access_plan(ctx.stack, ctx.resource_id).map_err(|error| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!("Failed to work out the key's access plan: {error}"),
+            })
+        })?;
         let ring_label = format!("{label}_ring");
         let ring_suffix_label = format!("{label}_ring_suffix");
         let mut fragment = TfFragment::default()
@@ -67,7 +72,7 @@ impl TfEmitter for GcpKeyEmitter {
             ));
 
         if let Some(access_label) = remote_bindings_label(ctx) {
-            let role = gcp_remote_role()?;
+            let role = gcp_remote_role(&plan)?;
             fragment.resource_blocks.push(resource_block(
                 "google_kms_crypto_key_iam_member",
                 &format!("{label}_remote_cryptography"),
@@ -99,7 +104,7 @@ impl TfEmitter for GcpKeyEmitter {
                         "crypto_key_id",
                         expr::traversal(["google_kms_crypto_key", label, "id"]),
                     ),
-                    attr("role", Expression::String(gcp_remote_role()?)),
+                    attr("role", Expression::String(gcp_remote_role(&plan)?)),
                     attr("member", service_account_member_for_label(account_label)),
                 ],
             ));
@@ -156,29 +161,14 @@ impl TfEmitter for GcpKeyEmitter {
     }
 }
 
-fn gcp_remote_role() -> Result<String> {
-    let permission_set =
-        alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY).ok_or_else(|| {
+fn gcp_remote_role(plan: &alien_permissions::key_access::KeyAccessPlan) -> Result<String> {
+    alien_permissions::key_access::gcp_key_roles(plan)
+        .map(|roles| roles.cryptography)
+        .map_err(|error| {
             AlienError::new(ErrorData::GenericError {
-                message: "key/remote-cryptography permission set is not registered".to_string(),
+                message: format!("key/remote-cryptography has no GCP role: {error}"),
             })
-        })?;
-    let roles = permission_set
-        .platforms
-        .gcp
-        .as_ref()
-        .and_then(|entries| entries.first())
-        .and_then(|entry| entry.grant.predefined_roles.as_ref())
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::GenericError {
-                message: "key/remote-cryptography has no GCP predefined role".to_string(),
-            })
-        })?;
-    roles.first().cloned().ok_or_else(|| {
-        AlienError::new(ErrorData::GenericError {
-            message: "key/remote-cryptography has an empty GCP role list".to_string(),
         })
-    })
 }
 
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {

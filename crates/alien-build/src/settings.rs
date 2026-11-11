@@ -124,15 +124,15 @@ pub struct PushSettings {
 ///
 /// - AWS images go to Amazon ECR, which refuses a large blob sent in one request (HTTP 413 for a
 ///   440 MB layer; 180 MiB passed) and accepts chunked uploads.
+/// - Azure images go to Azure Container Registry, which also answers HTTP 413 to a large blob sent
+///   in one request (a 1.8 GB layer; 150 MB passed) and accepts chunked uploads.
 /// - GCP images go to Google Artifact Registry, which needs monolithic uploads.
-/// - Azure keeps the monolithic uploads it has always used.
 /// - Kubernetes, Machines and Local images go to the manager's default registry, which can be
 ///   any of these, so they keep monolithic uploads too.
 pub fn registry_proxy_push_policy(platform: Platform) -> MonolithicPushPolicy {
     match platform {
-        Platform::Aws => MonolithicPushPolicy::Never,
+        Platform::Aws | Platform::Azure => MonolithicPushPolicy::Never,
         Platform::Gcp
-        | Platform::Azure
         | Platform::Kubernetes
         | Platform::Machines
         | Platform::Local
@@ -218,5 +218,13 @@ mod tests {
         assert_eq!(settings.platform.runtime_platform(), Platform::Machines);
         assert_eq!(settings.platform.platform(), Platform::Machines);
         assert_eq!(settings.get_targets(), BinaryTarget::LINUX.to_vec());
+    }
+
+    #[test]
+    fn azure_and_aws_push_in_chunks_others_monolithic() {
+        use dockdash::MonolithicPushPolicy::{Always, Never};
+        assert_eq!(registry_proxy_push_policy(Platform::Azure), Never);
+        assert_eq!(registry_proxy_push_policy(Platform::Aws), Never);
+        assert_eq!(registry_proxy_push_policy(Platform::Gcp), Always);
     }
 }

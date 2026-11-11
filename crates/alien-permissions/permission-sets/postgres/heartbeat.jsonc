@@ -5,18 +5,14 @@
     "aws": [
       {
         "label": "check-aurora-health",
-        "description": "Read cluster/instance state and the ServerlessDatabaseCapacity metric (auto-pause verification).",
+        "description": "Read cluster and instance state.",
         "grant": {
           "actions": [
             "rds:DescribeDBClusters",
             "rds:DescribeDBInstances",
-            "rds:ListTagsForResource",
-            "cloudwatch:GetMetricData"
+            "rds:ListTagsForResource"
           ]
         },
-        // `cloudwatch:GetMetricData` ignores resource-level ARN scoping (CloudWatch metrics
-        // aren't ARN-addressable), so the binding below effectively scopes only the rds:* actions;
-        // the metric read is account-wide but returns numeric time-series only, never data content.
         "binding": {
           "stack": {
             "resources": [
@@ -29,6 +25,24 @@
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
             ]
+          }
+        }
+      },
+      {
+        // CloudWatch metric reads support no resource-level scoping and must be granted on
+        // Resource "*": in a statement that lists RDS ARNs they would be denied. The read
+        // returns numeric time series only.
+        "label": "read-metrics",
+        "description": "Read the ServerlessDatabaseCapacity metric (auto-pause verification).",
+        "grant": {
+          "actions": ["cloudwatch:GetMetricData"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },

@@ -5,6 +5,27 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/components/schemas/AiModel"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AiModel": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "required": [
