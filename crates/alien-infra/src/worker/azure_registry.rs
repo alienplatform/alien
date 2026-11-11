@@ -285,20 +285,17 @@ pub(crate) async fn prepare(
             || !same_id(&current.registry_id, &registry_id)
             || !same_id(&current.identity_id, identity_id)
         {
-            // An import left unfinished (its polling failed, or the release
-            // changed meanwhile) is polled before it is replaced, so it cannot
-            // block the next release forever once Azure has finished it.
+            // An import still running is waited for. One Azure has finished,
+            // failed or no longer reports is dropped, so it cannot block the
+            // next release; imports go to untagged digest-addressed
+            // repositories with `NoForce`, so a late finish cannot overwrite
+            // the new image.
             if !current.complete {
-                let operation = current
-                    .operation
-                    .as_ref()
-                    .ok_or_else(|| invalid(worker, "Image import operation handle is missing"))?;
-                if !client.poll_image_import(operation).await.context(
-                    ErrorData::ResourceConfigInvalid {
-                        message: "Registry image import did not complete".into(),
-                        resource_id: Some(worker.id.clone()),
-                    },
-                )? {
+                let finished_or_lost = match current.operation.as_ref() {
+                    Some(operation) => client.poll_image_import(operation).await.unwrap_or(true),
+                    None => true,
+                };
+                if !finished_or_lost {
                     return Ok(Some(Duration::from_secs(5)));
                 }
             }
@@ -480,18 +477,26 @@ mod tests {
         image: &str,
         resolves_tag: bool,
     ) -> (Result<Option<Duration>>, Option<ImportedImage>) {
-        import_full(stored, live, image, resolves_tag, None, false)
+        import_full(stored, live, image, resolves_tag, None, Poll::Running)
+    }
+
+    /// What the registry answers when a saved import is polled.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Poll {
+        Running,
+        Done,
+        Fails,
     }
 
     /// [`import_source`] starting from a saved import, whose poll the registry
-    /// answers with `poll_done`.
+    /// answers with `poll`.
     fn import_full(
         stored: &str,
         live: &str,
         image: &str,
         resolves_tag: bool,
         saved_import: Option<ImportedImage>,
-        poll_done: bool,
+        poll: Poll,
     ) -> (Result<Option<Duration>>, Option<ImportedImage>) {
         let live = live.to_string();
         let mut identities = MockManagedIdentityApi::new();
@@ -534,7 +539,17 @@ mod tests {
         });
         registries
             .expect_poll_image_import()
-            .returning(move |_| Ok(poll_done));
+            .returning(move |_| match poll {
+                Poll::Running => Ok(false),
+                Poll::Done => Ok(true),
+                Poll::Fails => Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceConflict {
+                        resource_type: "Azure Container Registry import".into(),
+                        resource_name: "setupacr".into(),
+                        message: "the import finished without succeeding".into(),
+                    },
+                )),
+            });
         registries
             .expect_import_image()
             .returning(move |group, name, parameters| {
@@ -626,7 +641,7 @@ mod tests {
             .unwrap(),
         );
         executor.insert_saved_resource("registry", registry);
-        let waiting_on_saved_import = saved_import.is_some() && !poll_done;
+        let waiting_on_saved_import = saved_import.is_some() && poll == Poll::Running;
         let mut saved = saved_import;
         let result = executor.with_context(|ctx| block_on(prepare(&mut saved, &worker, ctx)));
         let imports = imports.lock().unwrap();
@@ -728,7 +743,8 @@ mod tests {
 
     /// An import whose polling failed stays unfinished. A later release with a
     /// different Worker image must not be blocked by it: the saved import is
-    /// polled first, and once Azure has finished it the new image is imported.
+    /// polled first, and once Azure has finished it, or the poll fails, the new image
+    /// is imported.
     #[test]
     fn an_unfinished_import_is_polled_before_a_different_image_replaces_it() {
         let unfinished = ImportedImage {
@@ -755,7 +771,7 @@ mod tests {
             &new_image,
             false,
             Some(unfinished.clone()),
-            false,
+            Poll::Running,
         );
         assert_eq!(result.unwrap(), Some(Duration::from_secs(5)));
         assert!(!saved.unwrap().complete);
@@ -766,8 +782,24 @@ mod tests {
             &identity_id("resourcegroups"),
             &new_image,
             false,
+            Some(unfinished.clone()),
+            Poll::Done,
+        );
+        assert_eq!(result.unwrap(), Some(Duration::from_secs(5)));
+        assert_eq!(
+            saved.unwrap().image,
+            format!("setupacr.azurecr.io/runtime/api@sha256:{DIGEST}")
+        );
+
+        // Azure finished it without succeeding, or its operation URL no longer
+        // answers: the old import is dropped and the new image is imported.
+        let (result, saved) = import_full(
+            &identity_id("resourceGroups"),
+            &identity_id("resourcegroups"),
+            &new_image,
+            false,
             Some(unfinished),
-            true,
+            Poll::Fails,
         );
         assert_eq!(result.unwrap(), Some(Duration::from_secs(5)));
         assert_eq!(
