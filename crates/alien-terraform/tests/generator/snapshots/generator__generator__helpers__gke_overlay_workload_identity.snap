@@ -756,8 +756,8 @@ output "chart_infrastructure_json" {
 }
 
 output "chart_service_accounts_json" {
-  value       = jsonencode({ serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
-  description = "The Helm chart's `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created), as JSON. Merge it into the chart's values."
+  value       = jsonencode({ serviceAccountPrefix = local.resource_prefix, serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
+  description = "The Helm chart's `serviceAccountPrefix`, `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created, and the prefix their trust policies expect in service account names), as JSON. Merge it into the chart's values. Install into the namespace set in `kubernetes_namespace`."
 }
 
 === README.md ===

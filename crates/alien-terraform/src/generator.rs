@@ -2063,8 +2063,8 @@ fn chart_infrastructure_output(
     ))
 }
 
-/// `chart_service_accounts_json`: the chart's `serviceAccounts` and `managerServiceAccount`
-/// values (the cloud identity annotations of the roles this module created), as JSON. Merge it
+/// `chart_service_accounts_json`: the chart's `serviceAccountPrefix`, `serviceAccounts` and
+/// `managerServiceAccount` values (the cloud identity annotations of the roles this module created), as JSON. Merge it
 /// into the chart's values.
 fn chart_service_accounts_output(present: bool) -> Option<(String, Expression, String)> {
     if !present {
@@ -2073,13 +2073,15 @@ fn chart_service_accounts_output(present: bool) -> Option<(String, Expression, S
     Some((
         "chart_service_accounts_json".to_string(),
         expr::jsonencode(expr::object([
+            // The cloud identities trust service accounts named from the resource prefix.
+            ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
             ("serviceAccounts", expr::raw("local.helm_service_accounts")),
             (
                 "managerServiceAccount",
                 expr::raw("local.helm_manager_service_account"),
             ),
         ])),
-        "The Helm chart's `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created), as JSON. Merge it into the chart's values.".to_string(),
+        "The Helm chart's `serviceAccountPrefix`, `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created, and the prefix their trust policies expect in service account names), as JSON. Merge it into the chart's values. Install into the namespace set in `kubernetes_namespace`.".to_string(),
     ))
 }
 

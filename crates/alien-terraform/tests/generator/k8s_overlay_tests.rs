@@ -1138,6 +1138,10 @@ fn eks_module_outputs_the_charts_infrastructure_values() {
         compact.contains("output \"chart_service_accounts_json\""),
         "{outputs}"
     );
+    assert!(
+        compact.contains("serviceAccountPrefix = local.resource_prefix"),
+        "{outputs}"
+    );
     assert!(compact.contains("local.helm_service_accounts"), "{outputs}");
     assert!(
         compact.contains("local.helm_manager_service_account"),
