@@ -1498,10 +1498,7 @@ pub(crate) fn adopt_unkeyed_hashes(
     snapshot: &EnvironmentVariablesSnapshot,
     monitoring: Option<&OtlpConfig>,
 ) -> Result<usize> {
-    let environment_hashes = (
-        unkeyed_environment_snapshot_hash(&snapshot.variables),
-        snapshot.hash.clone(),
-    );
+    let unkeyed_environment_hash = unkeyed_environment_snapshot_hash(&snapshot.variables);
     let runtime_hashes = monitoring
         .map(|monitoring| {
             Ok::<_, AlienError<ErrorData>>((
@@ -1512,7 +1509,21 @@ pub(crate) fn adopt_unkeyed_hashes(
         .transpose()?;
 
     let mut adopted = 0;
-    for resource_state in stack_state.resources.values_mut() {
+    for (resource_id, resource_state) in stack_state.resources.iter_mut() {
+        // The keyed hash is over the variables that apply to this resource, as injection
+        // computes it, so an unchanged resource compares equal to its desired config.
+        let applicable: Vec<EnvironmentVariable> = snapshot
+            .variables
+            .iter()
+            .filter(|variable| {
+                alien_core::environment_variable_applies(&variable.target_resources, resource_id)
+            })
+            .cloned()
+            .collect();
+        let environment_hashes = (
+            unkeyed_environment_hash.clone(),
+            environment_snapshot_hash(&applicable)?,
+        );
         let configs = std::iter::once(&mut resource_state.config)
             .chain(resource_state.previous_config.as_mut());
         for config in configs {

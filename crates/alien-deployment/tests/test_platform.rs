@@ -5404,3 +5404,74 @@ async fn reported_state_holds_no_secret_and_no_unkeyed_hash_of_one() {
         "the workload settings that carry the keyed hashes are in the reported state"
     );
 }
+
+/// The test stack plus a second worker, `another-worker`, for variables aimed at it.
+fn two_worker_stack(stack_id: &str, worker_id: &str) -> Stack {
+    let mut stack = create_test_stack(stack_id, worker_id);
+    let other = Worker::new("another-worker".to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+    let mut entry = stack.resources[worker_id].clone();
+    entry.config = alien_core::Resource::new(other);
+    stack.resources.insert("another-worker".to_string(), entry);
+    stack
+}
+
+/// A variable targeted at another resource is in the old snapshot hash but not in this
+/// worker's keyed hash. A deployment saved with the old hash and unchanged values must still
+/// not roll, and its saved hash becomes the one over the variables that apply to the worker.
+#[tokio::test]
+async fn an_old_hash_that_covers_a_variable_for_another_resource_is_not_rolled() {
+    let _vault = test_vault_env().await;
+    let worker_id = "old-hash-elsewhere-worker";
+    let mut config = keyed_config("secret_value");
+    config
+        .environment_variables
+        .variables
+        .push(EnvironmentVariable {
+            name: "ONLY_FOR_ANOTHER_WORKER".to_string(),
+            value: "elsewhere".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: Some(vec!["another-worker".to_string()]),
+        });
+    config.environment_variables.hash =
+        alien_deployment::environment_snapshot_hash(&config.environment_variables.variables)
+            .unwrap();
+    let applicable: Vec<EnvironmentVariable> = config
+        .environment_variables
+        .variables
+        .iter()
+        .filter(|variable| {
+            alien_core::environment_variable_applies(&variable.target_resources, worker_id)
+        })
+        .cloned()
+        .collect();
+    let keyed_for_worker = alien_deployment::environment_snapshot_hash(&applicable).unwrap();
+
+    let stack = two_worker_stack(&format!("{worker_id}-stack"), worker_id);
+    let mut state = run_to_completion(create_initial_state(stack), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(stored_secrets_hash(&state, worker_id), keyed_for_worker);
+    save_with_the_unkeyed_hash(
+        &mut state,
+        worker_id,
+        &unkeyed_hash_of(&config.environment_variables.variables),
+    );
+    let sent_before =
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}"));
+
+    let stack = two_worker_stack(&format!("{worker_id}-stack"), worker_id);
+    start_update(&mut state, release_of("rel_v2", stack));
+    state = run_to_completion(state, config.clone()).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}")).len(),
+        sent_before.len(),
+        "no update operation reached the worker"
+    );
+    assert_eq!(stored_secrets_hash(&state, worker_id), keyed_for_worker);
+}

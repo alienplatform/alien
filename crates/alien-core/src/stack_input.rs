@@ -50,9 +50,11 @@ pub struct StackInputEnvironmentMapping {
 }
 
 impl StackInputEnvironmentMapping {
-    /// Whether this mapping reaches `resource_id` (see [`targets_resource`]).
+    /// Whether this mapping reaches `resource_id` (see [`environment_variable_applies`]).
+    /// Grants that follow from delivery (reading a deployer secret) use this too, so Alien's
+    /// own gateway never gets access to an application secret.
     pub fn targets(&self, resource_id: &str) -> bool {
-        targets_resource(&self.target_resources, resource_id)
+        environment_variable_applies(&self.target_resources, resource_id)
     }
 }
 
@@ -723,5 +725,22 @@ mod environment_variable_applies_tests {
             "backend"
         ));
         assert!(!environment_variable_applies(&targets(&[]), "backend"));
+    }
+
+    /// Grants that follow delivery (reading a deployer secret) use the same rule, so the
+    /// gateway gets no access to an application secret even when a mapping names it.
+    #[test]
+    fn a_mapping_never_grants_the_gateway() {
+        let gateway = crate::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        for target_resources in [None, targets(&["*"]), targets(&[gateway])] {
+            let reaches_backend = target_resources != targets(&[gateway]);
+            let mapping = StackInputEnvironmentMapping {
+                name: "API_KEY".to_string(),
+                target_resources,
+                var_type: None,
+            };
+            assert!(!mapping.targets(gateway));
+            assert_eq!(mapping.targets("backend"), reaches_backend);
+        }
     }
 }
