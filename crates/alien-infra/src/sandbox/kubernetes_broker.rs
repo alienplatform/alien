@@ -42,6 +42,29 @@ pub struct ClaimedSession {
     pub capability: String,
     /// Unix seconds after which the capability is void
     pub expires_at: i64,
+    /// Unix seconds at which the session was created, as the pod records it
+    pub created_at: i64,
+    /// Generation the pod records
+    pub generation: u64,
+    /// Tenant key the session was created for
+    pub tenant_key: Option<String>,
+    /// Whether this call created the session, as opposed to finding it
+    pub created: bool,
+}
+
+/// What a pod records about its session.
+fn recorded(pod: &Pod, fallback_created_at: i64) -> (i64, u64, Option<String>) {
+    let annotations = pod.metadata.annotations.as_ref();
+    let read = |key: &str| annotations.and_then(|a| a.get(key));
+    (
+        read(crate::sandbox::ANNOTATION_SESSION_CREATED_AT)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(fallback_created_at),
+        read(crate::sandbox::ANNOTATION_SESSION_GENERATION)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1),
+        read(crate::sandbox::ANNOTATION_SESSION_TENANT).cloned(),
+    )
 }
 
 /// Claims an idle pod for `session_id` and mints a capability addressed to it.
@@ -67,6 +90,7 @@ pub async fn claim_session(
         secret_name,
         now_unix,
         None,
+        None,
     )
     .await
 }
@@ -81,6 +105,7 @@ pub(crate) async fn claim_session_for_deployment(
     now_unix: i64,
     deployment_label_key: &str,
     deployment_label_value: &str,
+    tenant_key: Option<&str>,
 ) -> Result<ClaimedSession> {
     claim_session_with_scope(
         pods,
@@ -91,6 +116,7 @@ pub(crate) async fn claim_session_for_deployment(
         secret_name,
         now_unix,
         Some((deployment_label_key, deployment_label_value)),
+        tenant_key,
     )
     .await
 }
@@ -105,6 +131,7 @@ async fn claim_session_with_scope(
     secret_name: &str,
     now_unix: i64,
     expected_scope: Option<(&str, &str)>,
+    tenant_key: Option<&str>,
 ) -> Result<ClaimedSession> {
     let (signing_key, deployment_label_key, deployment_label_value) =
         signing_key(secrets, namespace, secret_name, sandbox_id, expected_scope).await?;
@@ -136,6 +163,7 @@ async fn claim_session_with_scope(
         if !claim_idle_pod(&mut candidate, session_id) {
             continue;
         }
+        crate::sandbox::annotate_claim(&mut candidate, now_unix, tenant_key);
 
         // A conflict here is another caller winning the same pod, not an error to report: try
         // the next one rather than failing a create that a warm pool can still satisfy.
@@ -170,6 +198,10 @@ async fn claim_session_with_scope(
             endpoint: format!("http://{address}:{AGENT_PORT}"),
             capability,
             expires_at,
+            created_at: now_unix,
+            generation: 1,
+            tenant_key: tenant_key.map(str::to_string),
+            created: true,
         });
     }
 
@@ -185,6 +217,7 @@ async fn claim_session_with_scope(
         secret_name,
         now_unix,
         template,
+        tenant_key,
     )
     .await
 }
@@ -240,6 +273,7 @@ async fn cold_create(
     secret_name: &str,
     now_unix: i64,
     mut pod: Pod,
+    tenant_key: Option<&str>,
 ) -> Result<ClaimedSession> {
     // Born claimed: it never appears in the idle selector, so no one else can take it.
     if !claim_idle_pod(&mut pod, session_id) {
@@ -248,6 +282,7 @@ async fn cold_create(
             resource_id: Some(sandbox_id.to_string()),
         }));
     }
+    crate::sandbox::annotate_claim(&mut pod, now_unix, tenant_key);
     let created =
         pods.create_pod(namespace, &pod)
             .await
@@ -280,6 +315,10 @@ async fn cold_create(
                 endpoint: format!("http://{address}:{AGENT_PORT}"),
                 capability,
                 expires_at,
+                created_at: now_unix,
+                generation: 1,
+                tenant_key: tenant_key.map(str::to_string),
+                created: true,
             });
         }
         if started.elapsed() >= COLD_CREATE_TIMEOUT {
@@ -414,13 +453,135 @@ pub(crate) async fn reattach_session_for_deployment(
         sandbox_id,
         now_unix,
     )?;
+    let (created_at, generation, tenant_key) = recorded(&pod, now_unix);
     Ok(Some(ClaimedSession {
         agent_session_id,
         session_id: session_id.to_string(),
         endpoint: format!("http://{address}:{AGENT_PORT}"),
         capability,
         expires_at,
+        created_at,
+        generation,
+        tenant_key,
+        created: false,
     }))
+}
+
+/// Why a session request could not be answered by finding or creating the session.
+#[derive(Debug)]
+pub(crate) enum SessionRequestError {
+    /// The session exists for a different tenant than the request names.
+    TenantMismatch,
+    /// Anything else; retryable from the caller's point of view.
+    Unavailable(AlienError<ErrorData>),
+}
+
+/// Finds the session `session_id`, or creates it. Any process of the deployment may call this
+/// with the same id: the pod's labels decide which call created it.
+///
+/// Two processes racing to create the same id each claim a pod. The pod that was claimed first
+/// (earliest recorded time, then name) is the session; the other releases its pod and answers
+/// with the winner, so one id never resolves to two pods.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn find_or_create_session_for_deployment(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    sandbox_id: &str,
+    namespace: &str,
+    session_id: &str,
+    secret_name: &str,
+    now_unix: i64,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+    tenant_key: Option<&str>,
+) -> std::result::Result<ClaimedSession, SessionRequestError> {
+    let unavailable = SessionRequestError::Unavailable;
+    let existing = reattach_session_for_deployment(
+        pods,
+        secrets,
+        sandbox_id,
+        namespace,
+        session_id,
+        secret_name,
+        now_unix,
+        deployment_label_key,
+        deployment_label_value,
+    )
+    .await
+    .map_err(unavailable)?;
+    if let Some(found) = existing {
+        return if tenant_key.is_some_and(|tenant| found.tenant_key.as_deref() != Some(tenant)) {
+            Err(SessionRequestError::TenantMismatch)
+        } else {
+            Ok(found)
+        };
+    }
+
+    let mut claimed = claim_session_for_deployment(
+        pods,
+        secrets,
+        sandbox_id,
+        namespace,
+        session_id,
+        secret_name,
+        now_unix,
+        deployment_label_key,
+        deployment_label_value,
+        tenant_key,
+    )
+    .await
+    .map_err(SessionRequestError::Unavailable)?;
+
+    let mut contenders = claimed_pods(
+        pods,
+        namespace,
+        sandbox_id,
+        Some(session_id),
+        deployment_label_key,
+        deployment_label_value,
+    )
+    .await
+    .map_err(SessionRequestError::Unavailable)?;
+    if contenders.len() > 1 {
+        let rank = |pod: &Pod| {
+            (
+                recorded(pod, i64::MAX).0,
+                pod.metadata.name.clone().unwrap_or_default(),
+            )
+        };
+        contenders.sort_by_key(rank);
+        let winner = &contenders[0];
+        if winner.metadata.uid.as_deref() != Some(claimed.agent_session_id.as_str()) {
+            // Ours lost: free it and answer with the session that won.
+            for pod in contenders.iter().filter(|pod| {
+                pod.metadata.uid.as_deref() == Some(claimed.agent_session_id.as_str())
+            }) {
+                if let Some(name) = pod.metadata.name.as_deref() {
+                    let _ = pods.delete_pod(namespace, name).await;
+                }
+            }
+            claimed = reattach_session_for_deployment(
+                pods,
+                secrets,
+                sandbox_id,
+                namespace,
+                session_id,
+                secret_name,
+                now_unix,
+                deployment_label_key,
+                deployment_label_value,
+            )
+            .await
+            .map_err(SessionRequestError::Unavailable)?
+            .ok_or_else(|| {
+                SessionRequestError::Unavailable(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("session '{session_id}' vanished while two creates raced"),
+                    resource_id: Some(sandbox_id.to_string()),
+                }))
+            })?;
+        }
+    }
+    Ok(claimed)
 }
 
 /// Ids of the claimed sessions of a sandbox that belong to this deployment.
@@ -747,6 +908,54 @@ mod tests {
 
     /// The apiserver decides the race. A caller that lost one pod must take the next rather than
     /// failing a create the pool can still satisfy.
+    /// The pod is the only record of a session: its creation time, generation and tenant come
+    /// from annotations the claim wrote, so a process that did not create it reads the same.
+    #[tokio::test]
+    async fn the_claim_records_the_session_on_the_pod_and_another_process_reads_it_back() {
+        let mut pods = pods_returning(vec![idle_pod("pool-0", "10.1.2.3")]);
+        let written = Arc::new(std::sync::Mutex::new(None));
+        let written_pod = Arc::clone(&written);
+        pods.expect_update_pod().returning(move |_, _, pod| {
+            *written_pod.lock().unwrap() = Some(pod.clone());
+            Ok(pod.clone())
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(pods);
+        let mut secrets = MockSecretsApi::new();
+        let secret = key_secret();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+
+        let claimed = claim_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s1",
+            "key",
+            4_242,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+            Some("tenant-a"),
+        )
+        .await
+        .expect("claim");
+        assert!(claimed.created);
+        assert_eq!(claimed.created_at, 4_242);
+
+        let pod = written
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the claim wrote the pod");
+        let (created_at, generation, tenant) = recorded(&pod, 0);
+        assert_eq!(
+            (created_at, generation, tenant.as_deref()),
+            (4_242, 1, Some("tenant-a"))
+        );
+    }
+
     #[tokio::test]
     async fn a_session_claimed_elsewhere_is_reattached_with_a_fresh_capability() {
         let mut claimed = idle_pod("pool-a", "10.0.0.7");
@@ -756,6 +965,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
+        crate::sandbox::annotate_claim(&mut claimed, 77, Some("t1"));
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen_selector = Arc::clone(&seen);
         let mut mock = MockPodApi::new();
@@ -792,6 +1002,12 @@ mod tests {
         assert_eq!(session.session_id, "s1");
         assert_eq!(session.endpoint, format!("http://10.0.0.7:{AGENT_PORT}"));
         assert_eq!(session.expires_at, 1_000 + CAPABILITY_LIFETIME_SECONDS);
+        assert_eq!(
+            (session.created, session.created_at, session.generation),
+            (false, 77, 1),
+            "a reattach reports what the creating process recorded, and did not create it"
+        );
+        assert_eq!(session.tenant_key.as_deref(), Some("t1"));
         let selector = seen.lock().unwrap()[0].clone();
         assert!(
             selector.contains("alien.dev/sandbox-session=s1")

@@ -57,6 +57,28 @@ pub fn claim_idle_pod(pod: &mut Pod, session_id: &str) -> bool {
     true
 }
 
+/// Annotation recording when the session was claimed (Unix seconds).
+pub const ANNOTATION_SESSION_CREATED_AT: &str = "alien.dev/session-created-at";
+/// Annotation recording the session's generation. A released pod is deleted, never reused, so
+/// every session is generation 1; the record is what a process that did not create it reads.
+pub const ANNOTATION_SESSION_GENERATION: &str = "alien.dev/session-generation";
+/// Annotation recording the tenant key the session was created for, when it had one.
+pub const ANNOTATION_SESSION_TENANT: &str = "alien.dev/session-tenant";
+
+/// Records on the pod what the broker later answers about the session, so no process memory is
+/// the source of truth for it.
+pub fn annotate_claim(pod: &mut Pod, now_unix: i64, tenant_key: Option<&str>) {
+    let annotations = pod.metadata.annotations.get_or_insert_with(BTreeMap::new);
+    annotations.insert(
+        ANNOTATION_SESSION_CREATED_AT.to_string(),
+        now_unix.to_string(),
+    );
+    annotations.insert(ANNOTATION_SESSION_GENERATION.to_string(), "1".to_string());
+    if let Some(tenant) = tenant_key {
+        annotations.insert(ANNOTATION_SESSION_TENANT.to_string(), tenant.to_string());
+    }
+}
+
 /// Labels an idle pod: it belongs to the sandbox but to no session yet.
 pub fn idle_pod_labels(sandbox_id: &str) -> BTreeMap<String, String> {
     BTreeMap::from([

@@ -50,6 +50,21 @@ struct ClaimResponse {
     endpoint: String,
     capability: String,
     expires_at: i64,
+    /// What the pod records about the session; absent from a broker that predates them.
+    #[serde(default = "first_generation")]
+    generation: u64,
+    /// Whether this request created the session. A broker that predates the field only ever
+    /// created.
+    #[serde(default = "yes")]
+    created: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn first_generation() -> u64 {
+    1
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +72,8 @@ struct ClaimResponse {
 struct ClaimRequest<'a> {
     sandbox_id: &'a str,
     session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tenant_key: Option<&'a str>,
 }
 
 /// Asks the broker for a session and a fresh capability. `None` when no pod carries the id.
@@ -303,6 +320,99 @@ impl KubernetesSandbox {
         Ok(Some(claim))
     }
 
+    async fn create_resolved(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        self.validate_egress(request.egress.as_ref())?;
+        self.refuse_create_time_lifetime(&request)?;
+        let _policy_write = self.policy_write.lock().await;
+        let policy = request
+            .egress
+            .clone()
+            .or_else(|| self.default_policy.clone())
+            .unwrap_or(alien_core::EgressPolicy::Internet);
+        let sandbox_id = request
+            .sandbox_id
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+
+        let response = self
+            .client
+            .post(format!("{}/v1/sandbox/sessions", self.broker_url))
+            .bearer_auth(self.identity_token().await?)
+            .json(&ClaimRequest {
+                sandbox_id: &self.resource_id,
+                session_id: &sandbox_id,
+                tenant_key: request.tenant_key.as_deref(),
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::OperationNotSupported {
+                operation: "sandbox.create".to_string(),
+                reason: "the sandbox broker is unreachable".to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            // 503 is the pool being empty, which refills on the controller's next health tick.
+            // Saying so is the difference between a caller retrying and a caller giving up.
+            return Err(self.failed(
+                "sandbox.create",
+                &format!("the sandbox broker returned {status}: {body}"),
+            ));
+        }
+
+        let claim: ClaimResponse = response.json().await.into_alien_error().context(
+            ErrorData::UnexpectedResponseFormat {
+                provider: "kubernetes-sandbox".to_string(),
+                binding_name: "sandbox.create".to_string(),
+                field: "body".to_string(),
+                response_json: "the broker returned a body this provider cannot parse".to_string(),
+            },
+        )?;
+
+        self.claims
+            .lock()
+            .expect("no panic holds this lock")
+            .insert(claim.session_id.clone(), claim.clone());
+
+        // Another process created this id between the caller's lookup and this claim; the broker
+        // answered with its session, which already carries its own policy.
+        if !claim.created {
+            return Ok(ResolvedSandbox::found(SandboxInstance {
+                sandbox_id: claim.session_id,
+                state: SandboxState::Running,
+                generation: claim.generation,
+            }));
+        }
+
+        if let Some(manager) = &self.egress_manager {
+            let installation = async {
+                let identity = Self::egress_identity(&claim)?;
+                let delivery = manager.create(identity, &policy, claim.expires_at).await?;
+                self.deliver_egress(&claim.session_id, Some(&delivery.token), &delivery.policy)
+                    .await
+            }
+            .await;
+            if let Err(error) = installation {
+                // Release the claimed pod even if publishing its initial policy failed.
+                self.terminate(&claim.session_id)
+                    .await
+                    .context(ErrorData::SandboxEgressGatewayUnavailable {
+                    reason:
+                        "initial policy delivery failed and the claimed pod could not be cleaned up"
+                            .into(),
+                })?;
+                return Err(error);
+            }
+        }
+
+        Ok(ResolvedSandbox::created(SandboxInstance {
+            sandbox_id: claim.session_id,
+            state: SandboxState::Running,
+            generation: claim.generation,
+        }))
+    }
+
     fn failed(&self, operation: &str, reason: &str) -> AlienError<ErrorData> {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: operation.to_string(),
@@ -360,87 +470,9 @@ impl Sandbox for KubernetesSandbox {
 
     /// Claims a warm pod through the broker.
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        self.validate_egress(request.egress.as_ref())?;
-        self.refuse_create_time_lifetime(&request)?;
-        let _policy_write = self.policy_write.lock().await;
-        let policy = request
-            .egress
-            .clone()
-            .or_else(|| self.default_policy.clone())
-            .unwrap_or(alien_core::EgressPolicy::Internet);
-        let sandbox_id = request
-            .sandbox_id
-            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-
-        let response = self
-            .client
-            .post(format!("{}/v1/sandbox/sessions", self.broker_url))
-            .bearer_auth(self.identity_token().await?)
-            .json(&ClaimRequest {
-                sandbox_id: &self.resource_id,
-                session_id: &sandbox_id,
-            })
-            .send()
+        self.create_resolved(request)
             .await
-            .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.create".to_string(),
-                reason: "the sandbox broker is unreachable".to_string(),
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            // 503 is the pool being empty, which refills on the controller's next health tick.
-            // Saying so is the difference between a caller retrying and a caller giving up.
-            return Err(self.failed(
-                "sandbox.create",
-                &format!("the sandbox broker returned {status}: {body}"),
-            ));
-        }
-
-        let claim: ClaimResponse = response.json().await.into_alien_error().context(
-            ErrorData::UnexpectedResponseFormat {
-                provider: "kubernetes-sandbox".to_string(),
-                binding_name: "sandbox.create".to_string(),
-                field: "body".to_string(),
-                response_json: "the broker returned a body this provider cannot parse".to_string(),
-            },
-        )?;
-
-        self.claims
-            .lock()
-            .expect("no panic holds this lock")
-            .insert(claim.session_id.clone(), claim.clone());
-
-        if let Some(manager) = &self.egress_manager {
-            let installation = async {
-                let identity = Self::egress_identity(&claim)?;
-                let delivery = manager.create(identity, &policy, claim.expires_at).await?;
-                self.deliver_egress(&claim.session_id, Some(&delivery.token), &delivery.policy)
-                    .await
-            }
-            .await;
-            if let Err(error) = installation {
-                // Release the claimed pod even if publishing its initial policy failed.
-                self.terminate(&claim.session_id)
-                    .await
-                    .context(ErrorData::SandboxEgressGatewayUnavailable {
-                    reason:
-                        "initial policy delivery failed and the claimed pod could not be cleaned up"
-                            .into(),
-                })?;
-                return Err(error);
-            }
-        }
-
-        Ok(SandboxInstance {
-            sandbox_id: claim.session_id,
-            state: SandboxState::Running,
-            // A released pod is deleted rather than fenced, so a sandbox never outlives its own
-            // generation.
-            generation: 1,
-        })
+            .map(|resolved| resolved.sandbox)
     }
 
     /// Any process of the deployment can look a session up by id: the broker reads it off the pod.
@@ -452,7 +484,7 @@ impl Sandbox for KubernetesSandbox {
             .map(|claim| SandboxInstance {
                 sandbox_id: claim.session_id,
                 state: SandboxState::Running,
-                generation: 1,
+                generation: claim.generation,
             }))
     }
 
@@ -470,7 +502,7 @@ impl Sandbox for KubernetesSandbox {
             }
         }
 
-        self.create(request).await.map(ResolvedSandbox::created)
+        self.create_resolved(request).await
     }
 
     async fn update_egress(
@@ -889,6 +921,77 @@ mod tests {
         assert_eq!(*lookups.lock().unwrap(), 3, "refreshed before it expired");
     }
 
+    /// `get_or_create` from a new process per command: the known id is found (`created` false,
+    /// generation from the pod), a new id is created, and a create that lost a race to another
+    /// process is reported as found.
+    #[tokio::test]
+    async fn get_or_create_reports_whether_this_call_created_the_session() {
+        use axum::routing::{get, post};
+        let expires = chrono::Utc::now().timestamp() + 900;
+        let broker = serve(
+            Router::new()
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    get(
+                        move |Path((_, session)): Path<(String, String)>| async move {
+                            if session == "known" {
+                                Ok(Json(serde_json::json!({
+                                    "agentSessionId": "uid-1", "sessionId": "known",
+                                    "endpoint": "http://10.0.0.1:8080", "capability": "c",
+                                    "expiresAt": expires, "generation": 3, "created": false,
+                                })))
+                            } else {
+                                Err(StatusCode::NOT_FOUND)
+                            }
+                        },
+                    ),
+                )
+                .route(
+                    "/v1/sandbox/sessions",
+                    post(move |Json(body): Json<serde_json::Value>| async move {
+                        let id = body["sessionId"].as_str().unwrap().to_string();
+                        // "raced" was created by another process while this one was looking.
+                        let created = id != "raced";
+                        Json(serde_json::json!({
+                            "agentSessionId": "uid-2", "sessionId": id,
+                            "endpoint": "http://10.0.0.2:8080", "capability": "c",
+                            "expiresAt": expires, "generation": 1, "created": created,
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        std::fs::write(token.path(), "service-account-token").unwrap();
+        let sandbox = sandbox_over(broker, &token);
+        let request = |id: &str| CreateSandboxRequest {
+            sandbox_id: Some(id.to_string()),
+            ..Default::default()
+        };
+
+        let known = sandbox
+            .get_or_create(request("known"))
+            .await
+            .expect("found");
+        assert!(!known.created);
+        assert_eq!(
+            known.sandbox.generation, 3,
+            "the pod's generation, not a constant"
+        );
+
+        let fresh = sandbox
+            .get_or_create(request("fresh"))
+            .await
+            .expect("created");
+        assert!(fresh.created);
+
+        let raced = sandbox
+            .get_or_create(request("raced"))
+            .await
+            .expect("found");
+        assert!(!raced.created, "losing the create race is a find");
+    }
+
     /// A command's input is many short requests over hours, so the agent handle replaces its
     /// capability before it expires instead of letting a request reach the pod with a dead one.
     #[tokio::test]
@@ -915,6 +1018,8 @@ mod tests {
             endpoint: "http://10.0.0.1:8080".to_string(),
             capability: "first".to_string(),
             expires_at: chrono::Utc::now().timestamp() + 20,
+            generation: 1,
+            created: false,
         };
         let agent = SessionAgent {
             client: reqwest::Client::new(),

@@ -23,7 +23,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::sandbox::kubernetes::capability_secret_name;
-use crate::sandbox::kubernetes_broker::claim_session_for_deployment;
+use crate::sandbox::kubernetes_broker::{
+    find_or_create_session_for_deployment, SessionRequestError,
+};
 use alien_error::Context;
 use alien_k8s_clients::kubernetes::pods::PodApi;
 use alien_k8s_clients::kubernetes::secrets::SecretsApi;
@@ -121,6 +123,9 @@ pub struct ClaimRequest {
     pub sandbox_id: String,
     /// Session id the pod will carry
     pub session_id: String,
+    /// Tenant the session is created for; recorded on the pod
+    #[serde(default)]
+    pub tenant_key: Option<String>,
 }
 
 /// What the application needs to reach its session.
@@ -137,6 +142,31 @@ pub struct ClaimResponse {
     pub capability: String,
     /// Unix seconds after which the capability is void
     pub expires_at: i64,
+    /// Unix seconds at which the session was created
+    pub created_at: i64,
+    /// Generation recorded on the pod
+    pub generation: u64,
+    /// Tenant key the session was created for
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_key: Option<String>,
+    /// Whether this request created the session
+    pub created: bool,
+}
+
+impl From<crate::sandbox::kubernetes_broker::ClaimedSession> for ClaimResponse {
+    fn from(claimed: crate::sandbox::kubernetes_broker::ClaimedSession) -> Self {
+        Self {
+            agent_session_id: claimed.agent_session_id,
+            session_id: claimed.session_id,
+            endpoint: claimed.endpoint,
+            capability: claimed.capability,
+            expires_at: claimed.expires_at,
+            created_at: claimed.created_at,
+            generation: claimed.generation,
+            tenant_key: claimed.tenant_key,
+            created: claimed.created,
+        }
+    }
 }
 
 impl BrokerState {
@@ -257,7 +287,7 @@ async fn claim(
 ) -> Result<Json<ClaimResponse>, StatusCode> {
     let authorization = authorize(&state, &headers).await?;
 
-    let claimed = claim_session_for_deployment(
+    let claimed = find_or_create_session_for_deployment(
         &state.broker.pods,
         &state.broker.secrets,
         &request.sandbox_id,
@@ -267,19 +297,17 @@ async fn claim(
         chrono::Utc::now().timestamp(),
         &authorization.deployment_label_key,
         &authorization.deployment_label_value,
+        request.tenant_key.as_deref(),
     )
     .await
-    // Retryable rather than fatal: an empty pool refills on the controller's next health tick,
-    // and 503 is what tells a caller to wait rather than to give up.
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    .map_err(|error| match error {
+        SessionRequestError::TenantMismatch => StatusCode::CONFLICT,
+        // Retryable rather than fatal: a cold create can outlast a request and 503 is what tells
+        // a caller to wait rather than to give up.
+        SessionRequestError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+    })?;
 
-    Ok(Json(ClaimResponse {
-        agent_session_id: claimed.agent_session_id,
-        session_id: claimed.session_id,
-        endpoint: claimed.endpoint,
-        capability: claimed.capability,
-        expires_at: claimed.expires_at,
-    }))
+    Ok(Json(claimed.into()))
 }
 
 /// Returns a session claimed earlier, by this process or another, with a fresh capability.
@@ -305,13 +333,7 @@ async fn reattach(
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
     .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(ClaimResponse {
-        agent_session_id: claimed.agent_session_id,
-        session_id: claimed.session_id,
-        endpoint: claimed.endpoint,
-        capability: claimed.capability,
-        expires_at: claimed.expires_at,
-    }))
+    Ok(Json(claimed.into()))
 }
 
 #[derive(Debug, Serialize)]
@@ -616,6 +638,7 @@ mod tests {
             Json(ClaimRequest {
                 sandbox_id: "sbx".to_string(),
                 session_id: "session".to_string(),
+                tenant_key: None,
             }),
         )
         .await
