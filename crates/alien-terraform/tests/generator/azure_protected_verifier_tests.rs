@@ -248,3 +248,33 @@ const MANAGEMENT_PRINCIPAL: &str = "00000000-0000-0000-0000-00000000aaaa";
 const MANAGEMENT_CLIENT: &str = "00000000-0000-0000-0000-00000000bbbb";
 const VERIFIER_APP_ID: &str =
     "/subscriptions/0000/resourceGroups/acme-rg/providers/Microsoft.App/containerApps/acme-verifier";
+
+/// The signing vault is in a group of its own, named after the install's group. Management can
+/// assign roles in the install's group only, so nothing it assigns reaches the vault; the
+/// machines read the vault through the read role assigned on that group.
+#[test]
+fn the_signing_vault_is_in_its_own_resource_group() {
+    let module = render(
+        &stack(&["default-container-env"]),
+        TerraformTarget::Azure,
+        protected(),
+    );
+    assert_planned(
+        &module,
+        r#"
+  assert {
+    condition = azurerm_resource_group.management_signing_group.name == "acme-rg-signing"
+    error_message = "The signing group is the install's group with the signing suffix."
+  }
+  assert {
+    condition = azurerm_key_vault.management_signing.resource_group_name == "acme-rg-signing"
+    error_message = "The signing vault is in the signing group, not the install's."
+  }
+  assert {
+    condition = azurerm_key_vault.management_signing.resource_group_name != var.azure_resource_group_name
+    error_message = "The signing vault is outside the group management assigns roles in."
+  }
+"#,
+        "protected Azure signing vault group",
+    );
+}
