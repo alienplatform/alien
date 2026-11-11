@@ -54,6 +54,7 @@ fn next_release(gated_keys: &[&str]) -> Stack {
 }
 
 fn config(input: Option<bool>) -> DeploymentConfig {
+    digest_key();
     let mut config = DeploymentConfig::builder()
         .stack_settings(Default::default())
         .environment_variables(EnvironmentVariablesSnapshot {
@@ -128,7 +129,6 @@ async fn unanswered_deployment(gated_keys: &[&str]) -> DeploymentState {
 }
 
 async fn update(state: DeploymentState, input: Option<bool>) -> DeploymentState {
-    digest_key();
     alien_deployment::step(state, config(input), client(), None)
         .await
         .expect("update step")
