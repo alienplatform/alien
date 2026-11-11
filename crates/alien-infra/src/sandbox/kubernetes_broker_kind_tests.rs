@@ -26,7 +26,8 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 use super::kubernetes_broker::{
     find_or_create_session_for_deployment, list_sessions_for_deployment,
-    reattach_session_for_deployment, release_session_for_deployment, SessionRequestError,
+    preview_session_for_deployment, reattach_session_for_deployment,
+    release_session_for_deployment, PreviewError, SessionRequestError,
 };
 use super::{
     capability_secret_name, idle_pool_pod_with_labels, retire_stale_idle_pods, stale_idle_pods,
@@ -298,6 +299,68 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
     .expect("list sessions");
     listed.sort();
     assert_eq!(listed, ["s1", "warm"]);
+
+    // R8: a preview capability is minted for a declared port of a session of this deployment and
+    // for nothing else. The ports come from the Secret the controller publishes.
+    let mut secret = secrets
+        .get_secret(&namespace, &secret_name)
+        .await
+        .expect("secret");
+    secret.data.get_or_insert_default().insert(
+        super::PREVIEW_PORTS_SECRET_KEY.to_string(),
+        k8s_openapi::ByteString(serde_json::to_vec(&[8080u16]).unwrap()),
+    );
+    secrets
+        .update_secret(&namespace, &secret_name, &secret)
+        .await
+        .expect("publish the declared ports");
+    let preview = |session: &'static str, scope: &'static str, port: u16| {
+        let (pods, secrets, namespace, secret_name) = (
+            pods.clone(),
+            secrets.clone(),
+            namespace.clone(),
+            secret_name.clone(),
+        );
+        async move {
+            preview_session_for_deployment(
+                &pods,
+                &secrets,
+                SANDBOX,
+                &namespace,
+                session,
+                &secret_name,
+                chrono::Utc::now().timestamp(),
+                SCOPE_KEY,
+                scope,
+                port,
+            )
+            .await
+        }
+    };
+    let grant = preview("s1", SCOPE_VALUE, 8080)
+        .await
+        .ok()
+        .expect("a declared port of a live session");
+    assert!(
+        grant.endpoint.ends_with(":8971/v1/preview/8080"),
+        "{}",
+        grant.endpoint
+    );
+    assert!(grant.expires_at <= chrono::Utc::now().timestamp() + 900 + 5);
+    assert!(matches!(
+        preview("s1", SCOPE_VALUE, 9999).await,
+        Err(PreviewError::PortNotDeclared)
+    ));
+    assert!(matches!(
+        preview("s1", SCOPE_VALUE, alien_core::sandbox_image::AGENT_PORT).await,
+        Err(PreviewError::PortNotDeclared)
+    ));
+    // Another deployment's label finds nothing (the Secret's own scope also refuses it).
+    assert!(preview("s1", "another-deployment", 8080).await.is_err());
+    assert!(matches!(
+        preview("nobody", SCOPE_VALUE, 8080).await,
+        Err(PreviewError::NotFound)
+    ));
 
     // R7: a new release changes the template. Idle pods built from the old one are retired, but a
     // pod a session has already claimed keeps running, and a claim that lands between the listing
