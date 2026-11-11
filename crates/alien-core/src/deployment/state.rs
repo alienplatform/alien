@@ -256,6 +256,38 @@ pub struct RuntimeMetadata {
     /// read or recorded here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deployer_secrets: Vec<crate::DeployerSecretReport>,
+
+    /// What a one-token call with the customer admin's setup credentials said about each
+    /// model an AI resource declares. Written once, during setup; the AI controller's heartbeat
+    /// reports it. Absent when no model is declared or the setup could not check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_access_checks: Vec<AiAccessCheck>,
+}
+
+/// The setup-time answer for one declared model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AiAccessCheck {
+    /// The AI resource that declares the model.
+    pub resource_id: String,
+    /// The model id as the app uses it.
+    pub model_id: String,
+    /// `verified`, `refused` (the cloud refused the model) or `not-checked`.
+    pub result: AiAccessCheckResult,
+    /// The cloud's error code or the reason the check could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub tested_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAccessCheckResult {
+    Verified,
+    Refused,
+    NotChecked,
 }
 
 /// Cloud objects a direct setup created so a runtime-owned resource can run.
