@@ -819,4 +819,116 @@ mod config_only_updates_in_parallel {
         assert_eq!(get_status(&state, "daemon"), Some(ResourceStatus::Running));
         Ok(())
     }
+
+    const APPS: [&str; 7] = [
+        "protocol",
+        "temporal-worker",
+        "scheduler",
+        "ingest",
+        "web",
+        "cron",
+        "reports",
+    ];
+
+    /// The shape of the 11-10 stack: a `backend` that the other app containers link, an
+    /// egress `gateway` Alien adds itself, and a Worker. `timeout_seconds` stands for an env
+    /// value: an untargeted change reaches every app resource and never the gateway.
+    fn demo_stack(backend_image: &str, app_timeout: u32) -> Stack {
+        let backend = worker("backend", backend_image, app_timeout, None);
+        let mut builder =
+            Stack::new("demo".to_owned()).add(backend.clone(), ResourceLifecycle::Live);
+        for id in APPS {
+            builder = builder.add_with_dependencies(
+                worker(id, &format!("{id}-v1"), app_timeout, Some(&backend)),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "backend")],
+            );
+        }
+        builder
+            .add(
+                worker("gateway", "gateway-v1", 30, None),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    async fn demo_running() -> Result<StackState> {
+        let mut state = run_to_synced(
+            &new_executor(&demo_stack("backend-v1", 30))?,
+            new_test_state(),
+        )
+        .await?;
+        for (id, resource) in state.resources.iter_mut() {
+            if id == "gateway" {
+                continue;
+            }
+            let mut controller =
+                resource.get_internal_controller_typed::<TestWorkerController>()?;
+            controller.config_only_opt_in = true;
+            resource.set_internal_controller(Some(Box::new(controller)))?;
+        }
+        Ok(state)
+    }
+
+    /// An untargeted env-only change on the 11-10 shape: one step starts every app
+    /// resource's update, `backend` and its dependents together, and the gateway is untouched.
+    #[tokio::test]
+    async fn an_env_only_change_updates_every_app_resource_in_one_wave_and_not_the_gateway(
+    ) -> Result<()> {
+        let state = demo_running().await?;
+        let next = new_executor(&demo_stack("backend-v1", 60))?
+            .step(state)
+            .await?
+            .next_state;
+
+        for id in std::iter::once("backend").chain(APPS) {
+            assert_eq!(
+                get_status(&next, id),
+                Some(ResourceStatus::Updating),
+                "{id}"
+            );
+            let controller =
+                next.resources[id].get_internal_controller_typed::<TestWorkerController>()?;
+            assert_ne!(
+                controller.state,
+                TestWorkerState::UpdateStart,
+                "{id} waited"
+            );
+        }
+        assert_eq!(get_status(&next, "gateway"), Some(ResourceStatus::Running));
+        Ok(())
+    }
+
+    /// An image change to `backend` keeps every dependent waiting until it is Running.
+    #[tokio::test]
+    async fn an_image_change_to_backend_keeps_all_its_dependents_waiting() -> Result<()> {
+        let mut state = demo_running().await?;
+        let executor = new_executor(&demo_stack("backend-v2", 60))?;
+        let mut backend_rolled = false;
+        for _ in 0..300 {
+            state = executor.step(state).await?.next_state;
+            if get_status(&state, "backend") != Some(ResourceStatus::Running) {
+                backend_rolled = true;
+                for id in APPS {
+                    let controller = state.resources[id]
+                        .get_internal_controller_typed::<TestWorkerController>()?;
+                    assert_eq!(
+                        controller.state,
+                        TestWorkerState::UpdateStart,
+                        "{id} started early"
+                    );
+                }
+            } else if backend_rolled
+                && APPS
+                    .iter()
+                    .all(|id| get_status(&state, id) == Some(ResourceStatus::Running))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(backend_rolled);
+        assert_eq!(get_status(&state, "gateway"), Some(ResourceStatus::Running));
+        Ok(())
+    }
 }
