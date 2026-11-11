@@ -99,7 +99,10 @@ impl ServiceQuotasClient {
                 "servicequotas.{}.amazonaws.com",
                 self.credentials.region()
             ))
-            .header("X-Amz-Target", format!("ServiceQuotasV20190624.{operation}"))
+            .header(
+                "X-Amz-Target",
+                format!("ServiceQuotasV20190624.{operation}"),
+            )
             .header("Content-Type", "application/x-amz-json-1.1")
             .json(&body);
         builder
