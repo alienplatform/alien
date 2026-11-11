@@ -1,5 +1,10 @@
 use std::time::Duration;
 
+use alien_aws_clients::{
+    kms::{CreateKeyRequest, KmsApi, KmsTag},
+    resourcegroupstagging::{GetResourcesRequest, TagFilter},
+    ResourceGroupsTaggingApi,
+};
 use alien_core::{
     bindings::KeyBinding,
     import::{data::AwsKeyImportData, ImportContext},
@@ -7,17 +12,12 @@ use alien_core::{
     KeyHeartbeatStatus, KeyOutputs, ObservedHealth, Platform, ProviderLifecycleState,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, StackResourceState,
 };
-use alien_aws_clients::{
-    kms::{CreateKeyRequest, KmsApi, KmsTag},
-    resourcegroupstagging::{GetResourcesRequest, TagFilter},
-    ResourceGroupsTaggingApi,
-};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_macros::controller;
 use alien_permissions::{
     aws_key_policy::{aws_key_policy_for_stack, LiteralAwsPrincipals},
     key_access::{aws_key_grants, key_access_plan},
 };
-use alien_macros::controller;
 use chrono::Utc;
 
 use crate::{
@@ -39,6 +39,10 @@ pub struct AwsKeyController {
     /// Whether Alien made this key in a direct setup run. Older states are imports.
     #[serde(default)]
     pub(crate) origin: super::KeyOrigin,
+    /// A random value saved with `create_requested` and attached to the key as a tag. A rerun
+    /// adopts only a key carrying it: the deployment's own tags are predictable, this is not.
+    #[serde(default)]
+    pub(crate) create_marker: Option<String>,
     /// Saved by the step before the one that sends `CreateKey`, so a crash after the call is found on the rerun.
     #[serde(default)]
     pub(crate) create_requested: bool,
@@ -63,6 +67,8 @@ impl AwsKeyController {
         // Saved with this step's transition, before any CreateKey call: a crash after the
         // call finds the flag set and looks for the key it may have made.
         self.create_requested = true;
+        self.create_marker
+            .get_or_insert_with(|| uuid::Uuid::new_v4().simple().to_string());
         Ok(HandlerAction::Continue {
             state: CreatingKey,
             suggested_delay: None,
@@ -84,6 +90,12 @@ impl AwsKeyController {
                 message: "Failed to serialize the key policy".to_string(),
             })?;
 
+        let marker = self.create_marker.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceStateSerializationFailed {
+                resource_id: key.id.clone(),
+                message: "The key's creation marker was not saved".to_string(),
+            })
+        })?;
         if self.create_requested && self.key_arn.is_none() {
             // A crash between the CreateKey call and the checkpoint left a key this
             // deployment may own. Tags are written by anyone who can tag, so the key is
@@ -92,14 +104,15 @@ impl AwsKeyController {
                 .service_provider
                 .get_aws_resource_groups_tagging_client(aws)
                 .await?;
-            if let Some(arn) = find_tagged_key(ctx, tagging.as_ref(), client.as_ref(), &key.id).await? {
-                client
-                    .put_key_policy(&arn, &policy)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
+            if let Some(arn) =
+                find_tagged_key(ctx, tagging.as_ref(), client.as_ref(), &key.id, &marker).await?
+            {
+                client.put_key_policy(&arn, &policy).await.context(
+                    ErrorData::CloudPlatformError {
                         message: "Failed to apply the key policy to the adopted key".to_string(),
                         resource_id: Some(key.id.clone()),
-                    })?;
+                    },
+                )?;
                 self.key_arn = Some(arn);
                 self.origin = super::KeyOrigin::Created;
                 return Ok(HandlerAction::Continue {
@@ -115,7 +128,7 @@ impl AwsKeyController {
                 key_spec: "SYMMETRIC_DEFAULT".to_string(),
                 key_usage: "ENCRYPT_DECRYPT".to_string(),
                 policy,
-                tags: key_tags(ctx.resource_prefix, &key.id),
+                tags: key_tags(ctx.resource_prefix, &key.id, &marker),
             })
             .await
             .context(ErrorData::CloudPlatformError {
@@ -257,7 +270,9 @@ impl AwsKeyController {
                         ) => {}
                     Err(error) => {
                         return Err(error.context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to remove key grant '{policy}' from role '{role}'"),
+                            message: format!(
+                                "Failed to remove key grant '{policy}' from role '{role}'"
+                            ),
                             resource_id: Some(key.id.clone()),
                         }));
                     }
@@ -456,7 +471,10 @@ impl AwsKeyController {
                 })?;
         }
         for (role, policy) in &self.grants {
-            if !wanted.iter().any(|grant| &grant.role == role && &grant.policy == policy) {
+            if !wanted
+                .iter()
+                .any(|grant| &grant.role == role && &grant.policy == policy)
+            {
                 match iam.delete_role_policy(role, policy).await {
                     Ok(()) => {}
                     Err(error)
@@ -501,14 +519,12 @@ fn principals<'a>(
 
 fn desired_policy(ctx: &ResourceControllerContext<'_>, key_id: &str) -> Result<serde_json::Value> {
     let aws = ctx.get_aws_config()?;
-    let plan = key_access_plan(ctx.desired_stack, key_id).context(ErrorData::ResourceConfigInvalid {
-        resource_id: Some(key_id.to_string()),
-        message: "Failed to work out which roles may use the key".to_string(),
-    })?;
-    Ok(aws_key_policy_for_stack(
-        &plan,
-        &principals(ctx, aws),
-    ))
+    let plan =
+        key_access_plan(ctx.desired_stack, key_id).context(ErrorData::ResourceConfigInvalid {
+            resource_id: Some(key_id.to_string()),
+            message: "Failed to work out which roles may use the key".to_string(),
+        })?;
+    Ok(aws_key_policy_for_stack(&plan, &principals(ctx, aws)))
 }
 
 fn desired_grants(
@@ -516,10 +532,11 @@ fn desired_grants(
     key_id: &str,
     key_arn: &str,
 ) -> Result<Vec<RoleGrant>> {
-    let plan = key_access_plan(ctx.desired_stack, key_id).context(ErrorData::ResourceConfigInvalid {
-        resource_id: Some(key_id.to_string()),
-        message: "Failed to work out which roles may use the key".to_string(),
-    })?;
+    let plan =
+        key_access_plan(ctx.desired_stack, key_id).context(ErrorData::ResourceConfigInvalid {
+            resource_id: Some(key_id.to_string()),
+            message: "Failed to work out which roles may use the key".to_string(),
+        })?;
     let grants = aws_key_grants(&plan, key_arn).context(ErrorData::ResourceConfigInvalid {
         resource_id: Some(key_id.to_string()),
         message: "Failed to render the key grants".to_string(),
@@ -580,11 +597,17 @@ fn desired_revision(ctx: &ResourceControllerContext<'_>, key_id: &str) -> Result
     Ok(super::access_revision(&[&policy, &grants.join("\n")]))
 }
 
-fn key_tags(prefix: &str, key_id: &str) -> Vec<KmsTag> {
+const CREATE_MARKER_TAG: &str = "alien-create-marker";
+
+fn key_tags(prefix: &str, key_id: &str, marker: &str) -> Vec<KmsTag> {
     let mut tags = alien_core::standard_resource_tags(prefix, key_id)
         .into_iter()
         .map(|(tag_key, tag_value)| KmsTag { tag_key, tag_value })
         .collect::<Vec<_>>();
+    tags.push(KmsTag {
+        tag_key: CREATE_MARKER_TAG.to_string(),
+        tag_value: marker.to_string(),
+    });
     tags.sort_by(|a, b| a.tag_key.cmp(&b.tag_key));
     tags
 }
@@ -596,9 +619,11 @@ async fn find_tagged_key(
     tagging: &dyn ResourceGroupsTaggingApi,
     kms: &dyn KmsApi,
     key_id: &str,
+    marker: &str,
 ) -> Result<Option<String>> {
     let aws = ctx.get_aws_config()?;
-    let tags = alien_core::standard_resource_tags(ctx.resource_prefix, key_id);
+    let mut tags = alien_core::standard_resource_tags(ctx.resource_prefix, key_id);
+    tags.insert(CREATE_MARKER_TAG.to_string(), marker.to_string());
     let mut candidates = Vec::new();
     let mut token = None;
     loop {
@@ -624,7 +649,11 @@ async fn find_tagged_key(
                 message: "Failed to look for an earlier key of this deployment".to_string(),
                 resource_id: Some(key_id.to_string()),
             })?;
-        candidates.extend(page.resource_tag_mapping_list.into_iter().map(|m| m.resource_arn));
+        candidates.extend(
+            page.resource_tag_mapping_list
+                .into_iter()
+                .map(|m| m.resource_arn),
+        );
         match page.pagination_token.filter(|token| !token.is_empty()) {
             Some(next) => token = Some(next),
             None => break,
@@ -655,7 +684,10 @@ async fn find_tagged_key(
                 ),
             }));
         }
-        if matches!(metadata.key_state.as_str(), "PendingDeletion" | "PendingReplicaDeletion") {
+        if matches!(
+            metadata.key_state.as_str(),
+            "PendingDeletion" | "PendingReplicaDeletion"
+        ) {
             continue;
         }
         ours.push(arn);
@@ -706,6 +738,7 @@ impl ResourceImporter for AwsKeyImporter {
                 region: Some(ctx.region.to_string()),
                 origin: super::KeyOrigin::Imported,
                 create_requested: false,
+                create_marker: None,
                 access_revision: None,
                 grants: Vec::new(),
                 _internal_stay_count: None,

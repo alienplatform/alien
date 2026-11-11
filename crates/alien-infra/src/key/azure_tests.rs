@@ -1,4 +1,5 @@
 use super::*;
+use crate::key::KeyOrigin;
 use crate::{
     core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider},
     infra_requirements::AzureResourceGroupController,
@@ -13,13 +14,16 @@ use alien_azure_clients::{
     AzureClientConfig, AzureClientConfigExt as _,
 };
 use alien_core::{AzureResourceGroup, InitialSetupAuthority, ResourceLifecycle};
-use crate::key::KeyOrigin;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
 
-fn vault_json(rbac: bool, purge: bool, labelled: bool) -> alien_azure_clients::models::keyvault::Vault {
+fn vault_json(
+    rbac: bool,
+    purge: bool,
+    labelled: bool,
+) -> alien_azure_clients::models::keyvault::Vault {
     let tenant = AzureClientConfig::mock().tenant_id;
     let tags = if labelled {
         serde_json::to_value(resource_tags("test", "data-key")).unwrap()
@@ -165,40 +169,63 @@ async fn refused(executor: &mut SingleControllerExecutor) {
 #[tokio::test]
 async fn a_direct_setup_creates_group_vault_assignment_and_key_waiting_out_rbac() {
     let mut mocks = Mocks::new();
-    mocks.groups.expect_create_or_update_resource_group().times(1).returning(|name, group| {
-        assert_eq!(name, "test-keys");
-        assert_eq!(group.tags["managed-by"], "setup");
-        Ok(group.clone())
-    });
-    mocks.vaults.expect_get_vault().returning(|_, _| Err(not_found()));
-    mocks.vaults.expect_create_or_update_vault().times(1).returning(|group, name, params| {
-        assert_eq!(group, "test-keys");
-        assert!(name.len() <= 24, "{name}");
-        assert!(params.properties.enable_rbac_authorization);
-        assert_eq!(params.properties.enable_purge_protection, Some(true));
-        assert_eq!(params.properties.soft_delete_retention_in_days, 90);
-        Ok(vault_json(true, true, true))
-    });
-    mocks.authorization.expect_create_or_update_role_assignment_by_id().times(1).returning(|id, assignment| {
-        assert!(id.contains("/vaults/v/providers/Microsoft.Authorization/roleAssignments/"));
-        let properties = assignment.properties.as_ref().unwrap();
-        assert!(properties.role_definition_id.ends_with("14b46e9e-c2b7-41b4-b07b-48a6ebf60603"));
-        assert_eq!(properties.principal_id, "00000000-0000-0000-0000-0000000000aa");
-        Ok(assignment.clone())
-    });
+    mocks
+        .groups
+        .expect_create_or_update_resource_group()
+        .times(1)
+        .returning(|name, group| {
+            assert_eq!(name, "test-keys");
+            assert_eq!(group.tags["managed-by"], "setup");
+            Ok(group.clone())
+        });
+    mocks
+        .vaults
+        .expect_get_vault()
+        .returning(|_, _| Err(not_found()));
+    mocks
+        .vaults
+        .expect_create_or_update_vault()
+        .times(1)
+        .returning(|group, name, params| {
+            assert_eq!(group, "test-keys");
+            assert!(name.len() <= 24, "{name}");
+            assert!(params.properties.enable_rbac_authorization);
+            assert_eq!(params.properties.enable_purge_protection, Some(true));
+            assert_eq!(params.properties.soft_delete_retention_in_days, 90);
+            Ok(vault_json(true, true, true))
+        });
+    mocks
+        .authorization
+        .expect_create_or_update_role_assignment_by_id()
+        .times(1)
+        .returning(|id, assignment| {
+            assert!(id.contains("/vaults/v/providers/Microsoft.Authorization/roleAssignments/"));
+            let properties = assignment.properties.as_ref().unwrap();
+            assert!(properties
+                .role_definition_id
+                .ends_with("14b46e9e-c2b7-41b4-b07b-48a6ebf60603"));
+            assert_eq!(
+                properties.principal_id,
+                "00000000-0000-0000-0000-0000000000aa"
+            );
+            Ok(assignment.clone())
+        });
     // The role assignment has not reached the data plane for the first two tries.
     mocks.keys.expect_get_key().returning(|_| Err(not_found()));
     let tries = Arc::new(AtomicU32::new(0));
     let seen = tries.clone();
-    mocks.keys.expect_create_key().returning(move |uri, name, request| {
-        assert_eq!(uri, "https://v.vault.azure.net/");
-        assert_eq!(name, "key");
-        assert_eq!((request.kty.as_str(), request.key_size), ("RSA", 2048));
-        if seen.fetch_add(1, Ordering::SeqCst) < 2 {
-            return Err(forbidden());
-        }
-        Ok(key_bundle("RSA", &OPS, true))
-    });
+    mocks
+        .keys
+        .expect_create_key()
+        .returning(move |uri, name, request| {
+            assert_eq!(uri, "https://v.vault.azure.net/");
+            assert_eq!(name, "key");
+            assert_eq!((request.kty.as_str(), request.key_size), ("RSA", 2048));
+            if seen.fetch_add(1, Ordering::SeqCst) < 2 {
+                return Err(forbidden());
+            }
+            Ok(key_bundle("RSA", &OPS, true))
+        });
     let mut executor = executor(mocks.provider(), AzureKeyController::default(), true).await;
     for _ in 0..12 {
         executor.step().await.unwrap();
@@ -217,7 +244,9 @@ async fn a_direct_setup_creates_group_vault_assignment_and_key_waiting_out_rbac(
 #[tokio::test]
 async fn outside_a_setup_run_create_refuses_and_calls_no_cloud() {
     let mut provider = MockPlatformServiceProvider::new();
-    provider.expect_get_azure_key_vault_management_client().never();
+    provider
+        .expect_get_azure_key_vault_management_client()
+        .never();
     provider.expect_get_azure_key_vault_keys_client().never();
     provider.expect_get_azure_resources_client().never();
     provider.expect_get_azure_authorization_client().never();
@@ -227,12 +256,25 @@ async fn outside_a_setup_run_create_refuses_and_calls_no_cloud() {
 
 #[tokio::test]
 async fn a_planted_vault_is_not_adopted() {
-    for (rbac, purge, labelled) in [(false, true, true), (true, false, true), (true, true, false)] {
+    for (rbac, purge, labelled) in [
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
         let mut mocks = Mocks::new();
-        mocks.groups.expect_create_or_update_resource_group().returning(|_, g| Ok(g.clone()));
-        mocks.vaults.expect_get_vault().returning(move |_, _| Ok(vault_json(rbac, purge, labelled)));
+        mocks
+            .groups
+            .expect_create_or_update_resource_group()
+            .returning(|_, g| Ok(g.clone()));
+        mocks
+            .vaults
+            .expect_get_vault()
+            .returning(move |_, _| Ok(vault_json(rbac, purge, labelled)));
         mocks.vaults.expect_create_or_update_vault().never();
-        mocks.authorization.expect_create_or_update_role_assignment_by_id().never();
+        mocks
+            .authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .never();
         let mut executor = executor(mocks.provider(), AzureKeyController::default(), true).await;
         refused(&mut executor).await;
     }
@@ -246,10 +288,22 @@ async fn a_planted_key_is_not_adopted() {
         ("RSA", OPS.to_vec(), false),
     ] {
         let mut mocks = Mocks::new();
-        mocks.groups.expect_create_or_update_resource_group().returning(|_, g| Ok(g.clone()));
-        mocks.vaults.expect_get_vault().returning(|_, _| Ok(vault_json(true, true, true)));
-        mocks.authorization.expect_create_or_update_role_assignment_by_id().returning(|_, a| Ok(a.clone()));
-        mocks.keys.expect_get_key().returning(move |_| Ok(key_bundle(kty, &ops, labelled)));
+        mocks
+            .groups
+            .expect_create_or_update_resource_group()
+            .returning(|_, g| Ok(g.clone()));
+        mocks
+            .vaults
+            .expect_get_vault()
+            .returning(|_, _| Ok(vault_json(true, true, true)));
+        mocks
+            .authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .returning(|_, a| Ok(a.clone()));
+        mocks
+            .keys
+            .expect_get_key()
+            .returning(move |_| Ok(key_bundle(kty, &ops, labelled)));
         mocks.keys.expect_create_key().never();
         let mut executor = executor(mocks.provider(), AzureKeyController::default(), true).await;
         refused(&mut executor).await;
@@ -261,11 +315,14 @@ async fn deleting_a_created_key_removes_its_assignments_and_keeps_vault_key_and_
     let removed = Arc::new(AtomicU32::new(0));
     let mut mocks = Mocks::new();
     let count = removed.clone();
-    mocks.authorization.expect_delete_role_assignment_by_id().returning(move |id| {
-        assert!(id.ends_with("/roleAssignments/a1"));
-        count.fetch_add(1, Ordering::SeqCst);
-        Ok(None)
-    });
+    mocks
+        .authorization
+        .expect_delete_role_assignment_by_id()
+        .returning(move |id| {
+            assert!(id.ends_with("/roleAssignments/a1"));
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        });
     mocks.vaults.expect_delete_vault().never();
     mocks.groups.expect_delete_resource_group().never();
     mocks.keys.expect_create_key().never();
@@ -273,7 +330,9 @@ async fn deleting_a_created_key_removes_its_assignments_and_keeps_vault_key_and_
         state: AzureKeyState::Ready,
         key_id: Some("https://v.vault.azure.net/keys/key/v1".to_string()),
         origin: KeyOrigin::Created,
-        role_assignment_ids: vec!["/subscriptions/s/x/providers/Microsoft.Authorization/roleAssignments/a1".to_string()],
+        role_assignment_ids: vec![
+            "/subscriptions/s/x/providers/Microsoft.Authorization/roleAssignments/a1".to_string(),
+        ],
         ..Default::default()
     };
     let mut executor = executor(mocks.provider(), controller, true).await;
@@ -286,16 +345,21 @@ async fn deleting_a_created_key_removes_its_assignments_and_keeps_vault_key_and_
 #[tokio::test]
 async fn a_failed_grant_removal_keeps_the_assignments_that_are_left() {
     let mut mocks = Mocks::new();
-    mocks.authorization.expect_delete_role_assignment_by_id().returning(|id| {
-        if id.ends_with("/roleAssignments/a2") {
-            Err(forbidden())
-        } else {
-            Ok(None)
-        }
-    });
+    mocks
+        .authorization
+        .expect_delete_role_assignment_by_id()
+        .returning(|id| {
+            if id.ends_with("/roleAssignments/a2") {
+                Err(forbidden())
+            } else {
+                Ok(None)
+            }
+        });
     let ids: Vec<String> = ["a1", "a2", "a3"]
         .iter()
-        .map(|n| format!("/subscriptions/s/x/providers/Microsoft.Authorization/roleAssignments/{n}"))
+        .map(|n| {
+            format!("/subscriptions/s/x/providers/Microsoft.Authorization/roleAssignments/{n}")
+        })
         .collect();
     let controller = AzureKeyController {
         state: AzureKeyState::Ready,
@@ -312,14 +376,22 @@ async fn a_failed_grant_removal_keeps_the_assignments_that_are_left() {
     assert_ne!(executor.status(), ResourceStatus::Deleted);
     let controller = executor.internal_state::<AzureKeyController>().unwrap();
     // a3 was removed first; a2 failed, so a2 and a1 are still recorded for the retry.
-    assert_eq!(controller.role_assignment_ids.len(), 2, "{:?}", controller.role_assignment_ids);
+    assert_eq!(
+        controller.role_assignment_ids.len(),
+        2,
+        "{:?}",
+        controller.role_assignment_ids
+    );
 }
 
 #[test]
 fn vault_names_fit_azure_and_are_stable() {
     let name = vault_name("a_Very_long_prefix_that_goes_on", "data-key");
     assert!(name.len() <= 24 && name.len() >= 3, "{name}");
-    assert_eq!(name, vault_name("a_Very_long_prefix_that_goes_on", "data-key"));
+    assert_eq!(
+        name,
+        vault_name("a_Very_long_prefix_that_goes_on", "data-key")
+    );
     assert!(name.chars().next().unwrap().is_ascii_alphabetic());
     assert!(!name.contains("--"));
 }

@@ -405,30 +405,34 @@ async fn teardown_after_a_key_failed_to_create_drops_the_key() {
     }
     let refused = refused.expect("deleting an imported key must fail");
     assert!(
-        refused.message.contains("owned by the setup that created it"),
+        refused
+            .message
+            .contains("owned by the setup that created it"),
         "{refused:?}"
     );
 }
 
 mod created_keys {
     use super::*;
+    use crate::key::KeyOrigin;
     use crate::{
-        core::controller_test::SingleControllerExecutor, remote_stack_management::AwsRemoteStackManagementController,
+        core::controller_test::SingleControllerExecutor,
+        remote_stack_management::AwsRemoteStackManagementController,
     };
+    use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::{
         kms::KmsApi,
         resourcegroupstagging::{
             GetResourcesResponse, MockResourceGroupsTaggingApi, ResourceTagMapping,
         },
-
     };
-    use crate::key::KeyOrigin;
-    use alien_aws_clients::iam::MockIamApi;
     use alien_core::{InitialSetupAuthority, Platform};
     use std::sync::Mutex;
 
-    const NEW_ARN: &str = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000001";
-    const OTHER_ARN: &str = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000002";
+    const NEW_ARN: &str =
+        "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000001";
+    const OTHER_ARN: &str =
+        "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000002";
 
     fn metadata(arn: &str, spec: &str, origin: &str, state: &str) -> DescribeKeyResponse {
         DescribeKeyResponse {
@@ -516,12 +520,17 @@ mod created_keys {
         let requests = created.lock().unwrap();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
+        assert!(request
+            .tags
+            .iter()
+            .any(|tag| tag.tag_key == "alien-create-marker" && !tag.tag_value.is_empty()));
         assert_eq!(request.key_spec, "SYMMETRIC_DEFAULT");
         assert_eq!(request.key_usage, "ENCRYPT_DECRYPT");
         assert_eq!(request.description, "Encryption key 'data-key'");
         let mut tags: Vec<_> = request
             .tags
             .iter()
+            .filter(|tag| tag.tag_key != "alien-create-marker")
             .map(|tag| (tag.tag_key.as_str(), tag.tag_value.as_str()))
             .collect();
         tags.sort();
@@ -531,7 +540,10 @@ mod created_keys {
         expected.sort();
         assert_eq!(
             tags,
-            expected.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>()
+            expected
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>()
         );
         let policy: serde_json::Value = serde_json::from_str(&request.policy).unwrap();
         let denies = policy["Statement"]
@@ -577,6 +589,7 @@ mod created_keys {
         AwsKeyController {
             state: AwsKeyState::CreatingKey,
             create_requested: true,
+            create_marker: Some("marker-from-the-lost-attempt".to_string()),
             ..Default::default()
         }
     }
@@ -586,7 +599,13 @@ mod created_keys {
         let mut tagging = MockResourceGroupsTaggingApi::new();
         tagging.expect_get_resources().returning(move |request| {
             assert_eq!(request.resource_type_filters, vec!["kms:key"]);
-            assert_eq!(request.tag_filters.len(), 3);
+            // The deployment's three tags and the creation marker: a key that only carries the
+            // predictable tags is never listed, so it is never adopted.
+            assert_eq!(request.tag_filters.len(), 4);
+            assert!(request
+                .tag_filters
+                .iter()
+                .any(|filter| filter.key == "alien-create-marker" && !filter.values[0].is_empty()));
             Ok(GetResourcesResponse {
                 pagination_token: None,
                 resource_tag_mapping_list: arns
@@ -645,6 +664,7 @@ mod created_keys {
         let saved = first.internal_state::<AwsKeyController>().unwrap();
         assert_eq!(saved.state, AwsKeyState::CreatingKey);
         assert!(saved.create_requested);
+        assert!(saved.create_marker.is_some());
         assert!(saved.key_arn.is_none());
 
         // The rerun starts from that saved state and finds the key the lost call made.

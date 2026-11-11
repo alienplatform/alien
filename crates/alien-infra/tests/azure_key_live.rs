@@ -17,8 +17,8 @@ use alien_core::{
     ResourceLifecycle, ResourceStatus,
 };
 use alien_infra::{
-    controller_test::SingleControllerExecutor, AzureResourceGroupController,
-    AzureKeyController, DefaultPlatformServiceProvider, PlatformServiceProvider,
+    controller_test::SingleControllerExecutor, AzureKeyController, AzureResourceGroupController,
+    DefaultPlatformServiceProvider, PlatformServiceProvider,
 };
 
 async fn executor(config: &AzureClientConfig, prefix: &str) -> SingleControllerExecutor {
@@ -43,10 +43,19 @@ async fn executor(config: &AzureClientConfig, prefix: &str) -> SingleControllerE
 }
 
 fn fingerprint(run: &SingleControllerExecutor) -> (String, String, String) {
-    match run.outputs().unwrap().downcast_ref::<KeyOutputs>().unwrap().fingerprint.clone() {
-        KeyFingerprint::Azure { vault_resource_id, key_name, lineage_version_id } => {
-            (vault_resource_id, key_name, lineage_version_id)
-        }
+    match run
+        .outputs()
+        .unwrap()
+        .downcast_ref::<KeyOutputs>()
+        .unwrap()
+        .fingerprint
+        .clone()
+    {
+        KeyFingerprint::Azure {
+            vault_resource_id,
+            key_name,
+            lineage_version_id,
+        } => (vault_resource_id, key_name, lineage_version_id),
         other => panic!("not an Azure key: {other:?}"),
     }
 }
@@ -54,7 +63,10 @@ fn fingerprint(run: &SingleControllerExecutor) -> (String, String, String) {
 #[tokio::test]
 #[ignore = "creates a real resource group, Key Vault and key; see module docs"]
 async fn a_direct_setup_creates_adopts_and_keeps_the_vault_and_key_on_delete() {
-    assert_eq!(std::env::var("ALIEN_AZURE_KEY_LIVE_TEST").as_deref(), Ok("1"));
+    assert_eq!(
+        std::env::var("ALIEN_AZURE_KEY_LIVE_TEST").as_deref(),
+        Ok("1")
+    );
     let config = AzureClientConfig::from_std_env().await.unwrap();
     let provider = DefaultPlatformServiceProvider::default();
     let suffix = uuid::Uuid::new_v4().simple().to_string();
@@ -67,11 +79,19 @@ async fn a_direct_setup_creates_adopts_and_keeps_the_vault_and_key_on_delete() {
         run.run_until_terminal().await.unwrap();
         assert_eq!(run.status(), ResourceStatus::Running);
         let first = fingerprint(&run);
-        let vaults = provider.get_azure_key_vault_management_client(&config).unwrap();
+        let vaults = provider
+            .get_azure_key_vault_management_client(&config)
+            .unwrap();
         let vault_name = first.0.rsplit('/').next().unwrap().to_string();
-        let vault = vaults.get_vault(group.clone(), vault_name.clone()).await.unwrap();
+        let vault = vaults
+            .get_vault(group.clone(), vault_name.clone())
+            .await
+            .unwrap();
         let keys = provider.get_azure_key_vault_keys_client(&config).unwrap();
-        let key_url = format!("https://{vault_name}.vault.azure.net/keys/{}/{}", first.1, first.2);
+        let key_url = format!(
+            "https://{vault_name}.vault.azure.net/keys/{}/{}",
+            first.1, first.2
+        );
         let bundle = keys.get_key(&key_url).await.unwrap();
         eprintln!("CREATED group {group}\nVAULT {vault:?}\nKEY {bundle:?}\nFINGERPRINT {first:?}");
         assert_eq!(bundle.key.kty.as_str(), "RSA");
@@ -95,9 +115,14 @@ async fn a_direct_setup_creates_adopts_and_keeps_the_vault_and_key_on_delete() {
     let resources = provider.get_azure_resources_client(&config).unwrap();
     eprintln!(
         "delete resource group {group}: {:?}",
-        resources.delete_resource_group(&group).await.map(|_| "accepted")
+        resources
+            .delete_resource_group(&group)
+            .await
+            .map(|_| "accepted")
     );
-    eprintln!("LEFT BEHIND: soft-deleted, purge-protected vault of {group} until its retention ends");
+    eprintln!(
+        "LEFT BEHIND: soft-deleted, purge-protected vault of {group} until its retention ends"
+    );
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }

@@ -51,7 +51,14 @@ async fn executor(config: &GcpClientConfig, prefix: &str) -> SingleControllerExe
 }
 
 fn name(run: &SingleControllerExecutor) -> String {
-    match run.outputs().unwrap().downcast_ref::<KeyOutputs>().unwrap().fingerprint.clone() {
+    match run
+        .outputs()
+        .unwrap()
+        .downcast_ref::<KeyOutputs>()
+        .unwrap()
+        .fingerprint
+        .clone()
+    {
         KeyFingerprint::Gcp { crypto_key_name } => crypto_key_name,
         other => panic!("not a GCP key: {other:?}"),
     }
@@ -60,9 +67,18 @@ fn name(run: &SingleControllerExecutor) -> String {
 /// The ring name the controller computes (`<prefix>-<id>` plus a digest suffix).
 fn key_ring_id(prefix: &str, key_id: &str) -> String {
     use sha2::{Digest, Sha256};
-    let base: String = format!("{prefix}-{key_id}").to_lowercase().replace('_', "-").chars().take(56).collect();
+    let base: String = format!("{prefix}-{key_id}")
+        .to_lowercase()
+        .replace('_', "-")
+        .chars()
+        .take(56)
+        .collect();
     let digest = Sha256::digest(format!("{prefix}/{key_id}").as_bytes());
-    let suffix: String = digest.iter().take(3).map(|byte| format!("{byte:02x}")).collect();
+    let suffix: String = digest
+        .iter()
+        .take(3)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     format!("{}-{suffix}", base.trim_matches('-'))
 }
 
@@ -91,7 +107,10 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let prefix = format!("alienk{}", &suffix[..6]);
     let planted_prefix = format!("alienp{}", &suffix[..6]);
-    let accounts = [format!("{prefix}-runtime-sa"), format!("{planted_prefix}-runtime-sa")];
+    let accounts = [
+        format!("{prefix}-runtime-sa"),
+        format!("{planted_prefix}-runtime-sa"),
+    ];
     for account in &accounts {
         service_account(&iam, account).await;
     }
@@ -108,7 +127,10 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
         let policy = kms.get_crypto_key_iam_policy(&first).await.unwrap();
         eprintln!("CREATED {first}\nKEY {key:?}\nIAM POLICY {policy:?}");
         assert_eq!(key.purpose, "ENCRYPT_DECRYPT");
-        assert!(!policy.bindings.is_empty(), "the runtime account must be bound");
+        assert!(
+            !policy.bindings.is_empty(),
+            "the runtime account must be bound"
+        );
 
         // 2. A rerun with no state finds the same key and adopts it.
         let mut again = executor(&config, &prefix).await;
@@ -147,8 +169,16 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
         eprintln!("PLANTED {ring_id} {planted:?}");
         let mut refused = executor(&config, &planted_prefix).await;
         let outcome = refused.run_until_terminal().await;
-        eprintln!("PLANTED RESULT status={:?} err={:?}", refused.status(), outcome.as_ref().err());
-        assert_ne!(refused.status(), ResourceStatus::Running, "a planted key must not be adopted");
+        eprintln!(
+            "PLANTED RESULT status={:?} err={:?}",
+            refused.status(),
+            outcome.as_ref().err()
+        );
+        assert_ne!(
+            refused.status(),
+            ResourceStatus::Running,
+            "a planted key must not be adopted"
+        );
 
         // 4. Delete removes our members and keeps the key.
         run.delete().unwrap();
@@ -156,14 +186,21 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
         assert_eq!(run.status(), ResourceStatus::Deleted);
         let after = kms.get_crypto_key(&first).await.unwrap();
         let after_policy = kms.get_crypto_key_iam_policy(&first).await.unwrap();
-        eprintln!("AFTER DELETE key {} still exists; IAM POLICY {after_policy:?}", after.name);
+        eprintln!(
+            "AFTER DELETE key {} still exists; IAM POLICY {after_policy:?}",
+            after.name
+        );
         assert!(after_policy.bindings.iter().all(|b| b.members.is_empty()));
     })
     .catch_unwind()
     .await;
 
     let leftovers = std::env::var("ALIEN_GCP_KEY_LIVE_LEFTOVER_ACCOUNTS").unwrap_or_default();
-    let leftovers: Vec<String> = leftovers.split(',').filter(|a| !a.is_empty()).map(str::to_string).collect();
+    let leftovers: Vec<String> = leftovers
+        .split(',')
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .collect();
     for account in accounts.iter().chain(leftovers.iter()) {
         eprintln!(
             "delete service account {account}: {:?}",

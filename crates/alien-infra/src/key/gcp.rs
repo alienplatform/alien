@@ -137,30 +137,31 @@ impl GcpKeyController {
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         };
         let name = format!("{ring}/cryptoKeys/{CRYPTO_KEY_ID}");
-        let (created, adopted) = match client
-            .create_crypto_key(&ring, CRYPTO_KEY_ID, request)
-            .await
-        {
-            Ok(created) => (created, false),
-            Err(error) if is_conflict(&error) => {
-                // An earlier attempt of this run, or a key someone put under our name: it is
-                // used only if its metadata is what Alien creates and it is labelled ours.
-                let existing = client.get_crypto_key(&name).await.context(
-                    ErrorData::CloudPlatformError {
-                        message: "Failed to read the existing Cloud KMS key".to_string(),
+        let (created, adopted) =
+            match client
+                .create_crypto_key(&ring, CRYPTO_KEY_ID, request)
+                .await
+            {
+                Ok(created) => (created, false),
+                Err(error) if is_conflict(&error) => {
+                    // An earlier attempt of this run, or a key someone put under our name: it is
+                    // used only if its metadata is what Alien creates and it is labelled ours.
+                    let existing = client.get_crypto_key(&name).await.context(
+                        ErrorData::CloudPlatformError {
+                            message: "Failed to read the existing Cloud KMS key".to_string(),
+                            resource_id: Some(key.id.clone()),
+                        },
+                    )?;
+                    check_adoptable(&existing, &name, &labels, &key.id)?;
+                    (existing, true)
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Failed to create the Cloud KMS key".to_string(),
                         resource_id: Some(key.id.clone()),
-                    },
-                )?;
-                check_adoptable(&existing, &name, &labels, &key.id)?;
-                (existing, true)
-            }
-            Err(error) => {
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: "Failed to create the Cloud KMS key".to_string(),
-                    resource_id: Some(key.id.clone()),
-                }));
-            }
-        };
+                    }));
+                }
+            };
         self.crypto_key_name = Some(created.name);
         self.primary_version = created.primary.map(|version| version.name);
         self.origin = super::KeyOrigin::Created;
@@ -343,7 +344,6 @@ impl GcpKeyController {
         ))
     }
 }
-
 
 impl GcpKeyController {
     async fn apply_bindings(

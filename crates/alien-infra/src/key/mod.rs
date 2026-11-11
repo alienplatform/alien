@@ -28,7 +28,9 @@ pub(crate) fn may_write_keys(ctx: &crate::core::ResourceControllerContext<'_>) -
 }
 
 /// The refusal for a key that was not made in this deployment's setup run.
-pub(crate) fn key_created_by_setup(key_id: &str) -> alien_error::AlienError<crate::error::ErrorData> {
+pub(crate) fn key_created_by_setup(
+    key_id: &str,
+) -> alien_error::AlienError<crate::error::ErrorData> {
     alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
         resource_id: Some(key_id.to_string()),
         message: format!(

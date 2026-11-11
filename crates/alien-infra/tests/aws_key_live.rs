@@ -20,16 +20,18 @@ use alien_core::{
     Platform, ResourceLifecycle, ResourceStatus,
 };
 use alien_infra::{
-    controller_test::SingleControllerExecutor, AwsKeyController, AwsRemoteStackManagementController,
-    DefaultPlatformServiceProvider,
+    controller_test::SingleControllerExecutor, AwsKeyController,
+    AwsRemoteStackManagementController, DefaultPlatformServiceProvider,
 };
 use futures_util::FutureExt;
 use reqwest::{Client, Method};
 
 /// A controller whose earlier run sent `CreateKey` and was lost before it recorded the key.
-fn crashed_controller() -> AwsKeyController {
-    serde_json::from_value(serde_json::json!({"state": "creatingKey", "createRequested": true}))
-        .unwrap()
+fn crashed_controller(marker: &str) -> AwsKeyController {
+    serde_json::from_value(serde_json::json!({
+        "state": "creatingKey", "createRequested": true, "createMarker": marker
+    }))
+    .unwrap()
 }
 
 async fn executor(
@@ -57,7 +59,14 @@ async fn executor(
 }
 
 fn arn(run: &SingleControllerExecutor) -> String {
-    match run.outputs().unwrap().downcast_ref::<KeyOutputs>().unwrap().fingerprint.clone() {
+    match run
+        .outputs()
+        .unwrap()
+        .downcast_ref::<KeyOutputs>()
+        .unwrap()
+        .fingerprint
+        .clone()
+    {
         KeyFingerprint::Aws { key_arn } => key_arn,
         other => panic!("not an AWS key: {other:?}"),
     }
@@ -91,7 +100,9 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
     assert_eq!(std::env::var("ALIEN_AWS_KEY_LIVE_TEST").as_deref(), Ok("1"));
     let aws = AwsClientConfig::from_std_env().await.unwrap();
     let http = Client::new();
-    let creds = AwsCredentialProvider::from_config(aws.clone()).await.unwrap();
+    let creds = AwsCredentialProvider::from_config(aws.clone())
+        .await
+        .unwrap();
     let iam = IamClient::new(http.clone(), creds.clone());
     let kms = KmsClient::new(http.clone(), creds);
     let suffix = uuid::Uuid::new_v4().simple().to_string();
@@ -101,7 +112,10 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
     let mut to_schedule: Vec<String> = std::env::var("ALIEN_AWS_KEY_LIVE_LEFTOVER_KEYS")
         .map(|keys| keys.split(',').map(str::to_string).collect())
         .unwrap_or_default();
-    let mut roles = vec![format!("{prefix}-management"), format!("{planted_prefix}-management")];
+    let mut roles = vec![
+        format!("{prefix}-management"),
+        format!("{planted_prefix}-management"),
+    ];
 
     let trust = serde_json::json!({"Version":"2012-10-17","Statement":[{"Effect":"Allow",
         "Principal":{"AWS": format!("arn:aws:iam::{}:root", aws.account_id)},"Action":"sts:AssumeRole"}]})
@@ -135,7 +149,12 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
         assert!(kms.get_key_rotation_status(&first).await.unwrap());
 
         // 2. A run that lost its state after sending CreateKey adopts the same key.
-        let mut again = executor(&aws, &prefix, crashed_controller()).await;
+        let marker = serde_json::to_value(run.internal_state::<AwsKeyController>().unwrap()).unwrap()
+            ["createMarker"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut again = executor(&aws, &prefix, crashed_controller(&marker)).await;
         again.run_until_terminal().await.unwrap();
         assert_eq!(arn(&again), first, "re-run must adopt the same key");
         eprintln!("ADOPTED {}", arn(&again));
@@ -158,10 +177,23 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
             .unwrap();
         to_schedule.push(planted.key_metadata.key_id.clone());
         eprintln!("PLANTED {}", planted.key_metadata.key_id);
-        let mut refused = executor(&aws, &planted_prefix, crashed_controller()).await;
+        let planted_policy_before = kms.get_key_policy(&planted.key_metadata.arn).await.unwrap();
+        let mut refused =
+            executor(&aws, &planted_prefix, crashed_controller("a-marker-the-planted-key-lacks")).await;
         let outcome = refused.run_until_terminal().await;
         eprintln!("PLANTED RESULT status={:?} err={:?}", refused.status(), outcome.as_ref().err());
-        assert_ne!(refused.status(), ResourceStatus::Running, "a planted key must not be adopted");
+        // The planted key has the predictable tags but not the creation marker, so it is not
+        // adopted and its policy is left alone; the run makes its own key.
+        if refused.status() == ResourceStatus::Running {
+            let own = arn(&refused);
+            assert_ne!(own, planted.key_metadata.arn, "a planted key must not be adopted");
+            to_schedule.push(own);
+        }
+        assert_eq!(
+            kms.get_key_policy(&planted.key_metadata.arn).await.unwrap(),
+            planted_policy_before,
+            "the planted key's policy must not be rewritten"
+        );
 
         // 4. Delete removes grants and keeps the key.
         run.delete().unwrap();
@@ -179,11 +211,19 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
     }
     for role in roles.drain(..) {
         if let Ok(list) = iam.list_role_policies(&role).await {
-            for policy in list.list_role_policies_result.policy_names.map(|n| n.member).unwrap_or_default() {
+            for policy in list
+                .list_role_policies_result
+                .policy_names
+                .map(|n| n.member)
+                .unwrap_or_default()
+            {
                 let _ = iam.delete_role_policy(&role, &policy).await;
             }
         }
-        eprintln!("delete role {role}: {:?}", iam.delete_role(&role).await.is_ok());
+        eprintln!(
+            "delete role {role}: {:?}",
+            iam.delete_role(&role).await.is_ok()
+        );
     }
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);

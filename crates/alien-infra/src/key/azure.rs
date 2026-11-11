@@ -109,7 +109,10 @@ impl AzureKeyController {
                 &group,
                 &ResourceGroup {
                     id: None,
-                    location: azure.region.clone().unwrap_or_else(|| "East US".to_string()),
+                    location: azure
+                        .region
+                        .clone()
+                        .unwrap_or_else(|| "East US".to_string()),
                     managed_by: None,
                     name: Some(group.clone()),
                     properties: None,
@@ -322,7 +325,9 @@ impl AzureKeyController {
             .vault_uri
             .clone()
             .ok_or_else(|| missing(&key.id, "vault URI"))?;
-        let client = ctx.service_provider.get_azure_key_vault_keys_client(azure)?;
+        let client = ctx
+            .service_provider
+            .get_azure_key_vault_keys_client(azure)?;
         let tags = resource_tags(ctx.resource_prefix, &key.id)
             .into_iter()
             .collect::<BTreeMap<_, _>>();
@@ -342,8 +347,8 @@ impl AzureKeyController {
                 );
                 // 403 right after the role assignment is RBAC propagation: the key does not
                 // exist yet, or we could not tell. Wait and try again.
-                let forbidden = super::cloud_response(&error)
-                    .is_some_and(|(status, _, _)| status == 403);
+                let forbidden =
+                    super::cloud_response(&error).is_some_and(|(status, _, _)| status == 403);
                 if !not_found && !forbidden {
                     return Err(error.context(ErrorData::CloudPlatformError {
                         message: "Failed to look for the encryption key".to_string(),
@@ -614,7 +619,6 @@ impl AzureKeyController {
     }
 }
 
-
 impl AzureKeyController {
     fn group_and_vault(&self, key_id: &str) -> Result<(String, String)> {
         match (&self.resource_group_name, &self.vault_name) {
@@ -659,14 +663,26 @@ impl AzureKeyController {
         )
         .await?;
         ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx, &key.id, &key_resource_id, scope, "Key", "key",
+            ctx,
+            &key.id,
+            &key_resource_id,
+            scope,
+            "Key",
+            "key",
         )
         .await?;
         let authorization = ctx
             .service_provider
             .get_azure_authorization_client(ctx.get_azure_config()?)?;
-        for stale in self.role_assignment_ids.iter().filter(|id| !planned.contains(id)) {
-            match authorization.delete_role_assignment_by_id(stale.clone()).await {
+        for stale in self
+            .role_assignment_ids
+            .iter()
+            .filter(|id| !planned.contains(id))
+        {
+            match authorization
+                .delete_role_assignment_by_id(stale.clone())
+                .await
+            {
                 Ok(_) => {}
                 Err(error)
                     if matches!(
@@ -797,7 +813,10 @@ fn check_key_adoptable(
     if existing.attributes.enabled != Some(true) {
         return refuse("it is disabled");
     }
-    if tags.iter().any(|(tag, value)| existing.tags.get(tag) != Some(value)) {
+    if tags
+        .iter()
+        .any(|(tag, value)| existing.tags.get(tag) != Some(value))
+    {
         return refuse("it does not carry this deployment's tags");
     }
     Ok(())

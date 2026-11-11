@@ -9,7 +9,8 @@ use alien_gcp_clients::cloud_kms::{CryptoKey, CryptoKeyVersion, KeyRing, MockClo
 use std::sync::{Arc, Mutex};
 
 const RING: &str = "projects/test-project-123/locations/us-central1/keyRings";
-const RUNTIME_MEMBER: &str = "serviceAccount:test-runtime-sa@test-project-123.iam.gserviceaccount.com";
+const RUNTIME_MEMBER: &str =
+    "serviceAccount:test-runtime-sa@test-project-123.iam.gserviceaccount.com";
 const CRYPTO_ROLE: &str = "roles/cloudkms.cryptoKeyEncrypterDecrypter";
 
 fn crypto_key(name: &str, algorithm: &str, level: &str, labelled: bool) -> CryptoKey {
@@ -84,7 +85,10 @@ async fn refused(executor: &mut SingleControllerExecutor) {
     }
     assert_ne!(executor.status(), ResourceStatus::Running);
     let controller = executor.internal_state::<GcpKeyController>().unwrap();
-    assert!(controller.crypto_key_name.is_none(), "the key must not be adopted");
+    assert!(
+        controller.crypto_key_name.is_none(),
+        "the key must not be adopted"
+    );
 }
 
 #[tokio::test]
@@ -92,10 +96,14 @@ async fn a_direct_setup_creates_ring_key_and_bindings_from_the_plan() {
     let created = Arc::new(Mutex::new(None));
     let policy = Arc::new(Mutex::new(None));
     let mut kms = MockCloudKmsApi::new();
-    kms.expect_create_key_ring().times(1).returning(|location, id| {
-        assert_eq!(location, "projects/test-project-123/locations/us-central1");
-        Ok(KeyRing { name: format!("{location}/keyRings/{id}") })
-    });
+    kms.expect_create_key_ring()
+        .times(1)
+        .returning(|location, id| {
+            assert_eq!(location, "projects/test-project-123/locations/us-central1");
+            Ok(KeyRing {
+                name: format!("{location}/keyRings/{id}"),
+            })
+        });
     let seen = created.clone();
     kms.expect_create_crypto_key()
         .times(1)
@@ -104,10 +112,18 @@ async fn a_direct_setup_creates_ring_key_and_bindings_from_the_plan() {
             assert_eq!(id, "key");
             let name = format!("{ring}/cryptoKeys/{id}");
             *seen.lock().unwrap() = Some(request);
-            Ok(crypto_key(&name, "GOOGLE_SYMMETRIC_ENCRYPTION", "SOFTWARE", true))
+            Ok(crypto_key(
+                &name,
+                "GOOGLE_SYMMETRIC_ENCRYPTION",
+                "SOFTWARE",
+                true,
+            ))
         });
     kms.expect_get_crypto_key_iam_policy().returning(|_| {
-        Ok(IamPolicy { etag: Some("etag-1".into()), ..Default::default() })
+        Ok(IamPolicy {
+            etag: Some("etag-1".into()),
+            ..Default::default()
+        })
     });
     let written = policy.clone();
     kms.expect_set_crypto_key_iam_policy()
@@ -117,7 +133,12 @@ async fn a_direct_setup_creates_ring_key_and_bindings_from_the_plan() {
             Ok(policy)
         });
     kms.expect_get_crypto_key().returning(|name| {
-        Ok(crypto_key(name, "GOOGLE_SYMMETRIC_ENCRYPTION", "SOFTWARE", true))
+        Ok(crypto_key(
+            name,
+            "GOOGLE_SYMMETRIC_ENCRYPTION",
+            "SOFTWARE",
+            true,
+        ))
     });
     let mut executor = executor(provider(kms), GcpKeyController::default(), true).await;
     for _ in 0..5 {
@@ -155,10 +176,17 @@ async fn outside_a_setup_run_create_refuses_and_calls_no_cloud() {
 async fn an_existing_key_that_is_ours_is_adopted_and_its_policy_replaced() {
     let policy = Arc::new(Mutex::new(None));
     let mut kms = MockCloudKmsApi::new();
-    kms.expect_create_key_ring().returning(|_, _| Err(conflict()));
-    kms.expect_create_crypto_key().returning(|_, _, _| Err(conflict()));
+    kms.expect_create_key_ring()
+        .returning(|_, _| Err(conflict()));
+    kms.expect_create_crypto_key()
+        .returning(|_, _, _| Err(conflict()));
     kms.expect_get_crypto_key().returning(|name| {
-        Ok(crypto_key(name, "GOOGLE_SYMMETRIC_ENCRYPTION", "SOFTWARE", true))
+        Ok(crypto_key(
+            name,
+            "GOOGLE_SYMMETRIC_ENCRYPTION",
+            "SOFTWARE",
+            true,
+        ))
     });
     // The key carries a member nobody on this deployment added.
     kms.expect_get_crypto_key_iam_policy().returning(|_| {
@@ -173,10 +201,11 @@ async fn an_existing_key_that_is_ours_is_adopted_and_its_policy_replaced() {
         })
     });
     let written = policy.clone();
-    kms.expect_set_crypto_key_iam_policy().returning(move |_, policy| {
-        *written.lock().unwrap() = Some(policy.clone());
-        Ok(policy)
-    });
+    kms.expect_set_crypto_key_iam_policy()
+        .returning(move |_, policy| {
+            *written.lock().unwrap() = Some(policy.clone());
+            Ok(policy)
+        });
     let mut executor = executor(provider(kms), GcpKeyController::default(), true).await;
     for _ in 0..5 {
         executor.step().await.unwrap();
@@ -195,8 +224,10 @@ async fn a_planted_key_with_the_wrong_metadata_or_labels_is_not_adopted() {
         ("GOOGLE_SYMMETRIC_ENCRYPTION", "SOFTWARE", false),
     ] {
         let mut kms = MockCloudKmsApi::new();
-        kms.expect_create_key_ring().returning(|_, _| Err(conflict()));
-        kms.expect_create_crypto_key().returning(|_, _, _| Err(conflict()));
+        kms.expect_create_key_ring()
+            .returning(|_, _| Err(conflict()));
+        kms.expect_create_crypto_key()
+            .returning(|_, _, _| Err(conflict()));
         kms.expect_get_crypto_key()
             .returning(move |name| Ok(crypto_key(name, algorithm, level, labelled)));
         kms.expect_set_crypto_key_iam_policy().never();
@@ -225,17 +256,22 @@ async fn deleting_a_created_key_removes_our_members_and_never_touches_the_key() 
             etag: Some("e".into()),
             bindings: vec![Binding {
                 role: CRYPTO_ROLE.to_string(),
-                members: vec![RUNTIME_MEMBER.to_string(), "user:admin@example.com".to_string()],
+                members: vec![
+                    RUNTIME_MEMBER.to_string(),
+                    "user:admin@example.com".to_string(),
+                ],
                 condition: None,
             }],
             ..Default::default()
         })
     });
     let written = policy.clone();
-    kms.expect_set_crypto_key_iam_policy().times(1).returning(move |_, policy| {
-        *written.lock().unwrap() = Some(policy.clone());
-        Ok(policy)
-    });
+    kms.expect_set_crypto_key_iam_policy()
+        .times(1)
+        .returning(move |_, policy| {
+            *written.lock().unwrap() = Some(policy.clone());
+            Ok(policy)
+        });
     kms.expect_create_crypto_key().never();
     let mut executor = executor(provider(kms), created_controller(), true).await;
     executor.delete().unwrap();
@@ -258,8 +294,19 @@ async fn deleting_without_setup_credentials_leaves_the_policy_alone() {
 
 #[test]
 fn ring_names_fit_cloud_kms_and_are_stable() {
-    let id = key_ring_id("a_Very_long_prefix_that_goes_on_and_on_and_on", "data-key-with-a-long-id-too");
+    let id = key_ring_id(
+        "a_Very_long_prefix_that_goes_on_and_on_and_on",
+        "data-key-with-a-long-id-too",
+    );
     assert!(id.len() <= 63, "{id}");
-    assert_eq!(id, key_ring_id("a_Very_long_prefix_that_goes_on_and_on_and_on", "data-key-with-a-long-id-too"));
-    assert!(id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+    assert_eq!(
+        id,
+        key_ring_id(
+            "a_Very_long_prefix_that_goes_on_and_on_and_on",
+            "data-key-with-a-long-id-too"
+        )
+    );
+    assert!(id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
 }

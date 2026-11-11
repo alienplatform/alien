@@ -191,7 +191,12 @@ fn assert_foreign_untouched(document: &NotificationConfiguration) {
 #[tokio::test]
 async fn owned_entries_are_written_once_and_a_lost_response_recovers_by_observation() {
     let bucket = bucket(true);
-    let mut run = run(&bucket, storage("in/"), AwsStorageState::CreatingNotifications).await;
+    let mut run = run(
+        &bucket,
+        storage("in/"),
+        AwsStorageState::CreatingNotifications,
+    )
+    .await;
     run.step()
         .await
         .expect_err("the lost response must propagate");
@@ -226,11 +231,15 @@ async fn owned_entries_are_written_once_and_a_lost_response_recovers_by_observat
 #[tokio::test]
 async fn s3_normalization_is_not_a_change_but_an_edited_rule_is() {
     let bucket = bucket(false);
-    run(&bucket, storage("in/"), AwsStorageState::CreatingNotifications)
-        .await
-        .run_until_terminal()
-        .await
-        .unwrap();
+    run(
+        &bucket,
+        storage("in/"),
+        AwsStorageState::CreatingNotifications,
+    )
+    .await
+    .run_until_terminal()
+    .await
+    .unwrap();
     assert_eq!(bucket.writes.load(Ordering::SeqCst), 1);
     // S3 returns `Prefix`/`Suffix` and may reorder entries and filter rules.
     {
@@ -245,28 +254,40 @@ async fn s3_normalization_is_not_a_change_but_an_edited_rule_is() {
             }
         }
     }
-    run(&bucket, storage("in/"), AwsStorageState::UpdatingNotifications)
-        .await
-        .run_until_terminal()
-        .await
-        .unwrap();
+    run(
+        &bucket,
+        storage("in/"),
+        AwsStorageState::UpdatingNotifications,
+    )
+    .await
+    .run_until_terminal()
+    .await
+    .unwrap();
     assert_eq!(
         bucket.writes.load(Ordering::SeqCst),
         1,
         "an unchanged declaration never rewrites the document"
     );
 
-    run(&bucket, storage("changed/"), AwsStorageState::UpdatingNotifications)
-        .await
-        .run_until_terminal()
-        .await
-        .unwrap();
+    run(
+        &bucket,
+        storage("changed/"),
+        AwsStorageState::UpdatingNotifications,
+    )
+    .await
+    .run_until_terminal()
+    .await
+    .unwrap();
     assert_eq!(bucket.writes.load(Ordering::SeqCst), 2);
     let document = bucket.document.lock().unwrap().clone();
     assert_foreign_untouched(&document);
     let prefixes: Vec<_> = owned(&document)
         .iter()
-        .map(|configuration| configuration.filter.clone().unwrap().key.filter_rules[0].value.clone())
+        .map(|configuration| {
+            configuration.filter.clone().unwrap().key.filter_rules[0]
+                .value
+                .clone()
+        })
         .collect();
     assert_eq!(prefixes, ["changed/", "other/"]);
 }
@@ -274,17 +295,29 @@ async fn s3_normalization_is_not_a_change_but_an_edited_rule_is() {
 #[tokio::test]
 async fn deletion_and_retention_remove_only_owned_entries() {
     let bucket = bucket(false);
-    run(&bucket, storage("in/"), AwsStorageState::CreatingNotifications)
-        .await
-        .run_until_terminal()
-        .await
-        .unwrap();
-    let mut deleting = run(&bucket, storage("in/"), AwsStorageState::DeletingNotifications).await;
+    run(
+        &bucket,
+        storage("in/"),
+        AwsStorageState::CreatingNotifications,
+    )
+    .await
+    .run_until_terminal()
+    .await
+    .unwrap();
+    let mut deleting = run(
+        &bucket,
+        storage("in/"),
+        AwsStorageState::DeletingNotifications,
+    )
+    .await;
     deleting.step().await.unwrap();
     let document = bucket.document.lock().unwrap().clone();
     assert!(owned(&document).is_empty());
     assert_foreign_untouched(&document);
-    assert_eq!(document.queue_configurations, foreign().queue_configurations);
+    assert_eq!(
+        document.queue_configurations,
+        foreign().queue_configurations
+    );
 
     // Retention cleanup of a bucket without owned entries leaves it unwritten.
     let writes = bucket.writes.load(Ordering::SeqCst);

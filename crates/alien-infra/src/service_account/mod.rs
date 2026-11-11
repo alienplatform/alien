@@ -20,8 +20,8 @@ pub use aws_import::AwsServiceAccountImporter;
 pub use azure::AzureServiceAccountController;
 pub use azure_import::AzureServiceAccountImporter;
 pub use environment_providers::*;
-pub use gcp::GcpServiceAccountController;
 pub(crate) use gcp::get_gcp_service_account_id;
+pub use gcp::GcpServiceAccountController;
 pub use gcp_import::GcpServiceAccountImporter;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::KubernetesServiceAccountController;

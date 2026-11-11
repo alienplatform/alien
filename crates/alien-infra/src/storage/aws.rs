@@ -2104,7 +2104,8 @@ mod tests {
     /// a bucket under S3's default key would report success and not use the customer's key.
     #[tokio::test]
     async fn a_bucket_naming_a_key_is_encrypted_with_it() {
-        const KEY_ARN: &str = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000001";
+        const KEY_ARN: &str =
+            "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000001";
         let key = alien_core::Key::new("data-key".to_string()).build();
         let storage = Storage::new("data".to_string())
             .encryption_key(alien_core::ResourceRef::new(
@@ -2122,10 +2123,7 @@ mod tests {
             .resource(storage)
             .controller(AwsStorageController::default())
             .platform(Platform::Aws)
-            .with_dependency(
-                key,
-                crate::key::AwsKeyController::mock_ready(KEY_ARN),
-            )
+            .with_dependency(key, crate::key::AwsKeyController::mock_ready(KEY_ARN))
             .service_provider(setup_mock_service_provider(Arc::new(s3)))
             .with_test_dependencies()
             .build()

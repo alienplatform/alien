@@ -630,14 +630,22 @@ mod key_consumer_tests {
     #[test]
     fn a_direct_setup_refuses_storage_with_a_key_on_every_cloud_before_creating_anything() {
         for platform in [Platform::Gcp, Platform::Azure] {
-            let error = validate_setup_support(&stack(true), platform, InitialSetupAuthority::DirectSetup)
-                .expect_err("a bucket must not be created without its key");
-            assert_eq!(error.code, "KEY_CONSUMER_UNSUPPORTED_IN_DIRECT_SETUP", "{platform:?}");
+            let error =
+                validate_setup_support(&stack(true), platform, InitialSetupAuthority::DirectSetup)
+                    .expect_err("a bucket must not be created without its key");
+            assert_eq!(
+                error.code, "KEY_CONSUMER_UNSUPPORTED_IN_DIRECT_SETUP",
+                "{platform:?}"
+            );
 
             validate_setup_support(&stack(false), platform, InitialSetupAuthority::DirectSetup)
                 .expect("unencrypted storage is unchanged");
-            validate_setup_support(&stack(true), platform, InitialSetupAuthority::ImportedHandoff)
-                .expect("a template setup applies the key itself");
+            validate_setup_support(
+                &stack(true),
+                platform,
+                InitialSetupAuthority::ImportedHandoff,
+            )
+            .expect("a template setup applies the key itself");
         }
     }
 }
