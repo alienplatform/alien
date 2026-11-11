@@ -180,3 +180,19 @@ fn the_verifier_sets_bucket_policies_only_on_its_installs_buckets() {
     let object = Request::new("s3:GetObject", "arn:aws:s3:::acme-assets/key");
     assert_eq!(evaluate(&policy, &object), Decision::NotAllowed);
 }
+
+#[test]
+fn the_verifier_creates_and_configures_only_its_installs_queues() {
+    let policy = verifier();
+    for action in ["sqs:CreateQueue", "sqs:SetQueueAttributes", "sqs:TagQueue"] {
+        let own = Request::new(action, "arn:aws:sqs:us-east-1:111122223333:acme-jobs");
+        assert_eq!(evaluate(&policy, &own), Decision::Allowed, "{action}");
+        let other = Request::new(action, "arn:aws:sqs:us-east-1:111122223333:someone-elses");
+        assert_eq!(evaluate(&policy, &other), Decision::NotAllowed, "{action}");
+    }
+    let send = Request::new(
+        "sqs:SendMessage",
+        "arn:aws:sqs:us-east-1:111122223333:acme-jobs",
+    );
+    assert_eq!(evaluate(&policy, &send), Decision::NotAllowed);
+}

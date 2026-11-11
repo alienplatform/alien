@@ -17,6 +17,8 @@ pub mod aws_bucket_policy;
 #[cfg(feature = "infrastructure")]
 pub mod aws_key_policy;
 #[cfg(feature = "infrastructure")]
+pub mod aws_queue_policy;
+#[cfg(feature = "infrastructure")]
 pub mod aws_resource_policies;
 #[cfg(feature = "infrastructure")]
 pub mod generators;

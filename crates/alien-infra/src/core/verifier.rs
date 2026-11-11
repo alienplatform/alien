@@ -391,6 +391,19 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: serde_json::Value,
     },
+    /// SQS CreateQueue.
+    #[serde(rename_all = "camelCase")]
+    CreateQueue {
+        queue_name: String,
+        attributes: std::collections::BTreeMap<String, String>,
+        tags: std::collections::BTreeMap<String, String>,
+    },
+    /// SQS SetQueueAttributes.
+    #[serde(rename_all = "camelCase")]
+    SetQueueAttributes {
+        queue_url: String,
+        attributes: std::collections::BTreeMap<String, String>,
+    },
 }
 
 /// What `applyResourceWrite` did.

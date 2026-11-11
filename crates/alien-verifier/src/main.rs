@@ -136,6 +136,10 @@ impl Aws {
                     http.clone(),
                     credentials.clone(),
                 )),
+                sqs: Box::new(alien_aws_clients::sqs::SqsClient::new(
+                    http.clone(),
+                    credentials.clone(),
+                )),
                 lambda: LambdaClient::new(http.clone(), credentials.clone()),
                 machines: AwsMachines {
                     ec2: Ec2Client::new(http.clone(), credentials.clone()),

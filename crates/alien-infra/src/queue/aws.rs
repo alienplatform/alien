@@ -50,20 +50,48 @@ impl AwsQueueController {
         let queue_name = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
         info!(id=%config.id, name=%queue_name, "Creating SQS queue");
 
-        let resp = client
-            .create_queue(
-                alien_aws_clients::sqs::CreateQueueRequest::builder()
-                    .queue_name(queue_name.clone())
-                    .tags(standard_resource_tags(ctx.resource_prefix, &config.id))
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create SQS queue '{}'", queue_name),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        let queue_url = resp.create_queue_result.queue_url;
+        let tags = standard_resource_tags(ctx.resource_prefix, &config.id);
+        // On a protected install the verifier creates the queue: who may send to it is its to set.
+        let queue_url =
+            if let Some(release) = crate::core::verifier::protected_statements(ctx, &config.id)? {
+                let written = write_through_verifier(
+                    ctx,
+                    release,
+                    &config.id,
+                    crate::core::verifier::ResourceWrite::CreateQueue {
+                        queue_name: queue_name.clone(),
+                        attributes: Default::default(),
+                        tags: tags.clone().into_iter().collect(),
+                    },
+                )
+                .await?;
+                written.answers[0]["queueUrl"]
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "The verifier's answer for queue '{queue_name}' has no URL"
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?
+            } else {
+                client
+                    .create_queue(
+                        alien_aws_clients::sqs::CreateQueueRequest::builder()
+                            .queue_name(queue_name.clone())
+                            .tags(tags)
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create SQS queue '{}'", queue_name),
+                        resource_id: Some(config.id.clone()),
+                    })?
+                    .create_queue_result
+                    .queue_url
+            };
         self.queue_url = Some(queue_url.clone());
         self.queue_name = Some(queue_name.clone());
 
@@ -166,21 +194,18 @@ impl AwsQueueController {
             visibility_timeout.to_string(),
         );
 
-        client
-            .set_queue_attributes(
-                queue_url,
-                SetQueueAttributesRequest::builder()
-                    .attributes(attrs)
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to set visibility timeout for SQS queue '{}'",
-                    queue_url
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
+        set_queue_attributes(
+            ctx,
+            client.as_ref(),
+            &config.id,
+            queue_url,
+            attrs,
+            format!(
+                "Failed to set visibility timeout for SQS queue '{}'",
+                queue_url
+            ),
+        )
+        .await?;
 
         Ok(HandlerAction::Continue {
             state: ConfiguringStorageIngress,
@@ -381,6 +406,65 @@ impl AwsQueueController {
     }
 }
 
+/// Hands one write for queue `queue_id` to the install's verifier.
+async fn write_through_verifier(
+    ctx: &ResourceControllerContext<'_>,
+    release: &alien_core::ReleaseStatements,
+    queue_id: &str,
+    write: crate::core::verifier::ResourceWrite,
+) -> Result<crate::core::verifier::WrittenResource> {
+    let lambda = ctx
+        .service_provider
+        .get_aws_lambda_client(ctx.get_aws_config()?)
+        .await?;
+    let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+    crate::core::verifier::apply_resource_write(
+        &verifier,
+        release,
+        ctx.deployment_config.signed_config.as_ref(),
+        queue_id,
+        vec![write],
+    )
+    .await
+}
+
+/// Sets queue attributes. On a protected install who may send to the queue is the verifier's to
+/// set: it checks the attributes against the signed stack and sends this very request.
+async fn set_queue_attributes(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_aws_clients::sqs::SqsApi,
+    queue_id: &str,
+    queue_url: &str,
+    attributes: std::collections::HashMap<String, String>,
+    failure: String,
+) -> Result<()> {
+    if let Some(release) = crate::core::verifier::protected_statements(ctx, queue_id)? {
+        write_through_verifier(
+            ctx,
+            release,
+            queue_id,
+            crate::core::verifier::ResourceWrite::SetQueueAttributes {
+                queue_url: queue_url.to_string(),
+                attributes: attributes.into_iter().collect(),
+            },
+        )
+        .await?;
+        return Ok(());
+    }
+    client
+        .set_queue_attributes(
+            queue_url,
+            SetQueueAttributesRequest::builder()
+                .attributes(attributes)
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: failure,
+            resource_id: Some(queue_id.to_string()),
+        })
+}
+
 impl AwsQueueController {
     fn prepare_storage_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let queue = ctx.desired_resource_config::<Queue>()?;
@@ -468,15 +552,14 @@ impl AwsQueueController {
                 .iter()
                 .map(|bucket| format!("arn:aws:s3:::{bucket}"))
                 .collect();
-            statements.push(serde_json::json!({
-                "Sid": AWS_QUEUE_INGRESS_SID, "Effect": "Allow",
-                "Principal": {"Service": "s3.amazonaws.com"}, "Action": "sqs:SendMessage",
-                "Resource": format!("arn:aws:sqs:{}:{}:{name}", cfg.region, cfg.account_id),
-                "Condition": {
-                    "StringEquals": {"aws:SourceAccount": cfg.account_id},
-                    "ArnLike": {"aws:SourceArn": sources}
-                }
-            }));
+            statements.push(
+                alien_permissions::aws_queue_policy::storage_ingress_statement(
+                    AWS_QUEUE_INGRESS_SID,
+                    &format!("arn:aws:sqs:{}:{}:{name}", cfg.region, cfg.account_id),
+                    &cfg.account_id,
+                    &sources,
+                ),
+            );
         }
         // SQS rejects a policy without statements ("Invalid value for the parameter Policy"),
         // so removing the last one removes the policy.
@@ -486,21 +569,15 @@ impl AwsQueueController {
             policy.to_string()
         };
         if policy != original {
-            client
-                .set_queue_attributes(
-                    url,
-                    SetQueueAttributesRequest::builder()
-                        .attributes(std::collections::HashMap::from([(
-                            "Policy".into(),
-                            written,
-                        )]))
-                        .build(),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    resource_id: Some(queue.id.clone()),
-                    message: format!("Reconcile storage ingress policy for queue '{name}'"),
-                })?;
+            set_queue_attributes(
+                ctx,
+                client.as_ref(),
+                &queue.id,
+                url,
+                std::collections::HashMap::from([("Policy".into(), written)]),
+                format!("Reconcile storage ingress policy for queue '{name}'"),
+            )
+            .await?;
         }
         self.storage_ingress_buckets = desired;
         self.storage_ingress_pending = None;

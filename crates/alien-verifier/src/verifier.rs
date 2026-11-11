@@ -684,6 +684,10 @@ mod tests {
                 ResourceWrite::PutPublicAccessBlock { configuration, .. } => {
                     configuration.to_string()
                 }
+                ResourceWrite::CreateQueue { queue_name, .. } => queue_name.clone(),
+                ResourceWrite::SetQueueAttributes { attributes, .. } => {
+                    json!(attributes).to_string()
+                }
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -863,6 +867,144 @@ mod tests {
             .handle(request(true, &bucket, open))
             .await
             .expect("a declared public storage may open its block");
+    }
+
+    /// A release whose stack has the queue `jobs` and the storage `uploads`, which notifies it.
+    fn queue_release() -> alien_signing::SignedStatement {
+        let jobs = alien_core::Queue::new("jobs".to_string()).build();
+        let uploads = alien_core::Storage::new("uploads".to_string())
+            .notifications(vec![alien_core::StorageNotification::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "jobs",
+                ))
+                .build()])
+            .build();
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(jobs, alien_core::ResourceLifecycle::Frozen)
+            .add(uploads, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Aws,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    /// Queue writes are checked against the signed stack: the queue's own name and URL, only a
+    /// visibility timeout and a policy, and a policy that lets in only the S3 notifications of
+    /// the stack's storages that notify this queue.
+    #[tokio::test]
+    async fn queue_writes_are_checked_against_the_signed_stack() {
+        let name = format!("{PREFIX}-jobs");
+        let url = format!("https://sqs.{REGION}.amazonaws.com/{ACCOUNT}/{name}");
+        let queue_arn = format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{name}");
+        let sid = alien_core::storage_notifications::AWS_QUEUE_INGRESS_SID;
+        let ingress = |buckets: &[&str], account: &str| {
+            alien_permissions::aws_queue_policy::storage_ingress_statement(
+                sid,
+                &queue_arn,
+                account,
+                &buckets.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
+            )
+        };
+        let policy = |statement: Value| {
+            json!({"Version": "2012-10-17", "Statement": [statement]}).to_string()
+        };
+        let request = |write: Value| {
+            json!({"applyResourceWrite": {
+                "release": queue_release(),
+                "signerLists": [signer_list()],
+                "resource": "jobs",
+                "writes": [write],
+            }})
+        };
+        let set = |attributes: Value| {
+            request(json!({"setQueueAttributes": {"queueUrl": url, "attributes": attributes}}))
+        };
+        let own = format!("arn:aws:s3:::{PREFIX}-uploads");
+
+        // What the controller sends is accepted, and goes out unchanged.
+        let (verifier, backend) = resource_verifier();
+        for write in [
+            request(json!({"createQueue": {"queueName": name, "tags": {"deployment": PREFIX}}})),
+            set(json!({"VisibilityTimeout": "60"})),
+            set(json!({"Policy": policy(ingress(&[&own], ACCOUNT))})),
+            set(json!({"Policy": ""})),
+        ] {
+            verifier
+                .handle(write.clone())
+                .await
+                .unwrap_or_else(|error| panic!("{write}: {}", crate::describe(&error)));
+        }
+        assert_eq!(backend.forwarded.lock().unwrap().len(), 4);
+
+        let foreign_bucket = ingress(&["arn:aws:s3:::theirs"], ACCOUNT);
+        let foreign_account = ingress(&[&own], "999988887777");
+        let management = json!({
+            "Effect": "Allow",
+            "Principal": {"AWS": format!("arn:aws:iam::{ACCOUNT}:role/{PREFIX}-management")},
+            "Action": "sqs:*", "Resource": queue_arn
+        });
+        let service = json!({
+            "Effect": "Allow", "Principal": {"Service": "sns.amazonaws.com"},
+            "Action": "sqs:SendMessage", "Resource": queue_arn
+        });
+        let anyone = json!({
+            "Effect": "Allow", "Principal": "*", "Action": "sqs:SendMessage",
+            "Resource": queue_arn
+        });
+        let refused_writes = vec![
+            (
+                "a bucket the stack does not name",
+                set(json!({"Policy": policy(foreign_bucket)})),
+            ),
+            (
+                "a foreign account",
+                set(json!({"Policy": policy(foreign_account)})),
+            ),
+            (
+                "the management role",
+                set(json!({"Policy": policy(management)})),
+            ),
+            (
+                "a service without a source",
+                set(json!({"Policy": policy(service)})),
+            ),
+            ("anyone", set(json!({"Policy": policy(anyone)}))),
+            ("a redrive target", set(json!({"RedrivePolicy": "{}"}))),
+            (
+                "an over-long timeout",
+                set(json!({"VisibilityTimeout": "999999"})),
+            ),
+            (
+                "another queue's name",
+                request(json!({"createQueue": {"queueName": "other"}})),
+            ),
+            (
+                "an attribute at create",
+                request(
+                    json!({"createQueue": {"queueName": name, "attributes": {"Policy": "{}"}}}),
+                ),
+            ),
+            (
+                "another queue's url",
+                request(json!({"setQueueAttributes": {
+                    "queueUrl": "https://sqs.us-east-1.amazonaws.com/999988887777/q",
+                    "attributes": {"VisibilityTimeout": "1"}}})),
+            ),
+        ];
+        for (what, write) in refused_writes {
+            let (verifier, backend) = resource_verifier();
+            let reason = refusal(verifier.handle(write).await);
+            assert!(!reason.is_empty(), "{what}");
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{what}: sent");
+        }
     }
 
     /// The release the install's ledger records, if any.

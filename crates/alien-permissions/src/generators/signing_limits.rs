@@ -325,6 +325,14 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 "Resource": format!("arn:aws:s3:::{prefix}-*")
             },
             {
+                // Who may send to a queue is the verifier's to write: it checks the policy
+                // against the signed stack.
+                "Sid": "SetThisInstallsQueues",
+                "Effect": "Allow",
+                "Action": ["sqs:CreateQueue", "sqs:SetQueueAttributes", "sqs:TagQueue"],
+                "Resource": format!("arn:aws:sqs:{region}:{account}:{prefix}-*")
+            },
+            {
                 // Uninstall deletes a Live workload through the verifier, which takes its
                 // concurrency, URL, aliases and grants along.
                 "Sid": "DeleteThisInstallsFunctions",

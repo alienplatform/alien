@@ -7,9 +7,12 @@
 //! be what the signed stack declares for that resource (see [`alien_permissions::aws_bucket_policy`]),
 //! never management, the verifier or the setup identity.
 
-use alien_core::{ResourceEntry, Stack, Storage};
+use std::collections::BTreeMap;
+
+use alien_core::{Queue, ResourceEntry, Stack, Storage};
 use alien_permissions::{
     aws_bucket_policy::{check_bucket_policy, check_public_access_block},
+    aws_queue_policy::check_queue_policy,
     aws_resource_policies,
 };
 use alien_signing::SignedStatement;
@@ -53,6 +56,21 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: Value,
     },
+    /// SQS CreateQueue, as the controller sends it: no attributes.
+    #[serde(rename_all = "camelCase")]
+    CreateQueue {
+        queue_name: String,
+        #[serde(default)]
+        attributes: BTreeMap<String, String>,
+        #[serde(default)]
+        tags: BTreeMap<String, String>,
+    },
+    /// SQS SetQueueAttributes: the visibility timeout and the queue policy.
+    #[serde(rename_all = "camelCase")]
+    SetQueueAttributes {
+        queue_url: String,
+        attributes: BTreeMap<String, String>,
+    },
 }
 
 impl ResourceWrite {
@@ -61,6 +79,8 @@ impl ResourceWrite {
         match self {
             ResourceWrite::PutBucketPolicy { .. } => "PutBucketPolicy",
             ResourceWrite::PutPublicAccessBlock { .. } => "PutPublicAccessBlock",
+            ResourceWrite::CreateQueue { .. } => "CreateQueue",
+            ResourceWrite::SetQueueAttributes { .. } => "SetQueueAttributes",
         }
     }
 }
@@ -121,6 +141,21 @@ pub fn aws_partition(region: &str) -> &'static str {
     }
 }
 
+impl ResourceFacts<'_> {
+    /// The resource, which must be a queue of the signed stack.
+    pub fn queue(&self) -> Result<&Queue> {
+        self.entry()?.config.downcast_ref::<Queue>().ok_or_else(|| {
+            refused(format!(
+                "resource '{}' is not a queue in the signed stack",
+                self.resource_id
+            ))
+        })
+    }
+}
+
+/// The largest visibility timeout SQS accepts, in seconds.
+const MAX_VISIBILITY_TIMEOUT: u32 = 43_200;
+
 /// The storage a bucket write is for: the write must name the storage's own bucket.
 fn own_bucket<'a>(
     facts: &'a ResourceFacts<'_>,
@@ -161,12 +196,119 @@ pub fn check_aws_write(
             let storage = own_bucket(facts, bucket, "PutPublicAccessBlock")?;
             check_public_access_block(configuration, storage.public_read).map_err(refused)
         }
+        ResourceWrite::CreateQueue {
+            queue_name,
+            attributes,
+            ..
+        } => {
+            facts.queue()?;
+            let own = own_queue_name(facts);
+            if *queue_name != own {
+                return Err(refused(format!(
+                    "CreateQueue names queue {queue_name}, not {own}, the name this install \
+                     gives queue '{}'",
+                    facts.resource_id
+                )));
+            }
+            if let Some(name) = attributes.keys().next() {
+                return Err(refused(format!(
+                    "CreateQueue sets attribute {name}; a queue is created without any, and its \
+                     policy is set by SetQueueAttributes"
+                )));
+            }
+            Ok(())
+        }
+        ResourceWrite::SetQueueAttributes {
+            queue_url,
+            attributes,
+        } => {
+            facts.queue()?;
+            let (account, region) = aws_account_and_region(facts)?;
+            let own = own_queue_name(facts);
+            let expected_url = format!("https://sqs.{region}.amazonaws.com/{account}/{own}");
+            if *queue_url != expected_url {
+                return Err(refused(format!(
+                    "SetQueueAttributes names queue {queue_url}, not {expected_url}, the queue \
+                     this install gives '{}'",
+                    facts.resource_id
+                )));
+            }
+            for (name, value) in attributes {
+                match name.as_str() {
+                    "VisibilityTimeout" => {
+                        let seconds: u32 = value.parse().map_err(|_| {
+                            refused(format!("VisibilityTimeout '{value}' is not a number"))
+                        })?;
+                        if seconds > MAX_VISIBILITY_TIMEOUT {
+                            return Err(refused(format!(
+                                "VisibilityTimeout {seconds} is over the {MAX_VISIBILITY_TIMEOUT} \
+                                 seconds SQS allows"
+                            )));
+                        }
+                    }
+                    // An empty policy removes it.
+                    "Policy" if value.is_empty() => {}
+                    "Policy" => {
+                        let partition = aws_partition(&region);
+                        let document: Value = serde_json::from_str(value).map_err(|error| {
+                            refused(format!("the queue policy is not JSON: {error}"))
+                        })?;
+                        let buckets: Vec<String> =
+                            alien_core::storage_notifications::storages_notifying_queue(
+                                &facts.stack,
+                                facts.resource_id,
+                            )
+                            .iter()
+                            .map(|storage| {
+                                format!(
+                                    "arn:{partition}:s3:::{}",
+                                    aws_resource_policies::aws_prefixed_resource_name(
+                                        &facts.place.prefix,
+                                        storage
+                                    )
+                                )
+                            })
+                            .collect();
+                        check_queue_policy(
+                            &document,
+                            alien_core::storage_notifications::AWS_QUEUE_INGRESS_SID,
+                            &format!("arn:{partition}:sqs:{region}:{account}:{own}"),
+                            &account,
+                            &buckets,
+                        )
+                        .map_err(refused)?;
+                    }
+                    other => {
+                        return Err(refused(format!(
+                            "SetQueueAttributes sets attribute {other}, which is not one the \
+                             verifier applies"
+                        )))
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn own_queue_name(facts: &ResourceFacts<'_>) -> String {
+    aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, facts.resource_id)
+}
+
+/// The install's account and region.
+fn aws_account_and_region(facts: &ResourceFacts<'_>) -> Result<(String, String)> {
+    match &facts.place.install {
+        alien_signing::InstallId::Aws {
+            account, region, ..
+        } => Ok((account.clone(), region.clone())),
+        _ => Err(refused("this is not an AWS install")),
     }
 }
 
 /// Send a checked AWS write unchanged, after confirming no newer release was accepted.
 pub async fn forward_aws_write(
     s3: &dyn alien_aws_clients::s3::S3Api,
+    sqs: &dyn alien_aws_clients::sqs::SqsApi,
     write: &ResourceWrite,
     newest: &dyn StillNewest,
 ) -> Result<Value> {
@@ -195,6 +337,38 @@ pub async fn forward_aws_write(
                     operation: format!("s3:PutPublicAccessBlock {bucket}"),
                 })?;
             Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::CreateQueue {
+            queue_name, tags, ..
+        } => {
+            let created = sqs
+                .create_queue(
+                    alien_aws_clients::sqs::CreateQueueRequest::builder()
+                        .queue_name(queue_name.clone())
+                        .tags(tags.clone().into_iter().collect())
+                        .build(),
+                )
+                .await
+                .context(crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("sqs:CreateQueue {queue_name}"),
+                })?;
+            Ok(json!({ "queueUrl": created.create_queue_result.queue_url }))
+        }
+        ResourceWrite::SetQueueAttributes {
+            queue_url,
+            attributes,
+        } => {
+            sqs.set_queue_attributes(
+                queue_url,
+                alien_aws_clients::sqs::SetQueueAttributesRequest::builder()
+                    .attributes(attributes.clone().into_iter().collect())
+                    .build(),
+            )
+            .await
+            .context(crate::error::ErrorData::CloudCallFailed {
+                operation: format!("sqs:SetQueueAttributes {queue_url}"),
+            })?;
+            Ok(json!({ "queueUrl": queue_url }))
         }
     }
 }
