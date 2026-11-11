@@ -147,6 +147,12 @@ impl KubernetesManifestTestHarness {
         }
     }
 
+    /// Pulls every workload image from the site registry `registry`.
+    pub(crate) fn with_image_registry(mut self, registry: &str) -> Self {
+        self.deployment_config.image_registry = Some(registry.to_string());
+        self
+    }
+
     /// Adds a resource the workload links, in the state its controller holds.
     pub(crate) fn with_linked_resource<R: alien_core::ResourceDefinition>(
         mut self,

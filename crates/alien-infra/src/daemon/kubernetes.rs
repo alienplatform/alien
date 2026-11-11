@@ -1331,6 +1331,47 @@ mod tests {
         }
     }
 
+    /// Writes the daemon's DaemonSet, as the controller renders it, for the Kind test that
+    /// applies it to a namespace enforcing the `restricted` Pod Security profile. See
+    /// `write_the_default_deployment_for_the_kind_test` in the container controller.
+    #[tokio::test]
+    #[ignore = "writes manifests for the Kind pod security test"]
+    async fn write_the_default_daemonset_for_the_kind_test() {
+        let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
+        let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
+        let mut config = manifest_test_daemon(&[]);
+        config.code = DaemonCode::Image { image };
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        if let Ok(registry) = std::env::var("ALIEN_KIND_IMAGE_REGISTRY") {
+            harness = harness.with_image_registry(&registry);
+        }
+        let daemonset = manifest_test_controller()
+            .build_daemonset(
+                &config,
+                "agent",
+                "default",
+                Some("default"),
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest");
+        let mut value = serde_json::to_value(&daemonset).expect("serialize");
+        value["apiVersion"] = "apps/v1".into();
+        value["kind"] = "DaemonSet".into();
+        // The Kind test chooses the namespace.
+        value["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("namespace");
+        std::fs::write(
+            std::path::Path::new(&dir).join("daemon.yaml"),
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write manifest");
+    }
+
     #[tokio::test]
     async fn daemon_without_profile_does_not_mount_a_workload_identity() {
         let mut config = manifest_test_daemon(&[("OBJECTS_BUCKET", "objects")]);

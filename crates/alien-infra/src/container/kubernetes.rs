@@ -3038,6 +3038,49 @@ mod tests {
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
 
+    /// Writes the container's Deployment, as the controller renders it, for the Kind test that
+    /// applies it to a namespace enforcing the `restricted` Pod Security profile.
+    /// `ALIEN_KIND_MANIFEST_DIR` receives `container.yaml`; `ALIEN_KIND_IMAGE` is the release's
+    /// image and `ALIEN_KIND_IMAGE_REGISTRY` the site registry it must be pulled from.
+    #[tokio::test]
+    #[ignore = "writes manifests for the Kind pod security test"]
+    async fn write_the_default_deployment_for_the_kind_test() {
+        let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
+        let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
+        let mut config = manifest_test_container(&[], false);
+        config.code = ContainerCode::Image { image };
+        config.replicas = Some(1);
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        if let Ok(registry) = std::env::var("ALIEN_KIND_IMAGE_REGISTRY") {
+            harness = harness.with_image_registry(&registry);
+        }
+        let deployment = manifest_test_controller()
+            .build_deployment(
+                &config,
+                "web",
+                "default",
+                "default",
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("deployment manifest");
+        let mut value = serde_json::to_value(&deployment).expect("serialize");
+        value["apiVersion"] = "apps/v1".into();
+        value["kind"] = "Deployment".into();
+        // The Kind test chooses the namespace.
+        value["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("namespace");
+        std::fs::write(
+            std::path::Path::new(&dir).join("container.yaml"),
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write manifest");
+    }
+
     #[test]
     fn a_site_mirror_never_receives_the_manager_pull_token() {
         let code = ContainerCode::Image {
