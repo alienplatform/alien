@@ -1,0 +1,1 @@
+{"type":"object","description":"One quota the account has set well below the cloud's default (under 10%).","required":["quotaName","applied","default"],"properties":{"applied":{"type":"number","format":"double"},"default":{"type":"number","format":"double"},"quotaName":{"type":"string"}},"x-readme-ref-name":"AiQuotaWarning"}

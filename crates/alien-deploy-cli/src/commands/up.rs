@@ -8190,6 +8190,27 @@ async fn push_initial_setup_targeted(
             "push_initial_setup: state after re-fetch (before step loop)"
         );
 
+        // With the admin's setup credentials in hand, ask the cloud whether each model the app
+        // declares can be called. The answer rides in the runtime metadata (checkpointed with the
+        // setup steps); the AI controller reports it. A refusal never fails the setup.
+        if let Some(stack) = state.target_release.as_ref().map(|r| r.stack.clone()) {
+            let checks =
+                alien_deployment::check_declared_ai_models(
+                &stack,
+                platform,
+                &client_config,
+                &config.external_bindings,
+            )
+            .await;
+            // Replace the earlier answers: a model no longer declared must not keep one.
+            if !checks.is_empty() || state.runtime_metadata.is_some() {
+                state
+                    .runtime_metadata
+                    .get_or_insert_with(Default::default)
+                    .ai_access_checks = checks;
+            }
+        }
+
         // Run the shared step loop with per-step reconciliation via the manager API
         let transport = SetupRevisionTransport {
             inner: ManagerApiTransport::with_execution_claim(

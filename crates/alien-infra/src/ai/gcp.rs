@@ -86,6 +86,8 @@ async fn observe_vertex_availability(
                     access_test: AiAccessTest::NotChecked,
                     tested_at: Some(tested_at),
                     error_code: Some("model-garden-list-failed".to_string()),
+                    quota_warnings: Vec::new(),
+                    throttled_last_hour: None,
                 });
                 continue;
             }
@@ -99,6 +101,8 @@ async fn observe_vertex_availability(
                 access_test: AiAccessTest::NotChecked,
                 tested_at: Some(tested_at),
                 error_code: None,
+                quota_warnings: Vec::new(),
+                throttled_last_hour: None,
             });
             continue;
         }
@@ -111,6 +115,8 @@ async fn observe_vertex_availability(
                 access_test: AiAccessTest::NotChecked,
                 tested_at: Some(tested_at),
                 error_code: None,
+                quota_warnings: Vec::new(),
+                throttled_last_hour: None,
             });
             continue;
         }
@@ -137,6 +143,8 @@ async fn observe_vertex_availability(
                 access_test: AiAccessTest::NotChecked,
                 tested_at: Some(tested_at),
                 error_code: None,
+                quota_warnings: Vec::new(),
+                throttled_last_hour: None,
             }),
             Err(error) => {
                 warn!(model = model.public_id, %error, "Vertex EULA observation failed");
@@ -148,6 +156,8 @@ async fn observe_vertex_availability(
                     access_test: AiAccessTest::NotChecked,
                     tested_at: Some(tested_at),
                     error_code: Some("model-garden-eula-check-failed".to_string()),
+                    quota_warnings: Vec::new(),
+                    throttled_last_hour: None,
                 });
             }
         }

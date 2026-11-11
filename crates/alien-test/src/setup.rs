@@ -51,6 +51,45 @@ pub async fn setup_target(
     let target_config = build_initial_setup_target_config(config, platform, &deployment.name)
         .await
         .context("Failed to build initial setup target config")?;
+    run_initial_setup(config, platform, deployment, manager, management_config, target_config).await
+}
+
+/// Like [`setup_target`], but runs setup with the target account's admin credentials instead of
+/// the least-privilege setup role. A customer admin running setup has these; the AI access check
+/// needs them to call a model.
+pub async fn setup_target_as_admin(
+    config: &TestConfig,
+    platform: Platform,
+    deployment: &TestDeployment,
+    manager: &Arc<TestManager>,
+    management_config: Option<ManagementConfig>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(platform == Platform::Aws, "setup_target_as_admin supports AWS only");
+    let target = config
+        .aws_target
+        .as_ref()
+        .context("Missing AWS target credentials")?;
+    let target_config = ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+        account_id: target.account_id.clone().unwrap_or_default(),
+        region: target.region.clone(),
+        credentials: alien_core::AwsCredentials::AccessKeys {
+            access_key_id: target.access_key_id.clone(),
+            secret_access_key: target.secret_access_key.clone(),
+            session_token: target.session_token.clone(),
+        },
+        service_overrides: None,
+    }));
+    run_initial_setup(config, platform, deployment, manager, management_config, target_config).await
+}
+
+async fn run_initial_setup(
+    config: &TestConfig,
+    platform: Platform,
+    deployment: &TestDeployment,
+    manager: &Arc<TestManager>,
+    management_config: Option<ManagementConfig>,
+    target_config: ClientConfig,
+) -> anyhow::Result<()> {
     let has_remote_management = management_config.is_some();
 
     if let Err(error) = alien_deploy_cli::commands::push_initial_setup(
