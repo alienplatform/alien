@@ -57,6 +57,7 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       worker_integration: ${{ steps.filter.outputs.worker_integration }}
       platform_sdk: ${{ steps.filter.outputs.platform_sdk }}
+      node_addon: ${{ steps.filter.outputs.node_addon }}
       rust_mode: ${{ steps.rust_selection.outputs.mode }}
       rust_packages: ${{ steps.rust_selection.outputs.packages }}
       rust_features: ${{ steps.rust_selection.outputs.features }}
@@ -112,6 +113,16 @@ jobs:
               - 'client-sdks/platform/rust/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            # Inputs of the release-mode Node addon build whose glibc floor is checked.
+            node_addon:
+              - 'crates/alien-bindings-node/**'
+              - 'crates/alien-bindings/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'packages/bindings/package.json'
+              - 'packages/bindings/scripts/verify-addon-portability.sh'
+              - '.github/workflows/ci-fast.yml'
             # JavaScript inputs of the Worker integration job; Rust changes trigger it through `rust`.
             worker_integration:
               - 'package.json'
@@ -806,6 +817,74 @@ jobs:
           cargo nextest run --locked -p alien-local -p alien-worker-runtime \
             --test worker_integration --test container_app
 
+  # The published linux-gnu addons must load on older base images (Debian 12, Amazon Linux 2023,
+  # RHEL 9). Builds them the way release.yml does and checks the glibc floor plus a real load.
+  node-addon-portability:
+    name: Node addon (${{ matrix.triple }}, older glibc)
+    needs: [pr-conventions, changes]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.node_addon == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-ubuntu-24.04-16
+            target: x86_64-unknown-linux-gnu
+            triple: linux-x64-gnu
+          - runner: depot-ubuntu-24.04-arm-16
+            target: aarch64-unknown-linux-gnu
+            triple: linux-arm64-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build addon
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target ${{ matrix.target }} --use-napi-cross \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Verify glibc floor and load on older base images
+        run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
+
   all-tests-passed:
     name: All tests passed
     if: >-
@@ -814,7 +893,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration]
+    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration, node-addon-portability]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

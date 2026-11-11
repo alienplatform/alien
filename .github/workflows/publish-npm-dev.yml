@@ -202,12 +202,18 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           pnpm --filter @alienplatform/bindings exec napi build \
-            --platform --release --target ${{ matrix.target }} \
+            --platform --release --target ${{ matrix.target }} ${{ matrix.os == 'linux' && '--use-napi-cross' || '' }} \
             --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
           cp "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node" \
             "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node"
           file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" \
             | grep -q "${{ matrix.expect_arch }}"
+
+      # Linux addons are cross-built against glibc 2.17 so they load on Debian 12,
+      # Amazon Linux 2023 and RHEL 9; this fails the leg if that regresses.
+      - name: Verify addon glibc floor and load on older base images
+        if: matrix.os == 'linux'
+        run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
       - uses: actions/upload-artifact@v7
         with:
