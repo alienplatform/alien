@@ -99,6 +99,24 @@ pub enum ErrorData {
         allow_list: String,
     },
 
+    /// A permission set grants the management identity an action in a family it never holds on a
+    /// protected install.
+    #[error(
+        code = "PROTECTED_MANAGEMENT_FAMILY_ACTION",
+        message = "Permission set '{permission_set_id}' grants '{action}' to the management identity, which a protected install does not allow: it can {family} (run unsigned code, change an identity that could, or open the install to outside access). Only the verifier writes this. Remove it from the permission set, or narrow the pattern to actions outside that family.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedManagementFamilyAction {
+        /// Permission set holding the grant
+        permission_set_id: String,
+        /// The refused action pattern, permission or role
+        action: String,
+        /// The family the action can belong to: RUN, IDENTITY or REACH
+        family: String,
+    },
+
     /// Required variable not found in permission context.
     #[error(
         code = "VARIABLE_NOT_FOUND",

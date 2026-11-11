@@ -8,7 +8,7 @@ mod common;
 use alien_core::PermissionSet;
 use alien_permissions::{
     generators::{
-        is_management_held, management_stack_secrets_data, AwsCloudFormationPermissionsGenerator,
+        aws_family, is_management_held, management_stack_secrets_data, AwsCloudFormationPermissionsGenerator,
         AwsRuntimePermissionsGenerator, AzureRuntimePermissionsGenerator,
         GcpRuntimePermissionsGenerator,
     },
@@ -87,6 +87,22 @@ fn render_aws_template(set: &PermissionSet, protected: bool) -> alien_permission
 }
 
 const ALLOW_LIST_AWS: &str = "crates/alien-permissions/protected-management/aws.allow";
+
+fn assert_family_refused(
+    error: &alien_error::AlienError<alien_permissions::ErrorData>,
+    action: &str,
+) {
+    assert_eq!(
+        error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION",
+        "{action}: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains(&format!("'{action}'")),
+        "{action}: {}",
+        error.message
+    );
+}
 const ALLOW_LIST_AZURE: &str = "crates/alien-permissions/protected-management/azure.allow";
 const ALLOW_LIST_GCP: &str = "crates/alien-permissions/protected-management/gcp.allow";
 
@@ -118,7 +134,7 @@ fn assert_refused(
 }
 
 #[test]
-fn an_aws_stack_grant_outside_the_allow_list_is_refused() {
+fn an_aws_stack_grant_in_a_family_is_refused() {
     for action in [
         "iam:*",
         "iam:CreateRole",
@@ -141,15 +157,19 @@ fn an_aws_stack_grant_outside_the_allow_list_is_refused() {
         "s3:Put*",
         "s3:PutBucketPolicy",
         "ssm:SendCommand",
+        "lambda:UpdateFunctionCode",
+        "lambda:*",
+        "ec2:RunInstances",
+        "sns:Subscribe",
     ] {
         let set = aws_set(&["s3:GetObject", action]);
         let error = render_aws(&set, true)
             .expect_err(&format!("{action} must be refused on a protected install"));
-        assert_refused(&error, action, ALLOW_LIST_AWS);
+        assert_family_refused(&error, action);
 
         let error = render_aws_template(&set, true)
             .expect_err(&format!("{action} must be refused in the setup template"));
-        assert_refused(&error, action, ALLOW_LIST_AWS);
+        assert_family_refused(&error, action);
 
         let unprotected = render_aws(&set, false).expect("an unprotected install is unchanged");
         assert!(
@@ -183,10 +203,10 @@ fn an_aws_stack_grant_on_the_allow_list_still_renders() {
 }
 
 #[test]
-fn an_aws_stack_grant_of_what_only_the_verifier_may_do_is_dropped_not_granted() {
+fn an_aws_stack_grant_of_what_only_the_verifier_may_do_is_refused_not_dropped() {
     let set = aws_set(&["s3:GetObject", "lambda:UpdateFunctionCode"]);
-    let granted = render_aws(&set, true).expect("the verifier-owned action is dropped");
-    assert_eq!(granted, ["s3:GetObject"]);
+    let error = render_aws(&set, true).expect_err("a family action in a stack set is refused");
+    assert_family_refused(&error, "lambda:UpdateFunctionCode");
 }
 
 #[test]
@@ -218,7 +238,7 @@ fn a_changed_copy_of_a_built_in_set_is_a_stack_set() {
         .expect("actions")
         .push("iam:CreateRole".to_string());
     let error = render_aws(&copy, true).expect_err("the built-in id doesn't exempt a changed copy");
-    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
+    assert_family_refused(&error, "iam:CreateRole");
 
     let original = get_permission_set("storage/data-read").expect("built-in set");
     render_aws(original, true).expect("the built-in set renders");
@@ -251,19 +271,23 @@ fn no_held_built_in_aws_set_is_refused_on_a_protected_install() {
 }
 
 #[test]
-fn a_built_in_set_that_is_not_held_is_checked_like_a_stack_set() {
-    // Setup's sets and the sets that rewrite the management policies are not held by management,
-    // so the allow-list decides them. Their id is no exemption.
+fn setups_identity_sets_render_for_management_without_their_family_actions() {
+    // Setup's sets write roles and policies. A protected install's management identity gets
+    // their reads only: every IDENTITY, RUN and REACH action is dropped from a built-in set.
     for id in ["remote-stack-management/provision", "service-account/setup"] {
         let set = get_permission_set(id).expect("built-in set");
-        assert!(!is_management_held(set), "{id} is held");
-        let error = render_aws(set, true).expect_err(id);
-        assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED", "{id}");
-        assert!(error.message.contains(id), "{id}: {}", error.message);
-        render_aws(set, false).unwrap_or_else(|error| panic!("{id} unprotected: {error}"));
+        let granted = render_aws(set, true).unwrap_or_else(|error| panic!("{id}: {error}"));
+        assert!(!granted.is_empty(), "{id} grants management nothing");
+        for action in &granted {
+            assert_eq!(aws_family(action, None), None, "{id}: {action}");
+        }
+        let unprotected =
+            render_aws(set, false).unwrap_or_else(|error| panic!("{id} unprotected: {error}"));
+        assert!(
+            unprotected.iter().any(|action| aws_family(action, None).is_some()),
+            "{id} should hold family actions when unprotected"
+        );
     }
-    let held = get_permission_set("storage/provision").expect("built-in set");
-    assert!(is_management_held(held));
 }
 
 #[test]
@@ -281,7 +305,8 @@ fn a_held_set_id_does_not_exempt_a_changed_copy() {
         .push("iam:CreateRole".to_string());
     assert!(!is_management_held(&copy));
     let error = render_aws(&copy, true).expect_err("a changed copy is checked");
-    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
+    assert_eq!(error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION");
+    assert!(error.message.contains("'storage/provision'"), "{}", error.message);
 }
 
 #[test]
@@ -901,6 +926,50 @@ fn the_stack_secrets_set_setup_adds_is_held_by_its_contents_not_its_id() {
         condition: None,
     });
     assert!(!is_management_held(&wider));
-    let error = render_aws(&wider, true).expect_err("the same id with other contents is checked");
-    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
+}
+
+#[test]
+fn no_built_in_set_gives_a_protected_aws_management_identity_a_family_action() {
+    let mut rendered = 0;
+    for id in list_permission_set_ids() {
+        let set = get_permission_set(id).expect("listed set");
+        if set.platforms.aws.is_none() {
+            continue;
+        }
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let policy = match AwsRuntimePermissionsGenerator::new().generate_policy(
+                set,
+                target,
+                &aws_context(true),
+            ) {
+                Ok(policy) => policy,
+                // A set with no grant for this target renders nothing.
+                Err(error) if error.message.contains("is not supported by platform") => continue,
+                Err(error) => panic!("{id}: {}", error.message),
+            };
+            rendered += 1;
+            for statement in policy.statement.iter().filter(|s| s.effect == "Allow") {
+                let services: Vec<String> = statement
+                    .condition
+                    .iter()
+                    .flat_map(|conditions| conditions.values())
+                    .flat_map(|values| values.iter())
+                    .filter(|(key, _)| key.eq_ignore_ascii_case("iam:PassedToService"))
+                    .flat_map(|(_, value)| match value {
+                        alien_core::AwsConditionValue::String(service) => vec![service.clone()],
+                        alien_core::AwsConditionValue::List(list) => list.clone(),
+                    })
+                    .collect();
+                let services = (!services.is_empty()).then_some(services.as_slice());
+                for action in &statement.action {
+                    assert_eq!(
+                        aws_family(action, services),
+                        None,
+                        "{id} grants management {action}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(rendered > 100, "only {rendered} built-in policies rendered");
 }

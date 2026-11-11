@@ -14,7 +14,10 @@
 
 use alien_core::{AwsBindingSpec, AwsConditionValue};
 
-/// AWS actions only the verifier holds on a protected install. AWS scaling stays with the
+use super::families::aws_family;
+
+/// The AWS actions the verifier is granted for function and machine writes. Each is in the RUN
+/// or REACH family (a test pins that), so management holds none of them. AWS scaling stays with the
 /// management identity: `SetDesiredCapacity` can't change what boots, and the verifier sets the
 /// group's min and max from the signed stack, so AWS enforces the signed bounds.
 pub const AWS_VERIFIER_OWNED: &[&str] = &[
@@ -59,38 +62,32 @@ pub const AWS_VERIFIER_OWNED: &[&str] = &[
     "autoscaling:AttachInstances",
 ];
 
-/// Whether only the verifier may hold the AWS `action` on a protected install.
-pub fn aws_verifier_owned(action: &str) -> bool {
-    AWS_VERIFIER_OWNED
-        .iter()
-        .any(|owned| owned.eq_ignore_ascii_case(action))
-}
-
-/// The actions of an AWS catalog entry a protected install's management identity receives:
-/// all but what only the verifier may do. Passing a role to EC2 is the verifier's too: a role
-/// passed to EC2 is what a launched machine runs as.
+/// The actions of an AWS catalog entry a protected install's management identity receives: all
+/// but those in the RUN, IDENTITY and REACH families (see [`aws_family`]). `iam:PassRole` is
+/// judged by the services its binding passes to.
 pub fn aws_management_actions(actions: &[String], binding: &AwsBindingSpec) -> Vec<String> {
-    let passes_to_ec2 = binding.condition.as_ref().is_some_and(|condition| {
-        condition.values().any(|values| {
-            values.iter().any(|(key, value)| {
-                key.eq_ignore_ascii_case("iam:PassedToService")
-                    && match value {
-                        AwsConditionValue::String(service) => service == "ec2.amazonaws.com",
-                        AwsConditionValue::List(services) => services
-                            .iter()
-                            .any(|service| service == "ec2.amazonaws.com"),
-                    }
-            })
-        })
-    });
+    let services = aws_passed_to_services(binding);
     actions
         .iter()
-        .filter(|action| {
-            !aws_verifier_owned(action)
-                && !(passes_to_ec2 && action.eq_ignore_ascii_case("iam:PassRole"))
-        })
+        .filter(|action| aws_family(action, services.as_deref()).is_none())
         .cloned()
         .collect()
+}
+
+/// The `iam:PassedToService` values a binding's condition restricts a role pass to, if it has one.
+pub fn aws_passed_to_services(binding: &AwsBindingSpec) -> Option<Vec<String>> {
+    let mut services = Vec::new();
+    for values in binding.condition.as_ref()?.values() {
+        for (key, value) in values {
+            if key.eq_ignore_ascii_case("iam:PassedToService") {
+                match value {
+                    AwsConditionValue::String(service) => services.push(service.clone()),
+                    AwsConditionValue::List(list) => services.extend(list.iter().cloned()),
+                }
+            }
+        }
+    }
+    (!services.is_empty()).then_some(services)
 }
 
 /// GCP permissions only the verifier holds, besides every `setIamPolicy`, the Cloud Run writes
@@ -307,7 +304,16 @@ pub fn azure_changes_what_runs(action: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::azure_changes_what_runs;
+    use super::{azure_changes_what_runs, AWS_VERIFIER_OWNED};
+    use crate::generators::families::aws_family;
+
+    #[test]
+    fn every_aws_action_the_verifier_is_granted_is_in_a_family() {
+        for action in AWS_VERIFIER_OWNED {
+            assert!(aws_family(action, None).is_some(), "{action}");
+        }
+    }
+
 
     #[test]
     fn azure_patterns_that_reach_what_runs_are_dropped() {

@@ -20,65 +20,14 @@ use crate::{
 
 use super::{
     aws_boundary_coverage::action_patterns_overlap,
-    protected_allowlist::{is_management_held, AllowListCloud, Kind as AllowListKind},
+    families::{aws_family, AWS_SHARING},
+    protected_allowlist::is_built_in_unchanged,
+    verifier_owned::aws_passed_to_services,
     AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
 
-/// Resource-policy and sharing writes that could expose stack resources outside the
-/// account or to the public, including creates that accept a resource policy. Runtime
-/// catalog grants never need them. An inline application grant that names one of these
-/// exactly lifts the Deny only on that grant's own resources; entries with wildcards, which
-/// keep the boundary within IAM's size limit, are never lifted.
-const SHARING_ACTIONS: &[&str] = &[
-    "aoss:*AccessPolicy",
-    "aoss:*SecurityPolicy",
-    "backup:PutBackupVaultAccessPolicy",
-    "codebuild:PutResourcePolicy",
-    "dlm:*LifecyclePolicy",
-    "dynamodb:PutResourcePolicy",
-    "ec2:CopySnapshot",
-    "ec2:CreateVpcPeeringConnection",
-    "ec2:Modify*ImageAttribute",
-    "ec2:ModifySnapshotAttribute",
-    "ec2:ModifyVpcEndpointServicePermissions",
-    "ecr:*RepositoryCreationTemplate",
-    "ecr:PutRegistryPolicy",
-    "ecr:PutReplicationConfiguration",
-    "ecr:SetRepositoryPolicy",
-    "elasticfilesystem:PutFileSystemPolicy",
-    "es:Create*Domain",
-    "es:Update*DomainConfig",
-    "events:PutPermission",
-    "glacier:SetVaultAccessPolicy",
-    "glue:PutResourcePolicy",
-    "kinesis:PutResourcePolicy",
-    "kms:PutKeyPolicy",
-    "lambda:Add*Permission",
-    "lambda:CreateFunctionUrlConfig",
-    "lambda:UpdateFunctionUrlConfig",
-    "logs:PutDe*Policy",
-    "logs:PutResourcePolicy",
-    "logs:PutSubscriptionFilter",
-    "ram:*",
-    "rds:ModifyDB*SnapshotAttribute",
-    "s3:*BucketPolicy",
-    "s3:Put*PublicAccessBlock",
-    "s3:PutAccessPointPolicy*",
-    "s3:PutBucketAcl",
-    "s3:PutBucketOwnershipControls",
-    "s3:PutMultiRegionAccessPointPolicy",
-    "s3:PutReplicationConfiguration",
-    "secretsmanager:PutResourcePolicy",
-    "ses:*IdentityPolicy",
-    "sns:AddPermission",
-    "sns:CreateTopic",
-    "sns:SetTopicAttributes",
-    "sqs:AddPermission",
-    "sqs:CreateQueue",
-    "sqs:SetQueueAttributes",
-];
 
 /// Render the boundary including inline and ARN-selected application grants.
 ///
@@ -707,7 +656,7 @@ fn render_boundary(
             .collect()
     };
     let mut denies: Vec<(BTreeSet<&str>, Vec<&str>)> = Vec::new();
-    for action in SHARING_ACTIONS {
+    for action in AWS_SHARING {
         let resources = exempt(action);
         match denies
             .iter_mut()
@@ -918,9 +867,8 @@ pub(super) fn include_role_statement(
 /// The actions an Allow statement grants the rendered identity: on a protected install's
 /// management identity, all but what only the verifier may do. Denies are kept whole.
 ///
-/// What a set the stack defines grants must also be on the AWS allow-list, or rendering is
-/// refused: the exact-name filter can't drop a wildcard, and the limits bind only the
-/// management role itself.
+/// A set the stack defines that grants an action in a family is refused: a filter can't drop a
+/// wildcard, and the limits bind only the management role itself.
 pub(super) fn protected_management_actions<'a>(
     permission_set: &PermissionSet,
     allow: bool,
@@ -931,12 +879,21 @@ pub(super) fn protected_management_actions<'a>(
     if !allow || !context.signing_protected {
         return Ok(actions);
     }
-    let kept = super::verifier_owned::aws_management_actions(&actions, binding);
-    if !is_management_held(permission_set) {
-        for action in &kept {
-            AllowListCloud::Aws.require(&permission_set.id, AllowListKind::Action, action)?;
+    if !is_built_in_unchanged(permission_set) {
+        let services = aws_passed_to_services(binding);
+        for action in actions.iter() {
+            if let Some(family) = aws_family(action, services.as_deref()) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: action.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
         }
     }
+    let kept = super::verifier_owned::aws_management_actions(&actions, binding);
     Ok(Cow::Owned(kept))
 }
 
@@ -1201,7 +1158,7 @@ mod tests {
                     continue;
                 }
                 for action in entry.grant.actions.iter().flatten() {
-                    for denied in SHARING_ACTIONS {
+                    for denied in AWS_SHARING {
                         assert!(
                             !action_patterns_overlap(action, denied),
                             "{id} grants {action}, which the boundary denies"
@@ -1249,7 +1206,7 @@ mod tests {
         let boundary = aws_permissions_boundary(&context(), &[]).unwrap();
         let mut denied = denied_actions(&boundary);
         denied.sort();
-        let mut expected: Vec<_> = SHARING_ACTIONS.iter().map(|a| a.to_string()).collect();
+        let mut expected: Vec<_> = AWS_SHARING.iter().map(|a| a.to_string()).collect();
         expected.sort();
         assert_eq!(denied, expected);
         let grant_deny = boundary["Statement"]
@@ -1293,7 +1250,7 @@ mod tests {
             .iter()
             .filter(|s| s["Effect"] == "Deny")
             .collect();
-        let everywhere: Vec<_> = SHARING_ACTIONS
+        let everywhere: Vec<_> = AWS_SHARING
             .iter()
             .filter(|action| **action != "sqs:SetQueueAttributes")
             .collect();
@@ -2166,7 +2123,7 @@ mod tests {
         };
         assert_eq!(denies(&after), denies(&before));
 
-        let mut actions: BTreeSet<String> = SHARING_ACTIONS.iter().map(|a| concrete(a)).collect();
+        let mut actions: BTreeSet<String> = AWS_SHARING.iter().map(|a| concrete(a)).collect();
         for id in list_permission_set_ids()
             .into_iter()
             .filter(|id| is_runtime_set(id))

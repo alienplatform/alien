@@ -7,6 +7,7 @@ pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod azure_setup_owned;
 pub mod gcp_runtime;
+pub mod families;
 mod labels;
 pub mod protected_allowlist;
 pub mod signing_limits;
@@ -55,8 +56,9 @@ pub use protected_allowlist::{
     is_management_held, management_stack_secrets_data, AllowListCloud, Kind as AllowListKind,
 };
 pub use verifier_owned::{
-    aws_management_actions, aws_verifier_owned, azure_changes_what_runs,
+    aws_management_actions, aws_passed_to_services, azure_changes_what_runs,
     azure_protected_role_substitute, azure_runs_no_code, azure_verifier_owned_action,
     azure_verifier_owned_data_action, azure_write_or_delete, gcp_verifier_owned,
     AWS_VERIFIER_OWNED,
 };
+pub use families::{aws_family, Family};
