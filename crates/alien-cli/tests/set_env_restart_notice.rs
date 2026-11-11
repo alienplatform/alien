@@ -237,7 +237,7 @@ fn targeted_variable_lists_only_matching_resources_without_the_hint() {
 }
 
 #[test]
-fn a_variable_that_names_the_gateway_still_lists_it() {
+fn a_variable_that_names_the_gateway_does_not_list_it() {
     let api = MockServer::start();
     let save = mock_api(&api);
 
@@ -252,9 +252,8 @@ fn a_variable_that_names_the_gateway_still_lists_it() {
 
     assert!(output.status.success(), "{text}");
     save.assert_hits(1);
-    assert!(
-        text.contains(&format!("{SANDBOX_EGRESS_GATEWAY_ID} (container)")),
-        "{text}"
-    );
+    // The gateway is Alien's own: its environment is never the application's, so a variable
+    // that names it restarts nothing.
+    assert!(!text.contains(SANDBOX_EGRESS_GATEWAY_ID), "{text}");
     assert!(!text.contains("backend"), "{text}");
 }

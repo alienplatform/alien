@@ -7,8 +7,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use alien_core::{
-    env_delivered_to_resource, sandbox_egress, ComputePoolSelection, ComputeSettings, Platform,
-    StackState,
+    environment_variable_applies, ComputePoolSelection, ComputeSettings, Platform, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::ValueKind;
@@ -602,13 +601,9 @@ fn resources_receiving(
             )
         })
         .filter(|(id, _)| {
-            let alien_added = sandbox_egress::is_managed_gateway_among(
-                state.resources.values().map(|resource| &resource.config),
-                id,
-            );
             variable_targets
                 .iter()
-                .any(|targets| env_delivered_to_resource(targets, id, alien_added))
+                .any(|targets| environment_variable_applies(targets, id))
         })
         .map(|(id, resource)| (id.clone(), resource.resource_type.clone()))
         .collect();
