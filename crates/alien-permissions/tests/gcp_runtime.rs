@@ -884,12 +884,10 @@ fn service_account_quota_inventory_is_project_scoped(
         .find(|binding| binding.role == inventory_roles[0].name)
         .expect("inventory role must be bound at project scope");
     assert!(inventory_binding.condition.is_none());
-    assert!(
-        !inventory_roles[0]
-            .included_permissions
-            .iter()
-            .any(|p| p.contains("getAccessToken") || p.contains("keys"))
-    );
+    assert!(!inventory_roles[0]
+        .included_permissions
+        .iter()
+        .any(|p| p.contains("getAccessToken") || p.contains("keys")));
 }
 
 #[test]
