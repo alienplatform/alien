@@ -24,6 +24,9 @@ use std::{
 const UNENFORCED_CONTEXT: &str = "kind-alien-allow-egress-unenforced";
 /// The workflow's main cluster, whose CNI enforces NetworkPolicy.
 const ENFORCED_CONTEXT: &str = "kind-alien-product-lifecycle";
+/// A cluster running Cilium with its default CIDR match mode, where an API server on a node
+/// address is not matched by a CIDR rule.
+const CILIUM_CONTEXT: &str = "kind-alien-allow-egress-cilium";
 const NAMESPACE: &str = "alien-allow-egress-ci";
 const RELEASE: &str = "allow-egress";
 
@@ -138,7 +141,20 @@ fn allow_egress_install_is_refused_where_network_policy_is_not_enforced() {
 #[test]
 #[ignore = "requires the disposable Kind cluster configured by CI"]
 fn allow_egress_install_proceeds_where_network_policy_is_enforced() {
-    let (_cleanup, install) = install_allow_chart(ENFORCED_CONTEXT);
+    install_proceeds(ENFORCED_CONTEXT);
+    resolves_names_but_reaches_no_other_private_host_on_53();
+}
+
+/// The same install on Cilium. The API server runs on the node, and Cilium does not match node
+/// addresses with a CIDR rule, so a probe runner rule written as a CIDR could not reach it.
+#[test]
+#[ignore = "requires the disposable Cilium Kind cluster configured by CI"]
+fn allow_egress_install_proceeds_on_cilium() {
+    install_proceeds(CILIUM_CONTEXT);
+}
+
+fn install_proceeds(context: &str) {
+    let (_cleanup, install) = install_allow_chart(context);
     assert!(
         install.status.success(),
         "an enforcing cluster must accept an `allow` sandbox:\n{}\n{}",
@@ -169,7 +185,6 @@ fn allow_egress_install_proceeds_where_network_policy_is_enforced() {
         "networkpolicy",
         "alien-sbx-agent",
     ]);
-    resolves_names_but_reaches_no_other_private_host_on_53();
 }
 
 /// Install a chart with one `allow` sandbox into `context`, which must be the current context.
