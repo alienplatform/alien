@@ -168,3 +168,40 @@ fn existing_vpc_declared_by_the_stack_renders_as_its_settings() {
         })
     );
 }
+
+/// Only a Lambda that places network interfaces in the network needs IAM to outlive the
+/// private subnets. A stack with no Worker has no such function, so its subnets wait for no role.
+#[test]
+fn private_subnets_wait_for_no_iam_when_nothing_places_interfaces_in_them() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: Some("10.42.0.0/16".to_string()),
+            availability_zones: 3,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("network-no-worker".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network settings"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let yaml = render_built_ins(
+        &stack,
+        settings,
+        RegistrationMode::OutputsFallback,
+        "network without a worker",
+    );
+    let template: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("template parses");
+    for logical_id in [
+        "DefaultNetworkPrivateSubnet1",
+        "DefaultNetworkPrivateSubnet2",
+        "DefaultNetworkPrivateSubnet3",
+        "DefaultNetworkSecurityGroup",
+    ] {
+        let depends_on = &template["Resources"][logical_id]["DependsOn"];
+        assert!(depends_on.is_null(), "{logical_id}: {depends_on:?}");
+    }
+}

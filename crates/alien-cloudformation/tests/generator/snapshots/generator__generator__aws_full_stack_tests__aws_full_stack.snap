@@ -368,14 +368,6 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
-    - ManagementRole
-    - ManagementPermissionsBoundary
-    - ManagementRoleManagementPolicy1
-    - ManagementRoleManagementPolicy2
-    - ManagementRoleManagedPermissions1
-    - MailerRuleSetActivatorRole
-    - RegistryPullRole
-    - RegistryPushRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -439,14 +431,6 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
-    - ManagementRole
-    - ManagementPermissionsBoundary
-    - ManagementRoleManagementPolicy1
-    - ManagementRoleManagementPolicy2
-    - ManagementRoleManagedPermissions1
-    - MailerRuleSetActivatorRole
-    - RegistryPullRole
-    - RegistryPushRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -510,14 +494,6 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
-    - ManagementRole
-    - ManagementPermissionsBoundary
-    - ManagementRoleManagementPolicy1
-    - ManagementRoleManagementPolicy2
-    - ManagementRoleManagedPermissions1
-    - MailerRuleSetActivatorRole
-    - RegistryPullRole
-    - RegistryPushRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -668,14 +644,6 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
-    - ManagementRole
-    - ManagementPermissionsBoundary
-    - ManagementRoleManagementPolicy1
-    - ManagementRoleManagementPolicy2
-    - ManagementRoleManagedPermissions1
-    - MailerRuleSetActivatorRole
-    - RegistryPullRole
-    - RegistryPushRole
     Condition: NetworkModeCreate
   DefaultNetworkFlowLogGroup:
     Type: AWS::Logs::LogGroup

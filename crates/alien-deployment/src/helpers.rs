@@ -381,12 +381,6 @@ pub fn inject_environment_variables(
         platform,
         deployer_reports,
     );
-    let alien_added_resources: Vec<String> = stack
-        .resources
-        .keys()
-        .filter(|id| alien_core::sandbox_egress::is_managed_gateway(stack, id))
-        .cloned()
-        .collect();
     let mut injected_deployer_secrets = BTreeMap::new();
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
@@ -395,17 +389,15 @@ pub fn inject_environment_variables(
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
-            let alien_added = alien_added_resources.contains(resource_name);
             let deployer_secrets: Vec<DeployerSecretEnv> = deployer_environment
                 .iter()
                 .filter(|(_, targets)| {
-                    alien_core::env_delivered_to_resource(targets, resource_name, alien_added)
+                    alien_core::environment_variable_applies(targets, resource_name)
                 })
                 .map(|(variable, _)| variable.clone())
                 .collect();
             inject_into_compute_resource(
                 resource_name,
-                alien_added,
                 resource_entry,
                 snapshot,
                 platform,
@@ -672,7 +664,6 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 ///   them natively (see `alien_core::SecretDelivery`).
 fn inject_into_compute_resource(
     resource_name: &str,
-    alien_added: bool,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
@@ -681,7 +672,6 @@ fn inject_into_compute_resource(
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
             resource_name,
-            alien_added,
             ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
@@ -694,7 +684,6 @@ fn inject_into_compute_resource(
     {
         inject_into_environment(
             resource_name,
-            alien_added,
             ComputeKind::Container,
             &mut container.environment,
             snapshot,
@@ -704,7 +693,6 @@ fn inject_into_compute_resource(
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
             resource_name,
-            alien_added,
             ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
@@ -723,7 +711,6 @@ fn inject_into_compute_resource(
 
 fn inject_into_environment(
     resource_name: &str,
-    alien_added: bool,
     kind: ComputeKind,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
@@ -736,9 +723,7 @@ fn inject_into_environment(
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
         .iter()
-        .filter(|v| {
-            alien_core::env_delivered_to_resource(&v.target_resources, resource_name, alien_added)
-        })
+        .filter(|v| alien_core::environment_variable_applies(&v.target_resources, resource_name))
         .filter(|v| !deployer_secrets.iter().any(|secret| secret.name == v.name))
         .collect();
 
@@ -799,7 +784,14 @@ fn inject_into_environment(
     if !secret_keys.is_empty() || !deployer_secrets.is_empty() {
         let alien_secrets = AlienSecretsConfig {
             keys: secret_keys.clone(),
-            hash: snapshot.hash.clone(),
+            // Over this resource's own variables, so a change meant for another resource
+            // does not redeploy it.
+            hash: environment_snapshot_hash(
+                &applicable_vars
+                    .iter()
+                    .map(|v| (*v).clone())
+                    .collect::<Vec<_>>(),
+            )?,
             deployer_secrets: deployer_secrets.to_vec(),
         };
         let alien_secrets_json = serde_json::to_string(&alien_secrets)
@@ -1358,9 +1350,9 @@ fn desired_vault_secrets(
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
         .filter(|var| var.name != ENV_ALIEN_COMMANDS_TOKEN)
         .filter(|var| {
-            vault_backed_workers
-                .iter()
-                .any(|resource_id| alien_core::targets_resource(&var.target_resources, resource_id))
+            vault_backed_workers.iter().any(|resource_id| {
+                alien_core::environment_variable_applies(&var.target_resources, resource_id)
+            })
         })
         .map(|var| (var.name.clone(), var.value.clone()))
         .collect::<BTreeMap<_, _>>();
@@ -1588,10 +1580,7 @@ pub(crate) fn adopt_unkeyed_hashes(
     snapshot: &EnvironmentVariablesSnapshot,
     monitoring: Option<&OtlpConfig>,
 ) -> Result<usize> {
-    let environment_hashes = (
-        unkeyed_environment_snapshot_hash(&snapshot.variables),
-        snapshot.hash.clone(),
-    );
+    let unkeyed_environment_hash = unkeyed_environment_snapshot_hash(&snapshot.variables);
     let runtime_hashes = monitoring
         .map(|monitoring| {
             Ok::<_, AlienError<ErrorData>>((
@@ -1602,7 +1591,21 @@ pub(crate) fn adopt_unkeyed_hashes(
         .transpose()?;
 
     let mut adopted = 0;
-    for resource_state in stack_state.resources.values_mut() {
+    for (resource_id, resource_state) in stack_state.resources.iter_mut() {
+        // The keyed hash is over the variables that apply to this resource, as injection
+        // computes it, so an unchanged resource compares equal to its desired config.
+        let applicable: Vec<EnvironmentVariable> = snapshot
+            .variables
+            .iter()
+            .filter(|variable| {
+                alien_core::environment_variable_applies(&variable.target_resources, resource_id)
+            })
+            .cloned()
+            .collect();
+        let environment_hashes = (
+            unkeyed_environment_hash.clone(),
+            environment_snapshot_hash(&applicable)?,
+        );
         let configs = std::iter::once(&mut resource_state.config)
             .chain(resource_state.previous_config.as_mut());
         for config in configs {
@@ -2139,7 +2142,6 @@ mod tests {
         };
         inject_into_environment(
             "api",
-            false,
             ComputeKind::Worker,
             &mut worker.environment,
             &make_snapshot(&[("PLAIN_VAR", "plain")], &[]),
@@ -2631,6 +2633,7 @@ mod tests {
 
     #[test]
     fn test_inject_adds_alien_secrets_when_secret_vars_present() {
+        set_secrets_digest_key_if_unset([9; 32]);
         let snapshot = make_snapshot(
             &[("PLAIN_VAR", "pv")],
             &[
@@ -2661,7 +2664,7 @@ mod tests {
         assert!(parsed.keys.contains(&"SECRET_TOKEN".to_string()));
         assert!(parsed.keys.contains(&"SECRET_KEY".to_string()));
         assert!(!parsed.keys.contains(&ENV_ALIEN_COMMANDS_TOKEN.to_string()));
-        assert_eq!(parsed.hash, "test-hash");
+        assert!(parsed.hash.starts_with("env-"), "{}", parsed.hash);
 
         // Secret values NOT injected as plain env vars
         assert!(!func.environment.contains_key("SECRET_TOKEN"));
@@ -2842,7 +2845,7 @@ mod tests {
 
     /// An untargeted variable is for the stack's own workloads. The egress gateway is a
     /// container Alien adds itself, so it must not receive one (and must not restart when
-    /// one changes). A variable that names the gateway still reaches it.
+    /// one changes). Not even a variable that names it does.
     #[test]
     fn untargeted_variables_skip_the_managed_egress_gateway() {
         let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
@@ -2863,29 +2866,47 @@ mod tests {
             !gateway_env.contains_key("APP_FLAG"),
             "the gateway must not receive an untargeted variable: {gateway_env:?}"
         );
-        assert_eq!(
-            gateway_env.get("GATEWAY_ONLY").map(String::as_str),
-            Some("yes"),
-            "an explicitly targeted variable still reaches the gateway"
+        assert!(
+            !gateway_env.contains_key("GATEWAY_ONLY"),
+            "a variable that names the gateway does not reach it either: {gateway_env:?}"
         );
     }
 
-    /// Without an internet sandbox the id is an ordinary application resource, so it keeps
-    /// receiving untargeted variables.
+    /// Two Workers with secrets: a change targeted at one changes only that Worker's
+    /// `ALIEN_SECRETS`, so the other does not redeploy.
     #[test]
-    fn application_container_with_the_gateway_id_still_gets_untargeted_variables() {
-        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
-        let config = make_config(snapshot_with_untargeted_and_targeted_plain_vars());
-        let mut stack = with_managed_gateway(make_compute_stack());
-        stack.resources.swap_remove("subject");
-
-        inject_environment_variables(&mut stack, &config, Platform::Aws, &[]).unwrap();
-
+    fn a_targeted_change_redeploys_only_the_worker_it_targets() {
+        set_secrets_digest_key_if_unset([9; 32]);
+        let secrets_of = |stack: &Stack, id: &str| -> AlienSecretsConfig {
+            serde_json::from_str(&resource_env(stack, id)[ENV_ALIEN_SECRETS]).unwrap()
+        };
+        let build = |value: &str| {
+            let mut snapshot = make_snapshot(&[], &[("SHARED", "s")]);
+            snapshot.variables.push(EnvironmentVariable {
+                name: "ONLY_A".to_string(),
+                value: value.to_string(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: Some(vec!["worker-a".to_string()]),
+            });
+            let mut stack = make_single_function_stack("worker-a");
+            let b = make_single_function_stack("worker-b")
+                .resources
+                .swap_remove("worker-b")
+                .unwrap();
+            stack.resources.insert("worker-b".to_string(), b);
+            inject_environment_variables(&mut stack, &make_config(snapshot), Platform::Aws, &[])
+                .unwrap();
+            stack
+        };
+        let before = build("1");
+        let after = build("2");
+        assert_ne!(
+            secrets_of(&before, "worker-a").hash,
+            secrets_of(&after, "worker-a").hash
+        );
         assert_eq!(
-            resource_env(&stack, gateway_id)
-                .get("APP_FLAG")
-                .map(String::as_str),
-            Some("on")
+            secrets_of(&before, "worker-b").hash,
+            secrets_of(&after, "worker-b").hash
         );
     }
 

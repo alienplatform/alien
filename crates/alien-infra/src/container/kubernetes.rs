@@ -3955,7 +3955,7 @@ mod tests {
                                 .map(|data| data.keys().cloned().collect())
                                 .unwrap_or_default();
                             keys.sort();
-                            keys == ["ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS", "FOR_GATEWAY"]
+                            keys == ["ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS"]
                         })
                     });
                 then.status(201).json_body(serde_json::json!({

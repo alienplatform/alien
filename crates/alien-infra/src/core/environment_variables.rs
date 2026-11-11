@@ -99,7 +99,7 @@ pub(crate) fn applicable_secret_environment_variables<'a>(
     variables
         .iter()
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| alien_core::targets_resource(&var.target_resources, resource_id))
+        .filter(|var| alien_core::environment_variable_applies(&var.target_resources, resource_id))
         .collect()
 }
 
