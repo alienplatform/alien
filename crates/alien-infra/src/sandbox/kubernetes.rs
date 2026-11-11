@@ -19,7 +19,7 @@ use crate::core::{
 use crate::error::{ErrorData, Result};
 use crate::sandbox::{
     idle_pool_pod_with_labels, idle_selector, pool_deficit, require_sandboxed_runtime_class,
-    SandboxPlacement, LABEL_SANDBOX,
+    SandboxPlacement, LABEL_POOL_STATE, LABEL_SANDBOX,
 };
 use alien_core::{ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxOutputs};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -535,14 +535,12 @@ async fn replenish_warm_pool(
             resource_id: Some(sandbox.id.clone()),
         })?;
 
-    let waiting = idle.items.len();
-    let deficit = pool_deficit(target, waiting);
     let mut created = 0;
     let Some(egress_environment) =
         super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
     else {
         return Ok(WarmPool {
-            idle: waiting,
+            idle: idle.items.len(),
             created,
         });
     };
@@ -563,6 +561,41 @@ async fn replenish_warm_pool(
         .env
         .get_or_insert_default()
         .extend(egress_environment);
+
+    // A pod is only as new as the template it was built from. A release that changes the image,
+    // limits or lifecycle of a Live sandbox changes the template, and the idle pods built from
+    // the old one are replaced; a pod already claimed by a session is left to run until it ends.
+    let template_hash = template_hash(&pod);
+    pod.metadata
+        .annotations
+        .get_or_insert_default()
+        .insert(ANNOTATION_TEMPLATE_HASH.to_string(), template_hash.clone());
+    let mut waiting = 0;
+    for mut stale in stale_idle_pods(idle.items, &template_hash, &mut waiting) {
+        let name = stale.metadata.name.clone().unwrap_or_default();
+        // A session may claim the pod between the listing and the delete. The write that takes it
+        // out of the idle pool carries the resourceVersion that was listed, so it loses to a
+        // claim, and only a pod this controller retired is deleted.
+        stale
+            .metadata
+            .labels
+            .get_or_insert_default()
+            .insert(LABEL_POOL_STATE.to_string(), "retired".to_string());
+        let retired = client.update_pod(namespace, &name, &stale).await;
+        let outcome = match retired {
+            Ok(_) => client.delete_pod(namespace, &name).await,
+            Err(error) => Err(error),
+        };
+        match outcome {
+            Ok(()) => {
+                debug!(sandbox_id = %sandbox.id, pod = %name, "Replaced an idle pool pod built from an older template")
+            }
+            Err(error) => {
+                warn!(sandbox_id = %sandbox.id, pod = %name, error = %error, "Left a stale idle pool pod; it may have been claimed")
+            }
+        }
+    }
+    let deficit = pool_deficit(target, waiting);
 
     // The broker builds a pod from this when a create finds the pool empty, so a create never
     // fails for want of an idle pod. It is rewritten every tick and so follows chart upgrades.
@@ -588,6 +621,43 @@ async fn replenish_warm_pool(
         idle: waiting,
         created,
     })
+}
+
+/// Annotation holding the digest of the template an idle pool pod was built from.
+const ANNOTATION_TEMPLATE_HASH: &str = "alien.dev/pod-template-hash";
+
+/// Digest of the pod the controller would create. The pod is serialized in a fixed field order,
+/// so the same template always gives the same digest.
+fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(pod).unwrap_or_default();
+    Sha256::digest(bytes)
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Idle pods built from a template other than `current`. Counts the others in `fresh`.
+fn stale_idle_pods(
+    idle: Vec<k8s_openapi::api::core::v1::Pod>,
+    current: &str,
+    fresh: &mut usize,
+) -> Vec<k8s_openapi::api::core::v1::Pod> {
+    let mut stale = Vec::new();
+    for pod in idle {
+        let built_from = pod
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.get(ANNOTATION_TEMPLATE_HASH));
+        match built_from {
+            Some(hash) if hash == current => *fresh += 1,
+            _ if pod.metadata.name.is_some() => stale.push(pod),
+            _ => {}
+        }
+    }
+    stale
 }
 
 /// Stores the idle pod the controller would create in the capability Secret, for the broker's
@@ -698,6 +768,85 @@ async fn list_session_pods(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::Pod;
+
+    fn idle_with_hash(name: &str, hash: Option<&str>) -> Pod {
+        let mut pod = Pod::default();
+        pod.metadata.name = Some(name.to_string());
+        if let Some(hash) = hash {
+            pod.metadata.annotations =
+                Some([(ANNOTATION_TEMPLATE_HASH.to_string(), hash.to_string())].into());
+        }
+        pod
+    }
+
+    /// A release that changes a Live sandbox's image or limits changes the pod template, and the
+    /// idle pods built from the old template are the ones replaced.
+    #[test]
+    fn idle_pods_built_from_an_older_template_are_the_ones_replaced() {
+        let mut fresh = 0;
+        let stale = stale_idle_pods(
+            vec![
+                idle_with_hash("current", Some("new")),
+                idle_with_hash("old", Some("old")),
+                idle_with_hash("from-before-the-hash-existed", None),
+            ],
+            "new",
+            &mut fresh,
+        );
+        assert_eq!(fresh, 1);
+        let names: Vec<_> = stale
+            .iter()
+            .filter_map(|p| p.metadata.name.as_deref())
+            .collect();
+        assert_eq!(names, ["old", "from-before-the-hash-existed"]);
+    }
+
+    fn pool_pod(image: &str, memory: &str) -> Pod {
+        use alien_core::{SandboxCode, SandboxEgress, SandboxLimits};
+        let sandbox = Sandbox::new("agent".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+                bundled_from: None,
+            })
+            .limits(SandboxLimits {
+                cpu: "1".to_string(),
+                memory: memory.to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut pod =
+            idle_pool_pod_with_labels(&sandbox, "ns", "gvisor", None, None, Default::default());
+        // Created by the API server with a random suffix, so never part of the template.
+        pod.metadata.generate_name = None;
+        pod
+    }
+
+    /// A new release changes the image or the limits of a Live sandbox; either must change the
+    /// digest the idle pool is compared against, and an unchanged template must not.
+    #[test]
+    fn the_template_digest_follows_the_image_and_limits() {
+        let base = template_hash(&pool_pod("registry/app:1", "2Gi"));
+        assert_eq!(base, template_hash(&pool_pod("registry/app:1", "2Gi")));
+        assert_ne!(
+            base,
+            template_hash(&pool_pod("registry/app:2", "2Gi")),
+            "image"
+        );
+        assert_ne!(
+            base,
+            template_hash(&pool_pod("registry/app:1", "4Gi")),
+            "limits"
+        );
+    }
+
     /// An operator without the chart's broker address must fail the sandbox rather than let it
     /// reach Running with no binding: a linked workload would then start without
     /// `ALIEN_<SANDBOX>_BINDING`, which is the failure this guards against.

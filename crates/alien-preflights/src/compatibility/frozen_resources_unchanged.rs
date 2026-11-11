@@ -197,6 +197,30 @@ fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resou
     normalized == *new_sandbox
 }
 
+/// A Live Kubernetes sandbox's image, limits and lifecycle are applied by the Operator at runtime,
+/// but its egress mode is the NetworkPolicy the chart installed. Changing the mode without a
+/// chart upgrade would run the new declaration under the old policy, so it waits for setup.
+fn kubernetes_live_sandbox_chart_changes(old_stack: &Stack, new_stack: &Stack) -> Vec<String> {
+    new_stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Live)
+        .filter_map(|(id, entry)| {
+            let new = entry.config.downcast_ref::<Sandbox>()?;
+            let old_entry = old_stack.resources.get(id)?;
+            if old_entry.lifecycle != ResourceLifecycle::Live {
+                return None;
+            }
+            let old = old_entry.config.downcast_ref::<Sandbox>()?;
+            (old.egress != new.egress).then(|| {
+                format!(
+                    "Live sandbox '{id}' changes its egress mode, which is the NetworkPolicy \
+                     the chart installs. Rerun setup with the updated stack (helm upgrade)."
+                )
+            })
+        })
+        .collect()
+}
+
 /// Keeps only `platform`'s section of each permission set.
 fn permission_sets_on_platform(platform: Platform, sets: &mut [PermissionSet]) {
     for set in sets {
@@ -412,6 +436,10 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                     id
                 ));
             }
+        }
+
+        if self.platform == Platform::Kubernetes {
+            errors.extend(kubernetes_live_sandbox_chart_changes(old_stack, new_stack));
         }
 
         if errors.is_empty() {
@@ -1355,9 +1383,17 @@ mod tests {
                 cluster
             };
             for (case, old, new) in [
-                ("another size", chosen(Some(40), 4096), chosen(Some(60), 4096)),
+                (
+                    "another size",
+                    chosen(Some(40), 4096),
+                    chosen(Some(60), 4096),
+                ),
                 ("no data disk", chosen(Some(60), 4096), chosen(None, 4096)),
-                ("a wider range", chosen(Some(40), 1024), chosen(Some(40), 4096)),
+                (
+                    "a wider range",
+                    chosen(Some(40), 1024),
+                    chosen(Some(40), 4096),
+                ),
                 (
                     "a range replacing a fixed size",
                     disk_cluster(platform, machine, 20, Some(40)),
@@ -1446,6 +1482,63 @@ mod tests {
         Stack::new("stack".to_string())
             .add(sandbox, ResourceLifecycle::Frozen)
             .build()
+    }
+
+    fn live_sandbox_stack(image: &str, memory: &str, egress: alien_core::SandboxEgress) -> Stack {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: memory.to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(egress)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        Stack::new("stack".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build()
+    }
+
+    /// A release may change a Live Kubernetes sandbox's image and limits without a chart
+    /// upgrade, but not its egress mode, which is the chart's NetworkPolicy.
+    #[tokio::test]
+    async fn a_live_kubernetes_sandbox_changes_image_and_limits_but_not_egress_without_setup() {
+        use alien_core::SandboxEgress;
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Kubernetes,
+        };
+        let old = live_sandbox_stack("app:1", "2Gi", SandboxEgress::None);
+
+        let image_and_limits = check
+            .check(
+                &old,
+                &live_sandbox_stack("app:2", "4Gi", SandboxEgress::None),
+            )
+            .await
+            .unwrap();
+        assert!(image_and_limits.success, "{:?}", image_and_limits.errors);
+
+        let egress = check
+            .check(
+                &old,
+                &live_sandbox_stack("app:1", "2Gi", SandboxEgress::Internet),
+            )
+            .await
+            .unwrap();
+        assert!(!egress.success);
+        assert!(
+            egress.errors[0].contains("egress mode"),
+            "{:?}",
+            egress.errors
+        );
     }
 
     #[tokio::test]
