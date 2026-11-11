@@ -74,6 +74,7 @@ jobs:
           cargo test --locked -p alien-operator --test dynamic_containers_kind --no-run
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
           cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
+          cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind --no-run
 
       - name: Start disposable Kubernetes cluster
         uses: helm/kind-action@v1.14.0
@@ -101,6 +102,26 @@ jobs:
           ALIEN_SANDBOX_RBAC_KIND_CONTEXT: kind-alien-product-lifecycle
         run: |
           cargo test --locked -p alien-helm --test sandbox_rbac_kind -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: Kubernetes sandbox sessions on a real API server
+        env:
+          ALIEN_BROKER_KIND_CONTEXT: kind-alien-product-lifecycle
+          ALIEN_BROKER_KIND_NAMESPACE: alien-broker-kind-ci
+        run: |
+          kubectl create namespace "$ALIEN_BROKER_KIND_NAMESPACE"
+          trap 'kubectl delete namespace "$ALIEN_BROKER_KIND_NAMESPACE" --ignore-not-found; kubectl delete runtimeclass alien-kind-runc --ignore-not-found' EXIT
+          # The broker functions are driven directly, so the class only has to schedule a pod.
+          kubectl apply -f - <<'EOF'
+          apiVersion: node.k8s.io/v1
+          kind: RuntimeClass
+          metadata:
+            name: alien-kind-runc
+          handler: runc
+          EOF
+          docker pull alpine:3.20
+          kind load docker-image alpine:3.20 --name alien-product-lifecycle
+          cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind -- \
             --ignored --nocapture --test-threads=1
 
       - name: Product Remote Operator Helm and Terraform lifecycle
