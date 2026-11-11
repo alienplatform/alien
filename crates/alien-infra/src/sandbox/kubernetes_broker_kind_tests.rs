@@ -714,3 +714,134 @@ spec:
         ]);
     }
 }
+
+/// What the API server says about the two tokens a linking pod holds: the one projected for the
+/// broker is accepted for the broker's audience, and the default one the kubelet mounts (issued
+/// for the API server) is not. The pod's spec is the one the controllers build.
+#[tokio::test]
+#[ignore = "needs a Kind cluster; see the module docs"]
+async fn kubernetes_broker_kind_token_audience_is_enforced() {
+    use super::kubernetes_broker_token::{project_into, BROKER_AUDIENCE, TOKEN_PATH};
+    use alien_core::ResourceRef;
+    use alien_k8s_clients::kubernetes::token_reviews::{
+        authenticated_for_audience, authenticated_user, review_for_audience, TokenReviewsApi,
+    };
+
+    let namespace = env("ALIEN_BROKER_KIND_NAMESPACE");
+    let resolved = crate::kubeconfig::resolve_kubeconfig(&KubernetesClientConfig::Kubeconfig {
+        kubeconfig_path: std::env::var("KUBECONFIG").ok(),
+        context: Some(env("ALIEN_BROKER_KIND_CONTEXT")),
+        cluster: None,
+        user: None,
+        namespace: Some(namespace.clone()),
+        additional_headers: None,
+    })
+    .await
+    .expect("resolved kubeconfig");
+    let client = KubernetesClient::new(resolved)
+        .await
+        .expect("kubernetes client");
+
+    let mut spec = k8s_openapi::api::core::v1::PodSpec {
+        containers: vec![k8s_openapi::api::core::v1::Container {
+            name: "p".to_string(),
+            image: Some("alpine:3.20".to_string()),
+            command: Some(vec!["sleep".to_string(), "600".to_string()]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    project_into(
+        &mut spec,
+        &[ResourceRef::new(
+            alien_core::Sandbox::RESOURCE_TYPE,
+            "agent",
+        )],
+    );
+    let pod = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": "token-audience", "namespace": namespace},
+        "spec": spec,
+    });
+    let _ = std::process::Command::new("kubectl")
+        .args([
+            "--namespace",
+            &namespace,
+            "delete",
+            "pod",
+            "token-audience",
+            "--ignore-not-found",
+            "--wait=true",
+        ])
+        .output();
+    {
+        use std::io::Write;
+        let mut child = std::process::Command::new("kubectl")
+            .args(["apply", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("kubectl apply");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(pod.to_string().as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "wait",
+        "--for=condition=Ready",
+        "pod/token-audience",
+        "--timeout=120s",
+    ]);
+    let read = |path: &str| {
+        kubectl(&[
+            "--namespace",
+            &namespace,
+            "exec",
+            "token-audience",
+            "--",
+            "cat",
+            path,
+        ])
+        .trim()
+        .to_string()
+    };
+    let projected = read(TOKEN_PATH);
+    let default = read("/var/run/secrets/kubernetes.io/serviceaccount/token");
+    assert!(!projected.is_empty() && !default.is_empty() && projected != default);
+
+    let review = |token: &str| {
+        let client = &client;
+        let review = review_for_audience(token, BROKER_AUDIENCE);
+        async move { client.create_token_review(&review).await.expect("review") }
+    };
+    let verdict = review(&projected).await;
+    assert!(
+        authenticated_for_audience(&verdict, BROKER_AUDIENCE),
+        "the projected token is for the broker: {verdict:?}"
+    );
+    assert_eq!(
+        authenticated_user(&verdict).as_deref(),
+        Some(format!("system:serviceaccount:{namespace}:default").as_str())
+    );
+    let refused = review(&default).await;
+    assert!(
+        !authenticated_for_audience(&refused, BROKER_AUDIENCE),
+        "the default ServiceAccount token is not for the broker: {refused:?}"
+    );
+    let _ = std::process::Command::new("kubectl")
+        .args([
+            "--namespace",
+            &namespace,
+            "delete",
+            "pod",
+            "token-audience",
+            "--wait=false",
+        ])
+        .output();
+}
