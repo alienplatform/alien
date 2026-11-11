@@ -42,9 +42,9 @@ containerdConfigPatches:
       config_path = "/etc/containerd/certs.d"
 EOF
 kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
-kind create cluster --name "$cluster" --config "$work/kind.yaml" --wait 120s
+# Keep this cluster out of the caller's kubeconfig: kind would otherwise switch its current-context.
 export KUBECONFIG="$work/kubeconfig"
-kind get kubeconfig --name "$cluster" >"$KUBECONFIG"
+kind create cluster --name "$cluster" --config "$work/kind.yaml" --wait 120s --kubeconfig "$KUBECONFIG"
 [ "$(kubectl config current-context)" = "kind-${cluster}" ]
 
 # Nodes reach the mirror as localhost:5001 through the registry container.
