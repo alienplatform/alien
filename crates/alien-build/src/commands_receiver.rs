@@ -55,15 +55,28 @@ async fn rust_app_links_marked_receiver(src: &Path, binary_name: &str) -> Result
     }
     let metadata: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("cannot read cargo metadata: {error}"))?;
-    Ok(cargo_metadata_links_marked_receiver(&metadata, binary_name))
+    Ok(cargo_metadata_links_marked_receiver(
+        &metadata,
+        binary_name,
+        src,
+    ))
 }
 
 /// Whether the normal dependencies of the package that builds `binary_name`
-/// include a `alien-commands` that carries the marker.
-fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str) -> bool {
+/// from `src` include a `alien-commands` that carries the marker. In a
+/// workspace several members can build a binary of that name; the one Cargo
+/// builds from the resource's source directory is the package whose manifest
+/// is there. When none is, only a package that is the single builder of the
+/// binary counts, and otherwise the receiver is unmarked.
+fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str, src: &Path) -> bool {
+    let manifest = src
+        .canonicalize()
+        .unwrap_or_else(|_| src.to_path_buf())
+        .join("Cargo.toml");
     let packages = metadata["packages"].as_array().into_iter().flatten();
     let mut marked = HashSet::new();
-    let mut root = None;
+    let mut builders = Vec::new();
+    let mut from_source = None;
     for package in packages {
         let Some(id) = package["id"].as_str() else {
             continue;
@@ -82,11 +95,22 @@ fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str) -> 
                         .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
             });
         if builds_binary {
-            root = Some(id);
+            builders.push(id);
+            let at_source = package["manifest_path"].as_str().is_some_and(|path| {
+                Path::new(path)
+                    .canonicalize()
+                    .unwrap_or_else(|_| Path::new(path).to_path_buf())
+                    == manifest
+            });
+            if at_source {
+                from_source = Some(id);
+            }
         }
     }
-    let Some(root) = root else {
-        return false;
+    let root = match (from_source, builders.as_slice()) {
+        (Some(id), _) => id,
+        (None, [only]) => only,
+        _ => return false,
     };
 
     let mut normal_dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -215,6 +239,48 @@ mod tests {
     #[tokio::test]
     async fn rust_app_without_a_receiver_is_not_marked() {
         assert!(!rust_receiver_marked(true, None).await);
+    }
+
+    /// Two workspace members can build a binary of the same name from different
+    /// receiver versions. The package Cargo builds from the resource's source
+    /// directory decides, not whichever member comes last.
+    #[tokio::test]
+    async fn the_package_built_from_the_source_directory_decides_the_marker() {
+        let root = tempdir().unwrap();
+        write_receiver_crate(&root.path().join("old"), false);
+        let new = root.path().join("new");
+        write_receiver_crate(&new, true);
+        fs::write(
+            new.join("Cargo.toml"),
+            "[package]\nname = \"alien-commands\"\nversion = \"2.0.0\"\nedition = \"2021\"\n\n[package.metadata.alien]\ncommandsCapabilityFile = true\n",
+        )
+        .unwrap();
+        let workspace = root.path().join("ws");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nresolver = \"2\"\nmembers = [\"a\", \"b\"]\n",
+        )
+        .unwrap();
+        for (member, receiver) in [("a", "old"), ("b", "new")] {
+            let dir = workspace.join(member);
+            fs::create_dir_all(dir.join("src")).unwrap();
+            fs::write(
+                dir.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"app-{member}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"app\"\npath = \"src/main.rs\"\n\n[dependencies]\nalien-commands = {{ path = \"../../{receiver}\" }}\n"
+                ),
+            )
+            .unwrap();
+            fs::write(dir.join("src/main.rs"), "fn main() {}").unwrap();
+        }
+
+        assert!(!rust_app_links_marked_receiver(&workspace.join("a"), "app")
+            .await
+            .unwrap());
+        assert!(rust_app_links_marked_receiver(&workspace.join("b"), "app")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
