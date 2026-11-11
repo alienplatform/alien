@@ -24,10 +24,6 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
-/// Provisioned throughput (in GlobalStandard units) for each predefined model
-/// deployment. A conservative default; per-region quota tuning is a deploy-time
-/// concern verified against the target subscription.
-const DEFAULT_DEPLOYMENT_CAPACITY: i32 = 1;
 const AVAILABILITY_REFRESH_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
 
 fn azure_availability(
@@ -374,7 +370,7 @@ impl AzureAiController {
 
         // PUT is idempotent, so re-entering this state (e.g. after a retry) re-issues
         // the same deployments harmlessly.
-        for (deployment_name, model_name, model_version) in
+        for (deployment_name, model_name, model_version, capacity) in
             alien_core::ai_catalog::azure_deployments()
         {
             info!(
@@ -386,7 +382,7 @@ impl AzureAiController {
             let parameters = CognitiveServicesDeploymentCreateParameters {
                 sku: CognitiveServicesDeploymentSku {
                     name: "GlobalStandard".to_string(),
-                    capacity: DEFAULT_DEPLOYMENT_CAPACITY,
+                    capacity,
                 },
                 properties: CognitiveServicesDeploymentCreateProperties {
                     model: CognitiveServicesDeploymentModel {
@@ -449,7 +445,7 @@ impl AzureAiController {
             .service_provider
             .get_azure_cognitive_services_client(azure_config)?;
 
-        for (deployment_name, _, _) in alien_core::ai_catalog::azure_deployments() {
+        for (deployment_name, ..) in alien_core::ai_catalog::azure_deployments() {
             match cognitive_client
                 .get_deployment(resource_group_name, account_name, deployment_name)
                 .await

@@ -746,6 +746,22 @@ static CATALOG: &[CatalogModel] = &[
         client_apis: &[ClientApi::OpenAiChatCompletions],
         provider_api: ProviderApi::OpenAi,
     },
+    // Azure, GPT-5 family. Foundry serves these on Responses (also Chat Completions,
+    // but the gateway only advertises the Responses path, which carries `web_search`).
+    CatalogModel {
+        public_id: "gpt-5.5",
+        cloud: Platform::Azure,
+        upstream_id: "gpt-5.5",
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-5.6-sol",
+        cloud: Platform::Azure,
+        upstream_id: "gpt-5.6-sol",
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
+    },
     // Azure, Claude over the Foundry Anthropic endpoint. The upstream id is the
     // Foundry deployment name (defaults to the model id). Unlike the OpenAI list,
     // these are not in AZURE_DEPLOYMENTS: a first Claude deployment requires
@@ -833,10 +849,16 @@ pub const AI_CATALOG_REVISION: &str = "2026-08-20.1";
 /// Azure deployments to create at provision time: (deployment name, model name,
 /// model version). The deployment name is the catalog `upstream_id`. The version
 /// is validated against the target region's model catalog at deploy time.
-static AZURE_DEPLOYMENTS: &[(&str, &str, &str)] = &[
-    ("gpt-4.1", "gpt-4.1", "2025-04-14"),
-    ("model-router", "model-router", "2025-11-18"),
-    ("text-embedding-3-large", "text-embedding-3-large", "1"),
+///
+/// Each entry is (deployment name, model name, model version, capacity in
+/// thousands of tokens per minute). The GPT-5 deployments and the embeddings
+/// deployment get 50, enough for chat and document indexing; the others keep 1.
+static AZURE_DEPLOYMENTS: &[(&str, &str, &str, i32)] = &[
+    ("gpt-4.1", "gpt-4.1", "2025-04-14", 1),
+    ("model-router", "model-router", "2025-11-18", 1),
+    ("gpt-5.5", "gpt-5.5", "2026-04-24", 50),
+    ("gpt-5.6-sol", "gpt-5.6-sol", "2026-07-09", 50),
+    ("text-embedding-3-large", "text-embedding-3-large", "1", 50),
 ];
 
 /// One embeddings model. Embeddings are not text generation, so they stay out of
@@ -1292,7 +1314,7 @@ fn dot_minor_version(id: &str) -> String {
 }
 
 /// The Azure predefined model deployments, as (deployment name, model name, version).
-pub fn azure_deployments() -> Vec<(&'static str, &'static str, &'static str)> {
+pub fn azure_deployments() -> Vec<(&'static str, &'static str, &'static str, i32)> {
     AZURE_DEPLOYMENTS.to_vec()
 }
 
@@ -1501,7 +1523,7 @@ mod tests {
     #[test]
     fn azure_deployments_map_to_catalog() {
         assert!(!azure_deployments().is_empty());
-        for (deployment, _, _) in azure_deployments() {
+        for (deployment, ..) in azure_deployments() {
             assert!(
                 models_for(Platform::Azure)
                     .iter()

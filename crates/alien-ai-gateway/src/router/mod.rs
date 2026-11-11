@@ -1116,7 +1116,7 @@ async fn proxy(
 
     let response = async {
         let (provider_model, url, aws_service) =
-            if effective_provider_api == ProviderApi::OpenAiResponses {
+            if effective_provider_api == ProviderApi::OpenAiResponses && cloud == Platform::Aws {
                 let target = ai_catalog::responses_target(cm.public_id).ok_or_else(|| {
                     AlienError::new(ErrorData::ModelNotAvailable {
                         model: model.clone(),
@@ -1434,6 +1434,17 @@ pub(crate) fn upstream_target(
             (
                 endpoint.trim_end_matches('/').to_string(),
                 "/openai/v1/chat/completions".to_string(),
+                "",
+            )
+        }
+        (Platform::Azure, ProviderApi::OpenAiResponses) => {
+            let endpoint = route
+                .azure_endpoint
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "endpoint"))?;
+            (
+                endpoint.trim_end_matches('/').to_string(),
+                "/openai/v1/responses".to_string(),
                 "",
             )
         }
@@ -2189,6 +2200,41 @@ mod tests {
             upstream_base_override: None,
             additional_headers: AdditionalHeaders::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn azure_gpt5_responses_pass_through_with_web_search() {
+        // The GPT-5 deployments serve Responses on Foundry's /openai/v1/responses.
+        // The body, including the server-side web_search tool, is not translated.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/responses")
+                    .matches(|req: &HttpMockRequest| {
+                        let body: Value =
+                            serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                .unwrap_or(Value::Null);
+                        body["model"] == "gpt-5.5" && body["tools"][0]["type"] == "web_search"
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"resp_1","object":"response","output":[]}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![azure_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({
+                "model": "byo/gpt-5.5",
+                "input": "hi",
+                "tools": [{"type": "web_search"}]
+            }))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
