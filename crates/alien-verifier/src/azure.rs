@@ -369,6 +369,68 @@ impl Azure {
         .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))
     }
 
+    /// The address of `path` under sandbox group `group` of this install's resource group, on the
+    /// region's sandbox data plane.
+    fn sandbox_url(&self, group: &str, path: &str) -> Result<reqwest::Url> {
+        use alien_azure_clients::azure::sandbox_data_plane::API_VERSION;
+        let region = self
+            .region
+            .as_deref()
+            .ok_or_else(|| AlienError::new(failed("VERIFIER_AZURE_REGION is not set")))?;
+        let mut url = reqwest::Url::parse(&format!(
+            "https://management.{region}.azuredevcompute.io{}/sandboxGroups/{group}/{path}",
+            self.resource_group
+        ))
+        .into_alien_error()
+        .context(failed("the sandbox data plane address"))?;
+        url.query_pairs_mut().append_pair("api-version", API_VERSION);
+        Ok(url)
+    }
+
+    /// The ids of the disk images in sandbox group `group` carrying `label`, the one the build
+    /// puts on an image made from a registry image.
+    pub async fn disk_image_ids(&self, group: &str, label: &str) -> Result<Vec<String>> {
+        use alien_azure_clients::azure::sandbox_data_plane::ADC_SCOPE;
+        let url = self.sandbox_url(group, "diskimages")?;
+        let what = format!("sandboxGroups.diskimages.read {group}");
+        let images = self
+            .call(
+                reqwest::Method::GET,
+                url.as_str(),
+                ADC_SCOPE.trim_end_matches("/.default"),
+                None,
+                &what,
+            )
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        let images = images
+            .as_array()
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not a list"))))?;
+        Ok(images
+            .iter()
+            .filter(|image| {
+                image["labels"][alien_core::AZURE_DISK_IMAGE_LABEL].as_str() == Some(label)
+            })
+            .filter_map(|image| image["id"].as_str().map(str::to_string))
+            .collect())
+    }
+
+    /// Create a sandbox in sandbox group `group` with the body the controller built, with PUT.
+    pub async fn create_sandbox(&self, group: &str, body: &Value) -> Result<Value> {
+        use alien_azure_clients::azure::sandbox_data_plane::ADC_SCOPE;
+        let url = self.sandbox_url(group, "sandboxes")?;
+        let what = format!("sandboxGroups.sandboxes.write {group}");
+        self.call(
+            reqwest::Method::PUT,
+            url.as_str(),
+            ADC_SCOPE.trim_end_matches("/.default"),
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))
+    }
+
     /// Read `url` until its provisioning state is Succeeded; Failed,
     /// Canceled or ten minutes without it are errors.
     async fn provisioned(&self, url: &str, what: &str) -> Result<Value> {
@@ -579,6 +641,30 @@ impl Backend for AzureBackend {
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<()> {
         crate::cloud_write::resource::check_azure_write(facts, write)
+    }
+
+    async fn check_resource_state(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        use crate::cloud_write::resource::{check_sandbox_create, ResourceWrite};
+        let ResourceWrite::CreateSandbox { group, base, body } = write else {
+            return Ok(());
+        };
+        // The sandbox starts from an image built in the group from the signed image, found by the
+        // label the build puts on it.
+        let sandbox = facts.sandbox()?;
+        let label = alien_core::azure_disk_image_label(base);
+        let ids = self.0.disk_image_ids(group, &label).await?;
+        let wanted = body["sourcesRef"]["diskImage"]["id"].as_str().unwrap_or("");
+        let image = ids.iter().find(|id| id.as_str() == wanted).ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: "the sandbox does not start from a disk image built from the signed image"
+                    .to_string(),
+            })
+        })?;
+        check_sandbox_create(sandbox, &facts.place.prefix, group, base, body, Some(image))
     }
 
     async fn forward_resource_write(

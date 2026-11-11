@@ -21,7 +21,7 @@ use crate::traits::{
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
-    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
+    egress_policy, CreateSandbox, EgressPolicy, SandboxDataPlaneApi, ALLOW, DENY, FULL_INSPECTION,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
@@ -1467,46 +1467,6 @@ fn checked_path(operation: &str, path: &str) -> Result<String> {
     Ok(relative.to_string())
 }
 
-/// The policy a declared mode is created with.
-///
-/// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
-/// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
-/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
-/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
-/// `allow` promises.
-fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
-    let bounded = |host_rules| {
-        Some(EgressPolicy {
-            default_action: DENY.to_string(),
-            unmodelled: Default::default(),
-            rules: Vec::new(),
-            host_rules,
-            traffic_inspection: Some(FULL_INSPECTION.to_string()),
-        })
-    };
-
-    match egress {
-        SandboxEgress::Allow | SandboxEgress::Internet => None,
-        // Written as a rule as well as a default, because Microsoft documents `Partial`
-        // inspection as evaluating only traffic a rule matches and never states that `Full`
-        // differs. A policy holding no rule at all is the one shape where "deny" could mean
-        // nothing, and this is one rule to be out of it.
-        SandboxEgress::None => bounded(vec![EgressHostRule {
-            pattern: EVERY_HOST.to_string(),
-            action: DENY.to_string(),
-        }]),
-        SandboxEgress::AllowDomains { domains } => bounded(
-            domains
-                .iter()
-                .map(|domain| EgressHostRule {
-                    pattern: domain.clone(),
-                    action: ALLOW.to_string(),
-                })
-                .collect(),
-        ),
-    }
-}
-
 /// Whether the sandbox is running the policy it was created with.
 ///
 /// Not equality — the data plane may return the policy normalised, and failing every create over a
@@ -1609,15 +1569,6 @@ fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     }
 }
 
-/// The data plane's own words for the two actions and the one inspection mode that blocks
-/// non-HTTP traffic.
-const DENY: &str = "Deny";
-const ALLOW: &str = "Allow";
-const FULL_INSPECTION: &str = "Full";
-
-/// The host pattern that matches everything, so `deny` is a rule rather than only a default.
-const EVERY_HOST: &str = "*";
-
 /// Longest sandbox id this client will put in a data-plane URL.
 ///
 /// A bound on what a caller hands back rather than on what Azure mints: the ids seen in practice
@@ -1683,6 +1634,7 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_azure_clients::azure::sandbox_data_plane::EgressHostRule;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use alien_azure_clients::azure::sandbox_data_plane::{DiskImage, DiskImageStatus};

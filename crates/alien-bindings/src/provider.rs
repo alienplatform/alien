@@ -91,8 +91,10 @@ impl std::fmt::Debug for LazyEnvBindingsProvider {
 
 /// The ADC service defaults, named so a reader can tell a deliberate default from a magic number.
 /// One core and 2 GiB — what `begin_create_sandbox` uses when a caller passes neither.
-const DEFAULT_AZURE_CPU: &str = "1000m";
-const DEFAULT_AZURE_MEMORY: &str = "2048Mi";
+#[cfg(feature = "azure")]
+use alien_azure_clients::azure::sandbox_data_plane::{
+    DEFAULT_CPU as DEFAULT_AZURE_CPU, DEFAULT_MEMORY as DEFAULT_AZURE_MEMORY,
+};
 
 impl BindingsProvider {
     /// Creates a new BindingsProvider with explicit credentials and bindings.

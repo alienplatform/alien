@@ -744,6 +744,7 @@ mod tests {
                 ResourceWrite::CreateSandboxEngine { display_name } => display_name.clone(),
                 ResourceWrite::CreateSandboxTemplate { body, .. } => body.to_string(),
                 ResourceWrite::CreateSandboxDiskImage { base, .. } => base.clone(),
+                ResourceWrite::CreateSandbox { body, .. } => body.to_string(),
                 ResourceWrite::PutSandboxBundle { image } => image.clone(),
                 ResourceWrite::CreateMicrovmImage { request }
                 | ResourceWrite::UpdateMicrovmImage { request, .. } => request.to_string(),
@@ -1477,6 +1478,221 @@ mod tests {
         for (name, group, base, labels) in refused {
             assert!(
                 check_sandbox_disk_image(&sandbox, PREFIX, &group, &base, &labels).is_err(),
+                "{name} was accepted"
+            );
+        }
+    }
+
+    /// A sandbox create is accepted only as the signed sandbox declares it: its own group, the
+    /// disk image built from the signed digest, the signed size, egress and idle behaviour, no
+    /// group network connection, and only the two labels the provider sets. The caller's
+    /// environment is free. (Tested on the pure check, which the state check calls once it has
+    /// found the image.)
+    #[test]
+    fn an_azure_sandbox_create_is_checked_against_the_signed_sandbox() {
+        use crate::cloud_write::resource::check_sandbox_create;
+        use alien_azure_clients::azure::sandbox_data_plane::{
+            create_body, egress_policy, CreateSandbox,
+        };
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let signed = format!("registry.example.com/vendor/sandbox@{digest}");
+        let egress = alien_core::SandboxEgress::AllowDomains {
+            domains: vec!["api.example.com".to_string()],
+        };
+        let sandbox = alien_core::Sandbox::new("agent".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: signed.clone(),
+                bundled_from: None,
+            })
+            .egress(egress.clone())
+            .limits(alien_core::SandboxLimits {
+                cpu: "500m".to_string(),
+                memory: "1024Mi".to_string(),
+                disk: "2048Mi".to_string(),
+                max_processes: None,
+            })
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: Some(600),
+            })
+            .build();
+        let group = format!("{PREFIX}-agent");
+        let request = |f: &dyn Fn(&mut CreateSandbox)| {
+            let mut request = CreateSandbox {
+                disk_image: String::new(),
+                disk_image_id: Some("img-1".to_string()),
+                cpu: "500m".to_string(),
+                memory: "1024Mi".to_string(),
+                disk: Some("2048Mi".to_string()),
+                environment: [("MODE".to_string(), "x".to_string())].into(),
+                egress: egress_policy(&egress),
+                customer_vnet_connection_name: None,
+                idle_pause_seconds: Some(600),
+                labels: [(
+                    alien_core::SANDBOX_EXPIRY_LABEL.to_string(),
+                    "1700000000".to_string(),
+                )]
+                .into(),
+            };
+            f(&mut request);
+            create_body(&request)
+        };
+        let check = |group: &str, base: &str, body: &serde_json::Value, image: Option<&str>| {
+            check_sandbox_create(&sandbox, PREFIX, group, base, body, image)
+        };
+        let signed_body = request(&|_| {});
+        check(&group, &signed, &signed_body, None).expect("shape");
+        check(&group, &signed, &signed_body, Some("img-1")).expect("with the found image");
+        // The same bytes through the manager's pull proxy.
+        let proxied = format!("manager.example.com/proxy/sandbox@{digest}");
+        check(&group, &proxied, &signed_body, Some("img-1")).expect("proxied base");
+        // Any environment is the caller's.
+        let own_env = request(&|r| {
+            r.environment = [("ANY".to_string(), "thing".to_string())].into();
+        });
+        check(&group, &signed, &own_env, None).expect("another environment");
+
+        let mut with_field = signed_body.clone();
+        with_field["identity"] = json!({"type": "SystemAssigned"});
+        let mut other_source = signed_body.clone();
+        other_source["sourcesRef"] = json!({"diskImage": {"name": "ubuntu", "isPublic": true}});
+        let other_digest = format!(
+            "registry.example.com/vendor/sandbox@sha256:{}",
+            "b".repeat(64)
+        );
+        let refused: Vec<(&str, String, String, serde_json::Value, Option<&str>)> = vec![
+            (
+                "another group",
+                format!("{PREFIX}-other"),
+                signed.clone(),
+                signed_body.clone(),
+                None,
+            ),
+            (
+                "another base digest",
+                group.clone(),
+                other_digest,
+                signed_body.clone(),
+                None,
+            ),
+            (
+                "a catalog name",
+                group.clone(),
+                "ubuntu".into(),
+                signed_body.clone(),
+                None,
+            ),
+            (
+                "a catalog source",
+                group.clone(),
+                signed.clone(),
+                other_source,
+                None,
+            ),
+            (
+                "another image id",
+                group.clone(),
+                signed.clone(),
+                signed_body.clone(),
+                Some("img-2"),
+            ),
+            (
+                "more cpu",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.cpu = "4000m".into()),
+                None,
+            ),
+            (
+                "more memory",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.memory = "2048Mi".into()),
+                None,
+            ),
+            (
+                "more disk",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.disk = Some("9999Mi".into())),
+                None,
+            ),
+            (
+                "no disk ceiling",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.disk = None),
+                None,
+            ),
+            (
+                "open egress",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.egress = None),
+                None,
+            ),
+            (
+                "wider egress",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.egress = egress_policy(&alien_core::SandboxEgress::AllowDomains {
+                        domains: vec!["evil.example".to_string()],
+                    })
+                }),
+                None,
+            ),
+            (
+                "a group network connection",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.customer_vnet_connection_name = Some("default".into())),
+                None,
+            ),
+            (
+                "another idle time",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.idle_pause_seconds = Some(86400)),
+                None,
+            ),
+            (
+                "no idle policy",
+                group.clone(),
+                signed.clone(),
+                request(&|r| r.idle_pause_seconds = None),
+                None,
+            ),
+            (
+                "a foreign label",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels.insert("identity".into(), "gateway".into());
+                }),
+                None,
+            ),
+            (
+                "a non-numeric expiry",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), "never".into());
+                }),
+                None,
+            ),
+            (
+                "an extra field",
+                group.clone(),
+                signed.clone(),
+                with_field,
+                None,
+            ),
+        ];
+        for (name, group, base, body, image) in refused {
+            assert!(
+                check(&group, &base, &body, image).is_err(),
                 "{name} was accepted"
             );
         }

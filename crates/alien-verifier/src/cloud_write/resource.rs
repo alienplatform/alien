@@ -170,6 +170,15 @@ pub enum ResourceWrite {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         registry_credentials: Option<RegistryCredentials>,
     },
+    /// Azure sandbox data plane: create a sandbox in the install's sandbox group, as the client
+    /// sends it. Its image, size, egress and lifecycle must be what the signed sandbox declares;
+    /// only the caller's environment variables are free.
+    #[serde(rename_all = "camelCase")]
+    CreateSandbox {
+        group: String,
+        base: String,
+        body: Value,
+    },
     /// Writes the bundle the signed sandbox's MicroVM image is built from, into the install's
     /// bundle bucket. The verifier renders it from `image`, which must be the signed one.
     #[serde(rename_all = "camelCase")]
@@ -215,6 +224,7 @@ impl ResourceWrite {
             ResourceWrite::PutEventSubscription { .. } => "PutEventSubscription",
             ResourceWrite::UpdateBlobContainer { .. } => "UpdateBlobContainer",
             ResourceWrite::CreateSandboxDiskImage { .. } => "CreateSandboxDiskImage",
+            ResourceWrite::CreateSandbox { .. } => "CreateSandbox",
             ResourceWrite::CreateSandboxEngine { .. } => "CreateSandboxEngine",
             ResourceWrite::CreateSandboxTemplate { .. } => "CreateSandboxTemplate",
             ResourceWrite::PutSandboxBundle { .. } => "PutSandboxBundle",
@@ -523,6 +533,7 @@ pub fn check_aws_write(
         | ResourceWrite::UpdateBlobContainer { .. }
         | ResourceWrite::PutEventSubscription { .. }
         | ResourceWrite::CreateSandboxDiskImage { .. }
+        | ResourceWrite::CreateSandbox { .. }
         | ResourceWrite::CreateSandboxEngine { .. }
         | ResourceWrite::CreateSandboxTemplate { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
@@ -946,6 +957,7 @@ pub async fn forward_aws_write(
         | ResourceWrite::UpdateBlobContainer { .. }
         | ResourceWrite::PutEventSubscription { .. }
         | ResourceWrite::CreateSandboxDiskImage { .. }
+        | ResourceWrite::CreateSandbox { .. }
         | ResourceWrite::CreateSandboxEngine { .. }
         | ResourceWrite::CreateSandboxTemplate { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
@@ -1778,6 +1790,16 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
             name,
             body,
         } => return check_event_subscription(facts, account, name, body),
+        ResourceWrite::CreateSandbox { group, base, body } => {
+            return check_sandbox_create(
+                facts.sandbox()?,
+                &facts.place.prefix,
+                group,
+                base,
+                body,
+                None,
+            )
+        }
         ResourceWrite::CreateSandboxDiskImage {
             group,
             base,
@@ -1857,6 +1879,98 @@ pub fn check_sandbox_disk_image(
             "CreateSandboxDiskImage carries labels other than the one that finds the image again"
                 .to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// A sandbox create must be the one the signed sandbox describes: it starts from the disk image
+/// built from `base`, a reference with the signed digest (`image_id`, which the state check finds
+/// in the install's own group by the label of `base`), at the signed size, under the signed egress policy and idle behaviour, with no group
+/// network connection. The caller's environment variables are free: they go to code that holds no
+/// cloud identity. Labels are limited to the two the provider sets itself. The body is rebuilt
+/// with the client's own function and must equal the request, so nothing else can ride along.
+pub fn check_sandbox_create(
+    sandbox: &alien_core::Sandbox,
+    prefix: &str,
+    group: &str,
+    base: &str,
+    body: &Value,
+    image_id: Option<&str>,
+) -> Result<()> {
+    use alien_azure_clients::azure::sandbox_data_plane::{
+        create_body, egress_policy, CreateSandbox, AGENT_TRANSPORT_LABEL, AGENT_TRANSPORT_VERSION,
+        DEFAULT_CPU, DEFAULT_MEMORY,
+    };
+    let id = sandbox.id();
+    let own = azure_sandbox_group_name(prefix, id);
+    if group != own {
+        return Err(refused(format!(
+            "CreateSandbox names sandbox group {group}, not {own}, the group this install gives \
+             sandbox '{id}'"
+        )));
+    }
+    let signed = alien_core::release_statement::sandbox_pinned_image(id, sandbox)
+        .map_err(|error| refused(error.message))?;
+    let pinned = alien_core::release_statement::image_digest(signed);
+    if pinned.is_none() || alien_core::release_statement::image_digest(base) != pinned {
+        return Err(refused(format!(
+            "CreateSandbox starts from {base}, which is not the image {signed} the release \
+             signed for sandbox '{id}'"
+        )));
+    }
+    let fields = body
+        .as_object()
+        .ok_or_else(|| refused("the sandbox create is not a JSON object"))?;
+    let string_map = |field: &str| -> Result<std::collections::BTreeMap<String, String>> {
+        let Some(value) = fields.get(field) else {
+            return Ok(Default::default());
+        };
+        value
+            .as_object()
+            .and_then(|map| {
+                map.iter()
+                    .map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
+                    .collect()
+            })
+            .ok_or_else(|| refused(format!("the sandbox's {field} is not a map of text")))
+    };
+    let environment = string_map("environment")?;
+    let labels = string_map("labels")?;
+    for (key, value) in &labels {
+        let allowed = (key == alien_core::SANDBOX_EXPIRY_LABEL && value.parse::<u64>().is_ok())
+            || (key == AGENT_TRANSPORT_LABEL && value == AGENT_TRANSPORT_VERSION);
+        if !allowed {
+            return Err(refused(format!("the sandbox carries label '{key}'")));
+        }
+    }
+    let disk_image_id = fields
+        .get("sourcesRef")
+        .and_then(|source| source["diskImage"]["id"].as_str())
+        .ok_or_else(|| refused("the sandbox does not start from a built disk image"))?
+        .to_string();
+    if image_id.is_some_and(|image| image != disk_image_id) {
+        return Err(refused(
+            "the sandbox starts from a disk image other than the one built from the signed image",
+        ));
+    }
+    let limits = sandbox.limits.as_ref();
+    let expected = create_body(&CreateSandbox {
+        disk_image: String::new(),
+        disk_image_id: Some(disk_image_id),
+        cpu: limits.map_or_else(|| DEFAULT_CPU.to_string(), |l| l.cpu.clone()),
+        memory: limits.map_or_else(|| DEFAULT_MEMORY.to_string(), |l| l.memory.clone()),
+        disk: limits.map(|l| l.disk.clone()),
+        environment,
+        egress: egress_policy(&sandbox.egress),
+        customer_vnet_connection_name: None,
+        idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
+        labels,
+    });
+    if &expected != body {
+        return Err(refused(format!(
+            "the sandbox create differs from what the signed sandbox '{id}' declares: its image, \
+             size, egress, lifecycle or another field is not the signed one"
+        )));
     }
     Ok(())
 }
@@ -2059,6 +2173,7 @@ pub async fn forward_azure_write(
             );
             azure.create_disk_image(group, &body).await
         }
+        ResourceWrite::CreateSandbox { group, body, .. } => azure.create_sandbox(group, body).await,
         other => Err(refused(format!(
             "Azure takes no {} write",
             other.operation()

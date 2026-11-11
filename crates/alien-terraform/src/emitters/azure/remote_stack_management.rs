@@ -405,6 +405,7 @@ fn emit_protection(
 const AZURE_VERIFIER_DATA_ACTIONS: &[&str] = &[
     "Microsoft.App/sandboxGroups/diskimages/read",
     "Microsoft.App/sandboxGroups/diskimages/write",
+    "Microsoft.App/sandboxGroups/sandboxes/write",
 ];
 
 /// What the verifier may do in the install's group (byoc review §1). No `runCommand` and no

@@ -606,6 +606,14 @@ pub enum ResourceWrite {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         registry_credentials: Option<RegistryCredentials>,
     },
+    /// Azure sandbox data plane: create a sandbox in the install's sandbox group, as the client
+    /// sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateSandbox {
+        group: String,
+        base: String,
+        body: serde_json::Value,
+    },
     /// Writes the bundle a sandbox's MicroVM image is built from; the verifier renders it from
     /// `image`, the signed one.
     #[serde(rename_all = "camelCase")]
