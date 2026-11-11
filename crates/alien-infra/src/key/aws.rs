@@ -411,6 +411,17 @@ impl AwsKeyController {
 }
 
 impl AwsKeyController {
+    /// A ready key for tests of resources that depend on it.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn mock_ready(key_arn: &str) -> Self {
+        Self {
+            state: AwsKeyState::Ready,
+            key_arn: Some(key_arn.to_string()),
+            origin: super::KeyOrigin::Created,
+            ..Default::default()
+        }
+    }
+
     fn created_key_arn(&self, key_id: &str) -> Result<String> {
         self.key_arn.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -534,6 +545,14 @@ fn desired_grants(
             role: format!("{prefix}-{account}"),
             policy: format!("{key_id}-key-runtime"),
             document: document(vec![grants.cryptography.clone()]),
+        });
+    }
+    // Roles that read or write objects of a Storage encrypted with this key.
+    for account in &plan.native_storage_accounts {
+        wanted.push(RoleGrant {
+            role: format!("{prefix}-{account}"),
+            policy: format!("{key_id}-key-native-storage"),
+            document: document(vec![grants.native_storage.clone()]),
         });
     }
     Ok(wanted)

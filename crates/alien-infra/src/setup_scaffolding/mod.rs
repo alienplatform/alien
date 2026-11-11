@@ -52,7 +52,7 @@ pub(crate) fn validate_setup_support(
     if authority != alien_core::InitialSetupAuthority::DirectSetup {
         return Ok(());
     }
-    validate_key_consumers(stack)?;
+    validate_key_consumers(stack, platform)?;
     if platform != Platform::Aws {
         return Ok(());
     }
@@ -80,8 +80,13 @@ pub(crate) fn validate_setup_support(
 /// A key only protects data if the resource that names it applies it. No Storage controller
 /// sets a customer-managed key on its bucket in a direct setup, so a stack that names one is
 /// refused while planning: a bucket without the key would report success and silently not use it.
-fn validate_key_consumers(stack: &Stack) -> Result<()> {
+fn validate_key_consumers(stack: &Stack, platform: Platform) -> Result<()> {
     for (resource_id, entry) in stack.resources() {
+        // The AWS Storage controller encrypts its bucket with the key and grants its users the
+        // key, so only the other clouds still refuse.
+        if platform == Platform::Aws {
+            continue;
+        }
         if let Some(key) = entry
             .config
             .downcast_ref::<alien_core::Storage>()
@@ -624,7 +629,7 @@ mod key_consumer_tests {
 
     #[test]
     fn a_direct_setup_refuses_storage_with_a_key_on_every_cloud_before_creating_anything() {
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        for platform in [Platform::Gcp, Platform::Azure] {
             let error = validate_setup_support(&stack(true), platform, InitialSetupAuthority::DirectSetup)
                 .expect_err("a bucket must not be created without its key");
             assert_eq!(error.code, "KEY_CONSUMER_UNSUPPORTED_IN_DIRECT_SETUP", "{platform:?}");

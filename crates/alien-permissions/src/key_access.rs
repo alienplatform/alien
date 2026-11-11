@@ -50,6 +50,58 @@ pub struct KeyAccessPlan {
     pub runtime_cryptography: Vec<String>,
     /// Service accounts the AWS key policy allowlists (see `aws_key_policy`).
     pub policy_runtime_accounts: Vec<String>,
+    /// Service accounts that read or write objects of a Storage encrypted with this key, and so
+    /// need `key/native-storage` on it.
+    pub native_storage_accounts: Vec<String>,
+}
+
+/// Ids of the service accounts whose profile grants object data access (by the Storage's id or
+/// with a `storage/*` wildcard) on a Storage that names `key_id` as its encryption key.
+fn native_storage_service_accounts(stack: &Stack, key_id: &str) -> Vec<String> {
+    let storages: Vec<&str> = stack
+        .resources()
+        .filter(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Storage>()
+                .and_then(|storage| storage.encryption_key.as_ref())
+                .is_some_and(|key| key.id() == key_id)
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<ServiceAccount>())
+        .filter(|account| {
+            let Some(profile) = stack
+                .permission_profiles()
+                .get(account.id.strip_suffix("-sa").unwrap_or(&account.id))
+            else {
+                return false;
+            };
+            storages.iter().any(|storage| {
+                profile
+                    .0
+                    .get(*storage)
+                    .into_iter()
+                    .flatten()
+                    .chain(
+                        profile
+                            .0
+                            .get("*")
+                            .into_iter()
+                            .flatten()
+                            .filter(|reference| reference.id().starts_with("storage/")),
+                    )
+                    .any(|reference| {
+                        reference
+                            .resolve(|id| crate::get_permission_set(id).cloned())
+                            .is_some_and(|set| crate::permission_set_uses_aws_object_data(&set))
+                    })
+            })
+        })
+        .map(|account| account.id.clone())
+        .collect()
 }
 
 /// Works out the access plan for the key `key_id` of `stack`.
@@ -79,6 +131,7 @@ pub fn key_access_plan(stack: &Stack, key_id: &str) -> crate::Result<KeyAccessPl
         remote_bindings: remote_access && has_resource(alien_core::RemoteBindings::RESOURCE_TYPE),
         runtime_cryptography: cryptography_service_accounts(stack, key_id),
         policy_runtime_accounts: crate::aws_key_policy::key_runtime_service_accounts(stack, key_id)?,
+        native_storage_accounts: native_storage_service_accounts(stack, key_id),
     })
 }
 
@@ -89,6 +142,8 @@ pub struct AwsKeyGrants {
     pub management: Vec<serde_json::Value>,
     /// For the access role and each runtime role: encrypt and decrypt on the key.
     pub cryptography: serde_json::Value,
+    /// For each runtime role that uses a Storage encrypted with the key.
+    pub native_storage: serde_json::Value,
 }
 
 /// Renders the grants of [`KeyAccessPlan`] for AWS. `key_arn` is a literal ARN.
@@ -122,7 +177,22 @@ pub fn aws_key_grants(plan: &KeyAccessPlan, key_arn: &str) -> crate::Result<AwsK
     if actions.is_empty() {
         return Err(invalid(format!("{REMOTE_CRYPTOGRAPHY} has no AWS actions")));
     }
+    let storage_actions = crate::get_permission_set("key/native-storage")
+        .and_then(|set| set.platforms.aws.as_ref())
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| entry.grant.actions.iter().flatten())
+        .cloned()
+        .collect::<Vec<_>>();
+    if storage_actions.is_empty() {
+        return Err(invalid("key/native-storage has no AWS actions".to_string()));
+    }
     Ok(AwsKeyGrants {
+        native_storage: serde_json::json!({
+            "Effect": "Allow",
+            "Action": storage_actions,
+            "Resource": key_arn,
+        }),
         management,
         cryptography: serde_json::json!({
             "Effect": "Allow",
@@ -206,6 +276,54 @@ mod tests {
         assert_eq!(
             cryptography_service_accounts(&stack, "secrets"),
             vec!["manager-sa".to_string(), "wild-sa".to_string()]
+        );
+    }
+
+    #[test]
+    fn only_accounts_that_read_or_write_objects_of_a_storage_with_the_key_are_listed() {
+        let stack = Stack::new("stack".to_string())
+            .add(
+                Key::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("data".to_string())
+                    .encryption_key(alien_core::ResourceRef::new(Key::RESOURCE_TYPE, "secrets"))
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("plain".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        let stack = ["reader-sa", "health-sa", "plain-sa"]
+            .into_iter()
+            .fold(stack, |stack, id| {
+                stack.add(
+                    ServiceAccount::new(id.to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+            })
+            .permissions(
+                PermissionsConfig::new()
+                    .with_profile(
+                        "reader",
+                        PermissionProfile::new().resource("data", ["storage/data-read"]),
+                    )
+                    .with_profile(
+                        "health",
+                        PermissionProfile::new().resource("data", ["storage/heartbeat"]),
+                    )
+                    .with_profile(
+                        "plain",
+                        PermissionProfile::new().resource("plain", ["storage/data-read"]),
+                    ),
+            )
+            .build();
+
+        assert_eq!(
+            native_storage_service_accounts(&stack, "secrets"),
+            vec!["reader-sa".to_string()]
         );
     }
 }
