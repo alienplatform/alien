@@ -452,6 +452,20 @@ pub enum ResourceWrite {
         subscription: String,
         policy: serde_json::Value,
     },
+    /// Azure create of a blob container, as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateBlobContainer {
+        account: String,
+        container: String,
+        body: serde_json::Value,
+    },
+    /// Azure update of a blob container, as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    UpdateBlobContainer {
+        account: String,
+        container: String,
+        body: serde_json::Value,
+    },
 }
 
 /// What `applyResourceWrite` did.

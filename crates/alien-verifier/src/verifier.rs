@@ -669,6 +669,8 @@ mod tests {
         mapping: Mutex<(String, String)>,
         /// When set, the backend applies the GCP rules, and this is the IAM policy its bucket holds.
         gcp_bucket_policy: Mutex<Option<Value>>,
+        /// When set, the backend applies the Azure rules.
+        azure: Mutex<bool>,
     }
 
     #[async_trait]
@@ -687,6 +689,9 @@ mod tests {
         ) -> Result<()> {
             if self.gcp_bucket_policy.lock().unwrap().is_some() {
                 return crate::cloud_write::resource::check_gcp_write(facts, write);
+            }
+            if *self.azure.lock().unwrap() {
+                return crate::cloud_write::resource::check_azure_write(facts, write);
             }
             crate::cloud_write::resource::check_aws_write(facts, write, REGION)
         }
@@ -745,6 +750,8 @@ mod tests {
                 | ResourceWrite::CreateSubscription { body, .. } => body.to_string(),
                 ResourceWrite::SetTopicIamPolicy { policy, .. }
                 | ResourceWrite::SetSubscriptionIamPolicy { policy, .. } => policy.to_string(),
+                ResourceWrite::CreateBlobContainer { body, .. }
+                | ResourceWrite::UpdateBlobContainer { body, .. } => body.to_string(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -800,6 +807,7 @@ mod tests {
         let backend = Arc::new(ResourceForwards {
             forwarded: Mutex::new(Vec::new()),
             gcp_bucket_policy: Mutex::new(None),
+            azure: Mutex::new(false),
             mapping: Mutex::new((
                 format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{PREFIX}-jobs"),
                 format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PREFIX}-api"),
@@ -974,6 +982,73 @@ mod tests {
             prefix: prefix.to_string(),
         });
         (verifier, backend)
+    }
+
+    /// A blob container's public access is checked against the signed stack, its name against
+    /// the install's, and the body is sent unchanged.
+    #[tokio::test]
+    async fn azure_blob_container_writes_are_checked_against_the_signed_stack() {
+        // A release of a given sequence is accepted once with one body, so each case gets its own
+        // verifier.
+        let fresh = || {
+            let (mut verifier, backend) = resource_verifier();
+            *backend.azure.lock().unwrap() = true;
+            verifier.install_id = Arc::new(|_| alien_signing::InstallId::Azure {
+                subscription: "11111111-2222-3333-4444-555555555555".to_string(),
+                resource_group: PREFIX.to_string(),
+            });
+            (verifier, backend)
+        };
+        let container = format!("{PREFIX}-assets");
+        let request = |public_read: bool, operation: &str, account: &str, name: &str, body: Value| {
+            json!({"applyResourceWrite": {
+                "release": storage_release_for(alien_core::Platform::Azure, public_read),
+                "signerLists": [signer_list()],
+                "resource": "assets",
+                "writes": [{operation: {"account": account, "container": name, "body": body}}],
+            }})
+        };
+        let private = json!({"properties": {"publicAccess": "None"}});
+        let public = json!({"properties": {"publicAccess": "Blob"}});
+
+        for (declared, operation, body) in [
+            (false, "createBlobContainer", private.clone()),
+            (false, "updateBlobContainer", private.clone()),
+            (true, "createBlobContainer", public.clone()),
+            (true, "updateBlobContainer", public.clone()),
+            (false, "createBlobContainer", json!({})),
+        ] {
+            let (verifier, backend) = fresh();
+            verifier
+                .handle(request(declared, operation, "acmestore", &container, body.clone()))
+                .await
+                .unwrap_or_else(|error| panic!("{operation} {body}: {}", crate::describe(&error)));
+            assert_eq!(
+                *backend.forwarded.lock().unwrap(),
+                vec![body.to_string()],
+                "{operation} is sent unchanged"
+            );
+        }
+
+        for (what, declared, account, name, body) in [
+            ("public on a private storage", false, "acmestore", container.as_str(), public.clone()),
+            ("private on a public storage", true, "acmestore", container.as_str(), private.clone()),
+            ("container access", false, "acmestore", container.as_str(), json!({"properties": {"publicAccess": "Container"}})),
+            ("another container", false, "acmestore", "other", private.clone()),
+            ("another field", false, "acmestore", container.as_str(), json!({"properties": {"publicAccess": "None", "defaultEncryptionScope": "x"}})),
+            ("a top-level field", false, "acmestore", container.as_str(), json!({"properties": {}, "id": "x"})),
+            ("an odd account", false, "../x", container.as_str(), private.clone()),
+        ] {
+            let (verifier, backend) = fresh();
+            let result = verifier
+                .handle(request(declared, "createBlobContainer", account, name, body))
+                .await;
+            assert!(result.is_err(), "{what} must be refused");
+            assert!(
+                backend.forwarded.lock().unwrap().is_empty(),
+                "{what}: a refusal sends nothing"
+            );
+        }
     }
 
     fn gcp_bucket_request(public_read: bool, write: Value) -> Value {

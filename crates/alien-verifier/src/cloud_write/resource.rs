@@ -106,6 +106,21 @@ pub enum ResourceWrite {
     /// Pub/Sub setIamPolicy of a subscription: its whole policy.
     #[serde(rename_all = "camelCase")]
     SetSubscriptionIamPolicy { subscription: String, policy: Value },
+    /// Azure create (PUT) of a blob container in the install's storage account, with the
+    /// container as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateBlobContainer {
+        account: String,
+        container: String,
+        body: Value,
+    },
+    /// Azure update (PATCH) of a blob container in the install's storage account.
+    #[serde(rename_all = "camelCase")]
+    UpdateBlobContainer {
+        account: String,
+        container: String,
+        body: Value,
+    },
 }
 
 impl ResourceWrite {
@@ -125,6 +140,8 @@ impl ResourceWrite {
             ResourceWrite::CreateSubscription { .. } => "CreateSubscription",
             ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
             ResourceWrite::SetSubscriptionIamPolicy { .. } => "SetSubscriptionIamPolicy",
+            ResourceWrite::CreateBlobContainer { .. } => "CreateBlobContainer",
+            ResourceWrite::UpdateBlobContainer { .. } => "UpdateBlobContainer",
         }
     }
 }
@@ -368,7 +385,9 @@ pub fn check_aws_write(
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
-        | ResourceWrite::SetSubscriptionIamPolicy { .. } => {
+        | ResourceWrite::SetSubscriptionIamPolicy { .. }
+        | ResourceWrite::CreateBlobContainer { .. }
+        | ResourceWrite::UpdateBlobContainer { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -716,7 +735,9 @@ pub async fn forward_aws_write(
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
-        | ResourceWrite::SetSubscriptionIamPolicy { .. } => {
+        | ResourceWrite::SetSubscriptionIamPolicy { .. }
+        | ResourceWrite::CreateBlobContainer { .. }
+        | ResourceWrite::UpdateBlobContainer { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -918,6 +939,123 @@ pub fn check_gcp_state(
             check_bucket_iam(policy, current, &derived, false).map_err(refused)
         }
         _ => Ok(()),
+    }
+}
+
+/// The name this install gives the blob container of storage `id`.
+pub fn azure_container_name(prefix: &str, id: &str) -> String {
+    format!("{prefix}-{id}").to_lowercase().replace('_', "-")
+}
+
+/// Check a write for an Azure resource: the container must be the storage's own and carry only
+/// the public access the signed stack declares. The storage account is named by setup and the
+/// verifier only reaches the ones in its own resource group, so the name is only checked to be
+/// a plain account name.
+pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Result<()> {
+    let (account, container, body) = match write {
+        ResourceWrite::CreateBlobContainer {
+            account,
+            container,
+            body,
+        }
+        | ResourceWrite::UpdateBlobContainer {
+            account,
+            container,
+            body,
+        } => (account, container, body),
+        other => {
+            return Err(refused(format!("Azure takes no {} write", other.operation())));
+        }
+    };
+    let storage = facts.storage()?;
+    let own = azure_container_name(&facts.place.prefix, facts.resource_id);
+    if *container != own {
+        return Err(refused(format!(
+            "{} names container {container}, not {own}, the name this install gives storage '{}'",
+            write.operation(),
+            facts.resource_id
+        )));
+    }
+    let plain = (3..=24).contains(&account.len())
+        && account
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+    if !plain {
+        return Err(refused(format!(
+            "{} names storage account '{account}', which is not an Azure storage account name",
+            write.operation()
+        )));
+    }
+    check_blob_container_body(body, storage.public_read).map_err(refused)
+}
+
+/// A blob container's fields: only `properties.publicAccess`, `Blob` when the signed storage is
+/// public and `None` otherwise (an absent value is `None`).
+pub fn check_blob_container_body(body: &Value, public_read: bool) -> std::result::Result<(), String> {
+    let object = body
+        .as_object()
+        .ok_or("the blob container is not a JSON object")?;
+    if let Some(field) = object.keys().find(|key| key.as_str() != "properties") {
+        return Err(format!("the blob container sets '{field}'; only its properties may be set"));
+    }
+    let properties = match object.get("properties") {
+        None | Some(Value::Null) => return check_public_access(None, public_read),
+        Some(Value::Object(properties)) => properties,
+        Some(_) => return Err("the blob container's properties are not an object".to_string()),
+    };
+    if let Some(field) = properties.keys().find(|key| key.as_str() != "publicAccess") {
+        return Err(format!(
+            "the blob container sets properties.{field}; only publicAccess may be set"
+        ));
+    }
+    check_public_access(properties.get("publicAccess"), public_read)
+}
+
+fn check_public_access(value: Option<&Value>, public_read: bool) -> std::result::Result<(), String> {
+    let access = match value {
+        None | Some(Value::Null) => "None",
+        Some(Value::String(access)) => access.as_str(),
+        Some(_) => return Err("publicAccess is not a string".to_string()),
+    };
+    let allowed = if public_read { "Blob" } else { "None" };
+    if access == allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "publicAccess '{access}' is not '{allowed}', what the signed stack declares for this storage"
+        ))
+    }
+}
+
+/// Send a checked Azure write unchanged.
+pub async fn forward_azure_write(
+    azure: &crate::azure::Azure,
+    write: &ResourceWrite,
+    newest: &dyn StillNewest,
+) -> Result<Value> {
+    newest.check().await?;
+    match write {
+        ResourceWrite::CreateBlobContainer {
+            account,
+            container,
+            body,
+        } => {
+            azure
+                .write_blob_container(reqwest::Method::PUT, account, container, body)
+                .await?;
+            Ok(json!({ "container": container }))
+        }
+        ResourceWrite::UpdateBlobContainer {
+            account,
+            container,
+            body,
+        } => {
+            azure
+                .write_blob_container(reqwest::Method::PATCH, account, container, body)
+                .await?;
+            Ok(json!({ "container": container }))
+        }
+        other => Err(refused(format!("Azure takes no {} write", other.operation()))),
     }
 }
 

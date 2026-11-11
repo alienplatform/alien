@@ -432,6 +432,10 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
     // The deployer secrets vault's name ends in a random suffix, so it finds the vault in the
     // group to check the binding a worker is given for it.
     "Microsoft.KeyVault/vaults/read",
+    // It creates and updates the blob containers of the install's storages, whose public access
+    // it checks against the signed stack.
+    "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+    "Microsoft.Storage/storageAccounts/blobServices/containers/write",
 ];
 
 /// What the verifier reads outside the group: the publisher's community gallery images its

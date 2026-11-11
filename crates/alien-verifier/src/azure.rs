@@ -273,6 +273,37 @@ impl Azure {
         self.provisioned(url.as_str(), &what).await.map(|_| ())
     }
 
+    /// Send a blob container of the install's storage account `account`, in this install's
+    /// resource group, with `method` (PUT creates, PATCH updates).
+    pub async fn write_blob_container(
+        &self,
+        method: reqwest::Method,
+        account: &str,
+        container: &str,
+        body: &Value,
+    ) -> Result<()> {
+        let mut url = crate::machines::segments_url(
+            &format!("{ARM}{}", self.resource_group),
+            &[
+                "providers",
+                "Microsoft.Storage",
+                "storageAccounts",
+                account,
+                "blobServices",
+                "default",
+                "containers",
+                container,
+            ],
+        )?;
+        url.query_pairs_mut()
+            .append_pair("api-version", "2024-01-01");
+        let what = format!("storage.blobContainers.write {account}/{container}");
+        self.call(method, url.as_str(), ARM, Some(body), &what)
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        Ok(())
+    }
+
     /// Read `url` until its provisioning state is Succeeded; Failed,
     /// Canceled or ten minutes without it are errors.
     async fn provisioned(&self, url: &str, what: &str) -> Result<Value> {
@@ -475,6 +506,23 @@ impl Backend for AzureBackend {
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
         crate::cloud_write::container_apps::check_write(facts, write, self.0.environment.as_deref())
+    }
+
+    fn check_resource_write(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        crate::cloud_write::resource::check_azure_write(facts, write)
+    }
+
+    async fn forward_resource_write(
+        &self,
+        _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+        newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        crate::cloud_write::resource::forward_azure_write(&self.0, write, newest).await
     }
 
     async fn forward(
