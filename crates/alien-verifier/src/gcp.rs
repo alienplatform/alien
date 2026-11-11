@@ -22,8 +22,9 @@ use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
+// Read by IP: a DNS name can be redirected by a resolver the machine does not control.
 const METADATA_TOKEN: &str =
-    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token";
 
 /// Where the verifier's token comes from.
 #[derive(Debug, Clone)]
@@ -973,7 +974,7 @@ pub async fn metadata_identity() -> Result<(String, String)> {
         let http = http.clone();
         async move {
             http.get(format!(
-                "http://metadata.google.internal/computeMetadata/v1/{path}"
+                "http://169.254.169.254/computeMetadata/v1/{path}"
             ))
             .header("Metadata-Flavor", "Google")
             .send()
