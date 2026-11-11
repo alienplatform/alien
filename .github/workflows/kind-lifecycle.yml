@@ -76,6 +76,7 @@ jobs:
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
           cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
           cargo test --locked -p alien-manager --lib kind_ --no-run
+          cargo test --locked -p alien-infra --features all-platforms --test kubernetes_service_account_refresh_kind --no-run
 
       - name: Start disposable Kubernetes cluster
         uses: helm/kind-action@v1.14.0
@@ -109,6 +110,13 @@ jobs:
         run: |
           cargo test --locked -p alien-manager --lib kind_ -- \
             --ignored --nocapture --test-threads=1
+
+      - name: A Helm-owned ServiceAccount that disappears fails the health check at once
+        env:
+          KIND_CONTEXT: kind-alien-product-lifecycle
+        run: |
+          cargo test --locked -p alien-infra --features all-platforms \
+            --test kubernetes_service_account_refresh_kind -- --ignored --nocapture
 
       - name: Product Remote Operator Helm and Terraform lifecycle
         env:
