@@ -836,7 +836,32 @@ pub const AI_CATALOG_REVISION: &str = "2026-08-20.1";
 static AZURE_DEPLOYMENTS: &[(&str, &str, &str)] = &[
     ("gpt-4.1", "gpt-4.1", "2025-04-14"),
     ("model-router", "model-router", "2025-11-18"),
+    ("text-embedding-3-large", "text-embedding-3-large", "1"),
 ];
+
+/// One embeddings model. Embeddings are not text generation, so they stay out of
+/// [`CatalogModel`] and its client-API lists: the gateway serves them only on
+/// `POST /<name>/v1/embeddings`, and the model listing does not include them.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbeddingModel {
+    pub public_id: &'static str,
+    pub cloud: Platform,
+    /// For Azure, the deployment name the controller creates (see `AZURE_DEPLOYMENTS`).
+    pub upstream_id: &'static str,
+}
+
+static EMBEDDING_MODELS: &[EmbeddingModel] = &[EmbeddingModel {
+    public_id: "text-embedding-3-large",
+    cloud: Platform::Azure,
+    upstream_id: "text-embedding-3-large",
+}];
+
+/// The embeddings model a client-sent id names on `cloud`, or `None`.
+pub fn resolve_embedding_for(model_id: &str, cloud: Platform) -> Option<&'static EmbeddingModel> {
+    EMBEDDING_MODELS
+        .iter()
+        .find(|m| m.cloud == cloud && m.public_id == model_id)
+}
 
 /// Direct Anthropic aliases qualified for the native Messages API. Keep this
 /// explicit: the three cloud providers use different upstream IDs and cannot be
@@ -1480,10 +1505,20 @@ mod tests {
             assert!(
                 models_for(Platform::Azure)
                     .iter()
-                    .any(|m| m.upstream_id == deployment),
+                    .any(|m| m.upstream_id == deployment)
+                    || resolve_embedding_for(deployment, Platform::Azure).is_some(),
                 "azure deployment {deployment} must map to a catalog model"
             );
         }
+    }
+
+    #[test]
+    fn embeddings_resolve_only_on_the_cloud_that_serves_them() {
+        let m = resolve_embedding_for("text-embedding-3-large", Platform::Azure).unwrap();
+        assert_eq!(m.upstream_id, "text-embedding-3-large");
+        assert!(resolve_embedding_for("text-embedding-3-large", Platform::Aws).is_none());
+        // Embeddings never appear in the text-generation catalog.
+        assert!(lookup("text-embedding-3-large").is_none());
     }
 
     #[test]

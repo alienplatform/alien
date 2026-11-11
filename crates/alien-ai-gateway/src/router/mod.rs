@@ -375,6 +375,7 @@ fn build_router_inner(
         )
         .route("/{binding}/v1/messages", post(proxy_messages))
         .route("/{binding}/v1/responses", post(proxy_responses_universal))
+        .route("/{binding}/v1/embeddings", post(proxy_embeddings))
         .route("/{binding}/v1/models", get(list_models))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .with_state(state)
@@ -747,6 +748,50 @@ async fn proxy_chat_completions(
         ClientApi::OpenAiChatCompletions,
     )
     .await
+}
+
+/// `POST /<name>/v1/embeddings`: OpenAI-compatible embeddings, forwarded as is
+/// with the model rewritten to the upstream deployment. Served where the catalog
+/// lists an embeddings model for the binding's cloud (Azure today).
+async fn proxy_embeddings(
+    State(state): State<Arc<AppState>>,
+    Path(binding): Path<String>,
+    ProxyBody(body): ProxyBody,
+) -> Result<Response> {
+    let (mut payload, _requested, model) = parse_model_request(&body)?;
+    let route = state.routes.get(&binding).ok_or_else(|| {
+        AlienError::new(ErrorData::UnknownBinding {
+            binding: binding.clone(),
+        })
+    })?;
+    let not_available = || {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.clone(),
+            binding: binding.clone(),
+        })
+    };
+    let GatewayTarget::Cloud(cloud) = route.target else {
+        return Err(not_available());
+    };
+    let embedding = ai_catalog::resolve_embedding_for(&model, cloud).ok_or_else(not_available)?;
+    let endpoint = route
+        .azure_endpoint
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "endpoint"))?;
+    let base = route
+        .upstream_base_override
+        .clone()
+        .unwrap_or_else(|| endpoint.to_string());
+    let url = format!("{}/openai/v1/embeddings", base.trim_end_matches('/'));
+    payload["model"] = Value::String(embedding.upstream_id.to_string());
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
+    let upstream = sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
+    forward_response(upstream).await
 }
 
 async fn proxy_messages(
@@ -2144,6 +2189,48 @@ mod tests {
             upstream_base_override: None,
             additional_headers: AdditionalHeaders::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn azure_embeddings_forward_to_the_deployment() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/embeddings")
+                    .matches(|req: &HttpMockRequest| {
+                        let body: Value =
+                            serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                .unwrap_or(Value::Null);
+                        body["model"] == "text-embedding-3-large" && body["input"] == "hello"
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"object":"list","data":[{"embedding":[0.1,0.2],"index":0}]}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![azure_route(&server.base_url())])).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "byo/text-embedding-3-large", "input": "hello"}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200);
+        assert!(resp.text().await.unwrap().contains("\"embedding\""));
+        mock.assert_async().await;
+
+        // A chat model is not an embeddings model: rejected before any upstream call.
+        let resp = client
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "gpt-4.1", "input": "hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_client_error(), "{}", resp.status());
+        // The rejected request never reached the upstream.
+        assert_eq!(mock.hits_async().await, 1);
     }
 
     #[tokio::test]
