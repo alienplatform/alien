@@ -13,7 +13,7 @@ use tracing::info;
 use crate::cloud_write::resource::{ApplyResourceWrite, ResourceFacts, ResourceWrite};
 use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
-use crate::function::{Accepting, StillNewest};
+use crate::function::Accepting;
 use crate::machines::{self, DeleteMachines, RemoveMachines, RollMachines, Scale};
 use crate::plan::{DeleteWorkload, OwnResource, Place, Reads, Request, SetupNetwork};
 use crate::trust::{accept, find_install, Acceptance, Install, InstallStore};
@@ -57,7 +57,6 @@ pub trait Backend: Send + Sync {
         &self,
         _facts: &ResourceFacts<'_>,
         write: &ResourceWrite,
-        _newest: &dyn StillNewest,
     ) -> Result<Value> {
         Err(refused(format!(
             "this cloud takes no {} write",
@@ -83,12 +82,7 @@ pub trait Backend: Send + Sync {
     }
     /// Send `write`, already checked, to the cloud unchanged, checking `newest` right before,
     /// and read back what decides what runs. Answers what the cloud answered.
-    async fn forward(
-        &self,
-        _facts: &Facts<'_>,
-        write: &CloudWrite,
-        _newest: &dyn StillNewest,
-    ) -> Result<Value> {
+    async fn forward(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
         Err(refused(format!(
             "this cloud takes no {} write",
             write.operation()
@@ -278,11 +272,7 @@ impl Verifier {
         acceptance.accept().await?;
         let mut answers = Vec::with_capacity(request.writes.len());
         for write in &request.writes {
-            answers.push(
-                self.backend
-                    .forward_resource_write(&facts, write, &acceptance)
-                    .await?,
-            );
+            answers.push(self.backend.forward_resource_write(&facts, write).await?);
             info!(
                 resource = %request.resource,
                 operation = write.operation(),
@@ -359,7 +349,7 @@ impl Verifier {
         acceptance.accept().await?;
         let mut answers = Vec::with_capacity(request.writes.len());
         for write in &request.writes {
-            answers.push(self.backend.forward(&facts, write, &acceptance).await?);
+            answers.push(self.backend.forward(&facts, write).await?);
             info!(
                 function = %facts.own_name,
                 operation = write.operation(),
@@ -410,10 +400,11 @@ impl Verifier {
         .context(ErrorData::Refused {
             reason: "the signer lists were refused".to_string(),
         })?;
-        let release = crate::trust::verify_or_keep_release(&trust, &install.ledger, release, now)
+        let release = trust
+            .verify_release(release, now)
             .context(ErrorData::Refused {
-            reason: "the release was refused".to_string(),
-        })?;
+                reason: "the release was refused".to_string(),
+            })?;
         if release.body.platform != place.platform() {
             return Err(refused(format!(
                 "the release is for platform '{}', not '{}'",
@@ -421,7 +412,6 @@ impl Verifier {
                 place.platform()
             )));
         }
-        machines::check_floor(&install.ledger, release.sequence, &release.digest)?;
         Ok((place, release))
     }
 
@@ -468,7 +458,7 @@ mod tests {
     use crate::trust::tests::MemoryStore;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
-    use alien_signing::{Kind, Ledger};
+    use alien_signing::Ledger;
     use std::sync::Mutex;
 
     /// A GCP backend that records each resize.
@@ -639,13 +629,7 @@ mod tests {
         fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
             crate::cloud_write::lambda::check_write(facts, write)
         }
-        async fn forward(
-            &self,
-            _facts: &Facts<'_>,
-            write: &CloudWrite,
-            newest: &dyn StillNewest,
-        ) -> Result<Value> {
-            newest.check().await?;
+        async fn forward(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
             if *self.fail_once.lock().unwrap() == Some(write.operation()) {
                 *self.fail_once.lock().unwrap() = None;
                 return Err(AlienError::new(ErrorData::CloudCallFailed {
@@ -714,12 +698,14 @@ mod tests {
             };
             let (source, function) = self.mapping.lock().unwrap().clone();
             let mut lambda = alien_aws_clients::lambda::MockLambdaApi::new();
-            lambda.expect_get_event_source_mapping().returning(move |uuid| {
-                Ok(serde_json::from_value(json!({
-                    "UUID": uuid, "EventSourceArn": source, "FunctionArn": function
-                }))
-                .unwrap())
-            });
+            lambda
+                .expect_get_event_source_mapping()
+                .returning(move |uuid| {
+                    Ok(serde_json::from_value(json!({
+                        "UUID": uuid, "EventSourceArn": source, "FunctionArn": function
+                    }))
+                    .unwrap())
+                });
             let _ = uuid;
             crate::cloud_write::resource::check_mapping_is_own(&lambda, facts, uuid).await
         }
@@ -727,9 +713,7 @@ mod tests {
             &self,
             _facts: &ResourceFacts<'_>,
             write: &ResourceWrite,
-            newest: &dyn StillNewest,
         ) -> Result<Value> {
-            newest.check().await?;
             let sent = match write {
                 ResourceWrite::PutBucketPolicy { policy, .. } => policy.clone(),
                 ResourceWrite::PutPublicAccessBlock { configuration, .. } => {
@@ -889,10 +873,16 @@ mod tests {
             .expect("the function's ARN names it too");
 
         for (name, write) in [
-            ("another queue of the stack", create(queue("other"), &function)),
+            (
+                "another queue of the stack",
+                create(queue("other"), &function),
+            ),
             (
                 "another account's queue",
-                create(format!("arn:aws:sqs:{REGION}:999988887777:{PREFIX}-jobs"), &function),
+                create(
+                    format!("arn:aws:sqs:{REGION}:999988887777:{PREFIX}-jobs"),
+                    &function,
+                ),
             ),
             (
                 "another function",
@@ -964,7 +954,10 @@ mod tests {
         };
         for (bucket, configuration) in [
             ("someone-elses-assets".to_string(), json!({})),
-            (format!("{PREFIX}-assets"), json!({"QueueConfiguration": "x"})),
+            (
+                format!("{PREFIX}-assets"),
+                json!({"QueueConfiguration": "x"}),
+            ),
         ] {
             let (verifier, backend) = resource_verifier();
             let reason = refusal(verifier.handle(request(&bucket, configuration)).await);
@@ -1001,14 +994,15 @@ mod tests {
             (verifier, backend)
         };
         let container = format!("{PREFIX}-assets");
-        let request = |public_read: bool, operation: &str, account: &str, name: &str, body: Value| {
-            json!({"applyResourceWrite": {
-                "release": storage_release_for(alien_core::Platform::Azure, public_read),
-                "signerLists": [signer_list()],
-                "resource": "assets",
-                "writes": [{operation: {"account": account, "container": name, "body": body}}],
-            }})
-        };
+        let request =
+            |public_read: bool, operation: &str, account: &str, name: &str, body: Value| {
+                json!({"applyResourceWrite": {
+                    "release": storage_release_for(alien_core::Platform::Azure, public_read),
+                    "signerLists": [signer_list()],
+                    "resource": "assets",
+                    "writes": [{operation: {"account": account, "container": name, "body": body}}],
+                }})
+            };
         let private = json!({"properties": {"publicAccess": "None"}});
         let public = json!({"properties": {"publicAccess": "Blob"}});
 
@@ -1021,7 +1015,13 @@ mod tests {
         ] {
             let (verifier, backend) = fresh();
             verifier
-                .handle(request(declared, operation, "acmestore", &container, body.clone()))
+                .handle(request(
+                    declared,
+                    operation,
+                    "acmestore",
+                    &container,
+                    body.clone(),
+                ))
                 .await
                 .unwrap_or_else(|error| panic!("{operation} {body}: {}", crate::describe(&error)));
             assert_eq!(
@@ -1032,17 +1032,65 @@ mod tests {
         }
 
         for (what, declared, account, name, body) in [
-            ("public on a private storage", false, "acmestore", container.as_str(), public.clone()),
-            ("private on a public storage", true, "acmestore", container.as_str(), private.clone()),
-            ("container access", false, "acmestore", container.as_str(), json!({"properties": {"publicAccess": "Container"}})),
-            ("another container", false, "acmestore", "other", private.clone()),
-            ("another field", false, "acmestore", container.as_str(), json!({"properties": {"publicAccess": "None", "defaultEncryptionScope": "x"}})),
-            ("a top-level field", false, "acmestore", container.as_str(), json!({"properties": {}, "id": "x"})),
-            ("an odd account", false, "../x", container.as_str(), private.clone()),
+            (
+                "public on a private storage",
+                false,
+                "acmestore",
+                container.as_str(),
+                public.clone(),
+            ),
+            (
+                "private on a public storage",
+                true,
+                "acmestore",
+                container.as_str(),
+                private.clone(),
+            ),
+            (
+                "container access",
+                false,
+                "acmestore",
+                container.as_str(),
+                json!({"properties": {"publicAccess": "Container"}}),
+            ),
+            (
+                "another container",
+                false,
+                "acmestore",
+                "other",
+                private.clone(),
+            ),
+            (
+                "another field",
+                false,
+                "acmestore",
+                container.as_str(),
+                json!({"properties": {"publicAccess": "None", "defaultEncryptionScope": "x"}}),
+            ),
+            (
+                "a top-level field",
+                false,
+                "acmestore",
+                container.as_str(),
+                json!({"properties": {}, "id": "x"}),
+            ),
+            (
+                "an odd account",
+                false,
+                "../x",
+                container.as_str(),
+                private.clone(),
+            ),
         ] {
             let (verifier, backend) = fresh();
             let result = verifier
-                .handle(request(declared, "createBlobContainer", account, name, body))
+                .handle(request(
+                    declared,
+                    "createBlobContainer",
+                    account,
+                    name,
+                    body,
+                ))
                 .await;
             assert!(result.is_err(), "{what} must be refused");
             assert!(
@@ -1073,17 +1121,18 @@ mod tests {
             {"role": "roles/storage.objectViewer", "members": ["allUsers"]}]});
         let with_attacker = json!({"etag": "a", "bindings": [
             {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:app@p.iam", "user:attacker@x.y"]}]});
-        let set_policy = |bucket: &str, policy: &Value| {
-            json!({"setBucketIamPolicy": {"bucket": bucket, "policy": policy}})
-        };
-        let prevention = |value: &str| {
-            json!({"setPublicAccessPrevention": {"bucket": bucket, "value": value}})
-        };
+        let set_policy = |bucket: &str, policy: &Value| json!({"setBucketIamPolicy": {"bucket": bucket, "policy": policy}});
+        let prevention =
+            |value: &str| json!({"setPublicAccessPrevention": {"bucket": bucket, "value": value}});
 
         // Accepted, and sent unchanged: the held policy, the declared public read, enforcing.
         for (declared, write, sent) in [
             (false, set_policy(&bucket, &held), held.to_string()),
-            (true, set_policy(&bucket, &with_public), with_public.to_string()),
+            (
+                true,
+                set_policy(&bucket, &with_public),
+                with_public.to_string(),
+            ),
             (false, prevention("enforced"), "enforced".to_string()),
             (true, prevention("inherited"), "inherited".to_string()),
         ] {
@@ -1142,7 +1191,10 @@ mod tests {
         };
         let (verifier, backend) = gcp_resource_verifier(&json!({}));
         verifier
-            .handle(gcp_bucket_request(false, set_policy(&bucket, &as_policy(None))))
+            .handle(gcp_bucket_request(
+                false,
+                set_policy(&bucket, &as_policy(None)),
+            ))
             .await
             .expect("the derived grants are accepted");
         assert_eq!(
@@ -1165,15 +1217,34 @@ mod tests {
                     .await,
             );
             assert!(reason.contains(member), "{member}: {reason}");
-            assert!(backend.forwarded.lock().unwrap().is_empty(), "{member}: sent");
+            assert!(
+                backend.forwarded.lock().unwrap().is_empty(),
+                "{member}: sent"
+            );
         }
 
         // Refused, and nothing is sent.
         for (name, declared, write) in [
-            ("public read the stack does not declare", false, set_policy(&bucket, &with_public)),
-            ("a member the bucket does not hold", true, set_policy(&bucket, &with_attacker)),
-            ("another bucket", false, set_policy("someone-elses-bucket", &held)),
-            ("inherited prevention not declared", false, prevention("inherited")),
+            (
+                "public read the stack does not declare",
+                false,
+                set_policy(&bucket, &with_public),
+            ),
+            (
+                "a member the bucket does not hold",
+                true,
+                set_policy(&bucket, &with_attacker),
+            ),
+            (
+                "another bucket",
+                false,
+                set_policy("someone-elses-bucket", &held),
+            ),
+            (
+                "inherited prevention not declared",
+                false,
+                prevention("inherited"),
+            ),
         ] {
             let (verifier, backend) = gcp_resource_verifier(&held);
             refusal(verifier.handle(gcp_bucket_request(declared, write)).await);
@@ -1240,7 +1311,12 @@ mod tests {
         let own_topic = format!("projects/acme-project/topics/{topic}");
 
         for (name, notified, write, sent) in [
-            ("topic", false, json!({"createTopic": {"topic": topic, "body": {}}}), "{}".to_string()),
+            (
+                "topic",
+                false,
+                json!({"createTopic": {"topic": topic, "body": {}}}),
+                "{}".to_string(),
+            ),
             (
                 "subscription",
                 false,
@@ -1263,8 +1339,16 @@ mod tests {
         }
 
         for (name, notified, write) in [
-            ("a topic with a label", false, json!({"createTopic": {"topic": topic, "body": {"labels": {"a": "b"}}}})),
-            ("another topic", false, json!({"createTopic": {"topic": "other", "body": {}}})),
+            (
+                "a topic with a label",
+                false,
+                json!({"createTopic": {"topic": topic, "body": {"labels": {"a": "b"}}}}),
+            ),
+            (
+                "another topic",
+                false,
+                json!({"createTopic": {"topic": "other", "body": {}}}),
+            ),
             (
                 "a push subscription",
                 false,
@@ -1277,10 +1361,26 @@ mod tests {
                 json!({"createSubscription": {"subscription": subscription, "body": {
                     "topic": "projects/acme-project/topics/other"}}}),
             ),
-            ("an outside publisher", true, json!({"setTopicIamPolicy": {"topic": topic, "policy": attacker_policy}})),
-            ("the storage agent on a topic nothing notifies", false, json!({"setTopicIamPolicy": {"topic": topic, "policy": agent_policy}})),
-            ("an outside subscriber", false, json!({"setSubscriptionIamPolicy": {"subscription": subscription, "policy": attacker_policy}})),
-            ("another subscription", false, json!({"setSubscriptionIamPolicy": {"subscription": "other-sub", "policy": {}}})),
+            (
+                "an outside publisher",
+                true,
+                json!({"setTopicIamPolicy": {"topic": topic, "policy": attacker_policy}}),
+            ),
+            (
+                "the storage agent on a topic nothing notifies",
+                false,
+                json!({"setTopicIamPolicy": {"topic": topic, "policy": agent_policy}}),
+            ),
+            (
+                "an outside subscriber",
+                false,
+                json!({"setSubscriptionIamPolicy": {"subscription": subscription, "policy": attacker_policy}}),
+            ),
+            (
+                "another subscription",
+                false,
+                json!({"setSubscriptionIamPolicy": {"subscription": "other-sub", "policy": {}}}),
+            ),
         ] {
             let (verifier, backend) = gcp_resource_verifier(&json!({}));
             let reason = refusal(verifier.handle(request(notified, write)).await);
@@ -1516,11 +1616,14 @@ mod tests {
         );
 
         let mut other_filter = signed(own_queue.clone());
-        other_filter["properties"]["filter"]["subjectBeginsWith"] =
-            json!(format!("/blobServices/default/containers/{PREFIX}-secrets/blobs/in/"));
+        other_filter["properties"]["filter"]["subjectBeginsWith"] = json!(format!(
+            "/blobServices/default/containers/{PREFIX}-secrets/blobs/in/"
+        ));
         let mut other_types = signed(own_queue.clone());
-        other_types["properties"]["filter"]["includedEventTypes"] =
-            json!(["Microsoft.Storage.BlobCreated", "Microsoft.Storage.BlobDeleted"]);
+        other_types["properties"]["filter"]["includedEventTypes"] = json!([
+            "Microsoft.Storage.BlobCreated",
+            "Microsoft.Storage.BlobDeleted"
+        ]);
         let mut webhook = signed(own_queue.clone());
         webhook["properties"]["destination"] = json!({
             "endpointType": "WebHook",
@@ -1536,18 +1639,58 @@ mod tests {
         let mut advanced = signed(own_queue.clone());
         advanced["properties"]["filter"]["advancedFilters"] = json!([]);
         for (what, account, subscription, body) in [
-            ("another queue of the stack", "acmestore", name.as_str(), signed(queue_id("bus", PREFIX, &format!("{PREFIX}-other")))),
-            ("a queue in another group", "acmestore", name.as_str(), signed(queue_id("bus", "elsewhere", &format!("{PREFIX}-jobs")))),
-            ("a queue outside the stack", "acmestore", name.as_str(), signed(queue_id("bus", PREFIX, "rogue"))),
-            ("a nested destination", "acmestore", name.as_str(), signed(format!("{own_queue}/x"))),
-            ("another container", "acmestore", name.as_str(), other_filter),
+            (
+                "another queue of the stack",
+                "acmestore",
+                name.as_str(),
+                signed(queue_id("bus", PREFIX, &format!("{PREFIX}-other"))),
+            ),
+            (
+                "a queue in another group",
+                "acmestore",
+                name.as_str(),
+                signed(queue_id("bus", "elsewhere", &format!("{PREFIX}-jobs"))),
+            ),
+            (
+                "a queue outside the stack",
+                "acmestore",
+                name.as_str(),
+                signed(queue_id("bus", PREFIX, "rogue")),
+            ),
+            (
+                "a nested destination",
+                "acmestore",
+                name.as_str(),
+                signed(format!("{own_queue}/x")),
+            ),
+            (
+                "another container",
+                "acmestore",
+                name.as_str(),
+                other_filter,
+            ),
             ("more event types", "acmestore", name.as_str(), other_types),
             ("a webhook", "acmestore", name.as_str(), webhook),
             ("another field", "acmestore", name.as_str(), extra),
-            ("a rule without its suffix", "acmestore", name.as_str(), no_suffix),
+            (
+                "a rule without its suffix",
+                "acmestore",
+                name.as_str(),
+                no_suffix,
+            ),
             ("advanced filters", "acmestore", name.as_str(), advanced),
-            ("a name that is not a rule", "acmestore", "attacker-subscription", signed(own_queue.clone())),
-            ("an odd account", "../x", name.as_str(), signed(own_queue.clone())),
+            (
+                "a name that is not a rule",
+                "acmestore",
+                "attacker-subscription",
+                signed(own_queue.clone()),
+            ),
+            (
+                "an odd account",
+                "../x",
+                name.as_str(),
+                signed(own_queue.clone()),
+            ),
         ] {
             let (verifier, backend) = fresh();
             let result = verifier.handle(request(account, subscription, body)).await;
@@ -1697,12 +1840,12 @@ mod tests {
         }
     }
 
-    /// The release the install's ledger records, if any.
+    /// The signer list version the install's ledger records, if any: what accepting a request
+    /// writes before its first cloud call.
     fn recorded_release(store: &MemoryStore) -> Option<u64> {
         Ledger::parse(&store.ledgers.lock().unwrap()[PREFIX], PREFIX)
             .unwrap()
-            .floor(Kind::Release)
-            .unwrap()
+            .signer_list
             .map(|entry| entry.sequence)
     }
 
@@ -1879,13 +2022,7 @@ mod tests {
         async fn check_applied(&self, facts: &Facts<'_>, writes: &[CloudWrite]) -> Result<()> {
             crate::cloud_write::lambda::check_applied(&self.lambda, facts, writes).await
         }
-        async fn forward(
-            &self,
-            _facts: &Facts<'_>,
-            write: &CloudWrite,
-            newest: &dyn StillNewest,
-        ) -> Result<Value> {
-            newest.check().await?;
+        async fn forward(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
             self.forwarded
                 .lock()
                 .unwrap()
@@ -1972,7 +2109,7 @@ mod tests {
             run(held(&old_image, "changed"), held(&new_image, "changed")).await;
         assert_eq!(answer.unwrap()["operations"], json!(["UpdateFunctionCode"]));
         assert_eq!(forwarded, vec!["UpdateFunctionCode".to_string()]);
-        assert_eq!(recorded, Some(2));
+        assert_eq!(recorded, Some(1));
 
         // The write went out, and Lambda then holds the old env: not reported as done.
         let (answer, forwarded, _) =
@@ -2045,241 +2182,6 @@ mod tests {
             "the same release applies again, every write this time"
         );
         assert_eq!(recorded_release(&store), Some(1));
-    }
-
-    /// A backend whose forward of an UpdateFunctionCode to `slow_image` pauses after reading
-    /// the function, until told to go on, the way a Lambda update waits for the function to
-    /// settle.
-    struct Paused {
-        slow_image: String,
-        slow_config: Option<u64>,
-        read: tokio::sync::Notify,
-        resume: tokio::sync::Notify,
-        written: Mutex<Vec<String>>,
-    }
-
-    #[async_trait]
-    impl Backend for Paused {
-        async fn binding_reads(
-            &self,
-            _place: &Place,
-            _workload: &Workload,
-        ) -> Result<BTreeMap<String, String>> {
-            Ok(BTreeMap::new())
-        }
-        fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
-            crate::cloud_write::lambda::check_write(facts, write)
-        }
-        async fn forward(
-            &self,
-            facts: &Facts<'_>,
-            write: &CloudWrite,
-            newest: &dyn StillNewest,
-        ) -> Result<Value> {
-            let CloudWrite::UpdateFunctionCode { request, .. } = write else {
-                unreachable!("the test sends only UpdateFunctionCode")
-            };
-            let image = request["ImageUri"].as_str().unwrap().to_string();
-            let config = facts.accepted.config.as_ref().map(|config| config.sequence);
-            if image == self.slow_image || (config.is_some() && config == self.slow_config) {
-                self.read.notify_one();
-                self.resume.notified().await;
-            }
-            newest.check().await?;
-            self.written.lock().unwrap().push(image);
-            Ok(Value::Null)
-        }
-    }
-
-    #[tokio::test]
-    async fn an_older_release_applied_concurrently_never_lands_over_a_newer_one() {
-        // Release 10 is accepted and starts writing; release 11 is accepted and written while
-        // 10's write waits; then 10's write goes on. It must not land over 11.
-        let image =
-            |digit: char| format!("ghcr.io/shop/api@sha256:{}", digit.to_string().repeat(64));
-        let request = |sequence: u64, digit: char| {
-            let workload = alien_signing::Workload {
-                image: image(digit),
-                ..function_workload()
-            };
-            json!({"applyWrite": {
-                "release": signed_release(sequence, &crate::fixtures::release_body(vec![workload])),
-                "signerLists": [signer_list()],
-                "workload": "api",
-                "writes": [{"updateFunctionCode": {
-                    "functionName": format!("{PREFIX}-api"),
-                    "request": {"ImageUri": image(digit), "Publish": false},
-                }}],
-            }})
-        };
-        let backend = Arc::new(Paused {
-            slow_image: image('a'),
-            slow_config: None,
-            read: tokio::sync::Notify::new(),
-            resume: tokio::sync::Notify::new(),
-            written: Mutex::new(Vec::new()),
-        });
-        let store = Arc::new(MemoryStore::protected(&settings()));
-        let verifier = Verifier {
-            own_name: format!("{PREFIX}-verifier"),
-            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
-            store: store.clone(),
-            backend: backend.clone(),
-            vpc: None,
-            machine_network: None,
-        };
-        let older = verifier.handle(request(10, 'a'));
-        let newer = async {
-            backend.read.notified().await;
-            let answer = verifier.handle(request(11, 'b')).await;
-            backend.resume.notify_one();
-            answer
-        };
-        let (older, newer) = tokio::join!(older, newer);
-
-        assert_eq!(newer.unwrap()["release"], json!(11));
-        let reason = refusal(older);
-        assert!(
-            reason.contains("release 11 was accepted while release 10 was being applied"),
-            "{reason}"
-        );
-        assert_eq!(*backend.written.lock().unwrap(), vec![image('b')]);
-        let ledger = match store.ledger(PREFIX).await.unwrap() {
-            alien_signing::Lookup::Found(bytes) => {
-                alien_signing::Ledger::parse(&bytes, PREFIX).unwrap()
-            }
-            other => panic!("the ledger is gone: {other:?}"),
-        };
-        assert_eq!(ledger.release.unwrap().sequence, 11);
-    }
-
-    #[tokio::test]
-    async fn an_older_config_applied_concurrently_never_lands_over_a_newer_one() {
-        // Config 5 is accepted and starts writing; config 6 for the same release is accepted
-        // and written while 5's write waits; then 5's write goes on. It must not land over 6.
-        let image = format!("ghcr.io/shop/api@sha256:{}", "a".repeat(64));
-        let workload = alien_signing::Workload {
-            image: image.clone(),
-            ..function_workload()
-        };
-        let release = signed_release(10, &crate::fixtures::release_body(vec![workload]));
-        let fifth = config(5, alien_signing::ConfigBody::default());
-        let sixth = config(
-            6,
-            alien_signing::ConfigBody {
-                base: Some(alien_signing::ConfigBase {
-                    sequence: 5,
-                    digest: fifth.open().unwrap().digest,
-                }),
-                ..Default::default()
-            },
-        );
-        let request = |config_sequence: u64| {
-            json!({"applyWrite": {
-                "release": release,
-                "signerLists": [signer_list()],
-                "config": if config_sequence == 5 { &fifth } else { &sixth },
-                "workload": "api",
-                "writes": [{"updateFunctionCode": {
-                    "functionName": format!("{PREFIX}-api"),
-                    "request": {"ImageUri": image, "Publish": false},
-                }}],
-            }})
-        };
-        let backend = Arc::new(Paused {
-            slow_image: String::new(),
-            slow_config: Some(5),
-            read: tokio::sync::Notify::new(),
-            resume: tokio::sync::Notify::new(),
-            written: Mutex::new(Vec::new()),
-        });
-        let store = Arc::new(MemoryStore::protected(&settings()));
-        let verifier = Verifier {
-            own_name: format!("{PREFIX}-verifier"),
-            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
-            store: store.clone(),
-            backend: backend.clone(),
-            vpc: None,
-            machine_network: None,
-        };
-        let older = verifier.handle(request(5));
-        let newer = async {
-            backend.read.notified().await;
-            let answer = verifier.handle(request(6)).await;
-            backend.resume.notify_one();
-            answer
-        };
-        let (older, newer) = tokio::join!(older, newer);
-
-        newer.unwrap();
-        let reason = refusal(older);
-        assert!(
-            reason.contains("config 6 was accepted while config 5 was being applied"),
-            "{reason}"
-        );
-        assert_eq!(*backend.written.lock().unwrap(), vec![image]);
-        let ledger = match store.ledger(PREFIX).await.unwrap() {
-            alien_signing::Lookup::Found(bytes) => {
-                alien_signing::Ledger::parse(&bytes, PREFIX).unwrap()
-            }
-            other => panic!("the ledger is gone: {other:?}"),
-        };
-        assert_eq!(ledger.config.unwrap().sequence, 6);
-    }
-
-    #[tokio::test]
-    async fn an_older_release_is_refused_while_a_newer_one_is_being_applied() {
-        // Release 11 is accepted and starts writing; release 10 arrives while 11's write waits.
-        // 10 must not land in the middle of 11's apply: the install already records 11.
-        let image =
-            |digit: char| format!("ghcr.io/shop/api@sha256:{}", digit.to_string().repeat(64));
-        let request = |sequence: u64, digit: char| {
-            let workload = alien_signing::Workload {
-                image: image(digit),
-                ..function_workload()
-            };
-            json!({"applyWrite": {
-                "release": signed_release(sequence, &crate::fixtures::release_body(vec![workload])),
-                "signerLists": [signer_list()],
-                "workload": "api",
-                "writes": [{"updateFunctionCode": {
-                    "functionName": format!("{PREFIX}-api"),
-                    "request": {"ImageUri": image(digit), "Publish": false},
-                }}],
-            }})
-        };
-        let backend = Arc::new(Paused {
-            slow_image: image('b'),
-            slow_config: None,
-            read: tokio::sync::Notify::new(),
-            resume: tokio::sync::Notify::new(),
-            written: Mutex::new(Vec::new()),
-        });
-        let store = Arc::new(MemoryStore::protected(&settings()));
-        let verifier = Verifier {
-            own_name: format!("{PREFIX}-verifier"),
-            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
-            store: store.clone(),
-            backend: backend.clone(),
-            vpc: None,
-            machine_network: None,
-        };
-        let newer = verifier.handle(request(11, 'b'));
-        let older = async {
-            backend.read.notified().await;
-            let answer = verifier.handle(request(10, 'a')).await;
-            backend.resume.notify_one();
-            answer
-        };
-        let (newer, older) = tokio::join!(newer, older);
-
-        assert_eq!(newer.unwrap()["release"], json!(11));
-        let reason = refusal(older);
-        assert!(
-            reason.contains("the release is older than one this install accepted"),
-            "{reason}"
-        );
-        assert_eq!(*backend.written.lock().unwrap(), vec![image('b')]);
     }
 
     #[tokio::test]

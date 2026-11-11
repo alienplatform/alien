@@ -13,7 +13,6 @@ use super::{check_target, refused, CloudWrite, Facts};
 use crate::cloud_run::{network_of, vpc_access, ServiceStore};
 use crate::error::{ErrorData, Result};
 use crate::fields::{check_whole, empty, free, is_empty, parse_strict, signed, Row};
-use crate::function::StillNewest;
 
 /// Check `write`, a Cloud Run write for `facts.workload`, against the table.
 pub fn check_write(facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
@@ -283,23 +282,19 @@ pub async fn forward(
     store: &dyn ServiceStore,
     facts: &Facts<'_>,
     write: &CloudWrite,
-    newest: &dyn StillNewest,
 ) -> Result<Value> {
     let service = match write {
         CloudWrite::CreateService { service, .. } => {
-            newest.check().await?;
             store.create(&facts.own_name, service).await?;
             service
         }
         CloudWrite::ReplaceService { service, .. } => {
-            newest.check().await?;
             store.replace(&facts.own_name, service).await?;
             service
         }
         CloudWrite::SetServicePolicy { policy, .. } => {
             let live = store.policy(&facts.own_name).await?;
             check_policy(facts, &live, policy)?;
-            newest.check().await?;
             store.set_policy(&facts.own_name, policy).await?;
             return Ok(Value::Null);
         }
@@ -824,15 +819,6 @@ mod tests {
         }
     }
 
-    struct Newest;
-
-    #[async_trait::async_trait]
-    impl StillNewest for Newest {
-        async fn check(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-
     /// Send a SetServicePolicy of `sent` against the live policy `live`; what was set, or the
     /// refusal.
     async fn set_policy(live: Value, sent: Value) -> std::result::Result<Vec<Value>, String> {
@@ -856,7 +842,7 @@ mod tests {
             set: std::sync::Mutex::new(Vec::new()),
         };
         check_write(&facts, &write).map_err(|error| error.to_string())?;
-        forward(&store, &facts, &write, &Newest)
+        forward(&store, &facts, &write)
             .await
             .map_err(|error| error.to_string())?;
         Ok(store.set.into_inner().unwrap())

@@ -12,7 +12,6 @@ use super::{check_target, refused, CloudWrite, Facts};
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
 use crate::fields::{check, check_whole, empty, free, is_empty, parse_strict, signed, Row};
-use crate::function::StillNewest;
 
 /// Check `write`, a Container Apps write for `facts.workload`, against the table.
 /// `environment` is the Container Apps environment setup runs the install's workloads in.
@@ -278,20 +277,13 @@ const POLL: Duration = Duration::from_secs(3);
 
 /// Send `write`, already checked, to Container Apps as it is, checking `newest` right before;
 /// wait for it to provision and read back what decides what runs.
-pub async fn forward(
-    store: &dyn AppStore,
-    facts: &Facts<'_>,
-    write: &CloudWrite,
-    newest: &dyn StillNewest,
-) -> Result<Value> {
+pub async fn forward(store: &dyn AppStore, facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
     let app = match write {
         CloudWrite::CreateContainerApp { app, .. } => {
-            newest.check().await?;
             store.create(&facts.own_name, app).await?;
             app
         }
         CloudWrite::UpdateContainerApp { app, .. } => {
-            newest.check().await?;
             store.patch(&facts.own_name, app).await?;
             app
         }

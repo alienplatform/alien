@@ -6,12 +6,10 @@
 //! install id comes from the verifier's own identity. Nothing here comes from
 //! the request or the verifier's environment.
 
-use std::collections::BTreeSet;
-
 use alien_error::{AlienError, Context};
 use alien_signing::settings::names;
 use alien_signing::{
-    candidate_prefixes, discover, ConfigBody, Entry, InstallId, Kind, Ledger, Lookup, ReleaseBody,
+    candidate_prefixes, discover, ConfigBody, InstallId, Ledger, Lookup, ReleaseBody,
     SignedStatement, SigningSettings, Trust, Verified,
 };
 use async_trait::async_trait;
@@ -26,8 +24,7 @@ pub trait InstallStore: Send + Sync {
     async fn settings(&self, prefix: &str) -> Result<Lookup>;
     /// The ledger of `prefix`, as stored.
     async fn ledger(&self, prefix: &str) -> Result<Lookup>;
-    /// Replace the ledger of `prefix`. A store that numbers its writes gets a ledger whose
-    /// `based_on` is the version it was merged onto.
+    /// Replace the ledger of `prefix`.
     async fn store_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<()>;
     /// Deployer input `name` of `prefix`, if the deployer set it.
     async fn input(&self, prefix: &str, name: &str) -> Result<Option<String>>;
@@ -38,19 +35,6 @@ pub trait InstallStore: Send + Sync {
     /// Where the ledger of `prefix` lives, for messages.
     fn ledger_name(&self, prefix: &str) -> String {
         names::aws_ledger(prefix)
-    }
-    /// For a store that numbers each write of the ledger: the ledger of `prefix` and its
-    /// version. `None` when the store doesn't number writes.
-    async fn numbered_ledger(&self, _prefix: &str) -> Result<Option<(Lookup, u64)>> {
-        Ok(None)
-    }
-    /// Version `version` of the ledger of `prefix`. Called only on a store whose
-    /// `numbered_ledger` answers.
-    async fn ledger_version(&self, prefix: &str, _version: u64) -> Result<Lookup> {
-        Err(refused(format!(
-            "the ledger at {} has no numbered writes",
-            self.ledger_name(prefix)
-        )))
     }
 }
 
@@ -94,7 +78,7 @@ pub async fn find_install(
     })?;
     let Some(settings) = settings else {
         for prefix in &candidates {
-            if let Lookup::Found(bytes) = read_ledger(store, prefix).await? {
+            if let Lookup::Found(bytes) = store.ledger(prefix).await? {
                 let ledger = Ledger::parse(&bytes, prefix).context(ErrorData::Refused {
                     reason: format!("the ledger at {} is not valid", store.ledger_name(prefix)),
                 })?;
@@ -114,7 +98,7 @@ pub async fn find_install(
     };
     let prefix = settings.prefix.clone();
     let id = install_id(&prefix);
-    let ledger = match read_ledger(store, &prefix).await? {
+    let ledger = match store.ledger(&prefix).await? {
         Lookup::Found(bytes) => Ledger::parse(&bytes, &prefix).context(ErrorData::Refused {
             reason: format!("the ledger at {} is not valid", store.ledger_name(&prefix)),
         })?,
@@ -162,74 +146,6 @@ impl Accepted {
     }
 }
 
-/// The statement at the install's floor for `kind`, kept: it passed when
-/// it was accepted, and removing its signer from the list doesn't stop it
-/// (only the deny-list does). `None` when `statement` isn't the one there.
-fn kept<B: serde::de::DeserializeOwned>(
-    trust: &Trust,
-    ledger: &Ledger,
-    kind: Kind,
-    statement: &SignedStatement,
-) -> alien_signing::Result<Option<Verified<B>>> {
-    let opened = statement.open()?;
-    let floor = match kind {
-        Kind::Release => ledger.release.as_ref(),
-        Kind::Config => ledger.config.as_ref(),
-        _ => None,
-    };
-    if opened.kind != kind || floor.is_none_or(|floor| floor.digest != opened.digest) {
-        return Ok(None);
-    }
-    trust.keeps(&opened.digest)?;
-    Ok(Some(Verified {
-        kind,
-        sequence: opened.sequence,
-        digest: opened.digest.clone(),
-        not_after: opened.not_after,
-        signers: BTreeSet::new(),
-        body: opened.body()?,
-    }))
-}
-
-/// `release` verified for this install, or kept at its floor.
-pub(crate) fn verify_or_keep_release(
-    trust: &Trust,
-    ledger: &Ledger,
-    release: &SignedStatement,
-    now: DateTime<Utc>,
-) -> alien_signing::Result<Verified<ReleaseBody>> {
-    match kept::<ReleaseBody>(trust, ledger, Kind::Release, release)? {
-        Some(kept) => {
-            if kept.body.channel != trust.settings().channel {
-                return Err(AlienError::new(alien_signing::ErrorData::WrongChannel {
-                    expected: trust.settings().channel.clone(),
-                    actual: kept.body.channel.clone(),
-                }));
-            }
-            kept.body.validate()?;
-            Ok(kept)
-        }
-        None => trust.verify_release(release, now),
-    }
-}
-
-/// `config` verified for this install and `release`, or kept at its floor.
-fn verify_or_keep_config(
-    trust: &Trust,
-    ledger: &Ledger,
-    config: &SignedStatement,
-    release: &ReleaseBody,
-    now: DateTime<Utc>,
-) -> alien_signing::Result<Verified<ConfigBody>> {
-    match kept::<ConfigBody>(trust, ledger, Kind::Config, config)? {
-        Some(kept) => {
-            kept.body.check(release)?;
-            Ok(kept)
-        }
-        None => trust.verify_config(config, release, ledger, now),
-    }
-}
-
 /// Verify `release` (and `config`) for `install` on `platform`, against
 /// the signer chain `signer_lists` (from version 1) and the install's
 /// ledger.
@@ -251,11 +167,11 @@ pub fn accept(
     .context(ErrorData::Refused {
         reason: "the signer lists were refused".to_string(),
     })?;
-    let release = verify_or_keep_release(&trust, &install.ledger, release, now).context(
-        ErrorData::Refused {
+    let release = trust
+        .verify_release(release, now)
+        .context(ErrorData::Refused {
             reason: "the release was refused".to_string(),
-        },
-    )?;
+        })?;
     if release.body.platform != platform {
         return Err(refused(format!(
             "the release is for platform '{}', not '{platform}'",
@@ -263,32 +179,13 @@ pub fn accept(
         )));
     }
     let mut ledger = install.ledger.clone();
-    ledger
-        .raise(Kind::Release, release.sequence, &release.digest)
-        .context(ErrorData::Refused {
-            reason: "the release is older than one this install accepted".to_string(),
-        })?;
     let config = match config {
-        Some(config) => {
-            let config = verify_or_keep_config(&trust, &install.ledger, config, &release.body, now)
-                .context(ErrorData::Refused {
-                    reason: "the config was refused".to_string(),
-                })?;
-            ledger
-                .raise(Kind::Config, config.sequence, &config.digest)
-                .context(ErrorData::Refused {
-                    reason: "the config is older than one this install accepted".to_string(),
-                })?;
-            Some(config)
-        }
-        None => {
-            ledger
-                .require(Kind::Config, false)
-                .context(ErrorData::Refused {
-                    reason: "the config was withheld".to_string(),
-                })?;
-            None
-        }
+        Some(config) => Some(trust.verify_config(config, &release.body, now).context(
+            ErrorData::Refused {
+                reason: "the config was refused".to_string(),
+            },
+        )?),
+        None => None,
     };
     trust.record(&mut ledger).context(ErrorData::Refused {
         reason: "the ledger refused this trust".to_string(),
@@ -314,130 +211,31 @@ async fn stored(store: &dyn InstallStore, prefix: &str, lookup: Lookup) -> Resul
     }
 }
 
-/// The ledger of `prefix` as the store holds it.
-///
-/// A store that numbers its writes has no compare-and-swap, so a write can replace one made
-/// meanwhile and show a lower floor than the install accepted. Each write records the version
-/// it was merged onto (`based_on`), so the versions written since are the ones after it: every
-/// one is read and merged in. The result holds everything written up to the version read, which
-/// is why nothing that checks the floor reads the stored value alone.
-async fn read_ledger(store: &dyn InstallStore, prefix: &str) -> Result<Lookup> {
-    let Some((lookup, version)) = store.numbered_ledger(prefix).await? else {
-        return store.ledger(prefix).await;
-    };
-    let Lookup::Found(bytes) = &lookup else {
-        return Ok(lookup);
-    };
-    let mut ledger = stored(store, prefix, Lookup::Found(bytes.clone())).await?;
-    let unmerged_versions = ledger
-        .unmerged_versions(version)
-        .context(ErrorData::Refused {
-            reason: format!(
-                "the ledger at {} is not a write of the version it was read at",
-                store.ledger_name(prefix)
-            ),
-        })?;
-    for unmerged in unmerged_versions {
-        match store.ledger_version(prefix, unmerged).await? {
-            Lookup::Found(bytes) => {
-                let other = stored(store, prefix, Lookup::Found(bytes)).await?;
-                merge_into(store, prefix, &mut ledger, &other)?;
-            }
-            Lookup::Absent | Lookup::Denied => {
-                return Err(refused(format!(
-                    "version {unmerged} of the ledger at {} could not be read, so the floor can't be known",
-                    store.ledger_name(prefix)
-                )))
-            }
-        }
-    }
-    ledger.resolved_at(version);
-    Ok(Lookup::Found(ledger.to_json().into_bytes()))
-}
-
-/// Write `accepted` back to the install's ledger: read it again, take the higher value of
-/// each entry, and store the result. Another enforcer (another verifier call, or a machine) may
-/// have raised it in between; nothing here lowers it.
-///
-/// Where the store numbers writes, a write made between this read and this write is not lost:
-/// this write records the version it was merged onto, and every reader merges in the versions
-/// after that (see [`read_ledger`]). Elsewhere one verifier instance serves the install, and
-/// machines merge before they write.
+/// Write `accepted` back to the install's ledger: read it again, take the higher signer list
+/// version, and store the result. Another enforcer may have raised it in between; nothing here
+/// lowers it. Two writers raising it at once can lose one raise; the next verification raises it
+/// again.
 pub async fn store_ledger(store: &dyn InstallStore, prefix: &str, accepted: &Ledger) -> Result<()> {
-    let lookup = read_ledger(store, prefix).await?;
+    let lookup = store.ledger(prefix).await?;
     let mut current = stored(store, prefix, lookup).await?;
     let before = current.clone();
-    merge_into(store, prefix, &mut current, accepted)?;
+    current.merge(accepted).context(ErrorData::Refused {
+        reason: format!(
+            "the ledger at {} changed in a way that forks from this release",
+            store.ledger_name(prefix)
+        ),
+    })?;
     if current != before {
         store.store_ledger(prefix, &current).await?;
     }
     Ok(())
 }
 
-fn merge_into(
-    store: &dyn InstallStore,
-    prefix: &str,
-    current: &mut Ledger,
-    other: &Ledger,
-) -> Result<()> {
-    current.merge(other).context(ErrorData::Refused {
-        reason: format!(
-            "the ledger at {} changed in a way that forks from this release",
-            store.ledger_name(prefix)
-        ),
-    })
-}
-
-/// The release and config a request is applying, which must still be the install's newest when
-/// each of its functions is written. A config is checked too: a function's env follows it, so
-/// an older config applied after a newer one would roll the env back.
-pub struct Floor<'a> {
-    /// Where the ledger lives.
-    pub store: &'a dyn InstallStore,
-    /// The install's prefix.
-    pub prefix: &'a str,
-    /// The release, as the ledger records it.
-    pub release: Entry,
-    /// The config, as the ledger records it; none when the install has accepted none.
-    pub config: Option<Entry>,
-}
-
-#[async_trait]
-impl crate::function::StillNewest for Floor<'_> {
-    async fn check(&self) -> Result<()> {
-        let lookup = read_ledger(self.store, self.prefix).await?;
-        let ledger = stored(self.store, self.prefix, lookup).await?;
-        match &ledger.release {
-            Some(newest) if *newest == self.release => {}
-            Some(newest) => {
-                return Err(refused(format!(
-                    "release {} was accepted while release {} was being applied",
-                    newest.sequence, self.release.sequence
-                )))
-            }
-            None => {
-                return Err(refused(format!(
-                    "the ledger at {} no longer records release {}",
-                    self.store.ledger_name(self.prefix),
-                    self.release.sequence
-                )))
-            }
-        }
-        if ledger.config != self.config {
-            return Err(refused(format!(
-                "config {} was accepted while config {} was being applied",
-                ledger.config.as_ref().map_or(0, |entry| entry.sequence),
-                self.config.as_ref().map_or(0, |entry| entry.sequence)
-            )));
-        }
-        Ok(())
-    }
-}
-
 /// What a request applying `accepted` does with the install's ledger: records it before the
-/// first write, then rechecks it before each.
+/// first write.
 pub struct Acceptance<'a> {
-    floor: Floor<'a>,
+    store: &'a dyn InstallStore,
+    prefix: &'a str,
     ledger: &'a Ledger,
 }
 
@@ -445,31 +243,17 @@ impl<'a> Acceptance<'a> {
     /// The acceptance of `accepted` in the ledger of `prefix` in `store`.
     pub fn new(store: &'a dyn InstallStore, prefix: &'a str, accepted: &'a Accepted) -> Self {
         Self {
-            floor: Floor {
-                store,
-                prefix,
-                release: Entry {
-                    sequence: accepted.release.sequence,
-                    digest: accepted.release.digest.clone(),
-                },
-                config: accepted.ledger.config.clone(),
-            },
+            store,
+            prefix,
             ledger: &accepted.ledger,
         }
     }
 }
 
 #[async_trait]
-impl crate::function::StillNewest for Acceptance<'_> {
-    async fn check(&self) -> Result<()> {
-        self.floor.check().await
-    }
-}
-
-#[async_trait]
 impl crate::function::Accepting for Acceptance<'_> {
     async fn accept(&self) -> Result<()> {
-        store_ledger(self.floor.store, self.floor.prefix, self.ledger).await
+        store_ledger(self.store, self.prefix, self.ledger).await
     }
 }
 
@@ -477,7 +261,7 @@ impl crate::function::Accepting for Acceptance<'_> {
 pub(crate) mod tests {
     use super::*;
     use crate::fixtures::*;
-    use alien_signing::{Role, SecretKey, Signer, SignerKind, SignerListBody};
+    use alien_signing::{Kind, Role, SecretKey, Signer, SignerKind, SignerListBody};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -540,201 +324,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// A store that numbers each ledger write, like SSM, and replaces the value on every write:
-    /// where another writer's write lands between the verifier's read and its write once.
-    struct Numbered {
-        versions: Mutex<Vec<Ledger>>,
-        meanwhile: Mutex<Option<Ledger>>,
-        version_reads: Mutex<Vec<u64>>,
-        gone: Mutex<Vec<u64>>,
-    }
-
-    impl Numbered {
-        fn new(versions: Vec<Ledger>) -> Self {
-            Self {
-                versions: Mutex::new(versions),
-                meanwhile: Mutex::new(None),
-                version_reads: Mutex::new(Vec::new()),
-                gone: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl InstallStore for Numbered {
-        async fn settings(&self, _prefix: &str) -> Result<Lookup> {
-            unreachable!("only the ledger is used here")
-        }
-        async fn ledger(&self, _prefix: &str) -> Result<Lookup> {
-            unreachable!("a numbered store is read through numbered_ledger")
-        }
-        async fn store_ledger(&self, _prefix: &str, ledger: &Ledger) -> Result<()> {
-            let mut versions = self.versions.lock().unwrap();
-            if let Some(other) = self.meanwhile.lock().unwrap().take() {
-                versions.push(other);
-            }
-            versions.push(ledger.clone());
-            Ok(())
-        }
-        async fn input(&self, _prefix: &str, _name: &str) -> Result<Option<String>> {
-            unreachable!("only the ledger is used here")
-        }
-        async fn numbered_ledger(&self, _prefix: &str) -> Result<Option<(Lookup, u64)>> {
-            let versions = self.versions.lock().unwrap();
-            let latest = versions.last().unwrap();
-            Ok(Some((
-                Lookup::Found(latest.to_json().into_bytes()),
-                versions.len() as u64,
-            )))
-        }
-        async fn ledger_version(&self, _prefix: &str, version: u64) -> Result<Lookup> {
-            self.version_reads.lock().unwrap().push(version);
-            let versions = self.versions.lock().unwrap();
-            if self.gone.lock().unwrap().contains(&version) {
-                return Ok(Lookup::Absent);
-            }
-            Ok(match versions.get(version as usize - 1) {
-                Some(ledger) => Lookup::Found(ledger.to_json().into_bytes()),
-                None => Lookup::Absent,
-            })
-        }
-    }
-
-    fn at_release(sequence: u64, digit: char) -> Ledger {
-        based_on(0, sequence, digit)
-    }
-
-    /// A ledger at release `sequence`, written after merging onto version `based_on`.
-    fn based_on(based_on: u64, sequence: u64, digit: char) -> Ledger {
-        let mut ledger = Ledger::new(PREFIX);
-        ledger
-            .raise(
-                Kind::Release,
-                sequence,
-                &format!("sha256:{}", digit.to_string().repeat(64)),
-            )
-            .unwrap();
-        ledger.based_on = based_on;
-        ledger
-    }
-
-    async fn floor_of(store: &Numbered) -> u64 {
-        let lookup = read_ledger(store, PREFIX).await.unwrap();
-        stored(store, PREFIX, lookup)
-            .await
-            .unwrap()
-            .release
-            .unwrap()
-            .sequence
-    }
-
-    #[tokio::test]
-    async fn a_ledger_write_never_hides_a_raise_made_meanwhile() {
-        // Another writer raises the ledger to release 11 between this read and this write of
-        // release 10. The write of 10 is the latest value, but it records that it was merged
-        // onto version 1 only, so every reader merges in version 2 and sees 11.
-        let store = Numbered::new(vec![Ledger::new(PREFIX)]);
-        *store.meanwhile.lock().unwrap() = Some(based_on(1, 11, 'b'));
-        store_ledger(&store, PREFIX, &at_release(10, 'a'))
-            .await
-            .unwrap();
-        {
-            let versions = store.versions.lock().unwrap();
-            assert_eq!(versions.len(), 3, "empty, theirs, ours");
-            assert_eq!(versions[2].release.as_ref().unwrap().sequence, 10);
-            assert_eq!(versions[2].based_on, 1, "ours was merged onto version 1");
-        }
-        assert_eq!(floor_of(&store).await, 11);
-    }
-
-    #[tokio::test]
-    async fn a_reader_never_sees_the_floor_an_older_write_lowered() {
-        // Release 11 landed at version 2, then a writer that had read only version 1 wrote
-        // release 10 as version 3. A request for release 10 must still be refused, and must
-        // not write the ledger.
-        let store = Numbered::new(vec![
-            Ledger::new(PREFIX),
-            based_on(1, 11, 'b'),
-            based_on(1, 10, 'a'),
-        ]);
-        let floor = Floor {
-            store: &store,
-            prefix: PREFIX,
-            release: Entry {
-                sequence: 10,
-                digest: format!("sha256:{}", "a".repeat(64)),
-            },
-            config: None,
-        };
-        let error = crate::function::StillNewest::check(&floor)
-            .await
-            .expect_err("release 10 is older than the accepted 11");
-        assert!(
-            reason(error).contains("release 11 was accepted while release 10 was being applied"),
-        );
-        store_ledger(&store, PREFIX, &at_release(10, 'a'))
-            .await
-            .unwrap();
-        assert_eq!(
-            store.versions.lock().unwrap().len(),
-            3,
-            "nothing was raised"
-        );
-    }
-
-    #[tokio::test]
-    async fn only_the_versions_after_the_one_a_write_was_merged_onto_are_read() {
-        let store = Numbered::new(vec![
-            Ledger::new(PREFIX),
-            based_on(1, 11, 'b'),
-            based_on(2, 12, 'c'),
-            based_on(3, 12, 'c'),
-        ]);
-        assert_eq!(floor_of(&store).await, 12);
-        assert!(
-            store.version_reads.lock().unwrap().is_empty(),
-            "a write merged onto the version before it needs no other read"
-        );
-
-        let store = Numbered::new(vec![
-            Ledger::new(PREFIX),
-            based_on(1, 11, 'b'),
-            based_on(1, 12, 'c'),
-            based_on(1, 10, 'a'),
-        ]);
-        assert_eq!(floor_of(&store).await, 12);
-        assert_eq!(*store.version_reads.lock().unwrap(), vec![2, 3]);
-    }
-
-    #[tokio::test]
-    async fn a_version_that_can_no_longer_be_read_refuses() {
-        // Version 2 is gone (SSM keeps only the latest 100): the floor can't be known.
-        let store = Numbered::new(vec![
-            Ledger::new(PREFIX),
-            based_on(1, 11, 'b'),
-            based_on(1, 10, 'a'),
-        ]);
-        store.gone.lock().unwrap().push(2);
-        let error = read_ledger(&store, PREFIX)
-            .await
-            .expect_err("version 2 is missing");
-        assert!(reason(error).contains("version 2 of the ledger"));
-    }
-
-    #[tokio::test]
-    async fn a_write_claiming_to_be_merged_onto_a_later_version_is_refused() {
-        // Version 3 says it was merged onto version 5, which would skip version 2's raise.
-        let store = Numbered::new(vec![
-            Ledger::new(PREFIX),
-            based_on(1, 11, 'b'),
-            based_on(5, 10, 'a'),
-        ]);
-        let error = read_ledger(&store, PREFIX)
-            .await
-            .expect_err("a write is merged onto a version before its own");
-        assert!(reason(error).contains("not a write of the version it was read at"));
-    }
-
     pub fn aws_install(prefix: &str) -> InstallId {
         InstallId::Aws {
             account: ACCOUNT.to_string(),
@@ -745,31 +334,6 @@ pub(crate) mod tests {
 
     pub async fn found(store: &MemoryStore) -> Result<Install> {
         find_install(store, &format!("{PREFIX}-verifier"), &aws_install).await
-    }
-
-    /// A fresh install's store and two requests that both passed `accept` against its first
-    /// ledger: release 10 with `older`, release 11 with `newer`. The second overtakes the first
-    /// when they run one after the other.
-    pub async fn overtaking(
-        platform: &str,
-        older: &ReleaseBody,
-        newer: &ReleaseBody,
-    ) -> (MemoryStore, Accepted, Accepted) {
-        let store = MemoryStore::protected(&settings());
-        let install = found(&store).await.unwrap();
-        let accepted = |sequence, body: &ReleaseBody| {
-            accept(
-                &install,
-                &[signer_list()],
-                &signed_release(sequence, body),
-                None,
-                platform,
-                now(),
-            )
-            .unwrap()
-        };
-        let (older, newer) = (accepted(10, older), accepted(11, newer));
-        (store, older, newer)
     }
 
     fn reason(error: AlienError<ErrorData>) -> String {
@@ -938,93 +502,36 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn removing_the_ci_key_keeps_what_it_signed_and_refuses_what_it_signs_next() {
+    async fn removing_the_ci_key_refuses_what_it_signed_until_a_current_signer_signs_it() {
         let (v1, v2, settings) = lists_removing_ci();
         let store = MemoryStore::protected(&settings);
         let install = found(&store).await.unwrap();
-        let ten = release(10, function_workload());
-        let configured = config(
-            1,
-            ConfigBody {
-                env: BTreeMap::from([("LOG_LEVEL".to_string(), "info".to_string())]),
-                ..ConfigBody::default()
-            },
-        );
-        let accepted = accept(
-            &install,
-            &[v1.clone()],
-            &ten,
-            Some(&configured),
-            "aws",
-            Utc::now(),
-        )
-        .unwrap();
+        let body = release_body(vec![function_workload()]);
+        let by_ci = statement_under(PROJECT, Kind::Release, None, 10, None, 1, &body)
+            .sign_with("ci", &ci())
+            .unwrap();
+        let accepted = accept(&install, &[v1.clone()], &by_ci, None, "aws", Utc::now()).unwrap();
         store_ledger(&store, PREFIX, &accepted.ledger)
             .await
             .unwrap();
 
-        // CI leaves the list. What it signed and the install accepted keeps
-        // passing, so the verifier can still check and re-apply it.
+        // CI leaves the list: what it signed is no longer vouched for, even the release the
+        // install already runs.
         let install = found(&store).await.unwrap();
         let both = [v1, v2];
-        let kept = accept(&install, &both, &ten, Some(&configured), "aws", Utc::now()).unwrap();
-        assert_eq!(kept.release.sequence, 10);
-        assert!(kept.release.signers.is_empty(), "kept, not verified again");
-        store_ledger(&store, PREFIX, &kept.ledger).await.unwrap();
-
-        // A release CI signs now is refused.
-        let install = found(&store).await.unwrap();
-        let by_ci = statement_under(
-            PROJECT,
-            Kind::Release,
-            None,
-            11,
-            None,
-            2,
-            &release_body(vec![function_workload()]),
-        )
-        .sign_with("ci", &ci())
-        .unwrap();
-        let error = reason(
-            accept(
-                &install,
-                &both,
-                &by_ci,
-                Some(&configured),
-                "aws",
-                Utc::now(),
-            )
-            .unwrap_err(),
-        );
+        let error = reason(accept(&install, &both, &by_ci, None, "aws", Utc::now()).unwrap_err());
         assert!(error.contains("not on signer list version 2"), "{error}");
 
-        // The laptop's next release lands with the config CI signed before.
-        let by_laptop = statement_under(
-            PROJECT,
-            Kind::Release,
-            None,
-            11,
-            None,
-            2,
-            &release_body(vec![function_workload()]),
-        )
-        .sign_with("laptop", &key(2))
-        .unwrap();
-        let next = accept(
-            &install,
-            &both,
-            &by_laptop,
-            Some(&configured),
-            "aws",
-            Utc::now(),
-        )
-        .unwrap();
-        assert_eq!(next.release.sequence, 11);
-        assert_eq!(next.config.unwrap().sequence, 1);
+        // The same release signed by a current signer passes.
+        let by_laptop = statement_under(PROJECT, Kind::Release, None, 10, None, 2, &body)
+            .sign_with("laptop", &key(2))
+            .unwrap();
+        let next = accept(&install, &both, &by_laptop, None, "aws", Utc::now()).unwrap();
+        assert_eq!(next.release.sequence, 10);
     }
 
     #[tokio::test]
-    async fn the_ledger_only_rises_and_refuses_older_releases() {
+    async fn the_ledger_records_the_trust_root_and_never_lowers_the_signer_list() {
         let store = MemoryStore::protected(&settings());
         let install = found(&store).await.unwrap();
         let accepted = accept(
@@ -1039,42 +546,27 @@ pub(crate) mod tests {
         store_ledger(&store, PREFIX, &accepted.ledger)
             .await
             .unwrap();
-        assert_eq!(store.ledger_of(PREFIX).release.unwrap().sequence, 20);
         assert_eq!(
             store.ledger_of(PREFIX).fingerprint,
             Some(settings().fingerprint)
         );
-
-        // A fresh verifier with the stored ledger refuses an older release.
+        // An older release signed by a current signer runs again: the ledger holds trust.
         let install = found(&store).await.unwrap();
-        let error = reason(
-            accept(
-                &install,
-                &[signer_list()],
-                &release(10, function_workload()),
-                None,
-                "aws",
-                now(),
-            )
-            .unwrap_err(),
-        );
-        assert!(
-            error.contains("older than one this install accepted"),
-            "{error}"
-        );
-        // The release at the floor passes again.
         accept(
             &install,
             &[signer_list()],
-            &release(20, function_workload()),
+            &release(10, function_workload()),
             None,
             "aws",
             now(),
         )
         .unwrap();
-        // An older accepted ledger written back doesn't lower the floor.
-        store_ledger(&store, PREFIX, &install.ledger).await.unwrap();
-        assert_eq!(store.ledger_of(PREFIX).release.unwrap().sequence, 20);
+        // The ledger the install started with, written back, doesn't lower what is recorded.
+        let recorded = store.ledger_of(PREFIX);
+        store_ledger(&store, PREFIX, &Ledger::new(PREFIX))
+            .await
+            .unwrap();
+        assert_eq!(store.ledger_of(PREFIX), recorded);
     }
 
     #[tokio::test]
@@ -1111,37 +603,5 @@ pub(crate) mod tests {
             .unwrap_err(),
         );
         assert!(error.contains("not 'gcp'"), "{error}");
-    }
-
-    #[tokio::test]
-    async fn a_withheld_config_is_refused_once_one_was_accepted() {
-        let store = MemoryStore::protected(&settings());
-        let install = found(&store).await.unwrap();
-        let config = config(3, ConfigBody::default());
-        let accepted = accept(
-            &install,
-            &[signer_list()],
-            &release(10, function_workload()),
-            Some(&config),
-            "aws",
-            now(),
-        )
-        .unwrap();
-        store_ledger(&store, PREFIX, &accepted.ledger)
-            .await
-            .unwrap();
-        let install = found(&store).await.unwrap();
-        let error = reason(
-            accept(
-                &install,
-                &[signer_list()],
-                &release(11, function_workload()),
-                None,
-                "aws",
-                now(),
-            )
-            .unwrap_err(),
-        );
-        assert!(error.contains("config was withheld"), "{error}");
     }
 }

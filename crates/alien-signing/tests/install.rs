@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use alien_signing::{
     binding_env, build_workload, candidate_prefixes, discover, resolve_bindings, BindingContext,
-    InstallId, Kind, Ledger, LocalValues, Lookup, OwnBindingFacts, RecoveryCode, Role, Signer,
+    InstallId, Ledger, LocalValues, Lookup, OwnBindingFacts, RecoveryCode, Role, Signer,
     SignerKind, SigningSettings, Trust, WorkloadRequest,
 };
 use chrono::Duration;
@@ -24,13 +24,11 @@ fn fresh_trust(keys: &Keys, chain: &[alien_signing::SignedStatement], ledger: &L
     Trust::new(settings(keys), install(), chain, ledger, now()).expect("the chain is valid")
 }
 
-/// Accept a release the way an enforcer does: verify, check the ledger,
-/// raise it.
+/// Accept a release the way an enforcer does: verify it, then record the chain.
 fn accept(trust: &Trust, ledger: &mut Ledger, sequence: u64) -> alien_signing::Result<()> {
     let keys = keys();
     let verified = trust.verify_release(&release(&keys, sequence), now())?;
-    ledger.check(Kind::Release, verified.sequence, &verified.digest)?;
-    ledger.raise(Kind::Release, verified.sequence, &verified.digest)?;
+    let _ = verified;
     trust.record(ledger)
 }
 
@@ -78,19 +76,12 @@ fn a_removed_signer_keeps_what_it_signed_but_signs_nothing_new() {
 }
 
 #[test]
-fn an_install_never_goes_back_to_an_older_release() {
+fn an_older_signed_release_may_run_again() {
     let keys = keys();
     let mut ledger = Ledger::new(PREFIX);
     let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
-    accept(&trust, &mut ledger, 10).unwrap();
     accept(&trust, &mut ledger, 12).unwrap();
-    // The current release passes again; an older replica's release doesn't.
-    accept(&trust, &mut ledger, 12).unwrap();
-    assert_eq!(
-        code(accept(&trust, &mut ledger, 11)),
-        "SIGNING_SEQUENCE_REPLAYED"
-    );
-    assert_eq!(ledger.release.as_ref().unwrap().sequence, 12);
+    accept(&trust, &mut ledger, 11).expect("a signed rollback is allowed");
 }
 
 #[test]
@@ -119,21 +110,13 @@ fn a_new_machine_starts_from_the_install_ledger() {
         )),
         "SIGNING_SIGNER_LIST_MISSING"
     );
-    // With the full chain it gets no older release than the install had.
+    // With the full chain it accepts what the signer lists allow.
     let trust = fresh_trust(&keys, &chain, &seeded);
-    assert_eq!(
-        code(accept(&trust, &mut seeded, 11)),
-        "SIGNING_SEQUENCE_REPLAYED"
-    );
     accept(&trust, &mut seeded, 13).unwrap();
 
     // The first machine merges the newer state back: values only rise.
     first.merge(&seeded).unwrap();
-    assert_eq!(first.release.as_ref().unwrap().sequence, 13);
-    seeded
-        .merge(&Ledger::parse(stored.as_bytes(), PREFIX).unwrap())
-        .unwrap();
-    assert_eq!(seeded.release.as_ref().unwrap().sequence, 13);
+    assert_eq!(first.signer_list.as_ref().unwrap().sequence, 3);
 
     // A ledger for a neighbor's prefix is not this install's.
     assert_eq!(
@@ -149,146 +132,11 @@ fn two_different_statements_with_one_sequence_are_a_fork() {
     let trust = fresh_trust(&keys, &[genesis(&keys)], &ours);
     accept(&trust, &mut ours, 10).unwrap();
     let mut theirs = Ledger::new(PREFIX);
-    theirs
-        .raise(Kind::Release, 10, &format!("sha256:{}", "e".repeat(64)))
-        .unwrap();
+    theirs.signer_list = Some(alien_signing::ledger::Entry {
+        sequence: 1,
+        digest: format!("sha256:{}", "e".repeat(64)),
+    });
     assert_eq!(code(ours.merge(&theirs)), "SIGNING_LEDGER_REFUSED");
-}
-
-#[test]
-fn a_withheld_config_stops_new_workloads_once_one_was_accepted() {
-    let keys = keys();
-    let mut ledger = Ledger::new(PREFIX);
-    ledger
-        .require(Kind::Config, false)
-        .expect("never configured");
-    let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
-    let config = statement(
-        "config/v1",
-        PROJECT,
-        Some(INSTALL),
-        3,
-        1,
-        alien_signing::ConfigBody::default(),
-    )
-    .sign_with("alice-laptop", &keys.admin)
-    .unwrap();
-    let verified = trust
-        .verify_config(&config, &release_body(), &ledger, now())
-        .unwrap();
-    ledger
-        .raise(Kind::Config, verified.sequence, &verified.digest)
-        .unwrap();
-    assert_eq!(
-        code(ledger.require(Kind::Config, false)),
-        "SIGNING_LEDGER_REFUSED"
-    );
-    ledger.require(Kind::Config, true).unwrap();
-}
-
-#[test]
-fn a_config_made_from_an_older_config_is_refused() {
-    let keys = keys();
-    let mut ledger = Ledger::new(PREFIX);
-    let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
-    let signed = |sequence: u64, base: Option<(u64, &str)>| {
-        let mut body = alien_signing::ConfigBody::default();
-        body.env
-            .insert("LOG_LEVEL".to_string(), format!("level-{sequence}"));
-        body.base = base.map(|(sequence, digest)| alien_signing::ConfigBase {
-            sequence,
-            digest: digest.to_string(),
-        });
-        statement("config/v1", PROJECT, Some(INSTALL), sequence, 1, body)
-            .sign_with("alice-laptop", &keys.admin)
-            .unwrap()
-    };
-    let mut release = release_body();
-    release.configurable.env.push("LOG_LEVEL".to_string());
-    let take = |statement: &alien_signing::SignedStatement, ledger: &mut Ledger| {
-        let verified = trust.verify_config(statement, &release, ledger, now())?;
-        ledger.raise(Kind::Config, verified.sequence, &verified.digest)?;
-        Ok::<_, alien_error::AlienError<alien_signing::ErrorData>>(verified)
-    };
-
-    let first = take(&signed(1, None), &mut ledger).expect("the first config names no base");
-    let first_at = (first.sequence, first.digest.as_str());
-    let second = take(&signed(2, Some(first_at)), &mut ledger).expect("it builds on the first");
-    let second_at = (second.sequence, second.digest.as_str());
-    assert_eq!(
-        code(take(&signed(3, Some(first_at)), &mut ledger)),
-        "SIGNING_BODY_REFUSED",
-        "a change made on the first config would undo the second"
-    );
-    assert_eq!(
-        code(take(&signed(3, None), &mut ledger)),
-        "SIGNING_BODY_REFUSED",
-        "a change that names no base is refused once a config was accepted"
-    );
-    let other = format!("sha256:{}", "0".repeat(64));
-    assert_eq!(
-        code(take(
-            &signed(3, Some((second.sequence, other.as_str()))),
-            &mut ledger
-        )),
-        "SIGNING_BODY_REFUSED",
-        "a base with another digest at the accepted sequence is a different config"
-    );
-    take(&signed(3, Some(second_at)), &mut ledger).expect("it builds on the second");
-}
-
-#[test]
-fn a_config_made_on_a_config_the_install_never_accepted_is_refused() {
-    let keys = keys();
-    let mut ledger = Ledger::new(PREFIX);
-    let trust = fresh_trust(&keys, &[genesis(&keys)], &ledger);
-    let signed = |sequence: u64, base: Option<(u64, &str)>, level: &str| {
-        let mut body = alien_signing::ConfigBody::default();
-        body.env.insert("LOG_LEVEL".to_string(), level.to_string());
-        body.base = base.map(|(sequence, digest)| alien_signing::ConfigBase {
-            sequence,
-            digest: digest.to_string(),
-        });
-        statement("config/v1", PROJECT, Some(INSTALL), sequence, 1, body)
-            .sign_with("alice-laptop", &keys.admin)
-            .unwrap()
-    };
-    let mut release = release_body();
-    release.configurable.env.push("LOG_LEVEL".to_string());
-    let take = |statement: &alien_signing::SignedStatement, ledger: &mut Ledger| {
-        let verified = trust.verify_config(statement, &release, ledger, now())?;
-        ledger.raise(Kind::Config, verified.sequence, &verified.digest)?;
-        Ok::<_, alien_error::AlienError<alien_signing::ErrorData>>(verified)
-    };
-
-    // The install runs config 10. The control plane served config 5 when the
-    // developer signed config 20, so 20 names base 5 and the install refuses it.
-    let five = signed(5, None, "five");
-    let five_at = five.open().unwrap();
-    let ten = take(&signed(10, None, "ten"), &mut ledger).unwrap();
-    let ten_at = (ten.sequence, ten.digest.as_str());
-    let twenty = signed(20, Some((5, five_at.digest.as_str())), "twenty");
-    assert_eq!(code(take(&twenty, &mut ledger)), "SIGNING_BODY_REFUSED");
-
-    // The next edit starts from config 20, which the control plane now serves.
-    // Its base is newer than what the install runs, and it copied config 20's
-    // stale values, so accepting it would undo config 10.
-    let twenty_at = twenty.open().unwrap();
-    let twenty_one = signed(21, Some((20, twenty_at.digest.as_str())), "twenty");
-    let error = take(&twenty_one, &mut ledger).unwrap_err();
-    assert_eq!(code(Err::<(), _>(error.clone())), "SIGNING_BODY_REFUSED");
-    assert!(
-        error.message.contains("never accepted")
-            && error.message.contains("runs config sequence 10")
-            && error.message.contains("--from-config 10"),
-        "the refusal says which config to sign from: {}",
-        error.message
-    );
-    assert_eq!(ledger.floor(Kind::Config).unwrap().unwrap().sequence, 10);
-
-    // Signed again from the config the install runs, it is accepted.
-    take(&signed(22, Some(ten_at), "twenty-two"), &mut ledger)
-        .expect("a config made from the one the install runs");
 }
 
 #[test]
@@ -322,7 +170,7 @@ fn config_for_another_customers_install_is_refused() {
     .sign_with("alice-laptop", &keys.admin)
     .unwrap();
     assert_eq!(
-        code(trust.verify_config(&other, &release_body(), &Ledger::new(PREFIX), now())),
+        code(trust.verify_config(&other, &release_body(), now())),
         "SIGNING_WRONG_INSTALL"
     );
 }
@@ -770,23 +618,4 @@ fn config_sets_only_bindings_the_release_has() {
         ..alien_signing::ConfigBody::default()
     };
     assert_eq!(code(other.check(&release)), "SIGNING_BODY_REFUSED");
-}
-
-#[test]
-fn the_version_a_write_was_merged_onto_is_kept_but_never_decides_a_merge() {
-    let mut ours = Ledger::new(PREFIX);
-    assert!(
-        !ours.to_json().contains("basedOn"),
-        "a store that doesn't number its writes never sees the field"
-    );
-    ours.raise(Kind::Release, 10, &format!("sha256:{}", "a".repeat(64)))
-        .unwrap();
-    ours.based_on = 7;
-    let parsed = Ledger::parse(ours.to_json().as_bytes(), PREFIX).unwrap();
-    assert_eq!(parsed.based_on, 7);
-
-    let mut theirs = Ledger::new(PREFIX);
-    theirs.based_on = 40;
-    ours.merge(&theirs).unwrap();
-    assert_eq!(ours.based_on, 7, "a merge leaves the version to the writer");
 }

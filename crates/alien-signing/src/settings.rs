@@ -373,6 +373,36 @@ pub mod names {
     /// Azure Key Vault secret, in the install's signing vault, holding the ledger.
     pub const AZURE_LEDGER_SECRET: &str = "signing-state";
 
+    /// IAM path of the instance profiles setup creates for machines the verifier launches.
+    pub const AWS_SIGNED_PROFILE_PATH: &str = "/alien-signed/";
+
+    /// Name of the marked instance profile for capacity group profile `base`
+    /// (`<prefix>-<cluster>-<group>`). The name differs from the unmarked profile because IAM
+    /// instance profile names are unique per account whatever the path.
+    pub fn aws_signed_profile_name(base: &str) -> String {
+        format!("{base}-signed")
+    }
+
+    /// ARN of the marked instance profile for `base` in `account`.
+    pub fn aws_signed_profile_arn(account: &str, base: &str) -> String {
+        format!(
+            "arn:aws:iam::{account}:instance-profile{AWS_SIGNED_PROFILE_PATH}{}",
+            aws_signed_profile_name(base)
+        )
+    }
+
+    /// Whether an instance profile ARN names a profile under the reserved path. The check is
+    /// case-sensitive and covers the whole `instance-profile/alien-signed/` prefix, so
+    /// `/alien-signed-x/` and `/x/alien-signed/` are not marked.
+    pub fn aws_profile_is_signed(arn: &str) -> bool {
+        arn.split_once(":instance-profile")
+            .is_some_and(|(head, tail)| {
+                head.starts_with("arn:")
+                    && tail.starts_with(AWS_SIGNED_PROFILE_PATH)
+                    && tail.len() > AWS_SIGNED_PROFILE_PATH.len()
+            })
+    }
+
     /// Kubernetes ConfigMap holding the signing settings of Helm release `release`.
     pub fn kubernetes_settings(release: &str) -> String {
         format!("{release}-signing")
@@ -415,5 +445,32 @@ pub mod names {
     fn sha1_hex(text: &str) -> String {
         use sha1::{Digest, Sha1};
         hex::encode(Sha1::digest(text.as_bytes()))
+    }
+}
+
+#[cfg(test)]
+mod signed_profile_tests {
+    use super::names::{aws_profile_is_signed, aws_signed_profile_arn};
+
+    #[test]
+    fn only_the_reserved_path_marks_a_profile() {
+        let own = aws_signed_profile_arn("111122223333", "acme-prod-compute-general");
+        assert_eq!(
+            own,
+            "arn:aws:iam::111122223333:instance-profile/alien-signed/acme-prod-compute-general-signed"
+        );
+        assert!(aws_profile_is_signed(&own));
+        for unmarked in [
+            "arn:aws:iam::111122223333:instance-profile/acme-prod-compute-general",
+            "arn:aws:iam::111122223333:instance-profile/alien-signed-x/p",
+            "arn:aws:iam::111122223333:instance-profile/x/alien-signed/p",
+            "arn:aws:iam::111122223333:instance-profile/Alien-Signed/p",
+            "arn:aws:iam::111122223333:instance-profile/alien-signed/",
+            "arn:aws:iam::111122223333:role/alien-signed/p",
+            "instance-profile/alien-signed/p",
+            "",
+        ] {
+            assert!(!aws_profile_is_signed(unmarked), "{unmarked}");
+        }
     }
 }

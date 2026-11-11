@@ -15,9 +15,9 @@ use serde_json::{json, Value};
 
 use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
-use crate::function::{Accepting, StillNewest};
+use crate::function::Accepting;
 use crate::machines::{plan_roll, roll, MachineApi, RollMachines};
-use crate::plan::{OwnResource, Place};
+use crate::plan::Place;
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -101,24 +101,6 @@ impl<S: SsmApi> InstallStore for SsmInstall<S> {
                 operation: format!("ssm:PutParameter {name}"),
             })?;
         Ok(())
-    }
-
-    /// SSM numbers every write of a parameter, and each write of the ledger records the
-    /// version it was merged onto, so a reader can merge in the writes made since.
-    async fn numbered_ledger(&self, prefix: &str) -> Result<Option<(Lookup, u64)>> {
-        let name = names::aws_ledger(prefix);
-        match self.read_numbered(&name).await? {
-            (Lookup::Found(bytes), Some(version)) => Ok(Some((Lookup::Found(bytes), version))),
-            (Lookup::Found(_), None) => Err(AlienError::new(ErrorData::CloudCallFailed {
-                operation: format!("ssm:GetParameter {name} returned no version"),
-            })),
-            (lookup, _) => Ok(Some((lookup, 0))),
-        }
-    }
-
-    async fn ledger_version(&self, prefix: &str, version: u64) -> Result<Lookup> {
-        self.read(&format!("{}:{version}", names::aws_ledger(prefix)))
-            .await
     }
 
     async fn input(&self, prefix: &str, name: &str) -> Result<Option<String>> {
@@ -268,21 +250,19 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
             facts,
             write,
         )
-            .await
+        .await
     }
 
     async fn forward_resource_write(
         &self,
         _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
-        newest: &dyn StillNewest,
     ) -> Result<Value> {
         crate::cloud_write::resource::forward_aws_write(
             &self.lambda,
             self.s3.as_ref(),
             self.sqs.as_ref(),
             write,
-            newest,
         )
         .await
     }
@@ -295,13 +275,8 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         crate::cloud_write::lambda::check_applied(&self.lambda, facts, writes).await
     }
 
-    async fn forward(
-        &self,
-        facts: &Facts<'_>,
-        write: &CloudWrite,
-        newest: &dyn StillNewest,
-    ) -> Result<Value> {
-        crate::cloud_write::lambda::forward(&self.lambda, facts, write, newest).await
+    async fn forward(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
+        crate::cloud_write::lambda::forward(&self.lambda, facts, write).await
     }
 
     /// Deleting the function takes its concurrency, URL, aliases and invoke grants with it.

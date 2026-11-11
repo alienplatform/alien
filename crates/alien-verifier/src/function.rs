@@ -1,4 +1,4 @@
-//! Reading a Lambda function back, and the newest-release check before each write.
+//! Reading a Lambda function back, and recording what a request accepted before its first write.
 
 use std::time::Duration;
 
@@ -16,18 +16,10 @@ pub trait FunctionStore: Send + Sync {
     async fn get(&self, name: &str) -> Result<Value>;
 }
 
-/// Whether the release being applied is still the newest one the install accepted. Checked
-/// right before each write: a newer release accepted before the check refuses the write.
-#[async_trait]
-pub trait StillNewest: Send + Sync {
-    /// Refuse when the install has accepted a newer release.
-    async fn check(&self) -> Result<()>;
-}
-
 /// A request that makes the install accept its release and config, once its checks have passed
-/// and before its first write. Every write after that is preceded by [`StillNewest::check`].
+/// and before its first write.
 #[async_trait]
-pub trait Accepting: StillNewest {
+pub trait Accepting: Send + Sync {
     /// Record the release and config in the install's ledger.
     async fn accept(&self) -> Result<()>;
 }

@@ -32,7 +32,7 @@ use alien_core::{
     ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_signing::{Kind, ReleaseBody, SignedStatement};
+use alien_signing::{ReleaseBody, SignedStatement};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -583,7 +583,9 @@ pub fn plan_roll(
         .image_id(request.machine_image.clone())
         .instance_type(instance_type)
         .iam_instance_profile(LaunchTemplateIamInstanceProfileSpecification {
-            arn: Some(format!("arn:aws:iam::{account}:instance-profile/{base}")),
+            arn: Some(alien_signing::settings::names::aws_signed_profile_arn(
+                &account, &base,
+            )),
             name: None,
         })
         .tag_specifications(vec![TagSpecification {
@@ -706,7 +708,6 @@ pub async fn roll(
         )));
     }
     acceptance.accept().await?;
-    acceptance.check().await?;
     let (template_id, version) = match template {
         Some(id) => {
             let version = api.create_version(&id, &plan.data).await?;
@@ -723,7 +724,6 @@ pub async fn roll(
         launch_template_name: None,
         version: Some(version.to_string()),
     };
-    acceptance.check().await?;
     if group_exists {
         api.update_group(
             UpdateAutoScalingGroupRequest::builder()
@@ -1022,22 +1022,11 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
     }
 }
 
-/// Check that `release` is no older than the install's ledger allows, for
-/// requests that read bounds from it without raising the floor.
-pub fn check_floor(ledger: &alien_signing::Ledger, sequence: u64, digest: &str) -> Result<()> {
-    ledger
-        .check(Kind::Release, sequence, digest)
-        .context(ErrorData::Refused {
-            reason: "the release is older than one this install accepted".to_string(),
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fixtures::*;
     use crate::plan::SetupNetwork;
-    use crate::trust::Acceptance;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{ResourceLifecycle, Stack};
     use alien_signing::InstallId;
@@ -1223,7 +1212,7 @@ mod tests {
                 .iam_instance_profile
                 .as_ref()
                 .and_then(|profile| profile.arn.as_deref()),
-            Some("arn:aws:iam::111122223333:instance-profile/acme-prod-compute-general")
+            Some("arn:aws:iam::111122223333:instance-profile/alien-signed/acme-prod-compute-general-signed")
         );
         assert_eq!(
             plan.data
@@ -1586,8 +1575,6 @@ mod tests {
         groups: Mutex<Vec<CreateAutoScalingGroupRequest>>,
         /// The number the next template version gets.
         next_version: Mutex<i64>,
-        /// Held after it adds a version for this image, until the test lets it go on.
-        hold_after_version_of: Option<(String, Arc<Pause>)>,
     }
 
     impl Recorded {
@@ -1624,11 +1611,6 @@ mod tests {
                 *next += 1;
                 *next + 6
             };
-            if let Some((held, pause)) = &self.hold_after_version_of {
-                if *held == image {
-                    pause.hold().await;
-                }
-            }
             Ok(version)
         }
         async fn group_exists(&self, _name: &str) -> Result<bool> {
@@ -1842,91 +1824,5 @@ mod tests {
             calls[1],
             "CreateAutoScalingGroup acme-prod-compute-general min=1 max=4 desired=Some(1) version=Some(\"1\") subnets=Some(\"subnet-0123456789abcdef0\")"
         );
-    }
-
-    fn request_for(image: &str) -> RollMachines {
-        RollMachines {
-            machine_image: image.to_string(),
-            ..request()
-        }
-    }
-
-    /// Release 10 and release 11 roll the same group at once. Release 10 has added its template
-    /// version when release 11 is accepted and rolls the group to the end; release 10 must not
-    /// then point the group back at its own, older version.
-    #[tokio::test]
-    async fn a_roll_overtaken_by_a_newer_release_never_points_the_group_back() {
-        let (store, older, newer) =
-            crate::trust::tests::overtaking("aws", &release(), &release()).await;
-        let pause = Arc::new(Pause::default());
-        let api = Recorded {
-            template: Some("lt-0aaaaaaaaaaaaaaaa".to_string()),
-            group_exists: true,
-            hold_after_version_of: Some(("ami-0123456789abcdef1".to_string(), pause.clone())),
-            ..Default::default()
-        };
-        let plan_for = |image: &str| {
-            plan_roll(
-                &place(),
-                &release(),
-                &request_for(image),
-                &pins(),
-                &arm_image(PUBLISHER),
-            )
-            .unwrap()
-        };
-        let (older_plan, newer_plan) = (
-            plan_for("ami-0123456789abcdef1"),
-            plan_for("ami-0123456789abcdef2"),
-        );
-        let older_acceptance = Acceptance::new(&store, PREFIX, &older);
-        let newer_acceptance = Acceptance::new(&store, PREFIX, &newer);
-
-        let (older_result, newer_result) =
-            tokio::join!(roll(&api, &older_plan, &older_acceptance), async {
-                pause.reached().await;
-                let rolled = roll(&api, &newer_plan, &newer_acceptance).await;
-                pause.resume();
-                rolled
-            });
-
-        let reason = crate::describe(&older_result.expect_err("release 10 was overtaken"));
-        assert!(
-            reason.contains("release 11 was accepted while release 10 was being applied"),
-            "{reason}"
-        );
-        assert_eq!(newer_result.unwrap().version, 8);
-        let calls = api.calls.into_inner().unwrap();
-        assert_eq!(
-            calls,
-            [
-                "CreateLaunchTemplateVersion lt-0aaaaaaaaaaaaaaaa ami-0123456789abcdef1",
-                "CreateLaunchTemplateVersion lt-0aaaaaaaaaaaaaaaa ami-0123456789abcdef2",
-                "UpdateAutoScalingGroup acme-prod-compute-general min=Some(1) max=Some(4) desired=None version=Some(\"8\")",
-            ],
-            "the last group write is release 11's"
-        );
-        assert_eq!(store.ledger_of(PREFIX).release.unwrap().sequence, 11);
-    }
-
-    /// A roll the cloud's state refuses leaves the install's floor where it was.
-    #[tokio::test]
-    async fn a_refused_roll_does_not_raise_the_floor() {
-        let (store, older, _) =
-            crate::trust::tests::overtaking("aws", &release(), &release()).await;
-        let mut plan = plan();
-        plan.subnet_ids.clear();
-        let error = roll(
-            &Recorded::default(),
-            &plan,
-            &Acceptance::new(&store, PREFIX, &older),
-        )
-        .await
-        .expect_err("a new group needs subnets");
-        assert!(
-            crate::describe(&error).contains("no subnets were given"),
-            "{error}"
-        );
-        assert_eq!(store.ledger_of(PREFIX).release, None);
     }
 }

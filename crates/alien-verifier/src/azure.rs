@@ -16,7 +16,6 @@ use alien_signing::{Ledger, Lookup, Workload};
 use crate::cloud_write::{CloudWrite, Facts};
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
-use crate::function::StillNewest;
 use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
@@ -550,18 +549,12 @@ impl Backend for AzureBackend {
         &self,
         _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
-        newest: &dyn StillNewest,
     ) -> Result<Value> {
-        crate::cloud_write::resource::forward_azure_write(&self.0, write, newest).await
+        crate::cloud_write::resource::forward_azure_write(&self.0, write).await
     }
 
-    async fn forward(
-        &self,
-        facts: &Facts<'_>,
-        write: &CloudWrite,
-        newest: &dyn StillNewest,
-    ) -> Result<Value> {
-        crate::cloud_write::container_apps::forward(&self.0, facts, write, newest).await
+    async fn forward(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
+        crate::cloud_write::container_apps::forward(&self.0, facts, write).await
     }
 
     async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {

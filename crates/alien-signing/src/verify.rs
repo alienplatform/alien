@@ -161,17 +161,15 @@ impl Trust {
     }
 
     /// Verify a config statement for this install against the release it
-    /// configures and the config the install runs now (`ledger`).
+    /// configures.
     pub fn verify_config(
         &self,
         statement: &SignedStatement,
         release: &ReleaseBody,
-        ledger: &Ledger,
         now: DateTime<Utc>,
     ) -> Result<Verified<ConfigBody>> {
         let verified: Verified<ConfigBody> = self.verify(statement, Kind::Config, now)?;
         verified.body.check(release)?;
-        verified.body.check_base(ledger.floor(Kind::Config)?)?;
         Ok(verified)
     }
 

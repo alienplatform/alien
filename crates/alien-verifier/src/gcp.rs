@@ -16,7 +16,6 @@ use alien_signing::{Ledger, Lookup, Workload};
 use crate::cloud_run::ServiceStore;
 use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
-use crate::function::StillNewest;
 use crate::machines;
 use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
@@ -250,15 +249,24 @@ impl Gcp {
             self.project
         );
         let response = self
-            .call(reqwest::Method::GET, &url, None, "storage.projects.serviceAccount")
+            .call(
+                reqwest::Method::GET,
+                &url,
+                None,
+                "storage.projects.serviceAccount",
+            )
             .await?
-            .ok_or_else(|| AlienError::new(failed("the project has no Cloud Storage service agent")))?;
+            .ok_or_else(|| {
+                AlienError::new(failed("the project has no Cloud Storage service agent"))
+            })?;
         response["email_address"]
             .as_str()
             .or_else(|| response["emailAddress"].as_str())
             .map(str::to_string)
             .ok_or_else(|| {
-                AlienError::new(failed("the Cloud Storage service agent has no email address"))
+                AlienError::new(failed(
+                    "the Cloud Storage service agent has no email address",
+                ))
             })
     }
 
@@ -864,7 +872,9 @@ impl Backend for GcpBackend {
                 self.0.pubsub_iam_policy("topics", topic).await?
             }
             ResourceWrite::SetSubscriptionIamPolicy { subscription, .. } => {
-                self.0.pubsub_iam_policy("subscriptions", subscription).await?
+                self.0
+                    .pubsub_iam_policy("subscriptions", subscription)
+                    .await?
             }
             _ => return Ok(()),
         };
@@ -888,18 +898,12 @@ impl Backend for GcpBackend {
         &self,
         _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
-        newest: &dyn StillNewest,
     ) -> Result<Value> {
-        crate::cloud_write::resource::forward_gcp_write(&self.0, write, newest).await
+        crate::cloud_write::resource::forward_gcp_write(&self.0, write).await
     }
 
-    async fn forward(
-        &self,
-        facts: &Facts<'_>,
-        write: &CloudWrite,
-        newest: &dyn StillNewest,
-    ) -> Result<Value> {
-        crate::cloud_write::cloud_run::forward(&self.0, facts, write, newest).await
+    async fn forward(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
+        crate::cloud_write::cloud_run::forward(&self.0, facts, write).await
     }
 
     async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
@@ -973,18 +977,16 @@ pub async fn metadata_identity() -> Result<(String, String)> {
     let get = |path: &'static str| {
         let http = http.clone();
         async move {
-            http.get(format!(
-                "http://169.254.169.254/computeMetadata/v1/{path}"
-            ))
-            .header("Metadata-Flavor", "Google")
-            .send()
-            .await
-            .into_alien_error()
-            .context(failed(format!("metadata {path}")))?
-            .text()
-            .await
-            .into_alien_error()
-            .context(failed(format!("metadata {path}")))
+            http.get(format!("http://169.254.169.254/computeMetadata/v1/{path}"))
+                .header("Metadata-Flavor", "Google")
+                .send()
+                .await
+                .into_alien_error()
+                .context(failed(format!("metadata {path}")))?
+                .text()
+                .await
+                .into_alien_error()
+                .context(failed(format!("metadata {path}")))
         }
     };
     let project = get("project/project-id").await?;

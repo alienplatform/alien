@@ -19,9 +19,6 @@ use chrono::Duration;
 use common::*;
 use serde::{Deserialize, Serialize};
 
-/// Release floor the corpus runner's ledger holds before each case.
-const RELEASE_FLOOR: u64 = 10;
-
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Case {
@@ -155,14 +152,6 @@ fn cases() -> Vec<(&'static str, Case)> {
         .sign_with("ci", &keys.ci)
         .unwrap();
 
-    let mut other_body = release_body();
-    other_body.workloads[0]
-        .env
-        .insert("LOG_LEVEL".into(), "debug".into());
-    let same_sequence = statement("release/v2", PROJECT, None, RELEASE_FLOOR, 1, other_body)
-        .sign_with("ci", &keys.ci)
-        .unwrap();
-
     let mut refresh = version_3_body(&keys);
     refresh.previous = Some(version_2(&keys).open().unwrap().digest);
     let refreshed_by_ci = list(PROJECT, 3, 2, refresh)
@@ -192,14 +181,6 @@ fn cases() -> Vec<(&'static str, Case)> {
                 "a release signed for another project",
                 "SIGNING_WRONG_PROJECT",
                 other_project,
-            ),
-        ),
-        (
-            "replayed-sequence",
-            case(
-                "an older release sent again",
-                "SIGNING_SEQUENCE_REPLAYED",
-                release(&keys, RELEASE_FLOOR - 1),
             ),
         ),
         (
@@ -267,14 +248,6 @@ fn cases() -> Vec<(&'static str, Case)> {
             ),
         ),
         (
-            "same-sequence-other-release",
-            case(
-                "a different release with the sequence the install accepted",
-                "SIGNING_SEQUENCE_REPLAYED",
-                same_sequence,
-            ),
-        ),
-        (
             "refreshed-by-ci",
             case(
                 "a signer list refresh signed by CI, which is not an admin",
@@ -293,13 +266,10 @@ fn cases() -> Vec<(&'static str, Case)> {
     ]
 }
 
-/// What an enforcer at signer list version 2, whose ledger holds release
-/// [`RELEASE_FLOOR`], reports.
+/// What an enforcer at signer list version 2 reports.
 fn run(case: &Case) -> String {
     let keys = keys();
-    let mut ledger = Ledger::new(PREFIX);
-    let floor = release(&keys, RELEASE_FLOOR).open().unwrap().digest;
-    ledger.raise(Kind::Release, RELEASE_FLOOR, &floor).unwrap();
+    let ledger = Ledger::new(PREFIX);
     let mut trust = Trust::new(
         settings(&keys),
         install(),
@@ -317,9 +287,7 @@ fn run(case: &Case) -> String {
             .extend_chain(std::slice::from_ref(&case.statement), now())
             .map(|_| ())
     } else {
-        trust
-            .verify_release(&case.statement, now())
-            .and_then(|verified| ledger.check(Kind::Release, verified.sequence, &verified.digest))
+        trust.verify_release(&case.statement, now()).map(|_| ())
     };
     match result {
         Ok(()) => "ACCEPTED".to_string(),
@@ -367,7 +335,7 @@ fn the_untampered_inputs_are_accepted() {
     let ok = Case {
         description: "a newer release".to_string(),
         expect: "ACCEPTED".to_string(),
-        statement: release(&keys, RELEASE_FLOOR + 1),
+        statement: release(&keys, 11),
     };
     assert_eq!(run(&ok), "ACCEPTED");
     let next = Case {

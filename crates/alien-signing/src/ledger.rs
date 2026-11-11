@@ -1,11 +1,11 @@
 //! What an install has already accepted.
 //!
 //! Every enforcer of an install keeps the same small record: the trust root
-//! it accepted state under, the highest signer list version, and the
-//! release and config floors. Setup creates the install's copy in the
+//! it accepted state under and the highest signer list version. Setup creates the install's copy in the
 //! customer's cloud non-empty, so a missing ledger is an error and never a
 //! fresh start. Enforcers load it at start, take the maximum of it and their
-//! own copy, and write the result back. Values only rise.
+//! own copy, and write the result back. Values only rise. An older signed
+//! release or config may run again: what the ledger holds is trust, not a version floor.
 //!
 //! Each entry is the `(sequence, digest)` of a statement the enforcer can
 //! verify again, so a ledger written by someone without a signing key can
@@ -14,7 +14,6 @@
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
-use crate::envelope::Kind;
 use crate::error::{ErrorData, Result};
 use crate::release::is_sha256_digest;
 use crate::settings::InstallId;
@@ -47,21 +46,6 @@ pub struct Ledger {
     /// Highest signer list version accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_list: Option<Entry>,
-    /// Release floor: no older release is accepted on any machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release: Option<Entry>,
-    /// Config floor.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<Entry>,
-    /// Where a store that numbers its writes keeps the ledger: the version this write was
-    /// merged onto. The value holds everything those versions held; versions written after
-    /// it may hold more, and a reader merges them in. [`Ledger::merge`] ignores it.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub based_on: u64,
-}
-
-fn is_zero(value: &u64) -> bool {
-    *value == 0
 }
 
 impl Ledger {
@@ -73,9 +57,6 @@ impl Ledger {
             fingerprint: None,
             install: None,
             signer_list: None,
-            release: None,
-            config: None,
-            based_on: 0,
         }
     }
 
@@ -100,37 +81,12 @@ impl Ledger {
         if let Some(install) = &ledger.install {
             InstallId::parse(install)?;
         }
-        for entry in [&ledger.signer_list, &ledger.release, &ledger.config]
-            .into_iter()
-            .flatten()
-        {
+        for entry in [&ledger.signer_list].into_iter().flatten() {
             if !is_sha256_digest(&entry.digest) {
                 return Err(refused(format!("'{}' is not a digest", entry.digest)));
             }
         }
         Ok(ledger)
-    }
-
-    /// The versions a reader of this ledger, read at `version`, merges in before it uses it:
-    /// the ones written after the version this write was merged onto, up to the one before
-    /// this. Merge each with [`Ledger::merge`], then call [`Ledger::resolved_at`].
-    ///
-    /// A write can only be merged onto a version before its own, so a ledger that claims to be
-    /// based on its own version or a later one is refused: it would skip the merge.
-    pub fn unmerged_versions(&self, version: u64) -> Result<std::ops::Range<u64>> {
-        if self.based_on >= version {
-            return Err(refused(format!(
-                "the ledger at version {version} claims to be merged onto version {}",
-                self.based_on
-            )));
-        }
-        Ok(self.based_on + 1..version)
-    }
-
-    /// Record that this ledger now holds everything up to `version`, so a write of it is
-    /// merged onto that version.
-    pub fn resolved_at(&mut self, version: u64) {
-        self.based_on = version;
     }
 
     /// The JSON form enforcers write back.
@@ -150,9 +106,7 @@ impl Ledger {
         }
         merge_root(&mut self.fingerprint, &other.fingerprint)?;
         merge_root(&mut self.install, &other.install)?;
-        merge_entry(&mut self.signer_list, &other.signer_list, Kind::SignerList)?;
-        merge_entry(&mut self.release, &other.release, Kind::Release)?;
-        merge_entry(&mut self.config, &other.config, Kind::Config)?;
+        merge_entry(&mut self.signer_list, &other.signer_list)?;
         Ok(())
     }
 
@@ -231,66 +185,6 @@ impl Ledger {
             self.signer_list = Some(entry);
         }
     }
-
-    /// Refuse a release or config older than the floor, or a different one
-    /// at the floor. The statement at the floor passes again, because
-    /// enforcers re-read their current statement.
-    pub fn check(&self, kind: Kind, sequence: u64, digest: &str) -> Result<()> {
-        if let Some(floor) = self.floor(kind)? {
-            if sequence < floor.sequence || (sequence == floor.sequence && digest != floor.digest) {
-                return Err(AlienError::new(ErrorData::SequenceReplayed {
-                    kind: kind.as_str().to_string(),
-                    sequence,
-                    floor: floor.sequence,
-                }));
-            }
-        }
-        Ok(())
-    }
-
-    /// Raise the floor of `kind` to `sequence`. Never lowers it.
-    pub fn raise(&mut self, kind: Kind, sequence: u64, digest: &str) -> Result<()> {
-        self.check(kind, sequence, digest)?;
-        let entry = Some(Entry {
-            sequence,
-            digest: digest.to_string(),
-        });
-        match kind {
-            Kind::Release => self.release = entry,
-            Kind::Config => self.config = entry,
-            other => {
-                return Err(refused(format!(
-                    "'{other}' statements have no floor in the ledger"
-                )))
-            }
-        }
-        Ok(())
-    }
-
-    /// Refuse to go on without a statement of `kind` once the install has
-    /// accepted one, so a control plane that withholds the config can't get
-    /// workloads started without it.
-    pub fn require(&self, kind: Kind, present: bool) -> Result<()> {
-        match self.floor(kind)? {
-            Some(floor) if !present => Err(refused(format!(
-                "this install accepted '{kind}' sequence {} and none was delivered",
-                floor.sequence
-            ))),
-            _ => Ok(()),
-        }
-    }
-
-    /// The floor of `kind`.
-    pub fn floor(&self, kind: Kind) -> Result<Option<&Entry>> {
-        match kind {
-            Kind::Release => Ok(self.release.as_ref()),
-            Kind::Config => Ok(self.config.as_ref()),
-            Kind::SignerList => Ok(self.signer_list.as_ref()),
-            Kind::Session => Err(refused(
-                "sessions are bound to a nonce, not a floor".to_string(),
-            )),
-        }
-    }
 }
 
 fn merge_root(held: &mut Option<String>, other: &Option<String>) -> Result<()> {
@@ -309,14 +203,14 @@ fn merge_root(held: &mut Option<String>, other: &Option<String>) -> Result<()> {
     }
 }
 
-fn merge_entry(held: &mut Option<Entry>, other: &Option<Entry>, kind: Kind) -> Result<()> {
+fn merge_entry(held: &mut Option<Entry>, other: &Option<Entry>) -> Result<()> {
     let Some(theirs) = other else {
         return Ok(());
     };
     match held {
         Some(mine) if mine.sequence == theirs.sequence && mine.digest != theirs.digest => {
             Err(refused(format!(
-                "two different '{kind}' statements were accepted with sequence {}",
+                "two different signer lists were accepted with sequence {}",
                 mine.sequence
             )))
         }

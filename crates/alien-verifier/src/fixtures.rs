@@ -199,41 +199,8 @@ pub fn config(sequence: u64, body: ConfigBody) -> SignedStatement {
     config_for(PROJECT, &install_id(), sequence, &body, &ci())
 }
 
-/// A point a test fake holds a request at until the test lets it go on: the request reaches
-/// it, the test runs another request to the end, then releases it.
-#[derive(Default)]
-pub struct Pause {
-    reached: tokio::sync::Notify,
-    resume: tokio::sync::Notify,
-}
-
-impl Pause {
-    /// Called by the held request: report that it is here and wait to be let go on.
-    pub async fn hold(&self) {
-        self.reached.notify_one();
-        self.resume.notified().await;
-    }
-
-    /// Wait until the held request is here.
-    pub async fn reached(&self) {
-        self.reached.notified().await;
-    }
-
-    /// Let the held request go on.
-    pub fn resume(&self) {
-        self.resume.notify_one();
-    }
-}
-
-/// An acceptance nothing overtakes: it records nothing and refuses nothing.
+/// An acceptance that records nothing.
 pub struct Unopposed;
-
-#[async_trait::async_trait]
-impl crate::function::StillNewest for Unopposed {
-    async fn check(&self) -> crate::error::Result<()> {
-        Ok(())
-    }
-}
 
 #[async_trait::async_trait]
 impl crate::function::Accepting for Unopposed {

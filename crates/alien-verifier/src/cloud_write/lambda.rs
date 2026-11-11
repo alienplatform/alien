@@ -17,7 +17,7 @@ use crate::error::Result;
 use crate::fields::{
     check, check_whole, empty, free, is_empty, parse_strict, read_mismatch, signed, Row,
 };
-use crate::function::{default_log_group, wait_until_idle, FunctionStore, StillNewest};
+use crate::function::{default_log_group, wait_until_idle, FunctionStore};
 use crate::plan::{invoke_grants, signed_worker};
 
 /// Check `write`, a Lambda write for `facts.workload`, against the table. Refuses anything that
@@ -349,7 +349,6 @@ pub async fn forward<L: LambdaApi>(
     lambda: &L,
     facts: &Facts<'_>,
     write: &CloudWrite,
-    newest: &dyn StillNewest,
 ) -> Result<Value> {
     let name = facts.own_name.as_str();
     let failed = |operation: &str| call_failed(format!("lambda:{operation} {name}"));
@@ -359,7 +358,6 @@ pub async fn forward<L: LambdaApi>(
         }
         _ => None,
     };
-    newest.check().await?;
     let answer = match write {
         CloudWrite::CreateFunction(request) => {
             let request: CreateFunctionRequest = parse_strict("CreateFunction", request)?;
@@ -1110,23 +1108,12 @@ mod tests {
         }
     }
 
-    /// An update goes out only over the function as the verifier read it before its last check
-    /// that no newer release was accepted: Lambda refuses it if anything wrote the function in
-    /// between, so an older release's update held up by a newer one's (Lambda answers "update in
-    /// progress", and the call is retried) can't land after it.
+    /// An update goes out only over the function as the verifier read it: Lambda refuses it if
+    /// anything wrote the function in between.
     #[tokio::test]
     async fn an_update_is_sent_only_over_the_function_it_read() {
         use alien_aws_clients::lambda::MockLambdaApi;
         use std::sync::{Arc, Mutex};
-
-        struct Newest(Arc<Mutex<Vec<String>>>);
-        #[async_trait::async_trait]
-        impl StillNewest for Newest {
-            async fn check(&self) -> Result<()> {
-                self.0.lock().unwrap().push("floor checked".to_string());
-                Ok(())
-            }
-        }
 
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut lambda = MockLambdaApi::new();
@@ -1172,15 +1159,12 @@ mod tests {
             function_name: own(),
             request: json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": false}),
         };
-        forward(&lambda, &facts, &write, &Newest(events.clone()))
-            .await
-            .unwrap();
+        forward(&lambda, &facts, &write).await.unwrap();
 
         assert_eq!(
-            events.lock().unwrap()[..3],
+            events.lock().unwrap()[..2],
             [
                 "function read".to_string(),
-                "floor checked".to_string(),
                 "code updated over Some(\"rev-7\")".to_string(),
             ]
         );
@@ -1192,14 +1176,6 @@ mod tests {
     async fn the_write_is_sent_unchanged_and_read_back() {
         use alien_aws_clients::lambda::MockLambdaApi;
         use std::sync::{Arc, Mutex};
-
-        struct Newest;
-        #[async_trait::async_trait]
-        impl StillNewest for Newest {
-            async fn check(&self) -> Result<()> {
-                Ok(())
-            }
-        }
 
         let run = |resolved: String| async move {
             let sent = Arc::new(Mutex::new(None));
@@ -1241,13 +1217,7 @@ mod tests {
                 reads: &reads,
                 own_name: own(),
             };
-            let answer = forward(
-                &lambda,
-                &facts,
-                &CloudWrite::CreateFunction(create()),
-                &Newest,
-            )
-            .await;
+            let answer = forward(&lambda, &facts, &CloudWrite::CreateFunction(create())).await;
             let sent = sent.lock().unwrap().clone();
             (answer.map_err(|error| error.to_string()), sent)
         };

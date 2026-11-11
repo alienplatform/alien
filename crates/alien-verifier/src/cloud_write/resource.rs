@@ -16,9 +16,9 @@ use alien_aws_clients::{
 use alien_core::{Queue, ResourceEntry, Stack, Storage};
 use alien_permissions::{
     aws_bucket_policy::{check_bucket_policy, check_public_access_block},
-    gcp_bucket_iam::{check_bucket_iam, check_public_access_prevention},
     aws_queue_policy::check_queue_policy,
     aws_resource_policies,
+    gcp_bucket_iam::{check_bucket_iam, check_public_access_prevention},
 };
 use alien_signing::SignedStatement;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,6 @@ use serde_json::{json, Value};
 
 use super::refused;
 use crate::error::Result;
-use crate::function::StillNewest;
 use crate::plan::Place;
 use crate::trust::Accepted;
 
@@ -423,7 +422,10 @@ fn check_function_name(facts: &ResourceFacts<'_>, named: &str, operation: &str) 
     // A function is named by its name or by its ARN.
     let own_arn = aws_account_and_region(facts)
         .map(|(account, region)| {
-            format!("arn:{}:lambda:{region}:{account}:function:{own}", aws_partition(&region))
+            format!(
+                "arn:{}:lambda:{region}:{account}:function:{own}",
+                aws_partition(&region)
+            )
         })
         .ok();
     if named != own && Some(named) != own_arn.as_deref() {
@@ -648,10 +650,8 @@ pub async fn forward_aws_write(
     s3: &dyn alien_aws_clients::s3::S3Api,
     sqs: &dyn alien_aws_clients::sqs::SqsApi,
     write: &ResourceWrite,
-    newest: &dyn StillNewest,
 ) -> Result<Value> {
     use alien_error::Context;
-    newest.check().await?;
     match write {
         ResourceWrite::PutBucketPolicy { bucket, policy } => {
             s3.put_bucket_policy(bucket, policy).await.context(
@@ -811,7 +811,10 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
             let fields = body
                 .as_object()
                 .ok_or_else(|| refused("the subscription is not a JSON object"))?;
-            if let Some(field) = fields.keys().find(|key| !matches!(key.as_str(), "name" | "topic")) {
+            if let Some(field) = fields
+                .keys()
+                .find(|key| !matches!(key.as_str(), "name" | "topic"))
+            {
                 return Err(refused(format!(
                     "CreateSubscription sets '{field}': a pull subscription has only its topic"
                 )));
@@ -822,7 +825,9 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
                 return Err(refused(format!("the subscription's topic is not {topic}")));
             }
             if let Some(name) = fields.get("name") {
-                if name.as_str() != Some(format!("projects/{project}/subscriptions/{subscription}").as_str()) {
+                if name.as_str()
+                    != Some(format!("projects/{project}/subscriptions/{subscription}").as_str())
+                {
                     return Err(refused("the subscription's name is not its own"));
                 }
             }
@@ -836,7 +841,10 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
             }
             Ok(())
         }
-        ResourceWrite::SetSubscriptionIamPolicy { subscription, policy } => {
+        ResourceWrite::SetSubscriptionIamPolicy {
+            subscription,
+            policy,
+        } => {
             facts.queue()?;
             if *subscription != gcp_subscription_name(facts) {
                 return Err(refused(format!(
@@ -891,7 +899,9 @@ pub fn check_gcp_state(
     region: &str,
     storage_agent: Option<&str>,
 ) -> Result<()> {
-    use alien_permissions::generators::gcp_runtime::{GcpBindingResourceKind, GcpBindingTargetScope, GcpIamBinding};
+    use alien_permissions::generators::gcp_runtime::{
+        GcpBindingResourceKind, GcpBindingTargetScope, GcpIamBinding,
+    };
     let project = gcp_project(facts)?;
     let install = alien_permissions::gcp_resource_grants::GcpInstall {
         prefix: &facts.place.prefix,
@@ -918,7 +928,9 @@ pub fn check_gcp_state(
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             let mut derived: Vec<GcpIamBinding> = derive("queue", topic)?
                 .into_iter()
-                .filter(|binding| binding.resource_kind == Some(GcpBindingResourceKind::PubsubTopic))
+                .filter(|binding| {
+                    binding.resource_kind == Some(GcpBindingResourceKind::PubsubTopic)
+                })
                 .collect();
             // The one outside publisher a topic may have is the Cloud Storage service agent, and
             // only when a storage of the signed stack notifies this queue.
@@ -939,7 +951,10 @@ pub fn check_gcp_state(
             }
             check_bucket_iam(policy, current, &derived, false).map_err(refused)
         }
-        ResourceWrite::SetSubscriptionIamPolicy { subscription, policy } => {
+        ResourceWrite::SetSubscriptionIamPolicy {
+            subscription,
+            policy,
+        } => {
             let derived: Vec<GcpIamBinding> = derive("queue", &gcp_topic_name(facts))?
                 .into_iter()
                 .filter(|binding| {
@@ -980,7 +995,10 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
             body,
         } => return check_event_subscription(facts, account, name, body),
         other => {
-            return Err(refused(format!("Azure takes no {} write", other.operation())));
+            return Err(refused(format!(
+                "Azure takes no {} write",
+                other.operation()
+            )));
         }
     };
     let storage = facts.storage()?;
@@ -1099,12 +1117,17 @@ fn check_event_subscription(
 
 /// A blob container's fields: only `properties.publicAccess`, `Blob` when the signed storage is
 /// public and `None` otherwise (an absent value is `None`).
-pub fn check_blob_container_body(body: &Value, public_read: bool) -> std::result::Result<(), String> {
+pub fn check_blob_container_body(
+    body: &Value,
+    public_read: bool,
+) -> std::result::Result<(), String> {
     let object = body
         .as_object()
         .ok_or("the blob container is not a JSON object")?;
     if let Some(field) = object.keys().find(|key| key.as_str() != "properties") {
-        return Err(format!("the blob container sets '{field}'; only its properties may be set"));
+        return Err(format!(
+            "the blob container sets '{field}'; only its properties may be set"
+        ));
     }
     let properties = match object.get("properties") {
         None | Some(Value::Null) => return check_public_access(None, public_read),
@@ -1119,7 +1142,10 @@ pub fn check_blob_container_body(body: &Value, public_read: bool) -> std::result
     check_public_access(properties.get("publicAccess"), public_read)
 }
 
-fn check_public_access(value: Option<&Value>, public_read: bool) -> std::result::Result<(), String> {
+fn check_public_access(
+    value: Option<&Value>,
+    public_read: bool,
+) -> std::result::Result<(), String> {
     let access = match value {
         None | Some(Value::Null) => "None",
         Some(Value::String(access)) => access.as_str(),
@@ -1139,9 +1165,7 @@ fn check_public_access(value: Option<&Value>, public_read: bool) -> std::result:
 pub async fn forward_azure_write(
     azure: &crate::azure::Azure,
     write: &ResourceWrite,
-    newest: &dyn StillNewest,
 ) -> Result<Value> {
-    newest.check().await?;
     match write {
         ResourceWrite::CreateBlobContainer {
             account,
@@ -1171,17 +1195,15 @@ pub async fn forward_azure_write(
             azure.write_event_subscription(account, name, body).await?;
             Ok(json!({ "subscription": name }))
         }
-        other => Err(refused(format!("Azure takes no {} write", other.operation()))),
+        other => Err(refused(format!(
+            "Azure takes no {} write",
+            other.operation()
+        ))),
     }
 }
 
 /// Send a checked GCP write unchanged.
-pub async fn forward_gcp_write(
-    gcp: &crate::gcp::Gcp,
-    write: &ResourceWrite,
-    newest: &dyn StillNewest,
-) -> Result<Value> {
-    newest.check().await?;
+pub async fn forward_gcp_write(gcp: &crate::gcp::Gcp, write: &ResourceWrite) -> Result<Value> {
     match write {
         ResourceWrite::SetBucketIamPolicy { bucket, policy } => {
             gcp.set_bucket_iam_policy(bucket, policy).await?;
@@ -1196,15 +1218,20 @@ pub async fn forward_gcp_write(
             Ok(json!({ "topic": topic }))
         }
         ResourceWrite::CreateSubscription { subscription, body } => {
-            gcp.create_pubsub("subscriptions", subscription, body).await?;
+            gcp.create_pubsub("subscriptions", subscription, body)
+                .await?;
             Ok(json!({ "subscription": subscription }))
         }
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             gcp.set_pubsub_iam_policy("topics", topic, policy).await?;
             Ok(json!({ "topic": topic }))
         }
-        ResourceWrite::SetSubscriptionIamPolicy { subscription, policy } => {
-            gcp.set_pubsub_iam_policy("subscriptions", subscription, policy).await?;
+        ResourceWrite::SetSubscriptionIamPolicy {
+            subscription,
+            policy,
+        } => {
+            gcp.set_pubsub_iam_policy("subscriptions", subscription, policy)
+                .await?;
             Ok(json!({ "subscription": subscription }))
         }
         other => Err(refused(format!("GCP takes no {} write", other.operation()))),

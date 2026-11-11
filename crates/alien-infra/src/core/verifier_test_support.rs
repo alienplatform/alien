@@ -15,7 +15,6 @@ use alien_signing::{
     SignerKind, SignerListBody, SigningSettings, Workload,
 };
 use alien_verifier::cloud_write::{CloudWrite, Facts};
-use alien_verifier::function::StillNewest;
 use alien_verifier::plan::{OwnResource, Place};
 use alien_verifier::trust::InstallStore;
 use alien_verifier::{Backend, Verifier};
@@ -258,9 +257,7 @@ impl Backend for Forwarded {
         &self,
         _facts: &Facts<'_>,
         write: &CloudWrite,
-        newest: &dyn StillNewest,
     ) -> alien_verifier::Result<serde_json::Value> {
-        newest.check().await?;
         self.writes.lock().unwrap().push(write.clone());
         Ok(serde_json::Value::Null)
     }
