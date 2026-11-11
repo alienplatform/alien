@@ -526,7 +526,7 @@ async fn status_report(
     };
     if !deleting {
         if let Err(error) = reconcile_report(
-            state.deployment_store.as_ref(),
+            &state,
             &held_values,
             &subject,
             &deployment.id,
@@ -575,7 +575,7 @@ async fn status_report(
         && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
     {
         if let Err(error) = reconcile_report(
-            state.deployment_store.as_ref(),
+            &state,
             &held_values,
             &subject,
             &deployment.id,
@@ -601,7 +601,38 @@ async fn status_report(
         .into_response()
 }
 
+/// Persist a status report. A report that leaves the deployment Running with
+/// nothing queued also queues the update to the release it should run now.
 async fn reconcile_report(
+    state: &AppState,
+    held_values: &crate::values::HeldValues,
+    subject: &Subject,
+    deployment_id: &str,
+    report: DeploymentState,
+    heartbeats: Vec<ResourceHeartbeat>,
+    applied_configuration_revision: Option<String>,
+) -> Result<(), alien_error::AlienError> {
+    let mut outcome = persist_report(
+        state.deployment_store.as_ref(),
+        held_values,
+        subject,
+        deployment_id,
+        report,
+        heartbeats,
+        applied_configuration_revision,
+    )
+    .await?;
+    crate::release_targeting::retarget_if_settled(
+        state.deployment_store.as_ref(),
+        state.release_store.as_ref(),
+        state.release_channels.as_deref(),
+        subject,
+        &mut outcome.record,
+    )
+    .await
+}
+
+async fn persist_report(
     store: &dyn crate::traits::DeploymentStore,
     held_values: &crate::values::HeldValues,
     subject: &Subject,
@@ -609,7 +640,7 @@ async fn reconcile_report(
     mut report: DeploymentState,
     heartbeats: Vec<ResourceHeartbeat>,
     applied_configuration_revision: Option<String>,
-) -> Result<(), alien_error::AlienError> {
+) -> Result<crate::traits::ReconcileOutcome, alien_error::AlienError> {
     held_values
         .redact(report.stack_state.as_mut())
         .map_err(|error| error.into_generic())?;
@@ -630,10 +661,7 @@ async fn reconcile_report(
     if let Some(revision) = applied_configuration_revision {
         request = request.applied_configuration_revision(revision);
     }
-    store
-        .reconcile_request(subject, request.build())
-        .await
-        .map(|_| ())
+    store.reconcile_request(subject, request.build()).await
 }
 
 /// How long a status report spends forwarding telemetry before it answers.
@@ -1645,7 +1673,7 @@ mod tests {
                         && request.applied_configuration_revision() == expected_revision
                 })
                 .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
-            let error = reconcile_report(
+            let Err(error) = persist_report(
                 &store,
                 &crate::values::HeldValues::default(),
                 &Subject::system(),
@@ -1655,7 +1683,9 @@ mod tests {
                 report.applied_configuration_revision,
             )
             .await
-            .unwrap_err();
+            else {
+                panic!("the store returned an error");
+            };
             assert!(error.to_string().contains("store reached"));
         }
     }
