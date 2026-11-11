@@ -229,6 +229,8 @@ pub struct DeploymentLoop {
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
+    /// Release channels, when the manager has them; see `ReleaseTargeting`.
+    release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
 }
 
 /// A phase that can't start, to be saved as the deployment's failure.
@@ -318,7 +320,18 @@ impl DeploymentLoop {
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
             values: None,
+            release_channels: None,
         }
+    }
+
+    /// Send a deployment that finishes Running on a release other than the one
+    /// its channel or pin selects on to that release.
+    pub fn with_release_channels(
+        mut self,
+        channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    ) -> Self {
+        self.release_channels = channels;
+        self
     }
 
     /// Load deployments' held values from `values` before they step.
@@ -1249,7 +1262,11 @@ impl DeploymentLoop {
             self.config.supported_aws_regions.clone(),
         )
         .with_held_values(step_values)
-        .with_generated_slots(generated_slots);
+        .with_generated_slots(generated_slots)
+        .with_release_targeting(Some(crate::release_targeting::ReleaseTargeting {
+            release_store: self.release_store.clone(),
+            channels: self.release_channels.clone(),
+        }));
 
         let mut config = config;
         let runner_result = if options.require_heartbeats_enabled {
@@ -1487,7 +1504,17 @@ impl DeploymentLoop {
                 },
             )
             .await?;
-        Ok(outcome.record)
+        let mut record = outcome.record;
+        // Credential-retry bookkeeping is saved this way for Running deployments too.
+        crate::release_targeting::retarget_if_settled(
+            self.deployment_store.as_ref(),
+            self.release_store.as_ref(),
+            self.release_channels.as_deref(),
+            &Subject::system(),
+            &mut record,
+        )
+        .await?;
+        Ok(record)
     }
 }
 

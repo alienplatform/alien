@@ -31,6 +31,8 @@ pub struct ManagerTransport {
     supported_aws_regions: Vec<String>,
     held_values: crate::values::HeldValues,
     generated_slots: Vec<crate::values::ValueMeta>,
+    /// Where a deployment that finishes Running goes next; `None` queues nothing.
+    release_targeting: Option<crate::release_targeting::ReleaseTargeting>,
 }
 
 impl ManagerTransport {
@@ -53,6 +55,7 @@ impl ManagerTransport {
             supported_aws_regions,
             held_values: crate::values::HeldValues::default(),
             generated_slots: Vec::new(),
+            release_targeting: None,
         }
     }
 
@@ -64,6 +67,16 @@ impl ManagerTransport {
 }
 
 impl ManagerTransport {
+    /// Queue an update when a step leaves the deployment Running on a release
+    /// other than the one it should run.
+    pub fn with_release_targeting(
+        mut self,
+        targeting: Option<crate::release_targeting::ReleaseTargeting>,
+    ) -> Self {
+        self.release_targeting = targeting;
+        self
+    }
+
     /// Report these generated secret inputs with every step.
     pub fn with_generated_slots(mut self, slots: Vec<crate::values::ValueMeta>) -> Self {
         self.generated_slots = slots;
@@ -149,7 +162,7 @@ impl DeploymentLoopTransport for ManagerTransport {
             execution_claim: self.execution_claim.clone(),
             operations_report: None,
         };
-        let outcome = if self.generated_slots.is_empty() {
+        let mut outcome = if self.generated_slots.is_empty() {
             self.deployment_store.reconcile(&caller, data).await?
         } else {
             let request = ReconcileInput::builder(data)
@@ -159,6 +172,12 @@ impl DeploymentLoopTransport for ManagerTransport {
                 .reconcile_request(&caller, request)
                 .await?
         };
+
+        if let Some(targeting) = &self.release_targeting {
+            targeting
+                .retarget_if_settled(self.deployment_store.as_ref(), &caller, &mut outcome.record)
+                .await?;
+        }
 
         crate::registry_access::revoke_after_persisting(
             self.deployment_store.as_ref(),
