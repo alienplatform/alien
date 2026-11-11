@@ -4022,7 +4022,7 @@ inputValues: {}
 global:
   # Pull every image from this registry (host[/path]) instead of the public
   # ones: the Operator, its hooks and probes, the log collector and the
-  # application's workloads. Mirror the images with `alien-deploy sync --registry`.
+  # application's workloads. Copy the images there first, keeping each one's digest.
   imageRegistry: ""
 
 runtime:
