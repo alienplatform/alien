@@ -33,8 +33,8 @@ use error::{DockdashResultExt, ErrorData, Result};
 use fs2::FileExt;
 use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
 use oci_client::manifest::{
-    ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_MEDIA_TYPE,
-    OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
+    ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+    IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
 };
 use oci_client::Reference;
 use rand::distr::Alphanumeric;
@@ -457,6 +457,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Worker,
                                 &[],
+                                kubernetes_image_user(&settings, func.security.as_ref()),
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for worker '{}' was cancelled", func_id);
@@ -624,6 +625,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Daemon,
                                 &[],
+                                kubernetes_image_user(&settings, daemon.security.as_ref()),
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for daemon '{}' was cancelled", daemon_id);
@@ -774,6 +776,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::SandboxBase,
                                 &[],
+                                None,
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for sandbox '{}' was cancelled", sandbox_id);
@@ -1011,6 +1014,15 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Container,
                                 &related_resources,
+                                // One binary serves every container in the group, so it keeps the
+                                // image's own user as soon as any of them opts out.
+                                if containers_group.iter().all(|(_, c)| {
+                                    alien_core::ContainerSecurity::is_restricted(c.security.as_ref())
+                                }) {
+                                    kubernetes_image_user(&settings, None)
+                                } else {
+                                    None
+                                },
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for container '{}' was cancelled", container_id);
@@ -2120,6 +2132,13 @@ async fn push_target(
     )
     .await?;
     if target.resource_type != "sandbox" {
+        // Kubernetes runs workloads by digest: a tag can be repointed after the release is cut,
+        // and a site mirror keeps digests, not tags. The release records the digest it pushed.
+        if *platform == Platform::Kubernetes
+            && matches!(target.resource_type, "container" | "daemon")
+        {
+            return pin_to_digest(target.resource_name(), &image_uri, push_options).await;
+        }
         return Ok(image_uri);
     }
     let layered = match platform {
@@ -2195,7 +2214,12 @@ async fn pin_to_digest(
         .pull_manifest_raw(
             &reference,
             &push_options.auth,
-            &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+            &[
+                OCI_IMAGE_MEDIA_TYPE,
+                IMAGE_MANIFEST_MEDIA_TYPE,
+                OCI_IMAGE_INDEX_MEDIA_TYPE,
+                IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+            ],
         )
         .await
         .into_alien_error()
@@ -2390,6 +2414,7 @@ async fn build_resource(
     build_output_dir: &Path,
     workload: toolchain::WorkloadKind,
     related_resources: &[String],
+    image_user: Option<&'static str>,
 ) -> Result<String> {
     let resource_started = Instant::now();
     // Get target list from settings (uses platform defaults if not specified)
@@ -2414,9 +2439,11 @@ async fn build_resource(
     toolchain::create_toolchain(toolchain_config).validate_source(Path::new(src), resource_name)?;
 
     let cache_key_started = Instant::now();
-    let artifact_cache_key =
+    let artifact_cache_key = with_image_user(
         compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
-            .await?;
+            .await?,
+        image_user,
+    );
     let cache_key_secs = cache_key_started.elapsed().as_secs_f64();
 
     let platform_name = settings.platform.runtime_platform().as_str();
@@ -2509,6 +2536,7 @@ async fn build_resource(
                     &target,
                     &target_output_path,
                     workload,
+                    image_user,
                 )
                 .await?;
 
@@ -2560,6 +2588,7 @@ async fn build_resource(
     // A re-key that fails (a file removed since the build) leaves the artifact uncached too.
     match compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
         .await
+        .map(|key| with_image_user(key, image_user))
     {
         Ok(key_after_build) if key_after_build == artifact_cache_key => {
             write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key)
@@ -3433,6 +3462,33 @@ fn source_layer_compression(
     }
 }
 
+/// The unprivileged user and group source-built images run as on Kubernetes, where pods are
+/// restricted by default and the kubelet refuses an image that runs as root.
+pub const KUBERNETES_IMAGE_USER: &str = "65532:65532";
+
+/// The `USER` a source-built image gets: [`KUBERNETES_IMAGE_USER`] for a Kubernetes target whose
+/// workload runs restricted, nothing for any other target and for a workload that opted out of
+/// the restricted profile (it keeps the image's own user).
+fn kubernetes_image_user(
+    settings: &BuildSettings,
+    security: Option<&alien_core::ContainerSecurity>,
+) -> Option<&'static str> {
+    (settings.platform.runtime_platform() == Platform::Kubernetes
+        && alien_core::ContainerSecurity::is_restricted(security))
+    .then_some(KUBERNETES_IMAGE_USER)
+}
+
+/// An artifact built with a `USER` is a different artifact from the same source without one.
+fn with_image_user(key: String, image_user: Option<&str>) -> String {
+    match image_user {
+        Some(user) => format!(
+            "{:x}",
+            Sha256::digest(format!("{key}\0image-user\0{user}").as_bytes())
+        ),
+        None => key,
+    }
+}
+
 /// Build a specific OS/architecture target to an OCI tarball file
 #[allow(clippy::too_many_arguments)]
 async fn build_target_to_file(
@@ -3444,6 +3500,7 @@ async fn build_target_to_file(
     target: &BinaryTarget,
     output_path: &Path,
     workload: toolchain::WorkloadKind,
+    image_user: Option<&'static str>,
 ) -> Result<String> {
     info!(
         "Starting toolchain build for resource: {} (target: {})",
@@ -3575,6 +3632,9 @@ async fn build_target_to_file(
                         .platform(target.oci_os(), &target.to_dockdash_arch())
                         .pull_policy(PullPolicy::Always)
                         .layer(app_layer);
+                    if let Some(user) = image_user {
+                        image_builder = image_builder.user(user);
+                    }
 
                     // Built-in Worker and direct bases are public. Do not let
                     // unrelated DOCKER_USERNAME/PASSWORD values get sent to
@@ -3704,6 +3764,9 @@ async fn build_target_to_file(
             let mut image_builder = DockDashImage::builder()
                 .platform(target.oci_os(), &target.to_dockdash_arch())
                 .working_dir("/app"); // Set working directory so ./app resolves correctly
+            if let Some(user) = image_user {
+                image_builder = image_builder.user(user);
+            }
             image_builder = apply_image_command(image_builder, &toolchain_output);
 
             for layer in all_layers {
@@ -5714,6 +5777,45 @@ mod tests {
         // which is exactly why we hash - to detect changes!)
         let tarball_path = path.join("linux-x64.oci.tar");
         assert!(tarball_path.exists(), "Tarball should exist");
+    }
+
+    #[test]
+    fn only_restricted_kubernetes_workloads_get_the_unprivileged_user() {
+        let settings = |platform| BuildSettings {
+            output_directory: String::new(),
+            platform,
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let kubernetes = settings(PlatformBuildSettings::Kubernetes {
+            base_platform: None,
+        });
+        let opted_out = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        assert_eq!(
+            kubernetes_image_user(&kubernetes, None),
+            Some("65532:65532")
+        );
+        assert_eq!(kubernetes_image_user(&kubernetes, Some(&opted_out)), None);
+        for other in [
+            PlatformBuildSettings::Gcp {},
+            PlatformBuildSettings::Azure {},
+        ] {
+            assert_eq!(kubernetes_image_user(&settings(other), None), None);
+        }
+        // The same source built with and without the user is a different artifact.
+        let key = "abc".to_string();
+        assert_eq!(with_image_user(key.clone(), None), key);
+        assert_ne!(with_image_user(key.clone(), Some("65532:65532")), key);
     }
 
     /// `alien release` reuses a pushed image by the artifact's directory name, and GCP pushes a

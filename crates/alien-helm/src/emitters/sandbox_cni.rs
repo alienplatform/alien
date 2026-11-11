@@ -12,7 +12,9 @@
 //! an older API server refuses the install.
 
 /// Digest-pinned probe image (python:3.13-slim, multi-architecture index).
-pub(crate) const PROBE_IMAGE: &str = "docker.io/library/python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f";
+pub(crate) const PROBE_REPOSITORY: &str = "docker.io/library/python";
+pub(crate) const PROBE_DIGEST: &str =
+    "sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f";
 
 /// Runtime class the Kubernetes sandbox controller schedules sessions into.
 const SANDBOX_RUNTIME_CLASS: &str = "gvisor";
@@ -45,6 +47,7 @@ pub(crate) fn template() -> String {
         .join(", ");
     format!(
         r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" . | trunc 51 | trimSuffix "-") -}}}}
+{{{{- $probeImage := include "deployment.image" (dict "root" . "repository" "{repository}" "digest" "{digest}") -}}}}
 {{{{- $cluster := printf "%s-%s" $name (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -76,7 +79,7 @@ spec:
       message: probe pods mount nothing
     - expression: "!has(object.spec.initContainers) && !has(object.spec.ephemeralContainers) && size(object.spec.containers) == 1"
       message: probe pods run one container
-    - expression: "object.spec.containers.all(c, c.image == '{image}' && (!has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false))"
+    - expression: {{{{ printf "object.spec.containers.all(c, c.image == '%s' && (!has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false))" $probeImage | quote }}}}
       message: probe pods run the pinned probe image unprivileged
     - expression: "(!has(object.spec.hostNetwork) || !object.spec.hostNetwork) && (!has(object.spec.hostPID) || !object.spec.hostPID) && (!has(object.spec.hostIPC) || !object.spec.hostIPC)"
       message: probe pods use no host namespaces
@@ -233,7 +236,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: probe
-          image: {image}
+          image: {{{{ $probeImage | quote }}}}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -254,7 +257,7 @@ spec:
             - name: PROBE_JOB
               value: {{{{ $name | quote }}}}
             - name: PROBE_IMAGE
-              value: {image}
+              value: {{{{ $probeImage | quote }}}}
             - name: PROBE_RUNTIME_CLASS
               value: {runtime_class}
             - name: PROBE_ADMISSION_POLICY
@@ -265,7 +268,8 @@ spec:
             - -c
             - |
 {script}"#,
-        image = PROBE_IMAGE,
+        repository = PROBE_REPOSITORY,
+        digest = PROBE_DIGEST,
         runtime_class = SANDBOX_RUNTIME_CLASS,
     )
 }

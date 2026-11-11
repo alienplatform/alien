@@ -4233,6 +4233,14 @@ async fn helm_upgrade(
     if let Some(fingerprint) = fingerprint {
         cmd.args(["--description", fingerprint]);
     }
+    // Every other image the chart and the Operator run (probes, collector, workloads
+    // not named in the target) follows the same registry.
+    if let Some(registry) = record.registry.as_deref().filter(|r| !r.is_empty()) {
+        cmd.args([
+            "--set-string",
+            &format!("global.imageRegistry={}", registry.trim_end_matches('/')),
+        ]);
+    }
     for (key, image) in &record.chart_images {
         cmd.args([
             "--set-string",

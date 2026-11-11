@@ -1756,6 +1756,7 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                image_registry: None,
                 gcp_federation_scope,
                 stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),

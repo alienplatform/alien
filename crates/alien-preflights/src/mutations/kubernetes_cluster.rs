@@ -196,6 +196,7 @@ mod tests {
         stack_settings: StackSettings,
     ) -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
             gcp_federation_scope: None,
             deployment_name: None,
             stack_settings,

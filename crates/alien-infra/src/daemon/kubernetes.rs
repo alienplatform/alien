@@ -136,7 +136,9 @@ impl KubernetesDaemonController {
             }
         };
 
-        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
+        let image_pull_secret_name = if let (DaemonCode::Image { image }, None) =
+            (&config.code, ctx.deployment_config.image_registry.as_ref())
+        {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
@@ -525,7 +527,9 @@ impl KubernetesDaemonController {
         let service_account_name = config
             .get_permissions()
             .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
-        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
+        let image_pull_secret_name = if let (DaemonCode::Image { image }, None) =
+            (&config.code, ctx.deployment_config.image_registry.as_ref())
+        {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
@@ -1069,7 +1073,7 @@ impl KubernetesDaemonController {
         // entrypoint, deployed here as a DaemonSet. Reaching here with
         // unbuilt source means the build step was skipped.
         let image = match &config.code {
-            DaemonCode::Image { image } => image.clone(),
+            DaemonCode::Image { image } => ctx.deployment_config.workload_image(image),
             DaemonCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),

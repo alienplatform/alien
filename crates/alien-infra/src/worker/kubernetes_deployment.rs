@@ -36,7 +36,7 @@ pub(super) async fn build_worker_deployment(
 
     // Determine the container image
     let image = match &config.code {
-        WorkerCode::Image { image } => image.clone(),
+        WorkerCode::Image { image } => ctx.deployment_config.workload_image(image),
         WorkerCode::Source { .. } => {
             // For source code, we would need to get the built image from Build resource
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {

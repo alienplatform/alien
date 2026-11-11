@@ -30,10 +30,18 @@ management:
 
 inputValues: {}
 
+global:
+  # Pull every image from this registry (host[/path]) instead of the public
+  # ones: the Operator, its hooks and probes, the log collector and the
+  # application's workloads. Mirror the images with `alien-deploy sync --registry`.
+  imageRegistry: ""
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
     tag: latest
+    # Set to run the Operator by digest (sha256:...); it wins over the tag.
+    digest: ""
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
     # the manager this chart connects to).
@@ -301,6 +309,16 @@ postgres: {}
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
       }
     },
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imageRegistry": {
+          "type": "string",
+          "description": "Site registry (host[/path]) every image is pulled from: the Operator, its hooks and probes, the log collector and the application's workloads. Images keep their repository path, tag and digest."
+        }
+      }
+    },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -312,6 +330,7 @@ postgres: {}
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
             "pullWithManagementToken": { "type": "boolean" },
             "selfUpdate": { "type": "boolean" }
           }
@@ -462,6 +481,7 @@ postgres: {}
                   "properties": {
                     "repository": { "type": "string", "minLength": 1 },
                     "tag": { "type": "string", "minLength": 1 },
+                    "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
                     "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
                   }
                 }
@@ -493,6 +513,7 @@ postgres: {}
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
+            "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
           }
         },
@@ -814,6 +835,54 @@ postgres: {}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /*
+Image reference for a repository, tag and optional digest. When global.imageRegistry is set the
+registry host is replaced by it (a path after the host is kept as a prefix), so every image the chart
+runs comes from the site's mirror. A digest wins over the tag. Keep in step with the Operator's
+rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
+*/ -}}
+{{- define "deployment.image" -}}
+{{- $repository := .repository -}}
+{{- $mirror := trimSuffix "/" (default "" (default dict .root.Values.global).imageRegistry) -}}
+{{- if $mirror -}}
+{{- $parts := splitList "/" $repository -}}
+{{- $first := first $parts -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first)) -}}
+{{- $repository = join "/" (rest $parts) -}}
+{{- else if eq (len $parts) 1 -}}
+{{- $repository = printf "library/%s" $repository -}}
+{{- end -}}
+{{- if not (hasPrefix (printf "%s/" $mirror) .repository) -}}
+{{- $repository = printf "%s/%s" $mirror $repository -}}
+{{- else -}}
+{{- $repository = .repository -}}
+{{- end -}}
+{{- end -}}
+{{- if .digest -}}{{ $repository }}@{{ .digest }}{{- else -}}{{ $repository }}:{{ .tag }}{{- end -}}
+{{- end -}}
+{{- /* An image reference written as one string (repository[:tag][@digest]). */ -}}
+{{- define "deployment.mirroredImage" -}}
+{{- $image := .image -}}
+{{- $digest := "" -}}
+{{- $tag := "" -}}
+{{- if contains "@" $image -}}
+{{- $split := splitList "@" $image -}}
+{{- $image = first $split -}}
+{{- $digest = last $split -}}
+{{- end -}}
+{{- $last := last (splitList "/" $image) -}}
+{{- if contains ":" $last -}}
+{{- $tag = last (splitList ":" $last) -}}
+{{- $image = trimSuffix (printf ":%s" $tag) $image -}}
+{{- end -}}
+{{- $mirror := trimSuffix "/" (default "" (default dict .root.Values.global).imageRegistry) -}}
+{{- if not $mirror -}}
+{{- .image -}}
+{{- else -}}
+{{- $ref := include "deployment.image" (dict "root" .root "repository" $image "tag" (default "latest" $tag) "digest" $digest) -}}
+{{- $ref -}}
+{{- end -}}
+{{- end -}}
 {{- define "deployment.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
@@ -1369,7 +1438,7 @@ spec:
       {{- end }}
       containers:
         - name: operator
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
@@ -1481,6 +1550,10 @@ spec:
             {{- if ne (include "deployment.chartDefaultBindings" .) "{}" }}
             - name: CHART_DEFAULT_BINDINGS
               value: {{ include "deployment.chartDefaultBindings" . | quote }}
+            {{- end }}
+            {{- with (default dict .Values.global).imageRegistry }}
+            - name: IMAGE_REGISTRY
+              value: {{ . | quote }}
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
@@ -1786,7 +1859,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: collector
-          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.logCollector.image.repository "tag" .Values.logCollector.image.tag "digest" (dig "digest" "" .Values.logCollector.image)) | quote }}
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1998,7 +2071,7 @@ spec:
           {{- end }}
       containers:
         - name: prune-unsafe-history
-          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -2210,7 +2283,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -2778,7 +2851,7 @@ spec:
       serviceAccountName: metrics-server
       containers:
         - name: metrics-server
-          image: {{ default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image | quote }}
+          image: {{ include "deployment.mirroredImage" (dict "root" $ "image" (default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image)) | quote }}
           imagePullPolicy: IfNotPresent
           args:
             - --cert-dir=/tmp
@@ -3024,7 +3097,7 @@ spec:
       {{- end }}
       containers:
         - name: postgres
-          image: {{ printf "%s:%s" $database.image.repository $database.image.tag | quote }}
+          image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
           ports:
             - name: postgres
               containerPort: 5432

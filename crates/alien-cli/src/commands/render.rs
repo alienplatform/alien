@@ -186,6 +186,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        image_registry: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
@@ -784,6 +785,7 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    image_registry: None,
                     // Rendering precedes installation reservation; setup supplies the scope.
                     gcp_federation_scope: None,
                     stored_secret_input_ids: None,

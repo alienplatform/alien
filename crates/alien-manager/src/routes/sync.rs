@@ -2942,6 +2942,7 @@ pub(in crate::routes) mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),

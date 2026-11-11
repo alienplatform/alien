@@ -123,6 +123,10 @@ pub struct OperatorConfig {
     /// Explicit installation and manager bindings take precedence.
     pub chart_default_bindings: Option<ExternalBindings>,
 
+    /// Site registry (`host[/path]`) every workload image is pulled from, from the chart's
+    /// `global.imageRegistry`. Images keep their path, tag and digest.
+    pub image_registry: Option<String>,
+
     /// Operations declared through `OPERATOR_OPERATIONS`, for an Operator
     /// installed without a release.
     pub operations: Option<alien_core::OperationsConfig>,

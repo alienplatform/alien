@@ -145,7 +145,9 @@ impl KubernetesWorkerController {
 
         // Create a Docker config Secret so kubelet can authenticate when pulling
         // from the manager's registry. Required for image-based deployments.
-        let image_pull_secret_name = if let WorkerCode::Image { image } = &config.code {
+        let image_pull_secret_name = if let (WorkerCode::Image { image }, None) =
+            (&config.code, ctx.deployment_config.image_registry.as_ref())
+        {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
@@ -652,7 +654,9 @@ impl KubernetesWorkerController {
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
         // Registry pull secret is required for image-based deployments.
-        let image_pull_secret_name = if let WorkerCode::Image { image } = &config.code {
+        let image_pull_secret_name = if let (WorkerCode::Image { image }, None) =
+            (&config.code, ctx.deployment_config.image_registry.as_ref())
+        {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),

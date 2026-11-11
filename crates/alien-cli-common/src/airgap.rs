@@ -539,13 +539,7 @@ pub async fn import_images(
 /// Registry host and repository an image is pushed to under
 /// `registry_prefix` (`host[/path]`).
 fn site_repository(registry_prefix: &str, image: &BundleImage) -> (String, String) {
-    match registry_prefix.trim_end_matches('/').split_once('/') {
-        Some((host, path)) => (host.to_string(), format!("{path}/{}", image.repository)),
-        None => (
-            registry_prefix.trim_end_matches('/').to_string(),
-            image.repository.clone(),
-        ),
-    }
+    alien_core::image_rewrite::site_repository(registry_prefix, &image.repository)
 }
 
 /// Where each image lives once imported under `registry_prefix`, pinned by

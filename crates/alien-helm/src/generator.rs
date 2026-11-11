@@ -1050,7 +1050,7 @@ spec:
           {{- end }}
       containers:
         - name: verify-history-backend
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1108,7 +1108,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: wait-for-identity
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1191,7 +1191,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1437,7 +1437,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: rollback-guard
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -4019,10 +4019,18 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
 
 inputValues: {}
 
+global:
+  # Pull every image from this registry (host[/path]) instead of the public
+  # ones: the Operator, its hooks and probes, the log collector and the
+  # application's workloads. Mirror the images with `alien-deploy sync --registry`.
+  imageRegistry: ""
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
     tag: latest
+    # Set to run the Operator by digest (sha256:...); it wins over the tag.
+    digest: ""
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
     # the manager this chart connects to).
@@ -4739,6 +4747,16 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
       }
     },
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imageRegistry": {
+          "type": "string",
+          "description": "Site registry (host[/path]) every image is pulled from: the Operator, its hooks and probes, the log collector and the application's workloads. Images keep their repository path, tag and digest."
+        }
+      }
+    },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -4750,6 +4768,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
             "pullWithManagementToken": { "type": "boolean" },
             "selfUpdate": { "type": "boolean" }
           }
@@ -4900,6 +4919,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                   "properties": {
                     "repository": { "type": "string", "minLength": 1 },
                     "tag": { "type": "string", "minLength": 1 },
+                    "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
                     "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
                   }
                 }
@@ -4931,6 +4951,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
+            "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
           }
         },
@@ -5495,6 +5516,54 @@ fn helpers_tpl() -> String {
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /*
+Image reference for a repository, tag and optional digest. When global.imageRegistry is set the
+registry host is replaced by it (a path after the host is kept as a prefix), so every image the chart
+runs comes from the site's mirror. A digest wins over the tag. Keep in step with the Operator's
+rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
+*/ -}}
+{{- define "deployment.image" -}}
+{{- $repository := .repository -}}
+{{- $mirror := trimSuffix "/" (default "" (default dict .root.Values.global).imageRegistry) -}}
+{{- if $mirror -}}
+{{- $parts := splitList "/" $repository -}}
+{{- $first := first $parts -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first)) -}}
+{{- $repository = join "/" (rest $parts) -}}
+{{- else if eq (len $parts) 1 -}}
+{{- $repository = printf "library/%s" $repository -}}
+{{- end -}}
+{{- if not (hasPrefix (printf "%s/" $mirror) .repository) -}}
+{{- $repository = printf "%s/%s" $mirror $repository -}}
+{{- else -}}
+{{- $repository = .repository -}}
+{{- end -}}
+{{- end -}}
+{{- if .digest -}}{{ $repository }}@{{ .digest }}{{- else -}}{{ $repository }}:{{ .tag }}{{- end -}}
+{{- end -}}
+{{- /* An image reference written as one string (repository[:tag][@digest]). */ -}}
+{{- define "deployment.mirroredImage" -}}
+{{- $image := .image -}}
+{{- $digest := "" -}}
+{{- $tag := "" -}}
+{{- if contains "@" $image -}}
+{{- $split := splitList "@" $image -}}
+{{- $image = first $split -}}
+{{- $digest = last $split -}}
+{{- end -}}
+{{- $last := last (splitList "/" $image) -}}
+{{- if contains ":" $last -}}
+{{- $tag = last (splitList ":" $last) -}}
+{{- $image = trimSuffix (printf ":%s" $tag) $image -}}
+{{- end -}}
+{{- $mirror := trimSuffix "/" (default "" (default dict .root.Values.global).imageRegistry) -}}
+{{- if not $mirror -}}
+{{- .image -}}
+{{- else -}}
+{{- $ref := include "deployment.image" (dict "root" .root "repository" $image "tag" (default "latest" $tag) "digest" $digest) -}}
+{{- $ref -}}
+{{- end -}}
+{{- end -}}
 {{- define "deployment.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
@@ -6051,7 +6120,7 @@ spec:
           {{- end }}
       containers:
         - name: prune-unsafe-history
-          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -6266,7 +6335,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -6673,7 +6742,7 @@ spec:
       {{- end }}
       containers:
         - name: operator
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
@@ -6785,6 +6854,10 @@ spec:
             {{- if ne (include "deployment.chartDefaultBindings" .) "{}" }}
             - name: CHART_DEFAULT_BINDINGS
               value: {{ include "deployment.chartDefaultBindings" . | quote }}
+            {{- end }}
+            {{- with (default dict .Values.global).imageRegistry }}
+            - name: IMAGE_REGISTRY
+              value: {{ . | quote }}
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
@@ -7136,7 +7209,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: collector
-          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.logCollector.image.repository "tag" .Values.logCollector.image.tag "digest" (dig "digest" "" .Values.logCollector.image)) | quote }}
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -7525,7 +7598,7 @@ spec:
       serviceAccountName: metrics-server
       containers:
         - name: metrics-server
-          image: {{ default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image | quote }}
+          image: {{ include "deployment.mirroredImage" (dict "root" $ "image" (default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image)) | quote }}
           imagePullPolicy: IfNotPresent
           args:
             - --cert-dir=/tmp
@@ -9587,6 +9660,64 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn one_registry_value_moves_every_image_and_the_operator_runs_by_digest() {
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let values = format!(
+            r#"
+global:
+  imageRegistry: mirror.site.internal:5000/alien
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  image:
+    repository: ghcr.io/vendor/operator
+    tag: "1.2.3"
+    digest: {digest}
+logCollector:
+  enabled: true
+  mode: nodeAgent
+  token: collector-token
+"#
+        );
+        for (label, chart) in [("chart", sample_product_chart_with_collector(true))] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(&values));
+            rendered.assert_ok(label);
+            let mut images = Vec::new();
+            for document in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+                let document = YamlValue::deserialize(document).expect("valid Kubernetes YAML");
+                let pod = match document["kind"].as_str() {
+                    Some("Pod") => &document["spec"],
+                    Some(_) => &document["spec"]["template"]["spec"],
+                    None => continue,
+                };
+                for key in ["containers", "initContainers"] {
+                    for container in pod[key].as_sequence().into_iter().flatten() {
+                        images.push(container["image"].as_str().unwrap().to_string());
+                    }
+                }
+            }
+            assert!(images.len() >= 2, "{label}: {images:?}");
+            for image in &images {
+                assert!(
+                    image.starts_with("mirror.site.internal:5000/alien/"),
+                    "{label}: {image} does not come from the mirror"
+                );
+            }
+            assert!(
+                images.contains(&format!(
+                    "mirror.site.internal:5000/alien/vendor/operator@{digest}"
+                )),
+                "{label}: the Operator runs by digest from the mirror: {images:?}"
+            );
+        }
     }
 
     #[test]

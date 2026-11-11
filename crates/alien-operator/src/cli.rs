@@ -165,6 +165,10 @@ pub struct Args {
     #[arg(long, env = "CHART_DEFAULT_BINDINGS")]
     pub chart_default_bindings: Option<String>,
 
+    /// Site registry every workload image is pulled from (`host[/path]`).
+    #[arg(long, env = "IMAGE_REGISTRY")]
+    pub image_registry: Option<String>,
+
     #[arg(long, env = "PUBLIC_ENDPOINTS")]
     pub public_endpoints: Option<String>,
 
@@ -773,6 +777,7 @@ async fn run_operator_cli(
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
         .maybe_chart_default_bindings(chart_default_bindings)
+        .maybe_image_registry(args.image_registry.clone().filter(|r| !r.trim().is_empty()))
         .maybe_operations(operations)
         .maybe_installed_setup(installed_setup)
         .maybe_setup_release_file(args.setup_release_file.clone())

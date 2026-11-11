@@ -28,6 +28,70 @@ pub fn strip_registry_host(image_uri: &str) -> Option<String> {
     }
 }
 
+/// Registry host and repository an image with repository path `repository`
+/// is stored at under a site registry `registry_prefix` (`host[/path]`).
+///
+/// One rule for every path that moves images to a site registry: `alien-deploy
+/// sync --registry` pushes with it and the Operator rewrites workload images
+/// with it, so both always agree on where an image lives.
+pub fn site_repository(registry_prefix: &str, repository: &str) -> (String, String) {
+    match registry_prefix.trim_end_matches('/').split_once('/') {
+        Some((host, path)) => (host.to_string(), format!("{path}/{repository}")),
+        None => (
+            registry_prefix.trim_end_matches('/').to_string(),
+            repository.to_string(),
+        ),
+    }
+}
+
+/// The registry-less repository path of an image reference: no host, no tag,
+/// no digest. Docker Hub official images gain the `library/` namespace, as
+/// registries store them.
+fn repository_path(image: &str) -> Option<(String, &str)> {
+    let path = strip_registry_host(image)?;
+    let had_host = path.len() != image.len();
+    let (repository, reference) = match path.find('@') {
+        Some(at) => (
+            path[..at].to_string(),
+            &image[image.len() - (path.len() - at)..],
+        ),
+        None => match path.rfind(':') {
+            Some(colon) if !path[colon..].contains('/') => (
+                path[..colon].to_string(),
+                &image[image.len() - (path.len() - colon)..],
+            ),
+            _ => (path.clone(), ""),
+        },
+    };
+    if repository.is_empty() {
+        return None;
+    }
+    let repository = if !had_host && !repository.contains('/') {
+        format!("library/{repository}")
+    } else {
+        repository
+    };
+    Some((repository, reference))
+}
+
+/// `image` moved to the site registry `registry_prefix`, keeping its tag or
+/// digest. Local paths come back unchanged.
+pub fn rewrite_to_site_registry(image: &str, registry_prefix: &str) -> String {
+    let prefix = registry_prefix.trim_end_matches('/');
+    // Already stored under the site registry: rewriting again would nest the prefix.
+    if image
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return image.to_string();
+    }
+    let Some((repository, reference)) = repository_path(image) else {
+        return image.to_string();
+    };
+    let (host, repository) = site_repository(registry_prefix, &repository);
+    format!("{host}/{repository}{reference}")
+}
+
 /// Strip URL scheme and trailing slash from a URL, returning just host[:port].
 pub fn strip_url_scheme(url: &str) -> &str {
     let trimmed = url.trim_end_matches('/');
@@ -155,6 +219,90 @@ mod tests {
             Some(
                 "123456.dkr.ecr.us-east-1.amazonaws.com/alien-e2e@sha256:abcdef123456".to_string()
             )
+        );
+    }
+}
+
+#[cfg(test)]
+mod site_registry_tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_the_registry_and_keeps_the_digest() {
+        assert_eq!(
+            rewrite_to_site_registry(
+                "manager.example.com/team/app@sha256:abc",
+                "mirror.local:5000"
+            ),
+            "mirror.local:5000/team/app@sha256:abc"
+        );
+    }
+
+    #[test]
+    fn a_mirror_path_prefixes_the_repository() {
+        assert_eq!(
+            rewrite_to_site_registry("ghcr.io/org/app:1.2", "mirror.local/alien"),
+            "mirror.local/alien/org/app:1.2"
+        );
+    }
+
+    #[test]
+    fn docker_hub_names_follow_the_registry_layout() {
+        assert_eq!(
+            rewrite_to_site_registry("alpine/k8s:1.32.0", "mirror.local"),
+            "mirror.local/alpine/k8s:1.32.0"
+        );
+        assert_eq!(
+            rewrite_to_site_registry("nginx:1.27", "mirror.local"),
+            "mirror.local/library/nginx:1.27"
+        );
+    }
+
+    #[test]
+    fn a_registry_port_is_not_a_tag() {
+        assert_eq!(
+            rewrite_to_site_registry("localhost:5000/app", "mirror.local"),
+            "mirror.local/app"
+        );
+    }
+
+    #[test]
+    fn rewriting_twice_does_not_nest_the_prefix() {
+        let once = rewrite_to_site_registry("ghcr.io/org/app:1", "mirror.local/alien");
+        assert_eq!(rewrite_to_site_registry(&once, "mirror.local/alien"), once);
+    }
+
+    #[test]
+    fn a_tag_only_image_from_an_older_release_keeps_its_tag() {
+        assert_eq!(
+            rewrite_to_site_registry("manager.example.com/team/app:v3", "mirror.local"),
+            "mirror.local/team/app:v3"
+        );
+    }
+
+    #[test]
+    fn without_a_site_registry_the_release_image_is_used_as_is() {
+        let config = crate::DeploymentConfig::builder()
+            .stack_settings(crate::StackSettings::default())
+            .environment_variables(crate::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(crate::ExternalBindings::default())
+            .build();
+        assert_eq!(
+            config.workload_image("manager.example.com/app:v3"),
+            "manager.example.com/app:v3"
+        );
+    }
+
+    #[test]
+    fn local_paths_are_left_alone() {
+        assert_eq!(
+            rewrite_to_site_registry("/tmp/build/app", "mirror.local"),
+            "/tmp/build/app"
         );
     }
 }

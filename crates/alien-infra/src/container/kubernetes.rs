@@ -81,10 +81,16 @@ fn image_needing_pull_secret<'a>(
     code: &'a ContainerCode,
     has_deployment_token: bool,
     manager_url: Option<&str>,
+    mirrored: bool,
 ) -> Option<&'a str> {
     let ContainerCode::Image { image } = code else {
         return None;
     };
+    // A site mirror authenticates with the installation's own pull secrets. The manager's
+    // token must never be sent to it.
+    if mirrored {
+        return None;
+    }
     if has_deployment_token {
         return Some(image);
     }
@@ -371,6 +377,7 @@ impl KubernetesContainerController {
             &config.code,
             ctx.deployment_config.deployment_token.is_some(),
             ctx.deployment_config.manager_url.as_deref(),
+            ctx.deployment_config.image_registry.is_some(),
         ) {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1333,6 +1340,7 @@ impl KubernetesContainerController {
             &config.code,
             ctx.deployment_config.deployment_token.is_some(),
             ctx.deployment_config.manager_url.as_deref(),
+            ctx.deployment_config.image_registry.is_some(),
         ) {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2576,7 +2584,7 @@ impl KubernetesContainerController {
         // compiled binary is the direct entrypoint. Reaching here with
         // unbuilt source means the build step was skipped.
         let image = match &config.code {
-            ContainerCode::Image { image } => image.clone(),
+            ContainerCode::Image { image } => ctx.deployment_config.workload_image(image),
             ContainerCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
@@ -3029,6 +3037,21 @@ impl KubernetesContainerController {
 mod tests {
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
+
+    #[test]
+    fn a_site_mirror_never_receives_the_manager_pull_token() {
+        let code = ContainerCode::Image {
+            image: "manager.example.com/app@sha256:abc".to_string(),
+        };
+        assert!(
+            image_needing_pull_secret(&code, true, Some("https://manager.example.com"), false)
+                .is_some()
+        );
+        assert!(
+            image_needing_pull_secret(&code, true, Some("https://manager.example.com"), true)
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn adopted_workload_accepts_ready_created_replicas() {

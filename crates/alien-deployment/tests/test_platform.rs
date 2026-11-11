@@ -276,6 +276,7 @@ fn synced_digest(state: &DeploymentState) -> Option<String> {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        image_registry: None,
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
