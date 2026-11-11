@@ -63,6 +63,7 @@ fn azure_availability(
                 tested_at: Some(Utc::now()),
                 error_code: None,
                 quota_warnings: Vec::new(),
+                throttled_last_hour: None,
             }
         })
         .collect();

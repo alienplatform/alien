@@ -1959,6 +1959,10 @@ pub struct AiModelAvailabilityObservation {
     /// or none are low.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quota_warnings: Vec<AiQuotaWarning>,
+    /// Requests the cloud throttled for this model in the last hour, from the cloud's own
+    /// metrics. `None` when not read; `Some(0)` is a real zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throttled_last_hour: Option<u64>,
 }
 
 /// One quota the account has set well below the cloud's default (under 10%).
@@ -2005,6 +2009,7 @@ impl AiAvailabilityObservation {
                     tested_at: None,
                     error_code: None,
                     quota_warnings: Vec::new(),
+                    throttled_last_hour: None,
                 })
                 .collect(),
         }

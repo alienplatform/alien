@@ -241,6 +241,7 @@ mod tests {
                             tested_at: None,
                             error_code: None,
                             quota_warnings: Vec::new(),
+                            throttled_last_hour: None,
                         }],
                     },
                 },
