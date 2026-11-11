@@ -1166,6 +1166,32 @@ pub(super) mod tests {
         );
     }
 
+    /// A first install that failed setup still reports its installed setup: the
+    /// manager records the verdict and the rollback refusal as it does for a
+    /// running deployment, and may repair setup from this state.
+    #[tokio::test]
+    async fn a_report_is_accepted_while_the_first_install_has_failed_setup() {
+        let mut f = waiting_fixture().await;
+        f.record.status = "initial-setup-failed".to_string();
+        assert!(crate::routes::stack::can_reconcile_after_import(&f.record));
+        let mut stale = report(&f.installed_release);
+        stale.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &stale).await;
+        {
+            let written = f.written.lock().expect("log");
+            assert_eq!(written.len(), 1, "the report is recorded");
+            assert!(written[0].cloud_setup_required.is_some());
+        }
+        f.record.desired_release_id = None;
+        f.record.current_release_id = Some(f.installed_release.clone());
+        let mut rolled_back = report(&f.waiting_release);
+        rolled_back.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
+        let written = f.written.lock().expect("log");
+        assert_eq!(written.len(), 2);
+        assert!(written[1].setup_report_refusal.is_some());
+    }
+
     /// The verdict is recorded; the installed chart keeps reporting what runs.
     /// Every later sync leaves the record alone: no write, no cleared verdict.
     #[tokio::test]
