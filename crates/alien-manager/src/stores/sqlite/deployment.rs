@@ -72,6 +72,8 @@ impl SqliteDeploymentStore {
         "update-failed",
         "delete-failed",
     ];
+    /// Failed statuses the heartbeat loop keeps observing without a retry.
+    const OBSERVED_FAILED_STATUSES: [&'static str; 2] = ["refresh-failed", "update-failed"];
     const SETUP_TEARDOWN_STATUSES: [&'static str; 3] =
         ["retention-required", "teardown-required", "teardown-failed"];
     const RUNTIME_DELETE_STATUSES: [&'static str; 3] =
@@ -399,7 +401,7 @@ impl SqliteDeploymentStore {
                         || *status == Self::RUNNING_STATUS
                         // The heartbeat loop requests Running alongside RefreshFailed.
                         // Work-only acquisition must still require an explicit retry.
-                        || (*status == "refresh-failed"
+                        || (Self::OBSERVED_FAILED_STATUSES.contains(status)
                             && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
@@ -452,7 +454,7 @@ impl SqliteDeploymentStore {
                 && (Self::WORK_STATUSES.contains(&status)
                     || Self::SETUP_TEARDOWN_STATUSES.contains(&status)
                     || status == Self::RUNNING_STATUS
-                    || (status == "refresh-failed"
+                    || (Self::OBSERVED_FAILED_STATUSES.contains(&status)
                         && statuses
                             .iter()
                             .any(|candidate| candidate == Self::RUNNING_STATUS)))
@@ -628,6 +630,32 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::SqliteDeploymentStore;
+
+    /// The heartbeat loop observes a failed update without a retry, like a failed refresh.
+    /// Work-only acquisition still needs an explicit retry for either.
+    #[test]
+    fn heartbeat_acquires_failed_updates_without_a_retry() {
+        let heartbeat = vec![
+            "running".to_string(),
+            "refresh-failed".to_string(),
+            "update-failed".to_string(),
+        ];
+        for status in ["refresh-failed", "update-failed"] {
+            assert!(SqliteDeploymentStore::acquire_status_matches(
+                status,
+                false,
+                Some(&heartbeat)
+            ));
+            assert!(!SqliteDeploymentStore::acquire_status_matches(
+                status,
+                false,
+                Some(&vec![status.to_string()])
+            ));
+            assert!(!SqliteDeploymentStore::acquire_status_matches(
+                status, false, None
+            ));
+        }
+    }
 
     #[test]
     fn stale_lock_condition_parses_rfc3339_timestamps() {

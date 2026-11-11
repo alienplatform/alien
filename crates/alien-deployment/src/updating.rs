@@ -885,21 +885,25 @@ pub async fn handle_updating(
     Ok(result)
 }
 
-/// Handle UpdateFailed status - accept a retry request and re-run preflights
+/// How long a failed update waits before its running resources are observed again.
+const UPDATE_FAILED_OBSERVE_DELAY_MS: u64 = 60_000;
+
+/// Handle UpdateFailed status - observe the running resources, or accept a retry request
 ///
-/// This step:
-/// 1. Checks if retry_requested flag is set
-/// 2. Transitions back to UpdatePending to re-run preflights
-/// 3. Clears the retry marker
+/// Without a retry request the status stays UpdateFailed, but the resources that are still
+/// Running are observed (nothing else is stepped), so one failing resource cannot keep the
+/// others from noticing that a customer key came back and resuming. With a retry request:
+/// 1. Re-runs preflights by transitioning back to UpdatePending
+/// 2. Clears the retry marker
 ///
 /// Note: We transition to UpdatePending (not Updating) because update failures
 /// might indicate compatibility issues that preflights should re-validate.
 pub async fn handle_update_failed(
     current: DeploymentState,
-    _target_stack: Stack,
-    _config: DeploymentConfig,
-    _client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    target_stack: Stack,
+    config: DeploymentConfig,
+    client_config: alien_core::ClientConfig,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling UpdateFailed status");
 
@@ -908,12 +912,35 @@ pub async fn handle_update_failed(
 
     // Check if retry was requested
     if !current.retry_requested {
-        info!("No retry requested, staying in UpdateFailed status");
+        info!("No retry requested, observing running resources in UpdateFailed status");
+        let mut state = current;
+        let mut heartbeats = vec![];
+        if let Some(stack_state) = state.stack_state.clone() {
+            let observed = StackExecutor::builder(&target_stack, client_config)
+                .deployment_config(&config)
+                .service_provider(service_provider)
+                .build()
+                .context(ErrorData::StackExecutionFailed {
+                    message: "Failed to create executor for observing a failed update".to_string(),
+                })?
+                .observe_running(stack_state, &[])
+                .await;
+            // A read that fails leaves the state as it was and must not change the status.
+            match observed {
+                Ok(observation) => {
+                    state.stack_state = Some(observation.state);
+                    heartbeats = observation.heartbeats;
+                }
+                Err(error) => {
+                    warn!(%error, "Could not observe the running resources of a failed update");
+                }
+            }
+        }
         return Ok(DeploymentStepResult {
-            state: current,
-            suggested_delay_ms: None,
+            state,
+            suggested_delay_ms: Some(UPDATE_FAILED_OBSERVE_DELAY_MS),
             update_heartbeat: false,
-            heartbeats: vec![],
+            heartbeats,
             observed_inventory_batches: vec![],
         });
     }
@@ -983,6 +1010,194 @@ mod tests {
         Kv, Resource, ResourceLifecycle, ResourceRef, StackResourceState, Storage, Worker,
         WorkerCode,
     };
+
+    /// A failed update still observes the resources that are Running. A customer key that comes
+    /// back must be seen as available even though another resource is failing, so the
+    /// resources that depend on it can resume. The failed resource is left alone, the status
+    /// stays UpdateFailed and no retry is consumed.
+    #[tokio::test]
+    async fn failed_update_still_observes_a_restored_key() {
+        use alien_aws_clients::{
+            kms::{DescribeKeyResponse, EncryptResponse, KeyMetadata, MockKmsApi},
+            AwsClientConfig, AwsClientConfigExt,
+        };
+        use alien_core::{
+            import::{data::AwsKeyImportData, ImportContext},
+            ClientConfig, EnvironmentVariablesSnapshot, ExternalBindings, Key, KeyOutputs,
+            StackSettings,
+        };
+        use alien_infra::{AwsKeyImporter, MockPlatformServiceProvider, ResourceImporter};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        const KEY_ARN: &str =
+            "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555";
+        let revoked = Arc::new(AtomicBool::new(true));
+        let mut kms = MockKmsApi::new();
+        kms.expect_describe_key().returning(|_| {
+            Ok(DescribeKeyResponse {
+                key_metadata: KeyMetadata {
+                    origin: Some("EXTERNAL_KEY_STORE".to_string()),
+                    arn: KEY_ARN.to_string(),
+                    key_id: "key-id".to_string(),
+                    enabled: true,
+                    key_state: "Enabled".to_string(),
+                    key_usage: "ENCRYPT_DECRYPT".to_string(),
+                    key_spec: "SYMMETRIC_DEFAULT".to_string(),
+                    deletion_date: None,
+                },
+            })
+        });
+        let observed = revoked.clone();
+        kms.expect_encrypt().returning(move |_| {
+            if observed.load(Ordering::SeqCst) {
+                Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::HttpResponseError {
+                        message: "KMS request failed".to_string(),
+                        url: "https://kms.us-east-1.amazonaws.com".to_string(),
+                        http_status: 400,
+                        http_request_text: None,
+                        http_response_text: Some(
+                            serde_json::json!({"__type": "com.amazonaws.kms#KeyUnavailableException"})
+                                .to_string(),
+                        ),
+                    },
+                )
+                .context(alien_client_core::ErrorData::GenericError {
+                    message: "AWS KMS Encrypt failed".to_string(),
+                }))
+            } else {
+                Ok(EncryptResponse {
+                    ciphertext_blob: "probe".to_string(),
+                    key_id: KEY_ARN.to_string(),
+                })
+            }
+        });
+        let kms = Arc::new(kms);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_kms_client()
+            .returning(move |_| Ok(kms.clone()));
+        let provider = Arc::new(provider);
+
+        let key = Key::new("customer-key".to_string()).build();
+        let stack = Stack::new("failed-update".to_string())
+            .add(key.clone(), ResourceLifecycle::Frozen)
+            .add(
+                Storage::new("failing".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+        let settings = StackSettings::default();
+        let ctx = ImportContext {
+            resource_id: &key.id,
+            platform: Platform::Aws,
+            region: "us-east-1",
+            stack_settings: &settings,
+            management_config: None,
+            resource: &stack.resources[&key.id],
+        };
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            key.id.clone(),
+            AwsKeyImporter
+                .import(
+                    AwsKeyImportData {
+                        key_arn: KEY_ARN.to_string(),
+                        availability_probe: true,
+                    },
+                    &ctx,
+                )
+                .unwrap(),
+        );
+        let key_only = Stack::new("failed-update".to_string())
+            .add(key.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let executor = StackExecutor::builder(&key_only, client.clone())
+            .deployment_config(&config)
+            .service_provider(provider.clone())
+            .build()
+            .unwrap();
+        for _ in 0..8 {
+            stack_state = executor.step(stack_state).await.unwrap().next_state;
+        }
+        let failing = &stack.resources["failing"];
+        let mut failed = StackResourceState::new_pending(
+            "storage".to_string(),
+            failing.config.clone(),
+            Some(ResourceLifecycle::Live),
+            vec![],
+        );
+        failed.status = ResourceStatus::ProvisionFailed;
+        stack_state.resources.insert("failing".to_string(), failed);
+        let key_available = |state: &StackState| {
+            state.resources[&key.id]
+                .outputs
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<KeyOutputs>()
+                .unwrap()
+                .available
+        };
+        // The key is revoked; one observation notices.
+        let state = DeploymentState {
+            status: DeploymentStatus::UpdateFailed,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let state = handle_update_failed(
+            state,
+            stack.clone(),
+            config.clone(),
+            client.clone(),
+            provider.clone(),
+        )
+        .await
+        .unwrap()
+        .state;
+        assert_eq!(
+            key_available(state.stack_state.as_ref().unwrap()),
+            Some(false)
+        );
+
+        // The key is restored while the other resource is still failing.
+        revoked.store(false, Ordering::SeqCst);
+        let result = handle_update_failed(state, stack, config, client, provider)
+            .await
+            .unwrap();
+        let after = result.state;
+        assert_eq!(
+            key_available(after.stack_state.as_ref().unwrap()),
+            Some(true)
+        );
+        assert_eq!(after.status, DeploymentStatus::UpdateFailed);
+        assert!(!after.retry_requested);
+        assert_eq!(
+            after.stack_state.as_ref().unwrap().resources["failing"].status,
+            ResourceStatus::ProvisionFailed
+        );
+        assert!(result.suggested_delay_ms.is_some_and(|ms| ms > 0));
+    }
 
     #[tokio::test]
     async fn local_frozen_update_preserves_existing_storage() {
