@@ -205,6 +205,11 @@ pub async fn handle_pending(
         .as_ref()
         .and_then(|release| release.release_id.clone());
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
+    // The setup-time AI access answers are recorded before this step runs; a fresh metadata
+    // record must not drop them.
+    if let Some(previous) = current.runtime_metadata.as_ref() {
+        runtime_metadata.ai_access_checks = previous.ai_access_checks.clone();
+    }
 
     // Inject environment variables into the prepared stack for validation
     let mut mutated_stack_with_env = mutated_stack;
