@@ -701,12 +701,10 @@ fn linked_resource_read_during_update_needs_both_opt_ins() {
             updates_during_dependency_change,
             ..Default::default()
         };
-        let harness = KubernetesManifestTestHarness::new(
-            Resource::new(test_function("daemon")),
-            Vec::new(),
-        )
-        .with_linked_resource(test_function("cluster"), dependency)
-        .with_linked_resource(test_function("daemon"), dependent);
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(test_function("daemon")), Vec::new())
+                .with_linked_resource(test_function("cluster"), dependency)
+                .with_linked_resource(test_function("daemon"), dependent);
         let ctx = harness.ctx();
         let links = [ResourceRef::new(Worker::RESOURCE_TYPE, "cluster")];
 
@@ -717,5 +715,108 @@ fn linked_resource_read_during_update_needs_both_opt_ins() {
             "dependency opts in: {dependents_may_update}, dependent opts in: \
              {updates_during_dependency_change}"
         );
+    }
+}
+
+/// A controller that opts in for config-only updates, as a container controller can: it reads
+/// its links in UpdateStart and records there whether the update kept the image. These tests
+/// run the whole executor over a dependency and a dependent that both change in one plan.
+mod config_only_updates_in_parallel {
+    use super::*;
+    use crate::core::state_utils::StackResourceStateExt;
+    use crate::worker::{TestWorkerController, TestWorkerState};
+    use alien_core::StackState;
+
+    fn worker(id: &str, image: &str, timeout_seconds: u32, link: Option<&Worker>) -> Worker {
+        let mut worker = test_function_with_image(id, image);
+        worker.timeout_seconds = timeout_seconds;
+        if let Some(link) = link {
+            worker.links = vec![ResourceRef::new(Worker::RESOURCE_TYPE, link.id.clone())];
+        }
+        worker
+    }
+
+    fn stack(cluster_image: &str, timeout_seconds: u32) -> Stack {
+        let cluster = worker("cluster", cluster_image, timeout_seconds, None);
+        let daemon = worker("daemon", "daemon-v1", timeout_seconds, Some(&cluster));
+        Stack::new("config-only-updates".to_owned())
+            .add(cluster, ResourceLifecycle::Live)
+            .add_with_dependencies(
+                daemon,
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "cluster")],
+            )
+            .build()
+    }
+
+    /// Both resources Running on v1, and both controllers opted in.
+    async fn running_and_opted_in() -> Result<StackState> {
+        let mut state =
+            run_to_synced(&new_executor(&stack("cluster-v1", 30))?, new_test_state()).await?;
+        for id in ["cluster", "daemon"] {
+            let resource = state.resources.get_mut(id).expect("resource state");
+            let mut controller =
+                resource.get_internal_controller_typed::<TestWorkerController>()?;
+            controller.config_only_opt_in = true;
+            resource.set_internal_controller(Some(Box::new(controller)))?;
+        }
+        Ok(state)
+    }
+
+    fn daemon_controller_state(state: &StackState) -> TestWorkerState {
+        state.resources["daemon"]
+            .get_internal_controller_typed::<TestWorkerController>()
+            .expect("daemon controller")
+            .state
+    }
+
+    /// An env-style change to both, with the image untouched: after the first step the
+    /// dependent has started its update next to the dependency's, not behind it.
+    #[tokio::test]
+    async fn a_config_only_change_updates_dependency_and_dependent_in_the_same_step() -> Result<()>
+    {
+        let state = running_and_opted_in().await?;
+        let next = new_executor(&stack("cluster-v1", 60))?
+            .step(state)
+            .await?
+            .next_state;
+
+        assert_eq!(get_status(&next, "cluster"), Some(ResourceStatus::Updating));
+        assert_eq!(get_status(&next, "daemon"), Some(ResourceStatus::Updating));
+        assert_ne!(
+            daemon_controller_state(&next),
+            TestWorkerState::UpdateStart,
+            "the dependent must have sent its update while the dependency was updating"
+        );
+        Ok(())
+    }
+
+    /// An image change to the dependency keeps the order: the dependent does not start its
+    /// update in any step until the dependency is Running.
+    #[tokio::test]
+    async fn an_image_change_to_the_dependency_still_makes_the_dependent_wait() -> Result<()> {
+        let mut state = running_and_opted_in().await?;
+        let executor = new_executor(&stack("cluster-v2", 60))?;
+        let mut cluster_was_updating = false;
+        for _ in 0..200 {
+            state = executor.step(state).await?.next_state;
+            if get_status(&state, "cluster") != Some(ResourceStatus::Running) {
+                cluster_was_updating = true;
+                assert_eq!(
+                    daemon_controller_state(&state),
+                    TestWorkerState::UpdateStart,
+                    "the dependent must not start while an image change is rolling"
+                );
+            } else if cluster_was_updating
+                && get_status(&state, "daemon") == Some(ResourceStatus::Running)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(cluster_was_updating, "the dependency's update ran");
+        assert_eq!(get_status(&state, "cluster"), Some(ResourceStatus::Running));
+        assert_eq!(get_status(&state, "daemon"), Some(ResourceStatus::Running));
+        Ok(())
     }
 }

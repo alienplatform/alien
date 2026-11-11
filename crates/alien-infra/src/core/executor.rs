@@ -2443,6 +2443,11 @@ impl StackExecutor {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
+                                controller.plan_update(
+                                    (current_state.status == ResourceStatus::Running)
+                                        .then_some(&current_state.config),
+                                    new_config,
+                                );
                                 let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config = Some(current_state.config.clone()); // Store old config

@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs};
+use alien_core::{Resource, ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs};
 use alien_macros::controller;
 
 pub(crate) const CREATE_POLL_COUNT: u32 = 3; // Reduced from 5 for faster tests
@@ -222,16 +222,40 @@ pub struct TestWorkerController {
     /// As a dependent: it can update against a dependency that is not Running.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) updates_during_dependency_change: bool,
+    /// Models a controller that opts in for config-only updates the way a container controller
+    /// does: in UpdateStart it reads its links and records whether the update leaves the
+    /// image unchanged; dependents may update against it only while such an update runs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) config_only_opt_in: bool,
+    /// Set in UpdateStart under `config_only_opt_in`: the update kept the image.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) keeps_dependents_view: bool,
 }
 
 #[controller]
 impl TestWorkerController {
     fn dependents_may_update(&self) -> bool {
         self.dependents_may_update
+            || (self.config_only_opt_in
+                && self.keeps_dependents_view
+                && matches!(
+                    self.state,
+                    TestWorkerState::UpdateStart
+                        | TestWorkerState::UpdateCodePolling
+                        | TestWorkerState::UpdateConfigPolling
+                ))
+    }
+
+    fn plan_update(&mut self, applied: Option<&Resource>, desired: &Resource) {
+        self.keeps_dependents_view = self.config_only_opt_in
+            && applied
+                .and_then(|applied| applied.downcast_ref::<Worker>())
+                .zip(desired.downcast_ref::<Worker>())
+                .is_some_and(|(applied, desired)| applied.code == desired.code);
     }
 
     fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
-        self.updates_during_dependency_change
+        self.updates_during_dependency_change || self.config_only_opt_in
     }
 
     fn nothing_deleted_yet(&self) -> bool {
@@ -601,6 +625,10 @@ impl TestWorkerController {
                 message: "Identifier missing in UpdateStart state".to_string(),
             })
         })?;
+
+        if self.config_only_opt_in {
+            crate::core::ensure_linked_resources_running(&target_func.links, ctx, &target_func.id)?;
+        }
 
         record_deployed_config(identifier, target_func);
         info!(
