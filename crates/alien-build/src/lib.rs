@@ -2170,10 +2170,15 @@ impl SandboxAgentLayering {
         image_command_env: true,
     };
     /// The pod runs as the image's own non-root user, which the layered image ends with.
+    /// Supervised startup of the base command (`ALIEN_SANDBOX_IMAGE_COMMAND`) means a root
+    /// agent that starts the command under the image identity and later drops sessions to
+    /// the exec identity (uid-split). A pod is not allowed to run as root and the pod is
+    /// the isolation boundary, so the setting keeps one meaning by not being set here: the
+    /// agent refuses it without root, and the base image's own command is not started.
     const KUBERNETES: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::KUBERNETES_SANDBOX,
-        image_command_env: true,
+        image_command_env: false,
     };
     const AWS: Self = Self {
         target: BinaryTarget::LinuxArm64,
@@ -7957,13 +7962,20 @@ mod sandbox_push_tests {
             "ALIEN_SANDBOX_ISOLATION=platform",
             "ALIEN_SANDBOX_EXEC_UID=1001",
             "ALIEN_SANDBOX_ROOT=/sandbox",
-            "ALIEN_SANDBOX_IMAGE_COMMAND=true",
         ] {
             assert!(
                 environment.contains(&serde_json::json!(expected)),
                 "{expected} missing from {environment:?}"
             );
         }
+        // The agent refuses this setting unless it runs as root with uid-split isolation, which
+        // a pod (non-root, platform isolation) never does: the pool pods would exit at start.
+        assert!(
+            !environment
+                .iter()
+                .any(|entry| entry.as_str().is_some_and(|e| e.starts_with("ALIEN_SANDBOX_IMAGE_COMMAND"))),
+            "{environment:?}"
+        );
     }
 
     /// An unbuilt source sandbox has no directory to push, so a release says so rather than

@@ -715,6 +715,164 @@ spec:
     }
 }
 
+/// A source-built sandbox on Kubernetes: the pod runs as the base image's non-root `USER`
+/// (a `python:3.12-slim` base with `USER 65534`), and the agent starts with exactly the
+/// environment the layered image carries and runs a command. The agent used to exit at start
+/// when the image also carried `ALIEN_SANDBOX_IMAGE_COMMAND`, which it allows only for a root
+/// agent with uid-split isolation.
+#[tokio::test]
+#[ignore = "needs a Kind cluster and the agent binary; see the module docs"]
+async fn kubernetes_broker_kind_source_sandbox_runs_as_the_images_user() {
+    use alien_core::sandbox_capability::{SandboxCapabilityClaims, SandboxOperationClass};
+    use base64::Engine as _;
+
+    let namespace = env("ALIEN_BROKER_KIND_NAMESPACE");
+    let binary = env("ALIEN_AGENT_BINARY");
+    let keys = ed25519_compact::KeyPair::generate();
+    let public_key = base64::engine::general_purpose::STANDARD.encode(keys.pk.as_ref());
+    let _ = std::process::Command::new("kubectl")
+        .args([
+            "--namespace",
+            &namespace,
+            "delete",
+            "pod",
+            "source-agent",
+            "--ignore-not-found",
+            "--wait=true",
+        ])
+        .output();
+    // The contract the layered image sets, with the exec identity the base's USER replaces.
+    let mut contract = alien_core::sandbox_image::KUBERNETES_SANDBOX
+        .contract_env_vars()
+        .to_vec();
+    for (name, value) in contract.iter_mut() {
+        match *name {
+            "ALIEN_SANDBOX_EXEC_UID" | "ALIEN_SANDBOX_EXEC_GID" => *value = "65534".into(),
+            "ALIEN_SANDBOX_ROOT" => *value = "/tmp/sbx".into(),
+            _ => {}
+        }
+    }
+    let environment = contract
+        .iter()
+        .map(|(name, value)| format!("{{name: {name}, value: \"{value}\"}}"))
+        .chain([
+            format!("{{name: ALIEN_SANDBOX_PUBLIC_KEY, value: \"{public_key}\"}}"),
+            "{name: ALIEN_SANDBOX_SESSION_ID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}"
+                .to_string(),
+            "{name: ALIEN_SANDBOX_GENERATION, value: \"1\"}".to_string(),
+        ])
+        .collect::<Vec<_>>()
+        .join(", ");
+    let manifest = format!(
+        r#"apiVersion: v1
+kind: Pod
+metadata: {{name: source-agent, namespace: {namespace}}}
+spec:
+  securityContext: {{runAsUser: 65534, runAsGroup: 65534, runAsNonRoot: true}}
+  containers:
+    - name: p
+      image: python:3.12-slim
+      command: ["sh", "-c", "mkdir -p /tmp/sbx; sleep 3600"]
+      env: [{environment}]
+"#
+    );
+    {
+        use std::io::Write;
+        let mut child = std::process::Command::new("kubectl")
+            .args(["apply", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("kubectl apply");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(manifest.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success(), "apply failed:\n{manifest}");
+    }
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "wait",
+        "--for=condition=Ready",
+        "pod/source-agent",
+        "--timeout=240s",
+    ]);
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "cp",
+        &binary,
+        "source-agent:/tmp/agent",
+    ]);
+    // The agent runs under the pod's identity and its exit would show here.
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "exec",
+        "source-agent",
+        "--",
+        "sh",
+        "-c",
+        "chmod +x /tmp/agent; (/tmp/agent >/tmp/agent.log 2>&1 &); sleep 2",
+    ]);
+    let uid = kubectl(&[
+        "--namespace",
+        &namespace,
+        "get",
+        "pod",
+        "source-agent",
+        "-o",
+        "jsonpath={.metadata.uid}",
+    ]);
+    let token = alien_core::sandbox_capability_token::mint(
+        &SandboxCapabilityClaims {
+            session_id: uid.clone(),
+            operation: SandboxOperationClass::Execute,
+            generation: 1,
+            expires_at: chrono::Utc::now().timestamp() + 600,
+            key_id: "kind".to_string(),
+            port: None,
+        },
+        &keys.sk,
+    )
+    .unwrap();
+    let output = kubectl(&[
+        "--namespace", &namespace, "exec", "source-agent", "--", "python3", "-c",
+        &format!(
+            "import urllib.request,json\n\
+             r=urllib.request.Request('http://127.0.0.1:8971/v1/exec',data=json.dumps({{'command':['python3','-c','import os;print(1,os.getuid())'],'timeoutMs':20000}}).encode(),headers={{'Authorization':'Bearer {token}','Content-Type':'application/json'}})\n\
+             print(urllib.request.urlopen(r,timeout=30).read().decode())"
+        ),
+    ]);
+    // Output frames carry base64 data.
+    let printed = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|frame| frame["t"] == "stdout")
+        .filter_map(|frame| {
+            base64::engine::general_purpose::STANDARD
+                .decode(frame["data"].as_str()?)
+                .ok()
+        })
+        .flatten()
+        .collect::<Vec<u8>>();
+    assert_eq!(
+        String::from_utf8_lossy(&printed).trim(),
+        "1 65534",
+        "the command ran as the image's user: {output}"
+    );
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "delete",
+        "pod",
+        "source-agent",
+        "--wait=false",
+    ]);
+}
+
 /// What the API server says about the two tokens a linking pod holds: the one projected for the
 /// broker is accepted for the broker's audience, and the default one the kubelet mounts (issued
 /// for the API server) is not. The pod's spec is the one the controllers build.
