@@ -191,6 +191,41 @@ pub fn aws_key_policy(
     json!({ "Version": "2012-10-17", "Statement": statements })
 }
 
+/// How a caller names the roles in a key policy: CloudFormation as intrinsic functions,
+/// Terraform as resource references, the key controller as real ARNs.
+pub trait AwsKeyPrincipals {
+    fn account_root(&self) -> Value;
+    /// The management role, when the stack has one.
+    fn management_role(&self) -> Option<Value>;
+    /// Pattern matching every IAM role whose name starts with the stack's prefix.
+    fn stack_role_pattern(&self) -> Value;
+    fn service_account_role(&self, service_account_id: &str) -> Value;
+    /// The Remote Bindings access role, when the stack has one.
+    fn remote_bindings_role(&self) -> Option<Value>;
+}
+
+/// The key policy for the key an access plan describes.
+pub fn aws_key_policy_for_stack(
+    plan: &crate::key_access::KeyAccessPlan,
+    names: &impl AwsKeyPrincipals,
+) -> Value {
+    let mut runtime_role_arns: Vec<Value> = plan
+        .policy_runtime_accounts
+        .iter()
+        .map(|account| names.service_account_role(account))
+        .collect();
+    if plan.remote_bindings {
+        runtime_role_arns.extend(names.remote_bindings_role());
+    }
+    aws_key_policy(
+        names.account_root(),
+        names.management_role().filter(|_| plan.has_management_identity),
+        names.stack_role_pattern(),
+        plan.native_service_use,
+        runtime_role_arns,
+    )
+}
+
 /// Ids of the service accounts whose runtime roles may use the key: those with
 /// any grant scoped to the key, or a stack-wide grant that allows KMS key use.
 /// Stack-wide grants are judged by the actions they allow, not by their names.

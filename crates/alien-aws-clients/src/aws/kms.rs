@@ -18,6 +18,14 @@ pub trait KmsApi: Send + Sync + std::fmt::Debug {
     async fn encrypt(&self, request: EncryptRequest) -> Result<EncryptResponse>;
     async fn decrypt(&self, request: DecryptRequest) -> Result<DecryptResponse>;
     async fn describe_key(&self, key_id: &str) -> Result<DescribeKeyResponse>;
+    /// Creates a symmetric key. Not idempotent: every call makes a new key.
+    async fn create_key(&self, request: CreateKeyRequest) -> Result<DescribeKeyResponse>;
+    async fn enable_key_rotation(&self, key_id: &str) -> Result<()>;
+    async fn get_key_rotation_status(&self, key_id: &str) -> Result<bool>;
+    async fn put_key_policy(&self, key_id: &str, policy: &str) -> Result<()>;
+    /// The `default` key policy document, as a JSON string.
+    async fn get_key_policy(&self, key_id: &str) -> Result<String>;
+    async fn list_resource_tags(&self, key_id: &str) -> Result<BTreeMap<String, String>>;
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +111,130 @@ impl KmsApi for KmsClient {
             })?;
         self.send("DescribeKey", body, key_id).await
     }
+
+    async fn create_key(&self, request: CreateKeyRequest) -> Result<DescribeKeyResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS CreateKey request".to_string(),
+            },
+        )?;
+        self.send("CreateKey", body, "new key").await
+    }
+
+    async fn enable_key_rotation(&self, key_id: &str) -> Result<()> {
+        let body = key_id_body("EnableKeyRotation", key_id)?;
+        self.send::<serde_json::Value>("EnableKeyRotation", body, key_id)
+            .await
+            .map(|_| ())
+    }
+
+    async fn get_key_rotation_status(&self, key_id: &str) -> Result<bool> {
+        let body = key_id_body("GetKeyRotationStatus", key_id)?;
+        let response: KeyRotationStatusResponse =
+            self.send("GetKeyRotationStatus", body, key_id).await?;
+        Ok(response.key_rotation_enabled)
+    }
+
+    async fn put_key_policy(&self, key_id: &str, policy: &str) -> Result<()> {
+        let body = serde_json::to_string(&PutKeyPolicyRequest {
+            key_id,
+            policy_name: "default",
+            policy,
+        })
+        .into_alien_error()
+        .context(alien_client_core::ErrorData::SerializationError {
+            message: "Failed to serialize AWS KMS PutKeyPolicy request".to_string(),
+        })?;
+        self.send::<serde_json::Value>("PutKeyPolicy", body, key_id)
+            .await
+            .map(|_| ())
+    }
+
+    async fn get_key_policy(&self, key_id: &str) -> Result<String> {
+        let body = serde_json::to_string(&serde_json::json!({
+            "KeyId": key_id,
+            "PolicyName": "default",
+        }))
+        .into_alien_error()
+        .context(alien_client_core::ErrorData::SerializationError {
+            message: "Failed to serialize AWS KMS GetKeyPolicy request".to_string(),
+        })?;
+        let response: GetKeyPolicyResponse = self.send("GetKeyPolicy", body, key_id).await?;
+        Ok(response.policy)
+    }
+
+    async fn list_resource_tags(&self, key_id: &str) -> Result<BTreeMap<String, String>> {
+        let body = key_id_body("ListResourceTags", key_id)?;
+        let response: ListResourceTagsResponse =
+            self.send("ListResourceTags", body, key_id).await?;
+        Ok(response
+            .tags
+            .into_iter()
+            .map(|tag| (tag.tag_key, tag.tag_value))
+            .collect())
+    }
+}
+
+fn key_id_body(operation: &str, key_id: &str) -> Result<String> {
+    serde_json::to_string(&DescribeKeyRequest { key_id })
+        .into_alien_error()
+        .context(alien_client_core::ErrorData::SerializationError {
+            message: format!("Failed to serialize AWS KMS {operation} request"),
+        })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateKeyRequest {
+    pub description: String,
+    /// `SYMMETRIC_DEFAULT`
+    pub key_spec: String,
+    /// `ENCRYPT_DECRYPT`
+    pub key_usage: String,
+    /// The key policy as a JSON string.
+    pub policy: String,
+    pub tags: Vec<KmsTag>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KmsTag {
+    pub tag_key: String,
+    pub tag_value: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct PutKeyPolicyRequest<'a> {
+    key_id: &'a str,
+    policy_name: &'a str,
+    policy: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct KeyRotationStatusResponse {
+    key_rotation_enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct GetKeyPolicyResponse {
+    policy: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ListResourceTagsResponse {
+    #[serde(default)]
+    tags: Vec<ListedTag>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ListedTag {
+    tag_key: String,
+    tag_value: String,
 }
 
 #[derive(Serialize)]

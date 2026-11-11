@@ -8,9 +8,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    aws_key_policy::{aws_key_policy, key_has_native_service_use, key_runtime_service_accounts},
+    aws_key_policy::{aws_key_policy_for_stack, AwsKeyPrincipals},
     generators::AwsCloudFormationPermissionsGenerator,
-    key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY},
+    key_access::{cryptography_service_accounts, key_access_plan, REMOTE_CRYPTOGRAPHY},
     BindingTarget,
 };
 
@@ -169,38 +169,47 @@ fn management_metadata_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfR
 }
 
 fn key_policy(ctx: &EmitContext<'_>) -> Result<CfExpression> {
-    let management_role_arn = management_role_id(ctx)
-        .map(|role_id| serde_json::json!({ "Fn::GetAtt": [role_id, "Arn"] }));
-    // Runtime roles are named from the stack name, as the service account emitter
-    // does. Building the ARN from the name keeps the key from depending on roles
-    // whose policies may depend on the key.
-    let mut runtime_role_arns = key_runtime_service_accounts(ctx.stack, ctx.resource_id)
-        .context(ErrorData::GenericError {
-            message: "Failed to work out which roles may use the Key".to_string(),
-        })?
-        .into_iter()
-        .map(|account_id| {
-            serde_json::json!({
-                "Fn::Sub": format!(
-                    "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{account_id}"
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
-        if let Some(access_role_id) = remote_bindings_role_id(ctx) {
-            runtime_role_arns.push(serde_json::json!({ "Fn::GetAtt": [access_role_id, "Arn"] }));
-        }
+    let plan = key_access_plan(ctx.stack, ctx.resource_id).context(ErrorData::GenericError {
+        message: "Failed to work out which roles may use the Key".to_string(),
+    })?;
+    cf_from_json(aws_key_policy_for_stack(&plan, &CfPrincipals { ctx }))
+}
+
+/// Names roles as CloudFormation intrinsics. Runtime roles are named from the stack name, as the
+/// service account emitter does. Building the ARN from the name keeps the key from depending on
+/// roles whose policies may depend on the key.
+struct CfPrincipals<'a, 'b> {
+    ctx: &'a EmitContext<'b>,
+}
+
+impl AwsKeyPrincipals for CfPrincipals<'_, '_> {
+    fn account_root(&self) -> serde_json::Value {
+        serde_json::json!({ "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" })
     }
-    cf_from_json(aws_key_policy(
-        serde_json::json!({ "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }),
-        management_role_arn,
+
+    fn management_role(&self) -> Option<serde_json::Value> {
+        management_role_id(self.ctx)
+            .map(|role_id| serde_json::json!({ "Fn::GetAtt": [role_id, "Arn"] }))
+    }
+
+    fn stack_role_pattern(&self) -> serde_json::Value {
         serde_json::json!({
             "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
-        }),
-        key_has_native_service_use(ctx.stack, ctx.resource_id),
-        runtime_role_arns,
-    ))
+        })
+    }
+
+    fn service_account_role(&self, account_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "Fn::Sub": format!(
+                "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{account_id}"
+            )
+        })
+    }
+
+    fn remote_bindings_role(&self) -> Option<serde_json::Value> {
+        remote_bindings_role_id(self.ctx)
+            .map(|role_id| serde_json::json!({ "Fn::GetAtt": [role_id, "Arn"] }))
+    }
 }
 
 fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {
