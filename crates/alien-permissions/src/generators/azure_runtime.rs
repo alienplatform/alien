@@ -3,6 +3,7 @@ use crate::{
     generators::{
         families::{azure_data_family, azure_family, azure_reach_exclusions, Family},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        azure_sandbox_data::azure_sandbox_role_substitute,
         protected_allowlist::is_built_in_unchanged,
         verifier_owned::{
             azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
@@ -517,7 +518,9 @@ impl AzureRuntimePermissionsGenerator {
                     if context.signing_protected {
                         // The two built-in roles a held set binds that reach the verifier's
                         // identity are replaced by the custom role the entry renders below.
-                        if protected_role_substitute(permission_set, role_name).is_some() {
+                        if protected_role_substitute(permission_set, role_name).is_some()
+                            || protected_data_role_substitute(permission_set, role_name).is_some()
+                        {
                             continue;
                         }
                         require_built_in_azure_role(&permission_set.id, role_name)?;
@@ -649,6 +652,11 @@ impl AzureRuntimePermissionsGenerator {
                 .unwrap_or_default(),
             context,
         )?;
+        data_actions.extend(
+            substitute_data_actions(permission_set, &platform_permission.grant, context)
+                .into_iter()
+                .map(str::to_string),
+        );
         actions.sort();
         actions.dedup();
         data_actions.sort();
@@ -948,6 +956,35 @@ fn protected_role_substitute(
     azure_protected_role_substitute(role).filter(|_| is_built_in_unchanged(permission_set))
 }
 
+/// The data actions that replace the predefined `role` on a protected install: only the set the
+/// install holds by design gets the replacement; any other set naming the role is refused.
+fn protected_data_role_substitute(
+    permission_set: &PermissionSet,
+    role: &str,
+) -> Option<&'static [&'static str]> {
+    azure_sandbox_role_substitute(role).filter(|_| is_built_in_unchanged(permission_set))
+}
+
+/// The data actions the entry's substituted predefined roles stand for. Empty off a protected
+/// install.
+fn substitute_data_actions(
+    permission_set: &PermissionSet,
+    grant: &PermissionGrant,
+    context: &PermissionContext,
+) -> Vec<&'static str> {
+    if !context.signing_protected {
+        return Vec::new();
+    }
+    grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .filter_map(|role| protected_data_role_substitute(permission_set, role))
+        .flatten()
+        .copied()
+        .collect()
+}
+
 /// The actions the entry's substituted predefined roles stand for. Empty off a protected install.
 fn substitute_actions(
     permission_set: &PermissionSet,
@@ -973,6 +1010,7 @@ fn grants_residual_azure_permissions(
     context: &PermissionContext,
 ) -> bool {
     !substitute_actions(permission_set, grant, context).is_empty()
+        || !substitute_data_actions(permission_set, grant, context).is_empty()
         || grant
             .actions
             .as_ref()

@@ -67,3 +67,55 @@ fn the_protected_filter_leaves_a_remote_bindings_data_grant_whole() {
         assert_eq!(render(true), render(false), "{id}");
     }
 }
+
+/// A protected install gives the remote-bindings identity the explicit sandbox list, not the
+/// predefined Data Owner role: no predefined binding, one custom role holding exactly the list,
+/// and none of the identity, reach or run operations. An unprotected install still gets the
+/// predefined role.
+#[test]
+fn a_protected_remote_sandbox_role_is_the_explicit_list_and_not_data_owner() {
+    use alien_permissions::generators::{
+        azure_sandbox_data::{
+            AZURE_SANDBOX_REMOTE_DATA_ACTIONS, AZURE_SANDBOX_REMOTE_DENIED_DATA_ACTIONS,
+        },
+        AzureRoleDefinitionRef,
+    };
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let set = get_permission_set("sandbox/remote-execute").expect("registered");
+
+    let protected = generator
+        .generate_grant_plan(set, BindingTarget::Resource, &context(true))
+        .expect("renders protected");
+    assert!(
+        protected
+            .bindings
+            .iter()
+            .all(|b| matches!(b.role_definition, AzureRoleDefinitionRef::Custom { .. })),
+        "{:?}",
+        protected.bindings
+    );
+    assert_eq!(protected.custom_roles.len(), 1);
+    let definition = &protected.custom_roles[0].role_definition;
+    let mut expected: Vec<String> = AZURE_SANDBOX_REMOTE_DATA_ACTIONS
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+    expected.sort();
+    assert_eq!(definition.data_actions, expected);
+    assert!(definition.actions.is_empty() && definition.not_data_actions.is_empty());
+    for (denied, _) in AZURE_SANDBOX_REMOTE_DENIED_DATA_ACTIONS {
+        assert!(
+            !definition.data_actions.iter().any(|a| a == denied),
+            "{denied}"
+        );
+    }
+
+    let unprotected = generator
+        .generate_grant_plan(set, BindingTarget::Resource, &context(false))
+        .expect("renders unprotected");
+    assert!(unprotected.custom_roles.is_empty());
+    assert!(unprotected
+        .bindings
+        .iter()
+        .all(|b| matches!(b.role_definition, AzureRoleDefinitionRef::Predefined { .. })));
+}

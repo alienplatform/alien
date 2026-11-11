@@ -5,6 +5,7 @@ pub mod aws_cloudformation;
 mod aws_managed_policies;
 pub mod aws_runtime;
 pub mod azure_runtime;
+pub mod azure_sandbox_data;
 pub mod azure_setup_owned;
 pub mod families;
 pub mod gcp_runtime;
