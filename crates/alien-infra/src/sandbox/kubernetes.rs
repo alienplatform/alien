@@ -19,14 +19,24 @@ use crate::core::{
 use crate::error::{ErrorData, Result};
 use crate::sandbox::{
     idle_pool_pod_with_labels, idle_selector, pool_deficit, require_sandboxed_runtime_class,
-    LABEL_SANDBOX,
+    SandboxPlacement, LABEL_SANDBOX,
 };
 use alien_core::{ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxOutputs};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
-/// Runtime class a sandbox pod runs under when the operator has not chosen one.
-const DEFAULT_RUNTIME_CLASS: &str = "gvisor";
+/// Runtime class of an install whose chart predates `sandbox.runtimeClassName` and so does not
+/// pass `ALIEN_SANDBOX_RUNTIME_CLASS`. Those installs have always run under it; a chart upgrade
+/// sets the variable and this is no longer consulted. The Operator never picks a class otherwise.
+const LEGACY_RUNTIME_CLASS: &str = "gvisor";
+
+/// The class the chart chose, which the Operator only checks. `None` for a chart that predates it.
+fn chart_runtime_class() -> Option<String> {
+    std::env::var(alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
 
 /// Kubernetes Sandbox controller.
 #[controller]
@@ -91,10 +101,11 @@ impl KubernetesSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        let runtime_class = self
-            .runtime_class
-            .clone()
-            .unwrap_or_else(|| DEFAULT_RUNTIME_CLASS.to_string());
+        // The chart's value wins over what an earlier run recorded, so changing
+        // `sandbox.runtimeClassName` and upgrading takes effect.
+        let runtime_class = chart_runtime_class()
+            .or_else(|| self.runtime_class.clone())
+            .unwrap_or_else(|| LEGACY_RUNTIME_CLASS.to_string());
 
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let client = ctx
@@ -188,7 +199,7 @@ impl KubernetesSandboxController {
             &namespace,
             self.runtime_class
                 .as_deref()
-                .unwrap_or(DEFAULT_RUNTIME_CLASS),
+                .unwrap_or(LEGACY_RUNTIME_CLASS),
             self.warm_pool_size.unwrap_or(DEFAULT_WARM_POOL_SIZE),
             self.capability_public_key.as_deref(),
         )
@@ -490,6 +501,13 @@ async fn replenish_warm_pool(
         .get_kubernetes_pod_client(kubernetes_config)
         .await?;
 
+    let placement = SandboxPlacement::from_env().map_err(|message| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: sandbox.id.clone(),
+            message,
+        })
+    })?;
+
     let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
     let idle = client
         .list_pods(
@@ -535,6 +553,7 @@ async fn replenish_warm_pool(
             capability_public_key,
             kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
         );
+        placement.apply(&mut pod);
 
         pod.spec
             .as_mut()
@@ -631,7 +650,9 @@ mod tests {
             let error = broker_url_from("sbx", value.clone()).expect_err("no address is an error");
             assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR", "{value:?}");
             assert!(
-                error.message.contains(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL),
+                error
+                    .message
+                    .contains(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL),
                 "the error names the missing setting: {}",
                 error.message
             );

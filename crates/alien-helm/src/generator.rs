@@ -4227,6 +4227,22 @@ ephemeralStorage:
   nodeSelector: {}
 "#,
     );
+    if analysis.sandbox_broker {
+        yaml.push_str(
+            r#"
+# Where sandbox sessions run. The sandbox runtime is the cluster's own vendor runtime; the
+# Operator only checks that the class exists and is sandboxed.
+sandbox:
+  # RuntimeClass every sandbox pod uses. Empty picks it from the Kubernetes version: EKS uses
+  # `isolated-sandbox` (AWS Nitro Sandboxes), GKE uses `gvisor`. Set it on any other cluster
+  # (AKS: `kata-vm-isolation`; on-premises: the gVisor or Kata class your administrator installed).
+  runtimeClassName: ""
+  # Extra scheduling for sandbox pods, applied on top of what the RuntimeClass itself sets.
+  nodeSelector: {}
+  tolerations: []
+"#,
+        );
+    }
     yaml.push_str("\n# Frozen databases. An infrastructure binding overrides the corresponding database.\npostgres: ");
     yaml.push_str(
         &serde_json::to_string(&analysis.postgres)
@@ -4703,6 +4719,35 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
 }
 
 fn values_schema_json(stack: &Stack) -> Result<String> {
+    let schema = values_schema_with_inputs_json(stack)?;
+    if !stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some())
+    {
+        return Ok(schema);
+    }
+    let mut schema: serde_json::Value = serde_json::from_str(&schema).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse built-in Helm values schema".to_string(),
+        },
+    )?;
+    schema["properties"]["sandbox"] = serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "runtimeClassName": { "type": "string" },
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array" }
+        }
+    });
+    serde_json::to_string_pretty(&schema)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize Helm values schema".to_string(),
+        })
+}
+
+fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
     let base = r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
@@ -6603,6 +6648,13 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: {}\n              value: {{{{ printf \"http://%s.%s.svc:%d\" (include \"deployment.fullname\" .) .Release.Namespace (int .Values.runtime.api.port) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_BROKER_URL
     );
+    let placement = format!(
+        "            - name: {}\n              value: {{{{ include \"deployment.sandboxRuntimeClassName\" . | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS,
+        alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR,
+        alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS
+    );
+    let broker = format!("{broker}{placement}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"

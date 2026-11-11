@@ -13,6 +13,8 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+use k8s_openapi::api::core::v1::Toleration;
+
 use alien_core::sandbox_image::Authorization;
 use alien_core::{Sandbox, SandboxCode};
 
@@ -29,6 +31,68 @@ const SANDBOX_UID: i64 = 65534;
 /// scratch space. It is a pod-local `emptyDir`, counted against the pod's ephemeral storage.
 const SCRATCH_VOLUME: &str = "tmp";
 const SCRATCH_PATH: &str = "/tmp";
+
+/// Where sandbox pods may run, as the chart configured it (`sandbox.nodeSelector` and
+/// `sandbox.tolerations`). Applied on top of whatever the RuntimeClass's own `scheduling` sets;
+/// the cluster merges the two and refuses a pod that conflicts with the class.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SandboxPlacement {
+    pub node_selector: Option<BTreeMap<String, String>>,
+    pub tolerations: Option<Vec<Toleration>>,
+}
+
+impl SandboxPlacement {
+    /// Reads the placement the chart passed to the Operator. An unset or empty variable means no
+    /// constraint; one that does not parse is an error rather than a silently unconstrained pod.
+    pub fn from_values(
+        node_selector: Option<&str>,
+        tolerations: Option<&str>,
+    ) -> Result<Self, String> {
+        fn present(value: Option<&str>) -> Option<&str> {
+            value.map(str::trim).filter(|value| !value.is_empty())
+        }
+        let node_selector = match present(node_selector) {
+            None => None,
+            Some(json) => Some(
+                serde_json::from_str::<BTreeMap<String, String>>(json).map_err(|error| {
+                    format!("sandbox node selector is not a JSON object of strings: {error}")
+                })?,
+            )
+            .filter(|map| !map.is_empty()),
+        };
+        let tolerations = match present(tolerations) {
+            None => None,
+            Some(json) => Some(
+                serde_json::from_str::<Vec<Toleration>>(json).map_err(|error| {
+                    format!("sandbox tolerations are not a JSON array of tolerations: {error}")
+                })?,
+            )
+            .filter(|list| !list.is_empty()),
+        };
+        Ok(Self {
+            node_selector,
+            tolerations,
+        })
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_values(
+            std::env::var(alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR)
+                .ok()
+                .as_deref(),
+            std::env::var(alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS)
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    /// Sets the placement on a pod built by this module.
+    pub fn apply(&self, pod: &mut Pod) {
+        let spec = pod.spec.get_or_insert_default();
+        spec.node_selector = self.node_selector.clone();
+        spec.tolerations = self.tolerations.clone();
+    }
+}
 
 /// Names the pod backing one session.
 pub fn pod_name(sandbox: &str, session_id: &str) -> String {
@@ -269,6 +333,45 @@ mod tests {
                 idle_pause_seconds: None,
             })
             .build()
+    }
+
+    #[test]
+    fn chart_placement_reaches_the_pod() {
+        let placement = SandboxPlacement::from_values(
+            Some(r#"{"pool":"sandboxes"}"#),
+            Some(r#"[{"key":"sandbox","operator":"Exists","effect":"NoSchedule"}]"#),
+        )
+        .expect("valid placement");
+        let mut pod = sandbox_pod(
+            &sandbox(SandboxEgress::None),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
+        placement.apply(&mut pod);
+        let spec = pod.spec.unwrap();
+        assert_eq!(spec.node_selector.unwrap()["pool"], "sandboxes");
+        assert_eq!(spec.tolerations.unwrap()[0].key.as_deref(), Some("sandbox"));
+    }
+
+    #[test]
+    fn empty_or_unset_placement_adds_no_constraint() {
+        for (selector, tolerations) in [
+            (None, None),
+            (Some("{}"), Some("[]")),
+            (Some(" "), Some("")),
+        ] {
+            let placement = SandboxPlacement::from_values(selector, tolerations).unwrap();
+            assert_eq!(placement, SandboxPlacement::default());
+        }
+    }
+
+    #[test]
+    fn unparseable_placement_is_an_error_not_an_unconstrained_pod() {
+        assert!(SandboxPlacement::from_values(Some("not json"), None).is_err());
+        assert!(SandboxPlacement::from_values(None, Some("{}")).is_err());
     }
 
     #[test]

@@ -630,7 +630,7 @@ fn the_operator_is_given_the_address_of_its_own_broker_service() {
     assert_helm_valid(&chart, "sandbox broker service");
     let rendered = super::test_utils::helm_template_for_release(
         &chart.files,
-        Some("management:\n  name: customer-1\n"),
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
         "acme",
     );
     rendered.assert_ok("sandbox broker service");
@@ -781,4 +781,124 @@ fn platform_scoped_storage_is_absent_from_kubernetes_chart() {
     assert_helm_valid(&chart, "off-platform storage");
     let values: serde_yaml::Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
     assert!(values["infrastructure"]["data"].is_null());
+}
+
+fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<String> {
+    rendered_documents(rendered)
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .and_then(|operator| {
+            operator["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .and_then(|env| {
+                    env.iter().find(|variable| {
+                        variable["name"] == alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS
+                    })
+                })
+                .and_then(|variable| variable["value"].as_str().map(str::to_string))
+        })
+}
+
+/// The chart, not the Operator, chooses the sandbox RuntimeClass: the value wins, and without
+/// one the cluster's own version string picks the vendor class.
+#[test]
+fn the_sandbox_runtime_class_follows_the_value_then_the_cluster_version() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let render_for = |values: Option<&str>, version: &str| {
+        super::test_utils::helm_template_for_kube_version(
+            &chart.files,
+            values,
+            "acme",
+            Some(version),
+        )
+    };
+    for (version, expected) in [
+        ("v1.36.0-eks-1234567", "isolated-sandbox"),
+        ("v1.33.5-gke.1080000", "gvisor"),
+    ] {
+        let rendered = render_for(Some("management:\n  name: customer-1\n"), version);
+        rendered.assert_ok(version);
+        assert_eq!(
+            sandbox_runtime_class_env(&rendered).as_deref(),
+            Some(expected),
+            "{version}"
+        );
+    }
+
+    let rendered = render_for(
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: kata-vm-isolation\n"),
+        "v1.33.4",
+    );
+    rendered.assert_ok("explicit value on AKS");
+    assert_eq!(
+        sandbox_runtime_class_env(&rendered).as_deref(),
+        Some("kata-vm-isolation")
+    );
+
+    // An explicit value beats the version default.
+    let rendered = render_for(
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: kata\n"),
+        "v1.36.0-eks-1234567",
+    );
+    rendered.assert_ok("explicit value on EKS");
+    assert_eq!(
+        sandbox_runtime_class_env(&rendered).as_deref(),
+        Some("kata")
+    );
+}
+
+/// A cluster the chart cannot name a class for fails the render, naming the value to set.
+#[test]
+fn an_unknown_cluster_without_a_runtime_class_fails_the_render() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\n"),
+        "acme",
+        Some("v1.33.4"),
+    );
+    assert!(!rendered.is_ok(), "the render must fail");
+    for needle in [
+        "sandbox.runtimeClassName",
+        "kata-vm-isolation",
+        "gvisor",
+        "isolated-sandbox",
+    ] {
+        assert!(
+            rendered.stderr.contains(needle),
+            "missing {needle}: {}",
+            rendered.stderr
+        );
+    }
+}
+
+#[test]
+fn sandbox_node_placement_values_reach_the_operator() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+        "acme",
+        None,
+    );
+    rendered.assert_ok("sandbox placement");
+    let documents = rendered_documents(&rendered);
+    let operator = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("operator");
+    let env = |name: &str| {
+        operator["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("{name} missing"))
+    };
+    assert_eq!(
+        env(alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR),
+        r#"{"pool":"sandboxes"}"#
+    );
+    assert!(env(alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS).contains("\"key\":\"sandbox\""));
 }

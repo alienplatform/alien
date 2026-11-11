@@ -88,10 +88,7 @@ async fn ingress_reconciles_only_on_change_and_preserves_foreign_policy() {
             assert_eq!(actual["Statement"][0], original["Statement"][0]);
             assert_eq!(actual["Statement"].as_array().unwrap().len(), 2);
             let grant = &actual["Statement"][1];
-            assert_eq!(
-                grant["Principal"],
-                json!({"Service":"s3.amazonaws.com"})
-            );
+            assert_eq!(grant["Principal"], json!({"Service":"s3.amazonaws.com"}));
             assert_eq!(grant["Action"], "sqs:SendMessage");
             assert_eq!(
                 grant["Resource"],

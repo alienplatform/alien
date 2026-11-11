@@ -9,6 +9,13 @@ pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
 /// on the operator from the Service it renders in front of the operator, which serves the
 /// broker; the Sandbox controller publishes it in the sandbox binding.
 pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
+/// RuntimeClass the chart chose for sandbox pods (`sandbox.runtimeClassName`, or the cluster's
+/// vendor class when unset). The Operator only checks it; it never picks one.
+pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";
+/// JSON object of node labels sandbox pods must match (`sandbox.nodeSelector`).
+pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
+/// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
+pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";

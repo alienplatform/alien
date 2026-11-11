@@ -34,6 +34,27 @@ const ALWAYS_DENIED_CIDRS: &[&str] = &[
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
 const BROKER_RBAC_TEMPLATE: &str = "sandbox-broker-rbac.yaml";
 
+/// Helm helper naming the RuntimeClass of sandbox pods, shared by the operator Deployment and the
+/// network-policy probe. Only charts with a sandbox carry it.
+const RUNTIME_CLASS_HELPER_TEMPLATE: &str = "_sandbox.tpl";
+
+/// The `sandbox.runtimeClassName` value when set; otherwise the vendor class for the cluster the
+/// chart renders for, read from its version string without a `lookup` (Argo CD renders with
+/// `helm template`). Anything else fails the render and names the choices.
+const RUNTIME_CLASS_HELPER: &str = r#"{{- define "deployment.sandboxRuntimeClassName" -}}
+{{- $configured := dig "runtimeClassName" "" (default dict .Values.sandbox) -}}
+{{- if $configured -}}
+{{- $configured -}}
+{{- else if contains "-eks-" .Capabilities.KubeVersion.GitVersion -}}
+isolated-sandbox
+{{- else if contains "-gke." .Capabilities.KubeVersion.GitVersion -}}
+gvisor
+{{- else -}}
+{{- fail (printf "sandbox.runtimeClassName is not set and cannot be chosen for Kubernetes %s. Set it to the sandboxed RuntimeClass of this cluster: AKS uses kata-vm-isolation, EKS uses isolated-sandbox, GKE uses gvisor, and on-premises clusters use the gVisor or Kata class the administrator installed." .Capabilities.KubeVersion.GitVersion) -}}
+{{- end -}}
+{{- end -}}
+"#;
+
 #[derive(Debug, Default)]
 pub struct SandboxEmitter;
 
@@ -61,6 +82,10 @@ impl HelmEmitter for SandboxEmitter {
         fragment
             .extra_templates
             .insert(BROKER_RBAC_TEMPLATE.to_string(), broker_rbac());
+        fragment.extra_templates.insert(
+            RUNTIME_CLASS_HELPER_TEMPLATE.to_string(),
+            RUNTIME_CLASS_HELPER.to_string(),
+        );
         if matches!(sandbox.egress, SandboxEgress::Internet) {
             fragment.extra_templates.insert(
                 "sandbox-cni-probe.yaml".to_string(),
