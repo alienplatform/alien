@@ -234,6 +234,32 @@ pub struct KubernetesHttpProbe {
     pub port: u16,
 }
 
+/// Relative scheduling importance of a workload.
+///
+/// On Kubernetes the deployment's cluster administrator maps each level to a
+/// PriorityClass at install time. Other platforms ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum WorkloadPriority {
+    Critical,
+    High,
+    Normal,
+    Low,
+}
+
+impl WorkloadPriority {
+    /// The level name used in chart values and the Operator's class map.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::High => "high",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+}
+
 /// Security profile shared by container runtimes.
 ///
 /// Every workload the Operator creates runs under the Kubernetes Pod Security
@@ -550,6 +576,12 @@ pub struct Container {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 86400))]
     pub stop_grace_period_seconds: Option<u32>,
+
+    /// Relative scheduling importance. On Kubernetes the cluster administrator maps each
+    /// level to a PriorityClass at install time; unset leaves the pod without one. Other
+    /// platforms ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<WorkloadPriority>,
 }
 
 impl Container {

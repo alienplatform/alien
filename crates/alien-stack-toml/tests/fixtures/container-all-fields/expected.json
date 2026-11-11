@@ -151,6 +151,7 @@
             "port": 8080
           }
         ],
+        "priority": "high",
         "publicEndpoints": [
           {
             "hostLabel": "ledger",

@@ -546,6 +546,7 @@ export type { WorkerPublicEndpoint } from "./zod/worker-public-endpoint-schema.j
 export type { Worker } from "./zod/worker-schema.js";
 export type { WorkerTrigger } from "./zod/worker-trigger-schema.js";
 export type { WorkloadHeartbeatStatus } from "./zod/workload-heartbeat-status-schema.js";
+export type { WorkloadPriority } from "./zod/workload-priority-schema.js";
 export type { WorkloadReplicaStatus } from "./zod/workload-replica-status-schema.js";
 export { AcrArtifactRegistryBindingSchema } from "./zod/acr-artifact-registry-binding-schema.js";
 export { AgentStatusSchema } from "./zod/agent-status-schema.js";
@@ -1095,4 +1096,5 @@ export { WorkerPublicEndpointSchema } from "./zod/worker-public-endpoint-schema.
 export { WorkerSchema } from "./zod/worker-schema.js";
 export { WorkerTriggerSchema } from "./zod/worker-trigger-schema.js";
 export { WorkloadHeartbeatStatusSchema } from "./zod/workload-heartbeat-status-schema.js";
+export { WorkloadPrioritySchema } from "./zod/workload-priority-schema.js";
 export { WorkloadReplicaStatusSchema } from "./zod/workload-replica-status-schema.js";

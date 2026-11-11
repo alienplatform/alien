@@ -1,0 +1,12 @@
+name: Setup zig and cargo-zigbuild
+description: Installs zig and cargo-zigbuild so the Node addon can target an older glibc.
+
+runs:
+  using: composite
+  steps:
+    - uses: mlugg/setup-zig@v2
+      with:
+        version: 0.14.1
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-zigbuild@0.24.1

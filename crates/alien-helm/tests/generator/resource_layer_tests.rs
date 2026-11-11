@@ -853,3 +853,161 @@ fn platform_scoped_storage_is_absent_from_kubernetes_chart() {
     let values: serde_yaml::Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
     assert!(values["infrastructure"]["data"].is_null());
 }
+
+/// The operator's `ALIEN_KUBERNETES_PRIORITY_CLASSES` and the PriorityClass documents the chart
+/// renders for the given values, for a release named `acme`.
+fn priority_render(values: &str) -> (Option<String>, Vec<serde_yaml::Value>) {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_release(
+        &chart.files,
+        Some(&format!("management:\n  name: customer-1\n{values}")),
+        "acme",
+    );
+    rendered.assert_ok("workload priority values");
+    let documents = rendered_documents(&rendered);
+    let operator = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let map = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .expect("operator env")
+        .iter()
+        .find(|variable| variable["name"] == alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES)
+        .and_then(|variable| variable["value"].as_str())
+        .map(str::to_string);
+    let classes = documents
+        .into_iter()
+        .filter(|document| document["kind"] == "PriorityClass")
+        .collect();
+    (map, classes)
+}
+
+/// An existing install upgraded to this chart must not restart: with nothing mapped the
+/// operator's pod template gains no variable and no PriorityClass appears.
+#[test]
+fn workload_priority_renders_nothing_until_a_class_is_mapped() {
+    let (map, classes) = priority_render("");
+    assert_eq!(map, None);
+    assert!(classes.is_empty());
+}
+
+#[test]
+fn workload_priority_maps_each_level_to_the_class_the_admin_names() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    classes:\n      critical: vendor-core\n      low: vendor-batch\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.expect("env is set")).unwrap();
+    assert_eq!(
+        map,
+        serde_json::json!({"critical": "vendor-core", "low": "vendor-batch"})
+    );
+    assert!(classes.is_empty(), "the chart creates nothing unless asked");
+}
+
+#[test]
+fn workload_priority_create_renders_four_release_named_classes_below_system_ones() {
+    let (map, classes) = priority_render("runtime:\n  workloadPriority:\n    create: true\n");
+    let map: serde_json::Value = serde_json::from_str(&map.expect("env is set")).unwrap();
+    let rendered: Vec<(String, i64, bool)> = classes
+        .iter()
+        .map(|class| {
+            (
+                class["metadata"]["name"].as_str().unwrap().to_string(),
+                class["value"].as_i64().unwrap(),
+                class["globalDefault"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    // Cluster-scoped names carry a namespace/release hash so two releases that share a
+    // name in different namespaces never collide.
+    let name = |level: &str| map[level].as_str().unwrap().to_string();
+    for level in ["critical", "high", "normal", "low"] {
+        let n = name(level);
+        assert!(
+            n.starts_with("acme-") && n.ends_with(&format!("-{level}")),
+            "{n}"
+        );
+        assert_ne!(n, format!("acme-{level}"), "name must be namespace-scoped");
+    }
+    assert_eq!(
+        rendered,
+        vec![
+            (name("critical"), 1_000_000, false),
+            (name("high"), 100_000, false),
+            (name("normal"), 0, false),
+            (name("low"), -100, false),
+        ]
+    );
+    assert!(classes[0]["description"].as_str().unwrap().contains("acme"));
+}
+
+/// With `create` on, an admin override points one level at their own class and the chart
+/// creates only the remaining levels.
+#[test]
+fn workload_priority_create_skips_levels_the_admin_mapped_elsewhere() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: vendor-core\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    assert_eq!(map["critical"], "vendor-core");
+    let names: Vec<_> = classes
+        .iter()
+        .map(|class| class["metadata"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            map["high"].as_str().unwrap(),
+            map["normal"].as_str().unwrap(),
+            map["low"].as_str().unwrap()
+        ]
+    );
+}
+
+/// An explicit mapping whose name equals a generated name is still the admin's class:
+/// the chart must not try to create it.
+#[test]
+fn workload_priority_create_never_creates_a_class_the_admin_named() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: acme-critical\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    assert_eq!(map["critical"], "acme-critical");
+    assert_eq!(classes.len(), 3);
+    assert!(classes
+        .iter()
+        .all(|c| c["metadata"]["name"] != "acme-critical"));
+}
+
+/// Mapping a level to the name this release would generate anyway (for example by copying
+/// the rendered map into values) must keep creating that class; otherwise the next upgrade
+/// would delete a class running workloads still use.
+#[test]
+fn workload_priority_create_keeps_the_releases_own_class_when_mapped_to_its_name() {
+    let (map, _) = priority_render("runtime:\n  workloadPriority:\n    create: true\n");
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    let own = map["critical"].as_str().unwrap().to_string();
+    let (mapped, classes) = priority_render(&format!(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: {own}\n"
+    ));
+    let mapped: serde_json::Value = serde_json::from_str(&mapped.unwrap()).unwrap();
+    assert_eq!(mapped["critical"], own.as_str());
+    assert_eq!(classes.len(), 4);
+    assert!(classes.iter().any(|c| c["metadata"]["name"] == own.as_str()));
+}
+
+#[test]
+fn workload_priority_schema_rejects_unknown_levels() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_release(
+        &chart.files,
+        Some("management:\n  name: customer-1\nruntime:\n  workloadPriority:\n    classes:\n      urgent: x\n"),
+        "acme",
+    );
+    assert!(
+        !rendered.is_ok() && rendered.stderr.contains("urgent"),
+        "{}",
+        rendered.stderr
+    );
+}

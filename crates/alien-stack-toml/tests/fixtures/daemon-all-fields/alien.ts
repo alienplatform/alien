@@ -22,6 +22,7 @@ const agent = new alien.Daemon("agent")
   .cpu(0.5)
   .memory("512Mi")
   .stopGracePeriod(120)
+  .priority("low")
   .healthCheck({
     port: 9100,
     path: "/healthz",

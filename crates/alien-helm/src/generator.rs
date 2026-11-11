@@ -347,6 +347,10 @@ fn generate_helm_chart_internal(
         poddisruptionbudget_tpl(),
     );
     files.insert(
+        "templates/priorityclass.yaml".to_string(),
+        priorityclass_tpl(),
+    );
+    files.insert(
         "templates/networkpolicy.yaml".to_string(),
         networkpolicy_tpl(),
     );
@@ -4113,6 +4117,19 @@ runtime:
     topologySpreadConstraints: []
     priorityClassName: ""
     runtimeClassName: ""
+  # Scheduling priority of the workloads the Operator creates. The stack declares a level per
+  # container or daemon (critical, high, normal, low); each level maps to a PriorityClass here.
+  # An empty entry leaves workloads at that level without a PriorityClass. Nothing changes for
+  # existing installs until an entry is set.
+  workloadPriority:
+    # Create one PriorityClass per level named <release>-<hash>-<level> (the hash is derived from namespace and release), for clusters without their
+    # own. Needs cluster-scoped write rights from whoever runs helm, never the Operator.
+    create: false
+    classes:
+      critical: ""
+      high: ""
+      normal: ""
+      low: ""
   pdb:
     enabled: false
     minAvailable: 1
@@ -4876,6 +4893,23 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "runtimeClassName": { "type": "string" }
           }
         },
+        "workloadPriority": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "classes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "critical": { "type": "string" },
+                "high": { "type": "string" },
+                "normal": { "type": "string" },
+                "low": { "type": "string" }
+              }
+            }
+          }
+        },
         "pdb": {
           "type": "object",
           "additionalProperties": false,
@@ -5580,6 +5614,20 @@ rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
 {{- $rawBase := regexReplaceAll "[^a-z0-9-]" (lower .root.Release.Name) "-" | trimAll "-" -}}
 {{- $base := default "release" $rawBase | trunc (int $maxBaseLength) | trimSuffix "-" -}}
 {{- printf "%s-%s%s" $base $hash $suffix -}}
+{{- end -}}
+
+{{- /* Level -> PriorityClass name for the workloads the Operator creates; "{}" when none is set. */ -}}
+{{- define "deployment.priorityClassMap" -}}
+{{- $priority := default dict .Values.runtime.workloadPriority -}}
+{{- $configured := default dict $priority.classes -}}
+{{- $classes := dict -}}
+{{- range $level := list "critical" "high" "normal" "low" -}}
+{{- $name := default (ternary (include "deployment.releaseScopedName" (dict "root" $ "suffix" (printf "-%s" $level))) "" (default false $priority.create)) (get $configured $level) -}}
+{{- if $name -}}
+{{- $_ := set $classes $level $name -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $classes -}}
 {{- end -}}
 
 {{- define "deployment.logCollectorName" -}}
@@ -6753,6 +6801,11 @@ spec:
             - name: OPERATOR_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
+            {{- $priorityClasses := include "deployment.priorityClassMap" . }}
+            {{- if ne $priorityClasses "{}" }}
+            - name: ALIEN_KUBERNETES_PRIORITY_CLASSES
+              value: {{ $priorityClasses | quote }}
+            {{- end }}
             {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
             - name: AWS_REGION
               value: {{ .Values.basePlatformConfig.aws.region | quote }}
@@ -7306,6 +7359,35 @@ spec:
     .to_string()
 }
 
+/// Optional PriorityClasses for clusters that have none. Admins who already have classes map
+/// the levels to those instead and leave `create` off. Values stay well below the
+/// system-cluster-critical range so these never compete with Kubernetes components.
+fn priorityclass_tpl() -> String {
+    r#"{{- if .Values.runtime.workloadPriority.create }}
+{{- $classes := include "deployment.priorityClassMap" . | fromJson }}
+{{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
+{{- range $level := list "critical" "high" "normal" "low" }}
+{{- $configured := default dict $.Values.runtime.workloadPriority.classes }}
+{{- $ownName := include "deployment.releaseScopedName" (dict "root" $ "suffix" (printf "-%s" $level)) }}
+{{- /* Keep creating the class when an explicit mapping names this release's own class, otherwise Helm would delete a class workloads still use. */}}
+{{- if or (not (get $configured $level)) (eq (get $configured $level) $ownName) }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ get $classes $level }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+value: {{ get $values $level }}
+globalDefault: false
+description: {{ printf "Created by the %s Helm release for workloads declared with priority %s." $.Release.Name $level | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+"#
+    .to_string()
+}
+
 fn networkpolicy_tpl() -> String {
     r#"{{- if .Values.runtime.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -7844,6 +7926,40 @@ edit them in the deployment dashboard and retain the original Helm values.
 Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
 values with the installed Secret. Client-side `helm template --is-upgrade`
 cannot do that.
+
+## Workload priority
+
+A stack can declare a priority level on a container or daemon: `critical`, `high`,
+`normal` or `low`. The levels say which workloads matter more under node pressure;
+the cluster administrator decides which Kubernetes PriorityClass each level means.
+Map them in the install values:
+
+```yaml
+runtime:
+  workloadPriority:
+    classes:
+      critical: platform-critical
+      high: platform-high
+      normal: ""
+      low: platform-batch
+```
+
+A workload gets the class mapped to its level. A workload with no declared level, or
+a level whose entry is empty, gets no `priorityClassName`, as before. An install
+that sets none of these values renders and restarts exactly as it did.
+
+PriorityClasses are cluster-scoped, so the Operator never creates them. Point the
+levels at classes your cluster already has, or set
+`runtime.workloadPriority.create: true` and Helm creates `<release>-<hash>-critical`,
+`-high`, `-normal` and `-low` (the hash keeps same-named releases in different namespaces apart) (values 1000000, 100000, 0 and -100, never the
+default class) for any level you did not map yourself. Creating them needs
+cluster-scoped rights from whoever runs Helm. Removing the release removes the
+classes; running pods keep the priority they were admitted with.
+
+If a mapped class does not exist, Kubernetes rejects the pods and the workload
+reports `no PriorityClass with name ...`, followed by the values key to fix.
+Changing a mapping restarts only the workloads at that level. Sandboxes do not use
+priority levels, and platforms other than Kubernetes ignore the field.
 
 ## Logs
 
