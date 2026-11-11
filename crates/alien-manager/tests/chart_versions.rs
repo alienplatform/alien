@@ -128,7 +128,6 @@ async fn manager(stores: &Stores, operator_image: &str) -> AppState {
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: None,
         charts: Some(Arc::new(ChartSettings::new(
             Some(operator_image.to_string()),
             false,
