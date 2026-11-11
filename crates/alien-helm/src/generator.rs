@@ -4234,7 +4234,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n# Set true when Flux, Argo CD or another tool renders this chart without access to\n# the cluster (`helm template`). The render then fails unless existing Secrets supply\n# every credential the chart would otherwise generate: a generated value would change\n# on every render. Requires management.existingSecret.name,\n# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or\n# logCollector.token.\ngitops:\n  enabled: false\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n# Set true when Flux, Argo CD or another tool renders this chart without access to\n# the cluster (`helm template`). The render then fails unless existing Secrets supply\n# every credential the chart would otherwise generate: a generated value would change\n# on every render. Requires management.existingSecret.name,\n# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or\n# logCollector.token.\ngitops:\n  enabled: false\n\n# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health\n# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure\n# is disabled, so the Role doesn't carry them.\nrbac:\n  routing:\n    enabled: true\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -5114,6 +5114,19 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Grant the Operator Role the rules for Ingresses, Gateways, HTTPRoutes and load balancer health checks." }
+          }
+        }
+      }
+    },
     "gitops": {
       "type": "object",
       "additionalProperties": false,
@@ -5809,6 +5822,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -5821,6 +5835,7 @@ rules:
   - apiGroups: ["alb.networking.azure.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
 "#
     .to_string()
 }
@@ -8148,6 +8163,10 @@ ServiceAccounts get only the rules their permission profile needs.
 | `ingresses`; `gateways`, `httproutes` (Gateway API) | all | Public endpoints, for the exposure mode in `stackSettings.kubernetes.exposure` |
 | `healthcheckpolicies` (`networking.gke.io`, `alb.networking.azure.io`) | all | Load balancer health checks for public routes on GKE and AKS |
 | `nodes`; `nodes` (`metrics.k8s.io`) (ClusterRole) | `get`, `list`, `watch` | Node health; turn off with `heartbeat.collection.nodes.enabled: false` |
+
+Set `rbac.routing.enabled: false` to leave the Ingress, Gateway, HTTPRoute and
+health check rules out of the Role, for a stack whose
+`stackSettings.kubernetes.exposure` is disabled. It is on by default.
 
 ## Upgrades and availability
 

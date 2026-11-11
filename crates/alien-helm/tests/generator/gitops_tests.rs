@@ -416,3 +416,40 @@ fn the_operator_network_policy_names_what_it_allows() {
         .clone();
     assert_eq!(last["ports"][0]["port"], 5432);
 }
+
+#[test]
+fn the_routing_rules_of_the_operator_role_can_be_left_out() {
+    let chart = chart_files();
+    let role_resources = |extra: &str| {
+        let values = format!("management:\n  token: test-credential\n{extra}");
+        let rendered = test_utils::helm_template(&chart, Some(&values));
+        rendered.assert_ok("role");
+        let role = yaml_documents(&rendered.stdout)
+            .into_iter()
+            .find(|document| {
+                document["kind"] == "Role"
+                    && document["rules"].as_sequence().is_some_and(|rules| {
+                        rules
+                            .iter()
+                            .any(|rule| to_yaml(&rule["resources"]).contains("networkpolicies"))
+                    })
+            })
+            .expect("the Operator Role");
+        to_yaml(&role["rules"])
+    };
+    let default = role_resources("");
+    for resource in [
+        "ingresses",
+        "httproutes",
+        "healthcheckpolicies",
+        "networkpolicies",
+    ] {
+        assert!(default.contains(resource), "{resource}");
+    }
+    let without = role_resources("rbac:\n  routing:\n    enabled: false\n");
+    for resource in ["ingresses", "gateways", "httproutes", "healthcheckpolicies"] {
+        assert!(!without.contains(resource), "{resource} stays: {without}");
+    }
+    // Network policies are not routing: containers with network settings need them.
+    assert!(without.contains("networkpolicies"));
+}

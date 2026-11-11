@@ -250,6 +250,13 @@ infrastructureExistingSecret: ""
 gitops:
   enabled: false
 
+# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health
+# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure
+# is disabled, so the Role doesn't carry them.
+rbac:
+  routing:
+    enabled: true
+
 basePlatform: null
 basePlatformConfig:
   gcp:
@@ -672,6 +679,19 @@ postgres: {}
     },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Grant the Operator Role the rules for Ingresses, Gateways, HTTPRoutes and load balancer health checks." }
+          }
+        }
+      }
+    },
     "gitops": {
       "type": "object",
       "additionalProperties": false,
@@ -1220,6 +1240,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -1232,6 +1253,7 @@ rules:
   - apiGroups: ["alb.networking.azure.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
 
 === templates/rolebinding.yaml ===
 apiVersion: rbac.authorization.k8s.io/v1
@@ -3635,6 +3657,10 @@ ServiceAccounts get only the rules their permission profile needs.
 | `ingresses`; `gateways`, `httproutes` (Gateway API) | all | Public endpoints, for the exposure mode in `stackSettings.kubernetes.exposure` |
 | `healthcheckpolicies` (`networking.gke.io`, `alb.networking.azure.io`) | all | Load balancer health checks for public routes on GKE and AKS |
 | `nodes`; `nodes` (`metrics.k8s.io`) (ClusterRole) | `get`, `list`, `watch` | Node health; turn off with `heartbeat.collection.nodes.enabled: false` |
+
+Set `rbac.routing.enabled: false` to leave the Ingress, Gateway, HTTPRoute and
+health check rules out of the Role, for a stack whose
+`stackSettings.kubernetes.exposure` is disabled. It is on by default.
 
 ## Upgrades and availability
 
