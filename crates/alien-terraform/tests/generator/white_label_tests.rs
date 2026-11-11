@@ -48,7 +48,8 @@ fn settings(setup_management: SetupManagement) -> StackSettings {
             cidr: Some("10.44.0.0/16".to_string()),
             availability_zones: 2,
         }),
-        signing: Some(StackSigning {
+        // A protected install is never set up automatically.
+        signing: (setup_management == SetupManagement::Manual).then(|| StackSigning {
             fingerprint: format!("SHA256:{}", "9f".repeat(32)),
             channel: "production".to_string(),
         }),
