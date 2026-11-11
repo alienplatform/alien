@@ -410,6 +410,7 @@ fn test_list_permission_set_ids() {
     assert!(ids.contains(&"worker/provision"));
     assert!(ids.contains(&"kubernetes-public-endpoint/management"));
     assert!(ids.contains(&"observe/observe"));
+    assert!(ids.contains(&"observe/metrics-read"));
     assert!(ids.contains(&"build/execute"));
     assert!(ids.contains(&"build/management"));
     assert!(ids.contains(&"build/provision"));

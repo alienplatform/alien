@@ -69,6 +69,8 @@ impl CloudWatchClient {
         }
     }
 
+    /// Sends a query and decodes its XML response. An access denial is returned at once: the
+    /// caller's grants do not change between attempts.
     async fn send_query<T: DeserializeOwned + Send + 'static>(
         &self,
         body: String,
@@ -76,8 +78,12 @@ impl CloudWatchClient {
         resource: &str,
     ) -> Result<T> {
         let (builder, body) = self.query_request(&body, operation).await?;
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = crate::aws::aws_request_utils::sign_send_xml_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_retryable_unless_denied,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&body))
     }
@@ -648,7 +654,7 @@ mod tests {
     #[tokio::test]
     async fn a_denied_call_is_reported_as_access_denied() {
         let server = MockServer::start_async().await;
-        server
+        let denied = server
             .mock_async(|when, then| {
                 when.method(POST)
                     .path("/")
@@ -681,6 +687,7 @@ mod tests {
             })
             .await
             .unwrap_err();
+        denied.assert_hits_async(1).await;
         assert!(
             matches!(
                 &error.error,

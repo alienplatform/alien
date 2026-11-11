@@ -8,7 +8,7 @@ license-file.workspace = true
 
 [features]
 default = []
-aws = ["dep:alien-aws-clients"]
+aws = ["dep:alien-aws-clients", "dep:opentelemetry-proto"]
 azure = ["dep:alien-azure-clients"]
 gcp = ["dep:alien-gcp-clients"]
 kubernetes = ["dep:alien-k8s-clients"]
@@ -25,10 +25,17 @@ alien-k8s-clients = { workspace = true, optional = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
+opentelemetry-proto = { version = "0.30", optional = true, default-features = false, features = ["gen-tonic-messages", "metrics"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+httpmock = { workspace = true }
+reqwest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[[test]]
+name = "lambda_metrics"
+required-features = ["aws"]
