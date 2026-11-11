@@ -2918,7 +2918,9 @@ spec:
 {{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
 {{- range $level := list "critical" "high" "normal" "low" }}
 {{- $configured := default dict $.Values.runtime.workloadPriority.classes }}
-{{- if not (get $configured $level) }}
+{{- $ownName := include "deployment.releaseScopedName" (dict "root" $ "suffix" (printf "-%s" $level)) }}
+{{- /* Keep creating the class when an explicit mapping names this release's own class, otherwise Helm would delete a class workloads still use. */}}
+{{- if or (not (get $configured $level)) (eq (get $configured $level) $ownName) }}
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
