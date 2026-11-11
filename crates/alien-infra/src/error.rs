@@ -55,6 +55,15 @@ pub enum ErrorData {
     )]
     SandboxInternetDirectExistingVpcUnsupported { resource_id: String },
 
+    /// A direct setup would create a resource without the customer-managed key it names.
+    #[error(
+        code = "KEY_CONSUMER_UNSUPPORTED_IN_DIRECT_SETUP",
+        message = "Storage '{resource_id}' is encrypted with key '{key_id}', which a direct setup does not apply to storage yet. Nothing was created. Deploy with CloudFormation or Terraform to encrypt storage with a key.",
+        retryable = "false",
+        internal = "false"
+    )]
+    KeyConsumerUnsupportedInDirectSetup { resource_id: String, key_id: String },
+
     /// Resource configuration validation failed.
     #[error(
         code = "RESOURCE_CONFIG_INVALID",

@@ -49,7 +49,11 @@ pub(crate) fn validate_setup_support(
         sandbox_egress_network, SandboxEgressRefusal, SandboxEgressVpc,
     };
 
-    if platform != Platform::Aws || authority != alien_core::InitialSetupAuthority::DirectSetup {
+    if authority != alien_core::InitialSetupAuthority::DirectSetup {
+        return Ok(());
+    }
+    validate_key_consumers(stack)?;
+    if platform != Platform::Aws {
         return Ok(());
     }
     let refusal: fn(String) -> ErrorData = match sandbox_egress_network(stack) {
@@ -68,6 +72,27 @@ pub(crate) fn validate_setup_support(
             .is_some_and(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet))
         {
             return Err(AlienError::new(refusal(resource_id.clone())));
+        }
+    }
+    Ok(())
+}
+
+/// A key only protects data if the resource that names it applies it. No Storage controller
+/// sets a customer-managed key on its bucket in a direct setup, so a stack that names one is
+/// refused while planning: a bucket without the key would report success and silently not use it.
+fn validate_key_consumers(stack: &Stack) -> Result<()> {
+    for (resource_id, entry) in stack.resources() {
+        if let Some(key) = entry
+            .config
+            .downcast_ref::<alien_core::Storage>()
+            .and_then(|storage| storage.encryption_key.as_ref())
+        {
+            return Err(AlienError::new(
+                ErrorData::KeyConsumerUnsupportedInDirectSetup {
+                    resource_id: resource_id.clone(),
+                    key_id: key.id().to_string(),
+                },
+            ));
         }
     }
     Ok(())
@@ -571,6 +596,43 @@ mod direct_setup_planning_tests {
             } else {
                 planned.expect("direct internet in a created VPC is planned");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod key_consumer_tests {
+    use super::*;
+    use alien_core::{InitialSetupAuthority, Key, ResourceLifecycle, ResourceRef, Storage};
+
+    fn stack(with_key: bool) -> Stack {
+        let storage = if with_key {
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "data-key"))
+                .build()
+        } else {
+            Storage::new("data".to_string()).build()
+        };
+        Stack::new("s".to_string())
+            .add(
+                Key::new("data-key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(storage, ResourceLifecycle::Frozen)
+            .build()
+    }
+
+    #[test]
+    fn a_direct_setup_refuses_storage_with_a_key_on_every_cloud_before_creating_anything() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let error = validate_setup_support(&stack(true), platform, InitialSetupAuthority::DirectSetup)
+                .expect_err("a bucket must not be created without its key");
+            assert_eq!(error.code, "KEY_CONSUMER_UNSUPPORTED_IN_DIRECT_SETUP", "{platform:?}");
+
+            validate_setup_support(&stack(false), platform, InitialSetupAuthority::DirectSetup)
+                .expect("unencrypted storage is unchanged");
+            validate_setup_support(&stack(true), platform, InitialSetupAuthority::ImportedHandoff)
+                .expect("a template setup applies the key itself");
         }
     }
 }
