@@ -123,12 +123,19 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
+  # Restricts the Operator Pod. Off by default. Ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the Kubernetes
+  # API server on clusters that expose it there). Add what an installation needs, such as
+  # a database port, to extraRules (NetworkPolicy rules).
   networkPolicy:
     enabled: false
     ingress:
       enabled: true
+      extraRules: []
     egress:
       enabled: true
+      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -458,12 +465,18 @@ postgres: {}
             "ingress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             },
             "egress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             }
           }
         },
@@ -3041,11 +3054,35 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
-    - {}
+    # Pods of this release namespace: log collectors and linked workloads.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.runtime.api.port }}
+    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
-    - {}
+    # Cluster DNS.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to the manager, the image registry and cloud APIs, and the Kubernetes API server.
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 {{- end }}
 
@@ -3637,6 +3674,13 @@ The Operator connects to:
 - each service named in `infrastructure` (for example the object store, database or queue), and the cloud APIs the Pod's identity is allowed to call.
 
 The `nodeAgent` log collector reads logs on each node and sends them to the Operator in the cluster.
+
+`runtime.networkPolicy.enabled: true` restricts the Operator Pod to these
+connections: ingress from Pods in the release namespace on the API port, and
+egress to cluster DNS and to ports 443 and 6443. Add the ports an installation
+needs, such as a database, to `runtime.networkPolicy.egress.extraRules`. It is
+off by default. Enforcement depends on the cluster's CNI: on EKS, set the VPC CNI
+`NETWORK_POLICY_ENFORCING_MODE` to `strict` so a policy applies from a Pod's first packet.
 
 === files/stack.json ===
 {

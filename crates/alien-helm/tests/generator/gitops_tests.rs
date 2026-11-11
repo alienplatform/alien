@@ -368,3 +368,51 @@ fn the_node_log_collector_pulls_with_the_install_pull_secrets() {
         "collector-registry"
     );
 }
+
+#[test]
+fn the_operator_network_policy_names_what_it_allows() {
+    let chart = chart_files();
+    let render = |extra: &str| {
+        let values = format!(
+            "management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n{extra}"
+        );
+        let rendered = test_utils::helm_template(&chart, Some(&values));
+        rendered.assert_ok("network policy");
+        yaml_documents(&rendered.stdout)
+            .into_iter()
+            .find(|document| document["kind"] == "NetworkPolicy")
+            .expect("the chart renders a NetworkPolicy")
+    };
+    let policy = render("");
+    // Not allow-all: no empty rule.
+    for direction in ["ingress", "egress"] {
+        for rule in policy["spec"][direction].as_sequence().unwrap() {
+            assert!(
+                !rule.as_mapping().unwrap().is_empty(),
+                "{direction} must not allow everything: {}",
+                to_yaml(&policy)
+            );
+        }
+    }
+    assert_eq!(policy["spec"]["ingress"][0]["ports"][0]["port"], 8080);
+    let egress_ports: Vec<_> = policy["spec"]["egress"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .flat_map(|rule| rule["ports"].as_sequence().unwrap().iter())
+        .map(|port| port["port"].as_u64().unwrap())
+        .collect();
+    assert_eq!(egress_ports, [53, 53, 443, 6443]);
+
+    // An installation adds what it needs, such as a database port.
+    let with_database = render(
+        "    egress:\n      extraRules:\n        - ports:\n            - protocol: TCP\n              port: 5432\n",
+    );
+    let last = with_database["spec"]["egress"]
+        .as_sequence()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(last["ports"][0]["port"], 5432);
+}
