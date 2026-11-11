@@ -28,7 +28,7 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{
-        azure_role_assignment_allowlist_conditions, azure_runtime_roles,
+        azure_role_assignment_allowlist_conditions, azure_runtime_roles_for,
         dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementScopeKind,
         AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator, AzureRuntimeRoles,
@@ -2475,7 +2475,11 @@ pub(crate) fn current_runtime_roles_revision(
 
 /// Every role the runtime assigns after setup for this stack.
 fn runtime_roles(ctx: &ResourceControllerContext<'_>) -> Result<AzureRuntimeRoles> {
-    azure_runtime_roles(ctx.desired_stack).context(ErrorData::InfrastructureError {
+    azure_runtime_roles_for(
+        ctx.desired_stack,
+        ctx.deployment_config.stack_settings.signing.is_some(),
+    )
+    .context(ErrorData::InfrastructureError {
         message: "Failed to list the roles the runtime assigns".to_string(),
         operation: Some("runtime_roles".to_string()),
         resource_id: Some("management".to_string()),

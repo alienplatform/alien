@@ -81,24 +81,6 @@ pub enum ErrorData {
         label: String,
     },
 
-    /// A grant to a protected install's management identity is not on the allow-list for its
-    /// cloud.
-    #[error(
-        code = "PROTECTED_MANAGEMENT_ACTION_REFUSED",
-        message = "Permission set '{permission_set_id}' grants '{action}' to the management identity, which a protected install does not allow: it is not covered by the allow-list at {allow_list}. Remove it from the permission set, or add a line with a reason to that file if it cannot change what runs or reach signing secrets.",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 400
-    )]
-    ProtectedManagementActionRefused {
-        /// Permission set holding the grant
-        permission_set_id: String,
-        /// The refused action pattern, permission or role
-        action: String,
-        /// The allow-list file that would have to cover it
-        allow_list: String,
-    },
-
     /// A permission set grants the management identity an action in a family it never holds on a
     /// protected install.
     #[error(

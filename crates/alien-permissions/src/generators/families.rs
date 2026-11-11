@@ -511,6 +511,20 @@ pub fn azure_family(action: &str) -> Option<Family> {
     None
 }
 
+/// The family of an Azure data-plane action or pattern, if it is in one: a write or action under
+/// `Microsoft.App/` (a sandbox's disk image or sandbox decides what a sandbox runs). Reads and
+/// deletes are not, and a wildcard is when it can match one.
+pub fn azure_data_family(action: &str) -> Option<Family> {
+    let action = action.to_ascii_lowercase();
+    if action.ends_with("/read") && !action.starts_with('*') || action.ends_with("/delete") {
+        return None;
+    }
+    if action.starts_with('*') || glob_patterns_overlap("microsoft.app/*", &action) {
+        return Some(Family::Run);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

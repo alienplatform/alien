@@ -634,8 +634,8 @@ fn a_release_that_lists_runtime_addresses_as_provided_still_refuses_them() {
             env: BTreeMap::from([(name.to_string(), value.to_string())]),
             ..WorkloadRequest::default()
         };
-        let error = build_workload(&release, "web", &BTreeMap::new(), &local(), &request)
-            .expect_err(name);
+        let error =
+            build_workload(&release, "web", &BTreeMap::new(), &local(), &request).expect_err(name);
         assert_eq!(error.code, "SIGNING_WORKLOAD_REFUSED", "{name}");
     }
 }

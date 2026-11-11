@@ -26,7 +26,7 @@ use alien_core::{
 use alien_error::Context;
 use alien_permissions::{
     generators::{
-        azure_role_assignment_allowlist_conditions, azure_runs_no_code, azure_runtime_roles,
+        azure_role_assignment_allowlist_conditions, azure_runs_no_code, azure_runtime_roles_for,
         azure_write_or_delete, dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementRoles,
         AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
@@ -118,9 +118,12 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             })?;
         // The roles the runtime assigns after setup, and the conditions that limit management's
         // role-assignment writes to them. Mirrors `AzureRemoteStackManagementController`.
-        let runtime_roles = azure_runtime_roles(ctx.stack).context(ErrorData::GenericError {
-            message: "failed to list the Azure roles the runtime assigns".to_string(),
-        })?;
+        let runtime_roles =
+            azure_runtime_roles_for(ctx.stack, ctx.stack_settings.signing.is_some()).context(
+                ErrorData::GenericError {
+                    message: "failed to list the Azure roles the runtime assigns".to_string(),
+                },
+            )?;
         let conditions = runtime_role_conditions(ctx, &mut fragment, label, &runtime_roles)?;
         // The runtime assigns those roles even when the stack grants management no
         // role-assignment writes itself; the conditions make the role safe to add.
@@ -438,6 +441,15 @@ const AZURE_VERIFIER_IMAGE_ACTIONS: &[&str] = &[
     "Microsoft.Compute/locations/communityGalleries/images/versions/read",
 ];
 
+/// What follows the install's group name in the name of the group that holds the signing vault.
+/// Must equal `alien_signing::settings::names::azure_signing_resource_group`.
+const SIGNING_GROUP_SUFFIX: &str = "-signing";
+
+/// The Terraform label of the group that holds the signing vault, for management label `label`.
+fn signing_group_label(label: &str) -> String {
+    format!("{label}_signing_group")
+}
+
 /// Built-in role that reads and writes Key Vault secrets.
 const KEY_VAULT_SECRETS_OFFICER: &str = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7";
 
@@ -515,6 +527,30 @@ pub fn azure_machine_signing_grants(
         ),
         resource_block(
             "azurerm_role_assignment",
+            &format!("{label}_machine_signing_vault_group"),
+            [
+                attr(
+                    "scope",
+                    expr::traversal([
+                        "azurerm_resource_group",
+                        &signing_group_label(management),
+                        "id",
+                    ]),
+                ),
+                attr(
+                    "role_definition_id",
+                    expr::traversal([
+                        "azurerm_role_definition",
+                        &format!("{management}_machine_signing"),
+                        "role_definition_resource_id",
+                    ]),
+                ),
+                attr("principal_id", principal_id.clone()),
+                attr("principal_type", Expression::String("ServicePrincipal".to_string())),
+            ],
+        ),
+        resource_block(
+            "azurerm_role_assignment",
             &format!("{label}_signing_vault"),
             [
                 attr(
@@ -546,6 +582,23 @@ fn emit_verifier_grants(
     let group_id = expr::traversal(["azurerm_resource_group", resource_group, "id"]);
     let principal = expr::traversal(["azurerm_user_assigned_identity", verifier, "principal_id"]);
     let role = format!("{label}_verifier");
+    // The signing vault's own group. Management holds role-assignment rights in the install's
+    // group only, so nothing management assigns can reach the vault.
+    let signing_group = signing_group_label(label);
+    let signing_group_id = expr::traversal(["azurerm_resource_group", &signing_group, "id"]);
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_resource_group",
+        &signing_group,
+        [
+            attr(
+                "name",
+                expr::template(format!(
+                    "${{var.azure_resource_group_name}}{SIGNING_GROUP_SUFFIX}"
+                )),
+            ),
+            attr("location", expr::raw("var.azure_location")),
+        ],
+    ));
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_definition",
         &role,
@@ -650,7 +703,7 @@ fn emit_verifier_grants(
         &format!("{label}_machine_signing"),
         [
             attr("name", expr::template("${local.resource_prefix}-machine-signing".to_string())),
-            attr("scope", group_id.clone()),
+            attr("scope", expr::template(OWN_SUBSCRIPTION_SCOPE.to_string())),
             attr(
                 "description",
                 Expression::String(
@@ -664,7 +717,10 @@ fn emit_verifier_grants(
                     AZURE_MACHINE_SIGNING_ACTIONS.iter().map(|action| action.to_string()).collect(),
                 ))],
             )),
-            attr("assignable_scopes", Expression::Array(vec![group_id.clone()])),
+            attr(
+                "assignable_scopes",
+                Expression::Array(vec![group_id.clone(), signing_group_id.clone()]),
+            ),
         ],
     ));
 
@@ -688,7 +744,10 @@ fn emit_verifier_grants(
                     "format(\"%s-%s\", trim(substr(lower(replace(\"${{local.resource_prefix}}-signing\", \"_\", \"-\")), 0, 17), \"-\"), random_id.{vault}_name_suffix.hex)"
                 )),
             ),
-            attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+            attr(
+                "resource_group_name",
+                expr::traversal(["azurerm_resource_group", &signing_group, "name"]),
+            ),
             attr("location", expr::raw("var.azure_location")),
             attr(
                 "tenant_id",
@@ -700,7 +759,7 @@ fn emit_verifier_grants(
             attr("soft_delete_retention_days", Expression::Number(hcl::Number::from(7i64))),
             attr(
                 "depends_on",
-                Expression::Array(vec![expr::traversal(["azurerm_resource_group", resource_group])]),
+                Expression::Array(vec![expr::traversal(["azurerm_resource_group", &signing_group])]),
             ),
         ],
     ));
@@ -1484,4 +1543,19 @@ fn management_role_definition_id(
 
 fn string_array(items: Vec<String>) -> Expression {
     Expression::Array(items.into_iter().map(Expression::String).collect())
+}
+
+#[cfg(test)]
+mod signing_group_tests {
+    use super::*;
+
+    /// The machines and the verifier find the signing vault by this group's name, which the
+    /// template must give it.
+    #[test]
+    fn the_template_names_the_signing_group_as_the_readers_do() {
+        assert_eq!(
+            alien_signing::settings::names::azure_signing_resource_group("group"),
+            format!("group{SIGNING_GROUP_SUFFIX}")
+        );
+    }
 }

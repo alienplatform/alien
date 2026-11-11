@@ -1,12 +1,12 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        families::{azure_family, azure_reach_exclusions, Family},
+        families::{azure_data_family, azure_family, azure_reach_exclusions, Family},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        protected_allowlist::{is_built_in_unchanged, require_azure_data_action},
+        protected_allowlist::is_built_in_unchanged,
         verifier_owned::{
             azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
-            azure_verifier_owned_data_action,
+            
         },
     },
     variables::VariableInterpolator,
@@ -894,32 +894,35 @@ fn require_built_in_azure_role(permission_set_id: &str, role: &str) -> Result<()
 }
 
 /// The data actions of an entry the rendered identity receives. A protected install's
-/// management identity receives only the data actions on the Azure allow-list, whichever set
-/// grants them: setup's deny settings don't reach the data plane, and a data action such as
-/// writing a Key Vault secret could change the signing ledger or a signed input.
+/// management identity never receives a data action in a family (a sandbox's disk image or
+/// sandbox write decides what a sandbox runs); a set the stack defines that names one is refused.
+/// Key Vault secrets are not in a family: the signing vault sits in a group management cannot
+/// assign roles in.
 fn granted_data_actions(
     permission_set: &PermissionSet,
     data_actions: &[String],
     context: &PermissionContext,
 ) -> Result<Vec<String>> {
-    let kept = kept_data_actions(data_actions, context);
-    if context.signing_protected {
-        // A wildcard that would reach a verifier-owned action is refused by the allow-list, which
-        // doesn't list those; only a named one is dropped quietly.
-        for action in data_actions
-            .iter()
-            .filter(|action| action.contains(['*', '?']) || kept.contains(action))
-        {
-            require_azure_data_action(&permission_set.id, action)?;
+    if context.signing_protected && !is_built_in_unchanged(permission_set) {
+        for action in data_actions {
+            if let Some(family) = azure_data_family(action) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: action.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
         }
     }
-    Ok(kept)
+    Ok(kept_data_actions(data_actions, context))
 }
 
 fn kept_data_actions(data_actions: &[String], context: &PermissionContext) -> Vec<String> {
     data_actions
         .iter()
-        .filter(|action| !(context.signing_protected && azure_verifier_owned_data_action(action)))
+        .filter(|action| !(context.signing_protected && azure_data_family(action).is_some()))
         .cloned()
         .collect()
 }

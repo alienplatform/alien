@@ -41,12 +41,14 @@ pub use azure_runtime::{
 };
 pub use azure_setup_owned::{
     azure_role_assignment_allowlist_conditions, azure_role_key_segment,
-    azure_runtime_role_definition_uuid, azure_runtime_roles, role_definition_guid,
-    AzureRuntimeCustomRole, AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureWorkloadPrincipals,
-    AZURE_CONDITION_SHARD_LIMIT, AZURE_REMOTE_BINDINGS_PROFILE,
+    azure_runtime_role_definition_uuid, azure_runtime_roles, azure_runtime_roles_for,
+    role_definition_guid, AzureRuntimeCustomRole, AzureRuntimeRoleHolder, AzureRuntimeRoles,
+    AzureWorkloadPrincipals, AZURE_CONDITION_SHARD_LIMIT, AZURE_REMOTE_BINDINGS_PROFILE,
     AZURE_SERVICE_BUS_DATA_RECEIVER_ROLE_ID, AZURE_SERVICE_BUS_DATA_SENDER_ROLE_ID,
 };
-pub use families::{aws_family, azure_family, azure_reach_exclusions, gcp_family, Family};
+pub use families::{
+    aws_family, azure_data_family, azure_family, azure_reach_exclusions, gcp_family, Family,
+};
 pub use gcp_runtime::{
     custom_role_description_names_prefix, custom_role_namespace_for_prefix,
     custom_role_permission_set_prefix, custom_role_prefix, gcp_role_without_family_permissions,
@@ -58,5 +60,5 @@ pub use protected_allowlist::management_stack_secrets_data;
 pub use verifier_owned::{
     aws_management_actions, aws_passed_to_services, azure_changes_what_runs,
     azure_protected_role_substitute, azure_runs_no_code, azure_verifier_owned_action,
-    azure_verifier_owned_data_action, azure_write_or_delete, AWS_VERIFIER_OWNED,
+    azure_write_or_delete, AWS_VERIFIER_OWNED,
 };

@@ -115,21 +115,6 @@ pub fn azure_verifier_owned_action(action: &str) -> bool {
         .any(|owned| owned.eq_ignore_ascii_case(action))
 }
 
-/// Azure data actions only the verifier holds in a protected install's roles: a sandbox disk
-/// image or a sandbox is what a sandbox runs, and setup's deny settings don't reach the data
-/// plane. The verifier-owned AWS and GCP sandbox powers are the same.
-const AZURE_VERIFIER_OWNED_DATA_ACTIONS: &[&str] = &[
-    "Microsoft.App/sandboxGroups/diskimages/write",
-    "Microsoft.App/sandboxGroups/sandboxes/write",
-];
-
-/// Whether only the verifier may hold the Azure data `action` in a protected install's roles.
-pub fn azure_verifier_owned_data_action(action: &str) -> bool {
-    AZURE_VERIFIER_OWNED_DATA_ACTIONS
-        .iter()
-        .any(|owned| owned.eq_ignore_ascii_case(action))
-}
-
 /// What a protected install's management identity receives instead of a predefined role that a
 /// built-in set it holds binds at the resource group, and that reaches the verifier's identity or
 /// runs a template:

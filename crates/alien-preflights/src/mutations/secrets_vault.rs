@@ -152,8 +152,6 @@ impl StackMutation for SecretsVaultMutation {
                 secrets_vault_id,
                 !infrastructure_only && !write_only,
                 needs_certificates,
-                config.stack_settings.signing.is_some()
-                    && runs_on_platform_or_base(stack_state, config, Platform::Azure),
             )?;
         }
 
@@ -811,7 +809,6 @@ fn add_vault_permissions_to_management(
     vault_name: &str,
     needs_read: bool,
     needs_certificates: bool,
-    protected_azure: bool,
 ) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
@@ -831,17 +828,6 @@ fn add_vault_permissions_to_management(
     let current_management = stack.permissions.management.clone();
 
     match current_management {
-        ManagementPermissions::Auto | ManagementPermissions::Extend(_) if protected_azure => {
-            // Key Vault has no secret write that leaves the `signed-` secrets out, so a
-            // protected install's management cannot hold one.
-            return Err(AlienError::new(ErrorData::StackMutationFailed {
-                mutation_name: "Add the shared vault".to_string(),
-                message: format!(
-                    "vault '{vault_name}' needs secret writes by management, and vaults aren't supported on protected Azure installs yet. Remove what needs the vault, or install without release signing"
-                ),
-                resource_id: Some(vault_name.to_string()),
-            }));
-        }
         ManagementPermissions::Auto | ManagementPermissions::Extend(_) => {
             // For Auto or Extend, author data access on this concrete vault resource.
             // This will be merged with auto-generated permissions by ManagementPermissionProfileMutation
@@ -3349,10 +3335,10 @@ mod tests {
         }
     }
 
-    /// Key Vault has no secret write that leaves out the `signed-` secrets, so a protected Azure
-    /// install whose management would write a vault is refused by name, where it is set up.
+    /// A protected Azure install with a shared vault is set up like any other: the signing vault
+    /// is in a group of its own, so management's writes to this vault cannot reach it.
     #[tokio::test]
-    async fn a_protected_azure_install_that_needs_a_vault_is_refused_by_name() {
+    async fn a_protected_azure_install_that_needs_a_vault_is_accepted() {
         let stack = || {
             Stack::new("secrets-write".to_string())
                 .add(
@@ -3388,18 +3374,9 @@ mod tests {
                 .external_bindings(ExternalBindings::default())
                 .build()
         };
-        let error = crate::runner::PreflightRunner::new()
-            .apply_mutations(stack(), &StackState::new(Platform::Azure), &config(true))
-            .await
-            .expect_err("a protected Azure install with a vault is refused")
-            .to_string();
-        assert!(
-            error.contains("vaults aren't supported on protected Azure installs yet"),
-            "{error}"
-        );
-        assert!(error.contains(SECRETS_VAULT_ID), "{error}");
         for (platform, protected) in [
             (Platform::Azure, false),
+            (Platform::Azure, true),
             (Platform::Aws, true),
             (Platform::Gcp, true),
         ] {

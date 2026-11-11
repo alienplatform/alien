@@ -256,10 +256,21 @@ impl AzureRuntimeRoles {
 /// This lists more than a given deployment uses (a Frozen resource's grants are assigned by setup
 /// itself), so the runtime always finds its role already made.
 pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
+    azure_runtime_roles_for(stack, false)
+}
+
+/// [`azure_runtime_roles`] for an install that is `signing_protected` or not. On a protected
+/// install the remote-bindings identity's roles are rendered with the protected filter: the
+/// vendor can use that identity, so its roles never carry a family action.
+pub fn azure_runtime_roles_for(
+    stack: &Stack,
+    signing_protected: bool,
+) -> Result<AzureRuntimeRoles> {
     let mut roles = AzureRuntimeRoles::default();
     let mut seen = BTreeSet::new();
     let generator = AzureRuntimePermissionsGenerator::new();
     let context = enumeration_context();
+    let remote_bindings_context = enumeration_context().with_signing_protected(signing_protected);
 
     let mut add = |holder: AzureRuntimeRoleHolder,
                    permission_set: &PermissionSet,
@@ -271,7 +282,15 @@ pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
             return Ok(());
         }
         let plan = generator
-            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .generate_grant_plan(
+                permission_set,
+                BindingTarget::Resource,
+                if holder.is_remote_bindings() {
+                    &remote_bindings_context
+                } else {
+                    &context
+                },
+            )
             .context(crate::error::ErrorData::GeneratorError {
                 platform: "azure".to_string(),
                 message: format!(

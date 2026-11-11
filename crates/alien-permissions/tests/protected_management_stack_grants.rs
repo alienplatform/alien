@@ -103,34 +103,6 @@ fn assert_family_refused(
         error.message
     );
 }
-const ALLOW_LIST_AZURE: &str = "crates/alien-permissions/protected-management/azure.allow";
-
-fn assert_refused(
-    error: &alien_error::AlienError<alien_permissions::ErrorData>,
-    action: &str,
-    allow_list: &str,
-) {
-    assert_eq!(
-        error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED",
-        "{action}: {}",
-        error.message
-    );
-    assert!(
-        error.message.contains(&format!("'{action}'")),
-        "{action}: {}",
-        error.message
-    );
-    assert!(
-        error.message.contains(allow_list),
-        "{action}: {}",
-        error.message
-    );
-    assert!(
-        error.message.contains("orders/extra-management"),
-        "{action}: {}",
-        error.message
-    );
-}
 
 #[test]
 fn an_aws_stack_grant_in_a_family_is_refused() {
@@ -443,14 +415,6 @@ fn an_azure_stack_grant_of_what_only_the_verifier_may_do_is_refused_not_dropped(
         let error = render_azure(&set, true).expect_err(action);
         assert_family_refused(&error, action);
     }
-    // A vault secret write is no family action, but the signing vault shares the resource group
-    // until it moves to its own, so it is still left out.
-    let set = azure_set(&[
-        "Microsoft.Storage/storageAccounts/read",
-        "Microsoft.KeyVault/vaults/secrets/write",
-    ]);
-    let granted = render_azure(&set, true).expect("renders");
-    assert_eq!(granted, ["Microsoft.Storage/storageAccounts/read"]);
 }
 
 #[test]
@@ -471,16 +435,15 @@ fn an_azure_stack_grant_on_the_allow_list_still_renders() {
     );
 }
 
+/// A data write under `Microsoft.App/` decides what a sandbox runs, so a set the stack defines
+/// can't give it to management, and a wildcard that reaches one is refused with it.
 #[test]
-fn an_azure_data_action_outside_the_allow_list_is_refused_whichever_set_grants_it() {
+fn an_azure_data_family_action_is_refused_in_a_stack_set() {
     for action in [
-        "Microsoft.KeyVault/vaults/secrets/setSecret/action",
-        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
-        "Microsoft.KeyVault/vaults/secrets/delete",
-        "Microsoft.KeyVault/vaults/secrets/*",
-        "Microsoft.KeyVault/vaults/*",
-        "Microsoft.KeyVault/*",
-        "Microsoft.Storage/*",
+        "Microsoft.App/sandboxGroups/diskimages/write",
+        "Microsoft.App/sandboxGroups/sandboxes/write",
+        "Microsoft.App/sandboxGroups/*",
+        "Microsoft.App/*",
         "*",
     ] {
         let set = azure_data_set(&[
@@ -489,55 +452,55 @@ fn an_azure_data_action_outside_the_allow_list_is_refused_whichever_set_grants_i
         ]);
         let error = render_azure_data(&set, true)
             .expect_err(&format!("{action} must be refused on a protected install"));
-        assert_refused(&error, action, ALLOW_LIST_AZURE);
+        assert_family_refused(&error, action);
         render_azure_data(&set, false).expect("an unprotected install is unchanged");
     }
 }
 
+/// Key Vault data is not in a family: the signing vault is in a group management can't assign
+/// roles in, so a stack set may grant vault secret data like any other data.
 #[test]
-fn an_azure_data_action_on_the_allow_list_still_renders() {
+fn azure_data_outside_every_family_renders_in_a_stack_set() {
     let set = azure_data_set(&[
         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
-        "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.App/sandboxGroups/sandboxes/read",
     ]);
-    let granted = render_azure_data(&set, true).expect("allow-listed data actions render");
+    let granted = render_azure_data(&set, true).expect("data outside a family renders");
     assert_eq!(
         granted,
         [
-            "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+            "Microsoft.App/sandboxGroups/sandboxes/read",
+            "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+            "Microsoft.KeyVault/vaults/secrets/setSecret/action",
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
         ]
     );
 }
 
-/// The vault grants setup adds for every vault in the stack reach management as `[mgmt]` roles
-/// that the runtime assigns where a vault is created, including the signing vault: a role
-/// assignment condition can't name the scope. So a built-in set's secret write is refused too.
+/// The built-in vault data-write set keeps its secret write on a protected install: app vaults
+/// are management's to write, and the signing vault is out of its reach.
 #[test]
-fn the_built_in_vault_secret_write_is_refused_for_the_management_identity() {
+fn the_built_in_vault_secret_write_renders_for_the_management_identity() {
     let vault_write = get_permission_set("vault/data-write").expect("built-in set");
     for target in [BindingTarget::Stack, BindingTarget::Resource] {
-        let error = AzureRuntimePermissionsGenerator::new()
+        let plan = AzureRuntimePermissionsGenerator::new()
             .generate_grant_plan(vault_write, target, &azure_context(true))
-            .expect_err("a protected install's management can't write vault secrets");
-        assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
+            .expect("a protected install's management may write app vault secrets");
+        let data_actions: Vec<&String> = plan
+            .custom_roles
+            .iter()
+            .flat_map(|role| &role.role_definition.data_actions)
+            .collect();
         assert!(
-            error
-                .message
-                .contains("Microsoft.KeyVault/vaults/secrets/setSecret/action"),
-            "{}",
-            error.message
+            data_actions
+                .iter()
+                .any(|action| action.as_str() == "Microsoft.KeyVault/vaults/secrets/setSecret/action"),
+            "{data_actions:?}"
         );
-        assert!(
-            error.message.contains(ALLOW_LIST_AZURE),
-            "{}",
-            error.message
-        );
-        AzureRuntimePermissionsGenerator::new()
-            .generate_grant_plan(vault_write, target, &azure_context(false))
-            .expect("an unprotected install is unchanged");
     }
 }
 

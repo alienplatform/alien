@@ -361,7 +361,16 @@ pub mod names {
     /// Azure resource-group tag holding the signing settings.
     pub const AZURE_SETTINGS_TAG: &str = "signing-fingerprint";
 
-    /// Azure Key Vault secret, in the install's inputs vault, holding the ledger.
+    /// Azure resource group holding the install's signing vault: `<install group>-signing`.
+    ///
+    /// The vault is not in the install's own group. Management holds role-assignment rights in
+    /// that group, so a vault there could be opened to an identity the vendor holds; this group
+    /// is setup's alone.
+    pub fn azure_signing_resource_group(install_group: &str) -> String {
+        format!("{install_group}-signing")
+    }
+
+    /// Azure Key Vault secret, in the install's signing vault, holding the ledger.
     pub const AZURE_LEDGER_SECRET: &str = "signing-state";
 
     /// Kubernetes ConfigMap holding the signing settings of Helm release `release`.

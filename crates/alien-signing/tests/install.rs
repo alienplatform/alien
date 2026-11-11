@@ -736,9 +736,8 @@ fn gcp_queue_and_kv_bindings_follow_from_the_install() {
     )
     .unwrap();
     assert!(derived.unresolved.is_empty(), "{:?}", derived.unresolved);
-    let value = |name: &str| -> serde_json::Value {
-        serde_json::from_str(&derived.values[name]).unwrap()
-    };
+    let value =
+        |name: &str| -> serde_json::Value { serde_json::from_str(&derived.values[name]).unwrap() };
     assert_eq!(
         value("ALIEN_JOBS_BINDING"),
         serde_json::json!({
