@@ -23,6 +23,24 @@ pub struct Ai {
     /// Maximum 64 characters.
     #[builder(start_fn)]
     pub id: String,
+    /// The models the app calls. A deployment checks that the cloud lets it use each one.
+    /// Omitted from the serialized stack when empty, so existing stacks do not change.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<AiModel>,
+}
+
+/// A model the app calls through an AI resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiModel {
+    /// The model identifier as the app uses it, for example `claude-sonnet-4-6`.
+    pub id: String,
+    /// Whether the app's main feature needs this model. A refused required model is reported
+    /// as needing attention; it never blocks the deployment.
+    #[serde(default)]
+    pub required: bool,
 }
 
 impl Ai {
@@ -132,6 +150,36 @@ mod tests {
     fn test_ai_builder() {
         let ai = Ai::new("llm".to_string()).build();
         assert_eq!(ai.id, "llm");
+    }
+
+    #[test]
+    fn models_are_omitted_when_empty_and_round_trip_when_set() {
+        let plain = Ai::new("llm".to_string()).build();
+        assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"id": "llm"}));
+
+        let with_models = Ai::new("llm".to_string())
+            .models(vec![
+                AiModel { id: "claude-sonnet-4-6".to_string(), required: true },
+                AiModel { id: "claude-haiku-4-5".to_string(), required: false },
+            ])
+            .build();
+        let json = serde_json::to_value(&with_models).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"id": "llm", "models": [
+                {"id": "claude-sonnet-4-6", "required": true},
+                {"id": "claude-haiku-4-5", "required": false},
+            ]})
+        );
+        assert_eq!(serde_json::from_value::<Ai>(json).unwrap(), with_models);
+        // `required` defaults to false; unknown model fields are rejected.
+        let parsed: Ai =
+            serde_json::from_value(serde_json::json!({"id": "llm", "models": [{"id": "m"}]})).unwrap();
+        assert!(!parsed.models[0].required);
+        assert!(serde_json::from_value::<Ai>(
+            serde_json::json!({"id": "llm", "models": [{"id": "m", "minRpm": 1}]})
+        )
+        .is_err());
     }
 
     #[test]

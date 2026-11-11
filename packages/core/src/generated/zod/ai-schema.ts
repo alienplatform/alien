@@ -4,12 +4,16 @@
 */
 
 import * as z from "zod";
+import { AiModelSchema } from "./ai-model-schema.js";
 
 /**
  * @description Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack\'s external-bindings map; the executor then skips the cloud controller.
  */
 export const AiSchema = z.object({
-    "id": z.string().describe("Identifier for the AI resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
+    "id": z.string().describe("Identifier for the AI resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
+get "models"(){
+                return z.array(AiModelSchema.describe("A model the app calls through an AI resource.")).describe("The models the app calls. A deployment checks that the cloud lets it use each one.\nOmitted from the serialized stack when empty, so existing stacks do not change.").optional()
+              }
     }).describe("Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack's external-bindings map; the executor then skips the cloud controller.")
 
 export type Ai = z.infer<typeof AiSchema>

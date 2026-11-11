@@ -13,7 +13,7 @@ use alien_core::{
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
-    key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY},
+    key_access::{key_access_plan, REMOTE_CRYPTOGRAPHY},
     BindingTarget,
 };
 use hcl::expr::Expression;
@@ -274,7 +274,10 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
         })?;
         principals.push((access_label, "access".to_string()));
     }
-    for account_id in cryptography_service_accounts(ctx.stack, ctx.resource_id) {
+    let plan = key_access_plan(ctx.stack, ctx.resource_id).context(ErrorData::GenericError {
+        message: "Failed to work out which identities may use the Key".to_string(),
+    })?;
+    for account_id in plan.runtime_cryptography {
         if let Some(account_label) = ctx.name_for(&account_id) {
             principals.push((account_label, format!("runtime_{account_label}")));
         }

@@ -10,6 +10,7 @@ import { HealthCheckSchema } from "./health-check-schema.js";
 import { PublicEndpointSchema } from "./public-endpoint-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceSpecSchema } from "./resource-spec-schema.js";
+import { WorkloadPrioritySchema } from "./workload-priority-schema.js";
 
 export const DaemonSchema = z.object({
     "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for managed cloud\ncompute backends. Kubernetes and Local runtimes ignore this field.").nullish(),
@@ -36,6 +37,9 @@ get "memory"(){
               },
 "permissions": z.string().describe("Named workload permission profile. Absent means no workload cloud identity.").nullish(),
 "pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish(),
+get "priority"(){
+                return z.union([WorkloadPrioritySchema, z.null()]).optional()
+              },
 get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.").optional()
               },

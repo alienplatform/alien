@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Detach the generated retention inventory, keeping a recovery receipt.
 
-AWS Aurora and its network are excluded by the generator and remain managed
-for destroy. KMS keys remain in the inventory.
+The inventory lists every retained data resource (storage, key-value tables, registries,
+Redis, PostgreSQL) and its KMS keys on each cloud. Access grants stay managed for destroy.
 """
 import argparse
 import json

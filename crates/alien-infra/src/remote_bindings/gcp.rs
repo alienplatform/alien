@@ -254,7 +254,7 @@ fn missing_identity(ctx: &ResourceControllerContext<'_>) -> AlienError<ErrorData
 
 /// GCP service-account IDs are limited to 30 characters. Keep short prefixes readable and
 /// make longer customer-provided prefixes deterministic without risking collisions.
-fn service_account_id(prefix: &str) -> String {
+pub(crate) fn service_account_id(prefix: &str) -> String {
     let raw = format!("{prefix}-access");
     if raw.len() <= 30 {
         return raw;

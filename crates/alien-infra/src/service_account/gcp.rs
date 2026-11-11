@@ -21,7 +21,7 @@ use alien_permissions::{
 use chrono::Utc;
 
 /// Generates the GCP service account ID from the ServiceAccount name.
-fn get_gcp_service_account_id(prefix: &str, name: &str) -> String {
+pub(crate) fn get_gcp_service_account_id(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 

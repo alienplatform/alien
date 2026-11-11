@@ -193,6 +193,13 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         })?;
     let platform = validate_remote_platform(tracked_platform.as_deref(), remote_platform)?;
     let site_bound = site_bound_resource_ids(&deployment_json)?;
+    // Keys the direct setup created stay: read before teardown removes their state.
+    let kept_keys = alien_cli_common::kept_keys::kept_keys(
+        deployment_json
+            .get("stackState")
+            .and_then(|state| serde_json::from_value::<StackState>(state.clone()).ok())
+            .as_ref(),
+    );
 
     if let Some(source) = &import_source {
         if !args.force_delete_record {
@@ -361,6 +368,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     } else {
         output::success("Deployment stopped. Durable data and recovery tracking retained; use --erase-data to erase later.");
     }
+    alien_cli_common::kept_keys::print_kept_keys(&kept_keys);
     if !site_bound.is_empty() {
         output::info(&format!(
             "Released, not erased: {}. These were supplied where the deployment was installed (for example Helm values or the chart's database); remove them there.",

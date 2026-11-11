@@ -67,6 +67,25 @@ fn run_deploy_with(server: &MockServer, extra_args: &[&str]) -> Run {
 /// out the group `ensure_group` describes, and refuses the release preparation
 /// that comes before the deployment is created.
 fn mock_refusing_platform(api: &MockServer, ensure_group: Value) {
+    mock_refusing_platform_with(
+        api,
+        ensure_group,
+        json!({
+            "code": "SETUP_METHOD_CANNOT_INSTALL_RESOURCES",
+            "message": "This stack cannot be set up from the CLI."
+        }),
+    );
+}
+
+fn mock_refusing_platform_with(api: &MockServer, ensure_group: Value, refusal: Value) {
+    mock_platform_without_prepare(api, ensure_group);
+    api.mock(|when, then| {
+        when.method(POST).path("/v1/deployment-info/prepare-stack");
+        then.status(400).json_body(refusal);
+    });
+}
+
+fn mock_platform_without_prepare(api: &MockServer, ensure_group: Value) {
     api.mock(|when, then| {
         when.method(GET).path("/v1/whoami");
         then.status(200).json_body(json!({
@@ -100,13 +119,6 @@ fn mock_refusing_platform(api: &MockServer, ensure_group: Value) {
     api.mock(|when, then| {
         when.method(PUT).path("/v1/deployments/first-party-inputs");
         then.status(200).json_body(json!({}));
-    });
-    api.mock(|when, then| {
-        when.method(POST).path("/v1/deployment-info/prepare-stack");
-        then.status(400).json_body(json!({
-            "code": "SETUP_METHOD_CANNOT_INSTALL_RESOURCES",
-            "message": "This stack cannot be set up from the CLI."
-        }));
     });
 }
 
@@ -297,4 +309,51 @@ fn keeps_the_group_when_saving_inputs_fails_after_the_deployment_was_created() {
         run.text
     );
     assert!(!run.text.contains("empty deployment group"), "{}", run.text);
+}
+
+#[test]
+fn tells_the_platform_it_can_create_keys() {
+    let api = MockServer::start();
+    mock_platform_without_prepare(
+        &api,
+        json!({"id": GROUP_ID, "projectId": PROJECT, "created": false}),
+    );
+    // Only a request that says the CLI can create keys is answered.
+    let capable = api.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/deployment-info/prepare-stack")
+            .json_body_partial(json!({"setupCapabilities": ["create-keys"]}).to_string());
+        then.status(400).json_body(json!({
+            "code": "SETUP_METHOD_CANNOT_INSTALL_RESOURCES",
+            "message": "seen"
+        }));
+    });
+
+    let run = run_deploy(&api);
+
+    assert!(!run.success, "{}", run.text);
+    assert!(capable.hits() >= 1, "no prepare request carried the capability: {}", run.text);
+}
+
+#[test]
+fn explains_a_platform_that_cannot_create_keys_yet() {
+    let api = MockServer::start();
+    // What a platform from before CLI keys answers for a stack with a key.
+    mock_refusing_platform_with(
+        &api,
+        json!({"id": GROUP_ID, "projectId": PROJECT, "created": false}),
+        json!({
+            "code": "SETUP_METHOD_CANNOT_INSTALL_RESOURCES",
+            "message": "The 'cli' setup cannot install key resources (data-key): they enter a deployment through stack import. Use the CloudFormation or Terraform setup instead."
+        }),
+    );
+
+    let run = run_deploy(&api);
+
+    assert!(!run.success, "{}", run.text);
+    assert!(
+        run.text.contains("cannot yet create encryption keys during a CLI setup"),
+        "{}",
+        run.text
+    );
 }
