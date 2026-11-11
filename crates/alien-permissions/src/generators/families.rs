@@ -106,10 +106,8 @@ const AWS_EC2_RUN: &[&str] = &[
     "ec2:CreateLaunchTemplate",
     "ec2:CreateLaunchTemplateVersion",
     "ec2:ModifyLaunchTemplate",
-    "ec2:DeleteLaunchTemplate*",
     "ec2:CreateFleet",
     "ec2:ModifyFleet",
-    "ec2:DeleteFleets",
     "ec2:RequestSpot*",
     "ec2:ModifySpot*",
     "ec2:CancelSpot*",
@@ -129,7 +127,6 @@ const AWS_REACH: &[&str] = &[
     "lambda:CreateEventSourceMapping",
     "lambda:UpdateEventSourceMapping",
     "events:PutTargets",
-    "events:RemoveTargets",
     "ses:CreateReceiptRule*",
     "ses:UpdateReceiptRule*",
     "ses:CreateConfigurationSetEventDestination",
@@ -197,6 +194,18 @@ pub(super) const AWS_SHARING: &[&str] = &[
     "sqs:SetQueueAttributes",
 ];
 
+/// Deletes are out of scope (a hacked control plane can delete workloads and data), except the ones
+/// that change what runs or how it is limited rather than stopping it:
+/// - `lambda:DeleteAlias` makes an alias fall back to another version;
+/// - deleting a function's code-signing configuration removes the check on its code;
+/// - every IAM delete, because deleting a Deny, a boundary or a policy widens an identity.
+const AWS_DELETES_IN_FAMILY: &[&str] = &[
+    "lambda:DeleteAlias",
+    "lambda:DeleteFunctionCodeSigningConfig",
+    "lambda:DeleteCodeSigningConfig",
+    "iam:Delete*",
+];
+
 /// Verb prefixes of actions that only read.
 const AWS_READ_VERBS: &[&str] = &["get", "list", "describe", "batchget", "simulate"];
 
@@ -258,6 +267,13 @@ pub fn aws_family(action: &str, pass_role_services: Option<&[String]>) -> Option
     if is_read_verb_pattern(verb) {
         return None;
     }
+    let is_delete = verb.to_ascii_lowercase().starts_with("delete");
+    let delete_in_family = AWS_DELETES_IN_FAMILY
+        .iter()
+        .any(|delete| glob_patterns_overlap(delete, action));
+    if is_delete && !delete_in_family {
+        return None;
+    }
     for entry in AWS_SERVICES {
         if !glob_patterns_overlap(service, entry.service) {
             continue;
@@ -292,7 +308,7 @@ fn gcp_read_verb(verb: &str) -> bool {
     verb.starts_with("get") || verb.starts_with("list")
 }
 
-/// GCP services whose every write is RUN: a service's write decides what code runs.
+/// GCP services whose every write but a delete is RUN: a service's write decides what code runs.
 const GCP_RUN_PREFIXES: &[&str] = &[
     "run.services.",
     "run.jobs.",
@@ -345,6 +361,10 @@ pub fn gcp_family(permission: &str) -> Option<Family> {
     if permission.contains('*') {
         return Some(Family::Run);
     }
+    // Deleting is out of scope on every family.
+    if verb == "delete" {
+        return None;
+    }
     if verb == "setIamPolicy" || verb == "useReadOnly" {
         return Some(Family::Reach);
     }
@@ -367,15 +387,6 @@ pub fn gcp_family(permission: &str) -> Option<Family> {
                 | "iam.serviceAccounts.undelete"
         );
         return (!service_account_lifecycle).then_some(Family::Identity);
-    }
-    // Deleting changes no code and is out of scope. The exceptions are deleted by the verifier
-    // with the rest of a workload (Cloud Run services and jobs) or with what it writes (sandbox
-    // templates).
-    let deleted_by_verifier = permission.starts_with("run.services.")
-        || permission.starts_with("run.jobs.")
-        || permission.starts_with("aiplatform.sandboxEnvironmentTemplates.");
-    if verb == "delete" && !deleted_by_verifier {
-        return None;
     }
     if GCP_RUN_KEPT.contains(&permission) {
         return None;
@@ -417,6 +428,11 @@ mod tests {
             ("*:*", Family::Run),
             ("s3:*", Family::Reach),
             ("s3:Put*", Family::Reach),
+            // A delete that changes what runs or widens an identity stays in its family.
+            ("lambda:DeleteAlias", Family::Run),
+            ("lambda:DeleteFunctionCodeSigningConfig", Family::Run),
+            ("lambda:Delete*", Family::Run),
+            ("iam:DeleteRolePermissionsBoundary", Family::Identity),
         ] {
             assert_eq!(aws_family(action, None), Some(family), "{action}");
         }
@@ -443,6 +459,12 @@ mod tests {
             "ec2:Describe*",
             "autoscaling:SetDesiredCapacity",
             "autoscaling:Describe*",
+            // Deletes are out of scope.
+            "ec2:DeleteLaunchTemplate",
+            "ec2:DeleteFleets",
+            "cloudformation:DeleteStack",
+            "lambda:DeleteFunctionUrlConfig",
+            "s3:DeleteBucketPolicy",
         ] {
             assert_eq!(aws_family(action, None), None, "{action}");
         }
@@ -467,7 +489,6 @@ mod tests {
             ("storage.buckets.setIamPolicy", Family::Reach),
             ("resourcemanager.projects.setIamPolicy", Family::Reach),
             ("iam.roles.create", Family::Reach),
-            ("iam.roles.delete", Family::Reach),
             ("storage.hmacKeys.create", Family::Reach),
             ("compute.snapshots.useReadOnly", Family::Reach),
             ("pubsub.subscriptions.create", Family::Reach),
@@ -488,6 +509,9 @@ mod tests {
             "compute.instances.get",
             "compute.instances.delete",
             "compute.instanceGroups.create",
+            "run.services.delete",
+            "storage.hmacKeys.delete",
+            "iam.roles.delete",
             "cloudbuild.workerpools.update",
             "iam.serviceAccounts.create",
             "iam.serviceAccounts.update",

@@ -178,7 +178,6 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
         [
             "aiplatform.reasoningEngines.create",
             "aiplatform.sandboxEnvironmentTemplates.create",
-            "aiplatform.sandboxEnvironmentTemplates.delete",
             "aiplatform.sandboxEnvironments.create",
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
@@ -199,13 +198,11 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             "resourcemanager.projects.setIamPolicy",
             "run.jobs.create",
             "run.jobs.createTagBinding",
-            "run.jobs.delete",
             "run.jobs.deleteTagBinding",
             "run.jobs.setIamPolicy",
             "run.jobs.update",
             "run.services.create",
             "run.services.createTagBinding",
-            "run.services.delete",
             "run.services.deleteTagBinding",
             "run.services.setIamPolicy",
             "run.services.update",
@@ -226,7 +223,6 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             "pubsub.subscriptions.create",
             "pubsub.subscriptions.update",
             "pubsub.topics.attachSubscription",
-            "storage.hmacKeys.delete",
             "storage.hmacKeys.update",
         ]
         .into_iter()
@@ -484,7 +480,8 @@ fn every_permission_this_file_names_by_hand_is_in_a_family() {
         let set = alien_permissions::get_permission_set(id).expect("listed set");
         for entry in set.platforms.gcp.iter().flatten() {
             for permission in entry.grant.permissions.iter().flatten() {
-                if hand_listed_verifier_only(permission) {
+                // Deletes are out of scope and in no family; the verifier still does its own.
+                if hand_listed_verifier_only(permission) && !permission.ends_with(".delete") {
                     assert!(verifier_only(permission), "{id}: {permission}");
                     checked += 1;
                 }
