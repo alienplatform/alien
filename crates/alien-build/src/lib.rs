@@ -690,7 +690,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             && match &updated_daemon.code {
                                 DaemonCode::Source { src, toolchain } => {
                                     commands_receiver::receiver_reads_capability_file(
-                                        src, toolchain,
+                                        src, toolchain, &settings.get_targets(),
                                     )
                                     .await
                                 }
@@ -1097,7 +1097,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             let reads_capability_file = match &containers_group[0].1.code {
                                 ContainerCode::Source { src, toolchain } => {
                                     commands_receiver::receiver_reads_capability_file(
-                                        src, toolchain,
+                                        src, toolchain, &settings.get_targets(),
                                     )
                                     .await
                                 }

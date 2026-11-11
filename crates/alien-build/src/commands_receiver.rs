@@ -13,7 +13,7 @@
 //! a project whose dependencies are not installed) is unmarked. Unmarked is
 //! the safe answer: deployers keep `ALIEN_COMMANDS_TOKEN` for that resource.
 
-use alien_core::ToolchainConfig;
+use alien_core::{BinaryTarget, ToolchainConfig};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -26,15 +26,34 @@ const RUST_CRATE: &str = "alien-commands";
 const TYPESCRIPT_PACKAGE: [&str; 2] = ["@alienplatform", "commands"];
 
 /// Whether the receiver the app built from `src` reads the capability file.
-pub(crate) async fn receiver_reads_capability_file(src: &str, toolchain: &ToolchainConfig) -> bool {
+pub(crate) async fn receiver_reads_capability_file(
+    src: &str,
+    toolchain: &ToolchainConfig,
+    targets: &[BinaryTarget],
+) -> bool {
     let src = Path::new(src);
     let reads = match toolchain {
-        ToolchainConfig::Rust { binary_name } => rust_app_links_marked_receiver(src, binary_name)
-            .await
-            .unwrap_or_else(|reason| {
-                info!(src = %src.display(), "Command receiver left unmarked: {reason}");
-                false
-            }),
+        ToolchainConfig::Rust { binary_name } => {
+            // The receiver counts only when every built target links a marked
+            // one; with no target to check, or any doubt, it is unmarked.
+            let mut all_marked = !targets.is_empty();
+            for target in targets {
+                let triple = target.rust_target_triple();
+                match rust_app_links_marked_receiver(src, binary_name, triple).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        all_marked = false;
+                        break;
+                    }
+                    Err(reason) => {
+                        info!(src = %src.display(), "Command receiver left unmarked: {reason}");
+                        all_marked = false;
+                        break;
+                    }
+                }
+            }
+            all_marked
+        }
         ToolchainConfig::TypeScript { .. } => typescript_app_resolves_marked_receiver(src),
         // The build does not control what these images contain.
         ToolchainConfig::Python { .. } | ToolchainConfig::Docker { .. } => false,
@@ -43,9 +62,21 @@ pub(crate) async fn receiver_reads_capability_file(src: &str, toolchain: &Toolch
     reads
 }
 
-async fn rust_app_links_marked_receiver(src: &Path, binary_name: &str) -> Result<bool, String> {
+/// Resolved for `triple` only, so a dependency declared for another platform
+/// does not count.
+async fn rust_app_links_marked_receiver(
+    src: &Path,
+    binary_name: &str,
+    triple: &str,
+) -> Result<bool, String> {
     let output = Command::new("cargo")
-        .args(["metadata", "--format-version", "1"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--filter-platform",
+            triple,
+        ])
         .current_dir(src)
         .output()
         .await
@@ -176,6 +207,8 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    const LINUX: &[BinaryTarget] = &[BinaryTarget::LinuxX64];
+
     /// Writes a `alien-commands` stand-in crate. `marked` adds the manifest
     /// flag the real crate publishes.
     fn write_receiver_crate(dir: &Path, marked: bool) {
@@ -221,6 +254,7 @@ mod tests {
             &ToolchainConfig::Rust {
                 binary_name: "app".to_string(),
             },
+            LINUX,
         )
         .await
     }
@@ -275,12 +309,65 @@ mod tests {
             fs::write(dir.join("src/main.rs"), "fn main() {}").unwrap();
         }
 
-        assert!(!rust_app_links_marked_receiver(&workspace.join("a"), "app")
+        assert!(!rust_app_links_marked_receiver(
+            &workspace.join("a"),
+            "app",
+            "x86_64-unknown-linux-musl"
+        )
+        .await
+        .unwrap());
+        assert!(rust_app_links_marked_receiver(
+            &workspace.join("b"),
+            "app",
+            "x86_64-unknown-linux-musl"
+        )
+        .await
+        .unwrap());
+    }
+
+    /// An app can link an older receiver on one platform and a marked one on
+    /// another. Only the platforms actually built count, and with several,
+    /// every one of them must link a marked receiver.
+    #[tokio::test]
+    async fn the_receiver_is_marked_only_when_every_built_target_links_a_marked_one() {
+        let root = tempdir().unwrap();
+        write_receiver_crate(&root.path().join("old"), false);
+        let new = root.path().join("new");
+        fs::create_dir_all(new.join("src")).unwrap();
+        fs::write(
+            new.join("Cargo.toml"),
+            "[package]\nname = \"alien-commands\"\nversion = \"2.0.0\"\nedition = \"2021\"\n\n[package.metadata.alien]\ncommandsCapabilityFile = true\n",
+        )
+        .unwrap();
+        fs::write(new.join("src/lib.rs"), "").unwrap();
+        let app = root.path().join("app");
+        fs::create_dir_all(app.join("src")).unwrap();
+        fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[target.'cfg(target_os = \"linux\")'.dependencies]\nlinux-receiver = { path = \"../old\", package = \"alien-commands\" }\n\n[target.'cfg(target_os = \"macos\")'.dependencies]\nmac-receiver = { path = \"../new\", package = \"alien-commands\" }\n",
+        )
+        .unwrap();
+        fs::write(app.join("src/main.rs"), "fn main() {}").unwrap();
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let src = app.to_str().unwrap();
+
+        // Linux links the older receiver, so a Linux build is unmarked.
+        assert!(!receiver_reads_capability_file(src, &toolchain, LINUX).await);
+        // macOS links the marked one.
+        assert!(
+            receiver_reads_capability_file(src, &toolchain, &[BinaryTarget::DarwinArm64]).await
+        );
+        // Both built: every target must link a marked receiver.
+        assert!(
+            !receiver_reads_capability_file(
+                src,
+                &toolchain,
+                &[BinaryTarget::LinuxX64, BinaryTarget::DarwinArm64]
+            )
             .await
-            .unwrap());
-        assert!(rust_app_links_marked_receiver(&workspace.join("b"), "app")
-            .await
-            .unwrap());
+        );
     }
 
     #[tokio::test]
@@ -295,7 +382,9 @@ mod tests {
         let toolchain = ToolchainConfig::Rust {
             binary_name: "app".to_string(),
         };
-        assert!(!receiver_reads_capability_file(root.path().to_str().unwrap(), &toolchain).await);
+        assert!(
+            !receiver_reads_capability_file(root.path().to_str().unwrap(), &toolchain, LINUX).await
+        );
     }
 
     fn write_typescript_receiver(node_modules_parent: &Path, manifest: &str) {
@@ -318,7 +407,7 @@ mod tests {
             root.path(),
             r#"{"name":"@alienplatform/commands","alien":{"commandsCapabilityFile":true}}"#,
         );
-        assert!(receiver_reads_capability_file(app.to_str().unwrap(), &typescript()).await);
+        assert!(receiver_reads_capability_file(app.to_str().unwrap(), &typescript(), LINUX).await);
     }
 
     #[tokio::test]
@@ -329,7 +418,8 @@ mod tests {
             r#"{"name":"@alienplatform/commands","version":"1.0.0"}"#,
         );
         assert!(
-            !receiver_reads_capability_file(root.path().to_str().unwrap(), &typescript()).await
+            !receiver_reads_capability_file(root.path().to_str().unwrap(), &typescript(), LINUX)
+                .await
         );
     }
 
@@ -340,7 +430,7 @@ mod tests {
         fs::create_dir_all(&app).unwrap();
         write_typescript_receiver(root.path(), r#"{"alien":{"commandsCapabilityFile":true}}"#);
         write_typescript_receiver(&app, r#"{"version":"1.0.0"}"#);
-        assert!(!receiver_reads_capability_file(app.to_str().unwrap(), &typescript()).await);
+        assert!(!receiver_reads_capability_file(app.to_str().unwrap(), &typescript(), LINUX).await);
     }
 
     #[tokio::test]
@@ -360,7 +450,7 @@ mod tests {
                 target: None,
             },
         ] {
-            assert!(!receiver_reads_capability_file(src, &toolchain).await);
+            assert!(!receiver_reads_capability_file(src, &toolchain, LINUX).await);
         }
     }
 }
