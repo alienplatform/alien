@@ -230,15 +230,20 @@ spec:
       alien.dev/cni-probe-runner: {{{{ $name }}}}
   policyTypes: [Egress]
   egress:
-    # The runner pod may open any egress. It runs only the probe script, with the probe's own
-    # narrow token, for a few minutes, and never tenant code. A port list would buy nothing
-    # (the API server's port after address translation differs per cluster) and would add a
-    # value for installers to get wrong.
+    # The API server: its service address is translated to a node-network address on 443
+    # (6443 on kubeadm control planes); no other egress. The port list is required: measured
+    # on EKS Auto Mode, a runner rule that admits every destination with no port list stopped
+    # the network policy agent from refusing the `denied` probe pod.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
         - ipBlock:
             cidr: "::/0"
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
