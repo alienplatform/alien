@@ -93,6 +93,8 @@ struct DedupeKey {
     src: String,
     toolchain_type: ToolchainType,
     binary_name: String,
+    /// Restricted and opted-out containers get different image users, so they never share an image.
+    restricted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -111,10 +113,12 @@ impl DedupeKey {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Rust,
                 binary_name: binary_name.clone(),
+                restricted: true,
             },
             ToolchainConfig::TypeScript { binary_name } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::TypeScript,
+                restricted: true,
                 binary_name: binary_name.clone().unwrap_or_else(|| "default".to_string()),
             },
             ToolchainConfig::Python {
@@ -124,6 +128,7 @@ impl DedupeKey {
             } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Python,
+                restricted: true,
                 binary_name: format!(
                     "{}\0{}\0{}",
                     python_version.as_deref().unwrap_or_default(),
@@ -134,6 +139,7 @@ impl DedupeKey {
             ToolchainConfig::Docker { dockerfile, .. } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Docker,
+                restricted: true,
                 binary_name: dockerfile
                     .clone()
                     .unwrap_or_else(|| "Dockerfile".to_string()),
@@ -922,7 +928,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         // Group containers by dedupe key (src, toolchain_type, binary_name)
         let mut dedupe_groups: HashMap<DedupeKey, Vec<(String, Container)>> = HashMap::new();
         for (resource_id, container, src, toolchain) in containers_to_build {
-            let dedupe_key = DedupeKey::from_source_and_toolchain(&src, &toolchain);
+            let mut dedupe_key = DedupeKey::from_source_and_toolchain(&src, &toolchain);
+            dedupe_key.restricted =
+                alien_core::ContainerSecurity::is_restricted(container.security.as_ref());
             dedupe_groups
                 .entry(dedupe_key.clone())
                 .or_default()

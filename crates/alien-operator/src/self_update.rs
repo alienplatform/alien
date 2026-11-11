@@ -28,6 +28,15 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
             message: "self-update needs the Operator's namespace".to_string(),
         })
     })?;
+    // The manager advertises its own registry; a mirrored install pulls every image from its mirror.
+    let mirrored;
+    let target_image = match state.config.image_registry.as_deref() {
+        Some(registry) => {
+            mirrored = alien_core::image_rewrite::rewrite_to_site_registry(target_image, registry);
+            mirrored.as_str()
+        }
+        None => target_image,
+    };
     let failed = |message: &str| ErrorData::ConfigurationError {
         message: format!("self-update of Deployment '{deployment_name}': {message}"),
     };

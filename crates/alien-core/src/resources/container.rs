@@ -452,6 +452,13 @@ pub struct Container {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<ContainerEgress>,
 
+    /// Container tunnels were removed. Releases and checkpoints saved before
+    /// that still carry the field; it is read and discarded, never written.
+    #[serde(default, rename = "tunnel", skip_serializing)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(skip)]
+    retired_tunnel: Option<serde_json::Value>,
+
     /// Kubernetes liveness probe. Restarts an unhealthy container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kubernetes_liveness_probe: Option<KubernetesHttpProbe>,
@@ -990,6 +997,21 @@ mod tests {
                 wildcard_subdomains: false,
             })
             .build()
+    }
+
+    #[test]
+    fn a_saved_container_with_the_retired_tunnel_field_still_loads() {
+        let saved = serde_json::json!({
+            "id": "api",
+            "code": {"type": "image", "image": "example/api:1"},
+            "cpu": {"min": "0.5", "desired": "0.5"},
+            "memory": {"min": "256Mi", "desired": "256Mi"},
+            "permissions": "execution",
+            "links": [], "ports": [],
+            "tunnel": {"port": 8080}
+        });
+        let container: Container = serde_json::from_value(saved).expect("saved container loads");
+        assert!(serde_json::to_value(&container).unwrap().get("tunnel").is_none());
     }
 
     #[test]

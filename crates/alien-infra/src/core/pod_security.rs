@@ -133,21 +133,25 @@ pub fn pod_security(
 /// `runAsNonRoot`. Returns the message that names the opt-out when one of
 /// `pods` is stuck that way.
 pub fn root_image_blocked(pods: &[Pod], resource_id: &str) -> Option<String> {
-    let blocked = pods.iter().any(|pod| {
-        pod.status
-            .as_ref()
-            .and_then(|status| status.container_statuses.as_deref())
-            .unwrap_or(&[])
-            .iter()
-            .filter_map(|status| status.state.as_ref()?.waiting.as_ref())
-            .any(|waiting| {
-                waiting.reason.as_deref() == Some("CreateContainerConfigError")
-                    && waiting
-                        .message
-                        .as_deref()
-                        .is_some_and(|message| message.contains("runAsNonRoot"))
-            })
-    });
+    // A pod that is being deleted is a leftover of the previous rollout; its replacement decides.
+    let blocked = pods
+        .iter()
+        .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .any(|pod| {
+            pod.status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_deref())
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(|status| status.state.as_ref()?.waiting.as_ref())
+                .any(|waiting| {
+                    waiting.reason.as_deref() == Some("CreateContainerConfigError")
+                        && waiting
+                            .message
+                            .as_deref()
+                            .is_some_and(|message| message.contains("runAsNonRoot"))
+                })
+        });
     blocked.then(|| {
         format!(
             "The image of '{resource_id}' runs as root, which the restricted security profile refuses. \
