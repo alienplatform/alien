@@ -18,7 +18,8 @@ use alien_core::{
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, TokenType,
+    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord,
+    DeploymentRouting, TokenType, DEFAULT_CHANNEL,
 };
 
 use super::{auth, AppState};
@@ -785,6 +786,24 @@ async fn create_deployment(
             {
                 return error.into_response();
             }
+        }
+    }
+
+    // A pin given at creation holds the deployment on that release, as
+    // `PUT /v1/deployments/{id}/pin` does; without one the channel's later
+    // releases would replace it.
+    if let (Some(pinned), Some(channels)) =
+        (req.pinned_release_id.as_deref(), &state.release_channels)
+    {
+        let routing = DeploymentRouting {
+            channel: DEFAULT_CHANNEL.to_string(),
+            pinned_release_id: Some(pinned.to_string()),
+        };
+        if let Err(e) = channels
+            .set_deployment_routing(&deployment.id, &routing)
+            .await
+        {
+            return e.into_response();
         }
     }
 

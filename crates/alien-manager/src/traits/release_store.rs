@@ -84,6 +84,18 @@ pub trait ReleaseStore: Send + Sync {
         caller: &crate::auth::Subject,
     ) -> Result<Option<ReleaseRecord>, AlienError>;
 
+    /// Id of the latest release. Stores override this to avoid loading the
+    /// release's stacks.
+    async fn latest_release_id(
+        &self,
+        caller: &crate::auth::Subject,
+    ) -> Result<Option<String>, AlienError> {
+        Ok(self
+            .get_latest_release(caller)
+            .await?
+            .map(|release| release.id))
+    }
+
     /// Resolve the release used when a project-scoped operation omits an
     /// explicit release. Standalone stores have one release stream, so the
     /// default is the latest release. Hosted implementations may override this

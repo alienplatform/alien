@@ -40,6 +40,9 @@ fn import_source_to_string(source: &ImportSourceKind) -> String {
 
 pub struct SqliteDeploymentStore {
     db: Arc<SqliteDatabase>,
+    /// Whether deployment routing (channels and pins) lives in this database,
+    /// so a write can check it in the same statement.
+    routing_in_db: bool,
 }
 
 /// A setup reservation whose installer has not registered yet. The manager has
@@ -254,7 +257,19 @@ impl SqliteDeploymentStore {
     }
 
     pub fn new(db: Arc<SqliteDatabase>) -> Self {
-        Self { db }
+        Self {
+            db,
+            routing_in_db: false,
+        }
+    }
+
+    /// Declare that the release channel store keeps routing in this database
+    /// (the SQLite channel store on the same `db`). A retarget then checks
+    /// routing in the same statement that queues it; otherwise the caller's
+    /// own check before the write is all there is.
+    pub fn with_routing_in_db(mut self) -> Self {
+        self.routing_in_db = true;
+        self
     }
 
     /// Release Local push execution claims after the caller exclusively owns the stopped database.
@@ -1483,6 +1498,47 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_where(Expr::col(Deployments::Id).eq(deployment_id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
+    }
+
+    async fn retarget_settled_deployment(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        current_release_id: &str,
+        target_release_id: &str,
+        routing: Option<crate::traits::DeploymentRouting>,
+    ) -> Result<bool, AlienError> {
+        // Conditional on the row still being settled with nothing queued, so an
+        // update that started since the report was read is never overridden,
+        // and, when routing lives in this database, on the routing the target was
+        // chosen from being unchanged, so a channel or pin change made since then
+        // is not overridden either.
+        let sql = {
+            let mut query = Query::update();
+            query
+                .table(Deployments::Table)
+                .value(Deployments::DesiredReleaseId, target_release_id)
+                .value(Deployments::Status, "update-pending")
+                .value(Deployments::NextStepAfter, Option::<String>::None)
+                .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+                .and_where(Expr::col(Deployments::Status).eq("running"))
+                .and_where(Expr::col(Deployments::DesiredReleaseId).is_null())
+                .and_where(Expr::col(Deployments::CurrentReleaseId).eq(current_release_id));
+            if let Some(routing) = routing.as_ref().filter(|_| self.routing_in_db) {
+                query.and_where(Expr::cust_with_values(
+                    "id IN (SELECT d.id FROM deployments d
+                            LEFT JOIN deployment_channels c ON c.deployment_id = d.id
+                            WHERE COALESCE(c.channel, ?) = ? AND COALESCE(c.pinned_release_id, '') = ?)",
+                    [
+                        crate::traits::DEFAULT_CHANNEL,
+                        routing.channel.as_str(),
+                        routing.pinned_release_id.as_deref().unwrap_or(""),
+                    ],
+                ));
+            }
+            query.to_string(SqliteQueryBuilder)
+        };
+        Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
     }
 
     async fn set_desired_release(
