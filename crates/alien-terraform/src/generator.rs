@@ -351,6 +351,8 @@ pub(crate) fn render_terraform_module(
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
     let mut deployer_secrets_vault_binding: Option<Expression> = None;
+    // The chart's `infrastructure` entries for resources this module creates.
+    let mut chart_infrastructure: Vec<(String, Expression)> = Vec::new();
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -437,6 +439,19 @@ pub(crate) fn render_terraform_module(
 
         if resource_id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID {
             deployer_secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        } else if target.is_kubernetes()
+            && CHART_BOUND_TYPES.contains(&resource.config.resource_type().as_ref())
+        {
+            // The chart takes the resources a Kubernetes install doesn't create
+            // as `infrastructure` bindings. Their payload names the service;
+            // the chart also wants the resource type.
+            if let Some(Expression::Object(mut binding)) = emitter.emit_binding_ref(&ctx)? {
+                binding.insert(
+                    hcl::expr::ObjectKey::Identifier(Identifier::sanitized("type")),
+                    Expression::String(resource.config.resource_type().as_ref().to_string()),
+                );
+                chart_infrastructure.push((resource_id.clone(), Expression::Object(binding)));
+            }
         }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
@@ -768,7 +783,10 @@ pub(crate) fn render_terraform_module(
             setup_import_format_version,
             options.registration.as_ref(),
             &stack_inputs,
-            deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?,
+            deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?
+                .into_iter()
+                .chain(chart_infrastructure_output(chart_infrastructure))
+                .collect(),
         ))?,
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
@@ -2002,6 +2020,27 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 /// a Secret in the deployment's namespace whose name the operator derives, so
 /// the output carries the vault key and the deployment status shows the full
 /// name.
+/// Resource types the chart binds through its `infrastructure` values.
+const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registry", "vault"];
+
+/// `chart_infrastructure_json`: the chart's `infrastructure` values for the
+/// resources this module created, as JSON. Install the chart with it as the
+/// `infrastructure` value, or store it in the Secret named by
+/// `infrastructureExistingSecret` (key `external-bindings.json`) when a GitOps
+/// tool installs the chart. Absent when the module creates none of them.
+fn chart_infrastructure_output(
+    bindings: Vec<(String, Expression)>,
+) -> Option<(String, Expression, String)> {
+    if bindings.is_empty() {
+        return None;
+    }
+    Some((
+        "chart_infrastructure_json".to_string(),
+        expr::jsonencode(expr::object(bindings)),
+        "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`.".to_string(),
+    ))
+}
+
 fn deployer_secret_outputs(
     stack: &Stack,
     target: TerraformTarget,

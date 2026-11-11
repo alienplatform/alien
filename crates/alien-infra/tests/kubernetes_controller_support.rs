@@ -5,7 +5,7 @@
 
 use alien_core::Platform;
 use alien_infra::ResourceRegistry;
-use alien_preflights::compile_time::resource_controller_available::KUBERNETES_CONTROLLER_TYPES;
+use alien_preflights::controller_available::KUBERNETES_CONTROLLER_TYPES;
 
 #[test]
 fn the_release_check_lists_the_kubernetes_controllers() {

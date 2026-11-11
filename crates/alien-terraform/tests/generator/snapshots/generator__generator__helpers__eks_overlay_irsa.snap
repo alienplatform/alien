@@ -872,6 +872,11 @@ output "kubernetes_update_kubeconfig_command" {
   description = "AWS CLI command template for configuring kubectl access to the target EKS cluster."
 }
 
+output "chart_infrastructure_json" {
+  value       = jsonencode({ data = { service = "s3", bucketName = aws_s3_bucket.data.bucket, type = "storage" } })
+  description = "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`."
+}
+
 === README.md ===
 # Deployment setup - eks-overlay
 

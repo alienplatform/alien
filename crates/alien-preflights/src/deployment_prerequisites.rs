@@ -697,6 +697,56 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
     }
 }
 
+pub struct ControllerAvailableCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ControllerAvailableCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("RESOURCE_NOT_SUPPORTED")
+    }
+
+    fn description(&self) -> &'static str {
+        "Every resource has a controller or an external-binding path on the target platform"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> bool {
+        // Kubernetes is the one target whose controller list is complete in
+        // this repository, and only without a cloud behind the cluster.
+        stack_state.platform == Platform::Kubernetes && config.base_platform.is_none()
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let mut result = CheckResult::success();
+        for (id, entry) in stack.resources() {
+            let resource_type = entry.config.resource_type();
+            let kind = resource_type.as_ref();
+            if crate::controller_available::KUBERNETES_CONTROLLER_TYPES.contains(&kind)
+                || crate::controller_available::EXTERNAL_BINDING_TYPES.contains(&kind)
+            {
+                continue;
+            }
+            result.add_error(format!(
+                "Resource '{id}' is a {kind}, which a {platform} deployment without a cloud \
+                 behind the cluster can't create: nothing there manages it, and it has no \
+                 external binding. Remove it from the stack, or install on a cluster of a \
+                 cloud that supports {kind}.",
+                platform = stack_state.platform
+            ));
+        }
+        Ok(result)
+    }
+}
+
 /// Validates that a resource running without Alien control still has a binding.
 ///
 /// Adoption is what records a resource Running with no controller state, on create and on
@@ -796,13 +846,9 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
         config: &DeploymentConfig,
     ) -> bool {
         !external_binding_required_types(stack_state.platform).is_empty()
-            || config
-                .external_bindings
-                .0
-                .values()
-                .any(|binding| {
-                    postgres_password_is_reference(binding) || redis_password_is_reference(binding)
-                })
+            || config.external_bindings.0.values().any(|binding| {
+                postgres_password_is_reference(binding) || redis_password_is_reference(binding)
+            })
     }
 
     async fn check(
@@ -1026,6 +1072,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_key_on_plain_kubernetes_is_refused_before_setup() {
+        let stack = Stack::new("keyed".into())
+            .add(
+                Storage::new("data".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Key::new("secrets-key".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = stack_state(Platform::Kubernetes);
+        let mut config = deployment_config();
+        let check = ControllerAvailableCheck;
+        assert!(check.should_run(&stack, &state, &config));
+        let result = check.check(&stack, &state, &config).await.unwrap();
+        assert!(!result.success, "{result:?}");
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("secrets-key"),
+            "{:?}",
+            result.errors
+        );
+
+        // A cloud behind the cluster (EKS, GKE, AKS) supplies the controller.
+        config.base_platform = Some(Platform::Aws);
+        assert!(!check.should_run(&stack, &state, &config));
+        // Other platforms have their own controllers.
+        config.base_platform = None;
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+    }
+
+    #[tokio::test]
     async fn redis_needs_an_external_binding_on_kubernetes_and_machines() {
         let stack = Stack::new("cache-stack".into())
             .add(
@@ -1040,10 +1119,17 @@ mod tests {
                 .check(&stack, &state, &config)
                 .await
                 .unwrap();
-            assert!(!result.success, "{platform:?} must require a binding for Redis");
+            assert!(
+                !result.success,
+                "{platform:?} must require a binding for Redis"
+            );
         }
         // A cloud platform provisions its own server.
-        assert!(!ExternalBindingsRequiredCheck.should_run(&stack, &stack_state(Platform::Aws), &config));
+        assert!(!ExternalBindingsRequiredCheck.should_run(
+            &stack,
+            &stack_state(Platform::Aws),
+            &config
+        ));
     }
 
     #[tokio::test]

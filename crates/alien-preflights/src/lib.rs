@@ -1,6 +1,7 @@
 pub mod azure;
 pub mod compatibility;
 pub mod compile_time;
+pub mod controller_available;
 pub mod deployment_prerequisites;
 pub mod error;
 pub mod mutations;
@@ -384,7 +385,6 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
         registry.add_compile_time_check(Box::new(compile_time::RedisPersistenceCheck));
-        registry.add_compile_time_check(Box::new(compile_time::ResourceControllerAvailableCheck));
         registry.add_compile_time_check(Box::new(compile_time::WorkerMemoryCheck));
         registry.add_compile_time_check(Box::new(compile_time::StorageLifecycleRulesCheck));
         registry.add_compile_time_check(Box::new(compile_time::StorageCorsCheck));
@@ -442,6 +442,9 @@ impl PreflightRegistry {
         ));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ExternalBindingsTypeCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::ControllerAvailableCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(remote_storage::ExternalBindingCheck));
         registry.add_deployment_prerequisite_check(Box::new(

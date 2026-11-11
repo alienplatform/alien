@@ -1089,3 +1089,48 @@ fn aks_brought_network_uses_data_subnet_for_node_pool() {
     assert!(rendered.contains("vnet_subnet_id = data.azurerm_subnet.default_network_private.id"));
     assert_terraform_valid(&module, "aks_byo_shared_network");
 }
+
+#[test]
+fn eks_module_outputs_the_charts_infrastructure_values() {
+    let stack = Stack::new("chart-bindings".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("artifacts".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(
+        compact.contains("output \"chart_infrastructure_json\""),
+        "{outputs}"
+    );
+    // One entry per Storage, each with the chart's resource type and the
+    // bucket this module creates.
+    for id in ["data", "artifacts"] {
+        assert!(
+            compact.contains(&format!("{id} = {{")) || compact.contains(&format!("\"{id}\" = {{")),
+            "{id}: {outputs}"
+        );
+        assert!(
+            compact.contains(&format!("bucketName = aws_s3_bucket.{id}.bucket")),
+            "{id}: {outputs}"
+        );
+    }
+    assert!(compact.contains("type = \"storage\""), "{outputs}");
+    assert!(compact.contains("service = \"s3\""), "{outputs}");
+}
