@@ -226,6 +226,9 @@ for pod in json.load(sys.stdin)["items"]:
     for status in statuses:
         if "running" not in status.get("state", {}):
             bad.append(ns + "/" + pod["metadata"]["name"] + " container " + status["name"] + " is not running: " + json.dumps(status.get("state")))
+        # A crash-looping container is briefly "running" between restarts.
+        if status.get("restartCount", 0) > 0 or not status.get("ready"):
+            bad.append(ns + "/" + pod["metadata"]["name"] + " container " + status["name"] + " restarted or is not ready: restarts=" + str(status.get("restartCount", 0)) + " ready=" + str(status.get("ready")))
         if "@sha256:" not in status.get("imageID", "") or not status["imageID"].startswith("localhost:5001/"):
             bad.append(ns + "/" + pod["metadata"]["name"] + " imageID " + status.get("imageID", ""))
 print("\n".join(bad))

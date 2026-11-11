@@ -489,6 +489,27 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     );
     mirrored.assert_ok("mirrored sandbox chart");
     let mirrored_documents = rendered_documents(&mirrored);
+    // A pinned Operator digest is the install's choice; self-update to the manager's tag would undo it.
+    let self_update_env = |values: &str| -> bool {
+        let rendered = super::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("self-update chart");
+        rendered_documents(&rendered).iter().any(|doc| {
+            doc["spec"]["template"]["spec"]["containers"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .any(|c| {
+                    c["env"].as_sequence().into_iter().flatten().any(|e| {
+                        e["name"] == "OPERATOR_SELF_UPDATE_DEPLOYMENT"
+                    })
+                })
+        })
+    };
+    assert!(self_update_env("serviceAccountPrefix: custom-prefix\n"));
+    assert!(!self_update_env(&format!(
+        "serviceAccountPrefix: custom-prefix\nruntime:\n  image:\n    digest: sha256:{}\n",
+        "a".repeat(64)
+    )));
     let mut images = Vec::new();
     for doc in &mirrored_documents {
         let pod = match doc["kind"].as_str() {

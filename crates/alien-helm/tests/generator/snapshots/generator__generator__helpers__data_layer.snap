@@ -48,6 +48,7 @@ runtime:
     pullWithManagementToken: false
     # Follow the Operator image the manager targets, so upgrades need no helm
     # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    # Ignored when `digest` is set: a pinned Operator stays on that digest.
     selfUpdate: true
   # Pull secrets for the Operator and for the application's workloads (added
   # to their ServiceAccounts), for images in a registry that needs credentials.
@@ -1600,7 +1601,7 @@ spec:
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
-            {{- if dig "selfUpdate" true .Values.runtime.image }}
+            {{- if and (dig "selfUpdate" true .Values.runtime.image) (not (dig "digest" "" .Values.runtime.image)) }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}
             {{- end }}

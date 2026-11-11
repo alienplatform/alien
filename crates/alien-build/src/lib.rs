@@ -106,6 +106,18 @@ enum ToolchainType {
 }
 
 impl DedupeKey {
+    /// The key a container builds under: containers that differ in restricted/opted-out
+    /// get different image users, so they never share an image.
+    fn for_container(
+        src: &str,
+        toolchain: &ToolchainConfig,
+        security: Option<&alien_core::ContainerSecurity>,
+    ) -> Self {
+        let mut key = Self::from_source_and_toolchain(src, toolchain);
+        key.restricted = alien_core::ContainerSecurity::is_restricted(security);
+        key
+    }
+
     /// Extract dedupe key from source path and toolchain config
     fn from_source_and_toolchain(src: &str, toolchain: &ToolchainConfig) -> Self {
         match toolchain {
@@ -928,9 +940,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         // Group containers by dedupe key (src, toolchain_type, binary_name)
         let mut dedupe_groups: HashMap<DedupeKey, Vec<(String, Container)>> = HashMap::new();
         for (resource_id, container, src, toolchain) in containers_to_build {
-            let mut dedupe_key = DedupeKey::from_source_and_toolchain(&src, &toolchain);
-            dedupe_key.restricted =
-                alien_core::ContainerSecurity::is_restricted(container.security.as_ref());
+            let dedupe_key =
+                DedupeKey::for_container(&src, &toolchain, container.security.as_ref());
             dedupe_groups
                 .entry(dedupe_key.clone())
                 .or_default()
@@ -5785,6 +5796,29 @@ mod tests {
         // which is exactly why we hash - to detect changes!)
         let tarball_path = path.join("linux-x64.oci.tar");
         assert!(tarball_path.exists(), "Tarball should exist");
+    }
+
+    #[test]
+    fn restricted_and_opted_out_containers_never_share_an_image() {
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let opted_out = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        let restricted = DedupeKey::for_container("src", &toolchain, None);
+        assert_eq!(
+            restricted,
+            DedupeKey::for_container("src", &toolchain, None)
+        );
+        assert_ne!(
+            restricted,
+            DedupeKey::for_container("src", &toolchain, Some(&opted_out))
+        );
     }
 
     #[test]
