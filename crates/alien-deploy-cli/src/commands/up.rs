@@ -7,6 +7,10 @@
 
 mod setup_update;
 
+/// Identifies this binary and its version to the platform, as `alien-cli/<version>` does.
+pub(crate) const DEPLOY_CLI_USER_AGENT: &str =
+    concat!("alien-deploy-cli/", env!("CARGO_PKG_VERSION"));
+
 use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
@@ -5859,7 +5863,7 @@ async fn fetch_deployment_info(
                     message: "Invalid token format".to_string(),
                 })?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
         reqwest::Client::builder()
             .default_headers(headers)
@@ -6282,7 +6286,7 @@ async fn discover_manager_install_context(
                     message: "Invalid token format".to_string(),
                 })?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
         reqwest::Client::builder()
             .default_headers(headers)
@@ -6380,7 +6384,7 @@ pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client>
                 message: "Invalid token format".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+    headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
     reqwest::Client::builder()
         .default_headers(headers)
