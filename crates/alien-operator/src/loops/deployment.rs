@@ -514,10 +514,14 @@ pub(crate) async fn run_deployment_continuously(
 
         if steps_executed > 0 {
             // Every pass of a healthy deployment ends here, once per interval:
-            // report at info only when the result differs from the last one.
+            // report at info only when the result differs from the last one. The target
+            // is part of the result: a new release that ends the same way is new work.
             let level_is_info = outcome_changed(&format!(
-                "{:?}/{:?}/{:?}",
-                loop_result.final_status, loop_result.stop_reason, loop_result.outcome
+                "{:?}/{:?}/{:?}/{}",
+                loop_result.final_status,
+                loop_result.stop_reason,
+                loop_result.outcome,
+                applying_target_hash
             ));
             if level_is_info {
                 info!(

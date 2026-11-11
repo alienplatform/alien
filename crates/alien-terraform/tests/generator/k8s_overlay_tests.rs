@@ -9,12 +9,12 @@
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{
-    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, render,
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
     snapshot_module,
 };
 use alien_core::{
-    AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
-    Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
+    ArtifactRegistry, AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection,
+    ComputeSettings, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
@@ -1088,6 +1088,57 @@ fn aks_brought_network_uses_data_subnet_for_node_pool() {
         .join("\n");
     assert!(rendered.contains("vnet_subnet_id = data.azurerm_subnet.default_network_private.id"));
     assert_terraform_valid(&module, "aks_byo_shared_network");
+}
+
+#[test]
+fn the_charts_infrastructure_output_names_binding_types_and_skips_a_declined_store() {
+    let stack = Stack::new("chart-gated".to_string())
+        .inputs(vec![gate_input(
+            "extraStore",
+            "Extra store",
+            "Create the extra store.",
+        )])
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Storage::new("extra".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "extraStore",
+        )
+        .add(
+            ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // The chart's binding type is snake_case.
+    assert!(
+        compact.contains("type = \"artifact_registry\""),
+        "{outputs}"
+    );
+    assert!(!compact.contains("artifact-registry\""), "{outputs}");
+    // The declined store is left out while its gate is false, and never read without an index.
+    assert!(compact.contains("merge("), "{outputs}");
+    assert!(compact.contains("var.input_extra_store ?"), "{outputs}");
+    assert!(
+        !compact.contains("aws_s3_bucket.extra.bucket"),
+        "a gated bucket needs its count index: {outputs}"
+    );
+    assert_terraform_valid(&module, "eks_chart_gated_bindings");
 }
 
 #[test]

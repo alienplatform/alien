@@ -352,7 +352,7 @@ pub(crate) fn render_terraform_module(
     let mut gated = crate::gating::GatedAddresses::default();
     let mut deployer_secrets_vault_binding: Option<Expression> = None;
     // The chart's `infrastructure` entries for resources this module creates.
-    let mut chart_infrastructure: Vec<(String, Expression)> = Vec::new();
+    let mut chart_infrastructure: Vec<(Option<String>, String, Expression)> = Vec::new();
     // Resources this module doesn't create: the installer supplies their bindings.
     let mut installer_bindings: Vec<(String, String)> = Vec::new();
 
@@ -461,9 +461,15 @@ pub(crate) fn render_terraform_module(
             if let Some(Expression::Object(mut binding)) = emitter.emit_binding_ref(&ctx)? {
                 binding.insert(
                     hcl::expr::ObjectKey::Identifier(Identifier::sanitized("type")),
-                    Expression::String(resource.config.resource_type().as_ref().to_string()),
+                    // The binding's type is the snake_case form of the resource type
+                    // (`artifact-registry` is `artifact_registry`).
+                    Expression::String(resource.config.resource_type().as_ref().replace('-', "_")),
                 );
-                chart_infrastructure.push((resource_id.clone(), Expression::Object(binding)));
+                chart_infrastructure.push((
+                    resource.enabled_when.clone(),
+                    resource_id.clone(),
+                    Expression::Object(binding),
+                ));
             }
         }
 
@@ -524,6 +530,9 @@ pub(crate) fn render_terraform_module(
             crate::gating::rewrite_expression(expression, &gated);
         }
         for (_gate, expression) in registration_resources.iter_mut() {
+            crate::gating::rewrite_expression(expression, &gated);
+        }
+        for (_gate, _id, expression) in chart_infrastructure.iter_mut() {
             crate::gating::rewrite_expression(expression, &gated);
         }
     }
@@ -2051,14 +2060,21 @@ const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registr
 /// `infrastructureExistingSecret` (key `external-bindings.json`) when a GitOps
 /// tool installs the chart. Absent when the module creates none of them.
 fn chart_infrastructure_output(
-    bindings: Vec<(String, Expression)>,
+    bindings: Vec<(Option<String>, String, Expression)>,
 ) -> Option<(String, Expression, String)> {
     if bindings.is_empty() {
         return None;
     }
+    // A resource gated on an input only has a binding while its gate is true: the
+    // entry is left out otherwise, so the output never reads a resource that wasn't created.
+    let value = if bindings.iter().all(|(gate, _, _)| gate.is_none()) {
+        expr::object(bindings.into_iter().map(|(_, id, binding)| (id, binding)))
+    } else {
+        crate::emitters::enabled::gated_object(bindings)
+    };
     Some((
         "chart_infrastructure_json".to_string(),
-        expr::jsonencode(expr::object(bindings)),
+        expr::jsonencode(value),
         "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`.".to_string(),
     ))
 }

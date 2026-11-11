@@ -1948,7 +1948,9 @@ impl HelmInstall {
                     "  # Your own database. To have the chart run one instead, remove this entry and set\n  # postgres.{id}.enabled: true (see the chart README).\n  {id}:\n    type: postgres\n    service: external\n    host: <host>\n    port: 5432\n    database: <database>\n    username: <user>\n    password:\n      secretRef:\n        name: <existing-secret>\n        key: password\n    sslMode: verify-full\n"
                 )),
                 other => yaml.push_str(&format!(
-                    "  {id}:\n    type: {other}\n    # See `helm show values` for this resource's fields.\n"
+                    // The binding type is snake_case: `artifact-registry` is `artifact_registry`.
+                    "  {id}:\n    type: {}\n    # See `helm show values` for this resource's fields.\n",
+                    other.replace('-', "_")
                 )),
             }
         }
@@ -2215,6 +2217,10 @@ mod tests {
                 Redis::new("cache".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
+            .add(
+                alien_core::ArtifactRegistry::new("registry".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
             .build();
         let install = HelmInstall::new(&stack, "https://m.example.com", "m.example.com", "c1");
         let values: serde_yaml::Value =
@@ -2228,6 +2234,11 @@ mod tests {
         assert_eq!(values["infrastructure"]["metadata"]["type"], "postgres");
         assert_eq!(values["infrastructure"]["metadata"]["service"], "external");
         assert_eq!(values["infrastructure"]["cache"]["type"], "redis");
+        // The binding type is snake_case.
+        assert_eq!(
+            values["infrastructure"]["registry"]["type"],
+            "artifact_registry"
+        );
         assert!(install.command().contains("--values values.yaml"));
 
         // A stack with no public endpoint and no bindings has nothing to fill in.
