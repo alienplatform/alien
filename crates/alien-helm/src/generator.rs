@@ -8055,6 +8055,10 @@ kind: Application
 metadata:
   name: {chart_name}
   namespace: argocd
+  # Without this finalizer, deleting the Application removes only the Application (and the
+  # chart's pre-delete cleanup), and the chart's own objects stay in the namespace.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
