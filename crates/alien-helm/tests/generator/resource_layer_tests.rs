@@ -556,7 +556,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         .collect::<Vec<_>>()
         .join("\n");
     for required in [
-        format!("object.metadata.name in ['{probe_name}', '{probe_name}-ingress']"),
+        format!("object.metadata.name == '{probe_name}'"),
         "size(object.spec.podSelector.matchLabels) == 2".to_string(),
         format!("matchLabels['alien.dev/cni-probe'] == '{probe_name}'"),
         "size(object.spec.ingress) == 0".to_string(),
@@ -567,6 +567,42 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             "{required}: {policy_rules}"
         );
     }
+    // Under default-deny pod networking (EKS Auto Mode strict) a pod with no policy has no
+    // network: the runner needs its API server egress, and the probe's own pods need allow
+    // rules that never select the `denied` pod (policies are additive).
+    let allow = |suffix: &str| {
+        documents
+            .iter()
+            .find(|doc| {
+                doc["kind"] == "NetworkPolicy"
+                    && doc["metadata"]["name"] == format!("{probe_name}-{suffix}").as_str()
+            })
+            .unwrap_or_else(|| panic!("the probe installs its {suffix} allow policy"))
+    };
+    let runner = allow("runner");
+    assert_eq!(
+        runner["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-probe-runner"],
+        probe_name
+    );
+    assert!(runner["spec"]["egress"][0]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .any(|port| port["port"] == 443));
+    let egress = serde_yaml::to_string(allow("egress")).unwrap();
+    assert!(egress.contains("denied") && egress.contains("NotIn"), "{egress}");
+    let listener = serde_yaml::to_string(allow("listener")).unwrap();
+    // The denied pod must reach the listener's ingress, so only the egress bound can refuse it;
+    // the ingress-denied pod must not, so only the ingress bound can refuse it.
+    let listener_roles: Vec<&str> = allow("listener")["spec"]["ingress"][0]["from"][0]["podSelector"]
+        ["matchExpressions"][0]["values"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|role| role.as_str().unwrap())
+        .collect();
+    assert!(listener_roles.contains(&"denied"), "{listener}");
+    assert!(!listener_roles.contains(&"ingress-denied"), "{listener}");
     assert!(documents
         .iter()
         .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"
