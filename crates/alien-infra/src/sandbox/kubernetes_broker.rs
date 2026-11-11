@@ -416,6 +416,7 @@ fn mint_capability(
             generation: 1,
             expires_at,
             key_id: secret_name.to_string(),
+            port: None,
         },
         signing_key,
     )

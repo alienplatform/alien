@@ -110,6 +110,7 @@ mod tests {
             generation: 2,
             expires_at: NOW + 300,
             key_id: "k1".to_string(),
+            port: None,
         }
     }
 
