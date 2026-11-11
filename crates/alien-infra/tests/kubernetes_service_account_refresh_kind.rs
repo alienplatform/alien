@@ -107,4 +107,9 @@ async fn a_missing_helm_service_account_surfaces_through_the_running_refresh() {
         state.resources["b-sa"].status,
         ResourceStatus::RefreshFailed
     );
+
+    // A `helm upgrade` provides the account again: the health check recovers by itself.
+    kubectl(&context, &["-n", namespace, "create", "serviceaccount", &name]);
+    state = executor.refresh(state).await.expect("refresh").next_state;
+    assert_eq!(state.resources["b-sa"].status, ResourceStatus::Running);
 }

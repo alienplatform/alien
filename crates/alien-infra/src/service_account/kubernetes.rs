@@ -91,10 +91,23 @@ impl KubernetesServiceAccountController {
         state = CreateFailed,
         status = ResourceStatus::ProvisionFailed
     );
-    terminal_state!(
+    /// The chart may provide the account again (a `helm upgrade` after a rollback), so a
+    /// failed check keeps looking instead of staying failed until someone retries.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.observe(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: Some(Duration::from_secs(30)),
+        })
+    }
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
