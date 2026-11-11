@@ -146,3 +146,53 @@ fn a_management_url_that_is_not_https_is_refused_unless_allowed() {
     let https = format!("{credentials}  url: https://manager.example.test\n");
     test_utils::helm_template(&chart, Some(&https)).assert_ok("https url");
 }
+
+#[test]
+fn the_schema_types_the_postgres_and_exposure_values() {
+    use alien_core::{Postgres, ResourceLifecycle};
+    let stack = Stack::new("typed-values".to_string())
+        .add(
+            Postgres::new("metadata".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default()).files;
+    let base = "management:\n  token: test-credential\n";
+
+    test_utils::helm_template(
+        &chart,
+        Some(&format!(
+            "{base}postgres:\n  metadata:\n    enabled: true\n    storage: 20Gi\n    existingPasswordSecret: pg-password\n    image:\n      repository: pgvector/pgvector\n      tag: pg16-bookworm\n    recordedImage: pgvector/pgvector:pg16-bookworm\n"
+        )),
+    )
+    .assert_ok("typed postgres values");
+
+    let wrong_type = test_utils::helm_template(
+        &chart,
+        Some(&format!(
+            "{base}postgres:\n  metadata:\n    enabled: \"yes\"\n"
+        )),
+    );
+    assert!(!wrong_type.is_ok(), "{}", wrong_type.stdout);
+    assert!(
+        wrong_type.stderr.contains("values.schema.json")
+            || wrong_type.stderr.contains("don't meet the specifications"),
+        "{}",
+        wrong_type.stderr
+    );
+    let misspelt = test_utils::helm_template(
+        &chart,
+        Some(&format!("{base}postgres:\n  metadata:\n    enable: true\n")),
+    );
+    assert!(!misspelt.is_ok(), "{}", misspelt.stdout);
+    assert!(misspelt.stderr.contains("enable"), "{}", misspelt.stderr);
+
+    let bad_mode = test_utils::helm_template(
+        &chart,
+        Some(&format!(
+            "{base}stackSettings:\n  kubernetes:\n    exposure:\n      mode: public\n"
+        )),
+    );
+    assert!(!bad_mode.is_ok(), "{}", bad_mode.stdout);
+    assert!(bad_mode.stderr.contains("mode"), "{}", bad_mode.stderr);
+}

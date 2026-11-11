@@ -5027,11 +5027,66 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "deploymentModel": { "type": "string", "enum": ["pull", "Pull"] },
         "updates": { "type": "string" },
         "telemetry": { "type": "string" },
-        "heartbeats": { "type": "string" }
+        "heartbeats": { "type": "string" },
+        "quotaWarningOverrides": { "type": "array", "items": { "type": "string" } },
+        "network": { "type": ["object", "null"] },
+        "domains": { "type": ["object", "null"] },
+        "compute": { "type": ["object", "null"] },
+        "publicEndpoints": { "type": ["object", "null"] },
+        "kubernetes": {
+          "type": ["object", "null"],
+          "properties": {
+            "cluster": {
+              "type": ["object", "null"],
+              "properties": {
+                "ownership": { "type": "string" },
+                "namespace": { "type": ["string", "null"] },
+                "cloud": { "type": ["object", "null"] }
+              }
+            },
+            "exposure": {
+              "type": ["object", "null"],
+              "required": ["mode"],
+              "properties": {
+                "mode": { "type": "string", "enum": ["disabled", "generated", "custom", "customBaseDomain"] },
+                "domain": { "type": "string" },
+                "baseDomain": { "type": "string" },
+                "route": { "type": "object" },
+                "certificate": { "type": "object" }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": true
     },
-    "postgres": { "type": "object" },
+    "postgres": {
+      "type": "object",
+      "description": "One entry per Postgres resource in the stack, keyed by resource ID.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead." },
+          "existingPasswordSecret": { "type": "string", "description": "Secret with a `password` key. Required for GitOps and offline rendering." },
+          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering." },
+          "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "repository": { "type": "string", "minLength": 1 },
+              "tag": { "type": "string", "minLength": 1 }
+            }
+          },
+          "storage": { "type": "string", "minLength": 1 },
+          "storageClassName": { "type": "string" },
+          "highAvailability": { "type": "boolean" },
+          "encryptionKey": { "type": ["object", "string", "null"] },
+          "resources": { "type": "object" }
+        }
+      }
+    },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
     "gitops": {

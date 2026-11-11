@@ -810,6 +810,59 @@ postgres: {}
       "type": "object"
     },
     "postgres": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead.",
+            "type": "boolean"
+          },
+          "encryptionKey": {
+            "type": [
+              "object",
+              "string",
+              "null"
+            ]
+          },
+          "existingPasswordSecret": {
+            "description": "Secret with a `password` key. Required for GitOps and offline rendering.",
+            "type": "string"
+          },
+          "highAvailability": {
+            "type": "boolean"
+          },
+          "image": {
+            "additionalProperties": false,
+            "properties": {
+              "repository": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "tag": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "recordedImage": {
+            "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering.",
+            "type": "string"
+          },
+          "resources": {
+            "type": "object"
+          },
+          "storage": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "storageClassName": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "description": "One entry per Postgres resource in the stack, keyed by resource ID.",
       "type": "object"
     },
     "publicEndpoints": {
@@ -1246,6 +1299,12 @@ postgres: {}
     "stackSettings": {
       "additionalProperties": true,
       "properties": {
+        "compute": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "deploymentModel": {
           "enum": [
             "pull",
@@ -1253,8 +1312,96 @@ postgres: {}
           ],
           "type": "string"
         },
+        "domains": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "heartbeats": {
           "type": "string"
+        },
+        "kubernetes": {
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {
+              "properties": {
+                "cloud": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "namespace": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ownership": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "exposure": {
+              "properties": {
+                "baseDomain": {
+                  "type": "string"
+                },
+                "certificate": {
+                  "type": "object"
+                },
+                "domain": {
+                  "type": "string"
+                },
+                "mode": {
+                  "enum": [
+                    "disabled",
+                    "generated",
+                    "custom",
+                    "customBaseDomain"
+                  ],
+                  "type": "string"
+                },
+                "route": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "network": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "publicEndpoints": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "quotaWarningOverrides": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "telemetry": {
           "type": "string"
