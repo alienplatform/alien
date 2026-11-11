@@ -9,4 +9,4 @@ runs:
         version: 0.14.1
     - uses: taiki-e/install-action@v2
       with:
-        tool: cargo-zigbuild
+        tool: cargo-zigbuild@0.24.1
