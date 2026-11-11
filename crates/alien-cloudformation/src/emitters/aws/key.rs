@@ -24,7 +24,7 @@ impl CfEmitter for AwsKeyEmitter {
         let mut key = CfResource::new(logical_id.to_string(), "AWS::KMS::Key".to_string());
         key.properties.insert(
             "Description".to_string(),
-            CfExpression::from(format!("Encryption key '{}'", ctx.resource_id)),
+            CfExpression::from(alien_core::key_description(ctx.resource_id)),
         );
         key.properties
             .insert("EnableKeyRotation".to_string(), CfExpression::from(true));

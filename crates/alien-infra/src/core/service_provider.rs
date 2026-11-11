@@ -19,6 +19,7 @@ use alien_aws_clients::{
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
     kms::{KmsApi, KmsClient},
+    resourcegroupstagging::{ResourceGroupsTaggingApi, ResourceGroupsTaggingClient},
     lambda::{LambdaApi, LambdaClient},
     lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient},
     elasticache::{ElastiCacheApi, ElastiCacheClient},
@@ -193,6 +194,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
     async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
+    async fn get_aws_resource_groups_tagging_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>>;
     async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>>;
 
     // GCP clients
@@ -664,6 +669,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(KmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_resource_groups_tagging_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ResourceGroupsTaggingClient::new(
             reqwest::Client::new(),
             credentials,
         )))

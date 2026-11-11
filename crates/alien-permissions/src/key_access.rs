@@ -82,6 +82,56 @@ pub fn key_access_plan(stack: &Stack, key_id: &str) -> crate::Result<KeyAccessPl
     })
 }
 
+/// IAM statements an AWS key's identities hold on it, with the key named by `key_arn`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AwsKeyGrants {
+    /// For the management role: the management profile's sets on the key.
+    pub management: Vec<serde_json::Value>,
+    /// For the access role and each runtime role: encrypt and decrypt on the key.
+    pub cryptography: serde_json::Value,
+}
+
+/// Renders the grants of [`KeyAccessPlan`] for AWS. `key_arn` is a literal ARN.
+pub fn aws_key_grants(plan: &KeyAccessPlan, key_arn: &str) -> crate::Result<AwsKeyGrants> {
+    use crate::{generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext};
+    use alien_error::AlienError;
+
+    let invalid = |message: String| AlienError::new(crate::ErrorData::InvalidPermissionSet { message });
+    let context = PermissionContext::new().with_resource_name(key_arn.to_string());
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let mut management = Vec::new();
+    for id in &plan.management {
+        let set = crate::get_permission_set(id)
+            .ok_or_else(|| invalid(format!("Unknown Key management permission '{id}'")))?;
+        let document = generator.generate_policy(set, BindingTarget::Resource, &context)?;
+        for mut statement in document.statement {
+            statement.resource = vec![key_arn.to_string()];
+            management.push(
+                serde_json::to_value(statement)
+                    .map_err(|error| invalid(format!("Failed to serialize Key grant: {error}")))?,
+            );
+        }
+    }
+    let actions = crate::get_permission_set(REMOTE_CRYPTOGRAPHY)
+        .and_then(|set| set.platforms.aws.as_ref())
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| entry.grant.actions.iter().flatten())
+        .cloned()
+        .collect::<Vec<_>>();
+    if actions.is_empty() {
+        return Err(invalid(format!("{REMOTE_CRYPTOGRAPHY} has no AWS actions")));
+    }
+    Ok(AwsKeyGrants {
+        management,
+        cryptography: serde_json::json!({
+            "Effect": "Allow",
+            "Action": actions,
+            "Resource": key_arn,
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
