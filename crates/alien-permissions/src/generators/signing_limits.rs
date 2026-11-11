@@ -11,7 +11,7 @@
 
 use serde_json::{json, Value};
 
-use super::verifier_owned::AWS_VERIFIER_OWNED;
+use super::{families::aws_family, verifier_owned::AWS_VERIFIER_OWNED};
 
 /// Lambda writes: what code a function runs, how, and who may call it.
 fn lambda_writes() -> Vec<&'static str> {
@@ -28,6 +28,15 @@ fn machine_launches() -> Vec<&'static str> {
         .iter()
         .copied()
         .filter(|action| !action.starts_with("lambda:"))
+        .collect()
+}
+
+/// What the limits deny of `actions`: those in a family. Deletes that change no code stay with
+/// management.
+fn in_a_family(actions: Vec<&'static str>) -> Vec<&'static str> {
+    actions
+        .into_iter()
+        .filter(|action| aws_family(action, None).is_some())
         .collect()
 }
 
@@ -168,13 +177,13 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
             {
                 "Sid": "OnlyVerifierChangesFunctions",
                 "Effect": "Deny",
-                "Action": lambda_writes(),
+                "Action": in_a_family(lambda_writes()),
                 "Resource": "*"
             },
             {
                 "Sid": "OnlyVerifierLaunchesMachines",
                 "Effect": "Deny",
-                "Action": machine_launches(),
+                "Action": in_a_family(machine_launches()),
                 "Resource": "*"
             },
             {
@@ -725,7 +734,7 @@ mod tests {
                 other => panic!("unexpected action {other}"),
             })
             .collect();
-        for owned in AWS_VERIFIER_OWNED {
+        for owned in AWS_VERIFIER_OWNED.iter().filter(|owned| aws_family(owned, None).is_some()) {
             assert!(denied.iter().any(|action| action == owned), "{owned}");
         }
         for action in AWS_MACHINE_COMMANDS
@@ -734,6 +743,36 @@ mod tests {
             .chain(AWS_BUILD_RUNS)
         {
             assert!(denied.iter().any(|denied| denied == action), "{action}");
+        }
+    }
+
+    #[test]
+    fn every_run_or_reach_deny_is_in_a_family() {
+        use super::super::families::aws_family;
+        let limits = aws_management_limits("orders", "111122223333", "us-east-1");
+        for statement in limits["Statement"].as_array().expect("statements") {
+            let sid = statement["Sid"].as_str().expect("sid");
+            if !matches!(
+                sid,
+                "OnlyVerifierChangesFunctions"
+                    | "OnlyVerifierLaunchesMachines"
+                    | "NoCommandsOnMachines"
+                    | "NoUnsignedMicrovms"
+                    | "NoUnsignedBuilds"
+                    | "NoSharingInstallDataWithOutsiders"
+            ) {
+                continue;
+            }
+            let actions: Vec<&str> = match &statement["Action"] {
+                Value::Array(actions) => actions.iter().filter_map(Value::as_str).collect(),
+                other => panic!("{sid}: unexpected action {other}"),
+            };
+            for action in actions {
+                assert!(
+                    aws_family(action, None).is_some(),
+                    "{sid} denies {action}, which no family covers: the list and the families disagree"
+                );
+            }
         }
     }
 }
