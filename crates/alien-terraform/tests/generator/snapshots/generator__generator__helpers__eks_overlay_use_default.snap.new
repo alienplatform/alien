@@ -1,0 +1,1234 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 229
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.9.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.70"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = ">= 4.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.7.2"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Deployment name, unique within the deployment group: 2-100 lowercase letters, numbers, and single hyphens. Shown in setup and cloud IAM review metadata."
+
+  validation {
+    condition     = length(var.name) >= 2 && length(var.name) <= 100 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.name)) && !startswith(var.name, "ag-")
+    error_message = "name must be 2-100 characters of lowercase letters, numbers, and single hyphens; start and end with a letter or number; and not start with \"ag-\"."
+  }
+}
+
+variable "token" {
+  type        = string
+  description = "Not used: this module does not register the deployment."
+  default     = null
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the management identity allowed to assume setup-created roles."
+  default     = ""
+}
+
+variable "management_external_id" {
+  type        = string
+  description = "ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a module applied before this variable existed."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.management_external_id == "" || can(regex("^[A-Za-z0-9]{32,128}$", var.management_external_id))
+    error_message = "management_external_id must be the ExternalId shown on the setup page: 32 to 128 letters and digits."
+  }
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."
+  default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "unsupported_availability_zone_ids" {
+  type        = list(string)
+  description = "Availability Zone IDs to exclude when selecting EKS control-plane subnets. AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are account-local — the same physical zone can be `us-east-1e` in one account and `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting EKS control plane today (see https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per region when AWS deprecates more."
+  default = [
+    "use1-az3",
+    "usw1-az2",
+    "cac1-az3"
+  ]
+}
+
+variable "kubernetes_cluster_mode" {
+  type        = string
+  description = "Kubernetes cluster mode. Values: create or existing."
+  default     = "create"
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  description = "Kubernetes namespace for runtime resources."
+  default     = "default"
+}
+
+variable "custom_domain_name" {
+  type        = string
+  description = "Optional custom domain for public Kubernetes routes. Leave empty to use the generated load balancer hostname."
+  default     = ""
+}
+
+variable "custom_domain_certificate_arn" {
+  type        = string
+  description = "ACM certificate ARN for custom_domain_name. Required when custom_domain_name is set."
+  default     = ""
+
+  validation {
+    condition     = var.custom_domain_certificate_arn == "" ? var.custom_domain_name == "" : can(regex("^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$", var.custom_domain_certificate_arn))
+    error_message = "custom_domain_certificate_arn must be a valid AWS ACM certificate ARN when custom_domain_name is set."
+  }
+}
+
+variable "eks_cluster_name" {
+  type        = string
+  description = "Existing EKS cluster name that Helm will install into."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+data "aws_partition" "current" {}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "aws"
+  deployment_target            = "eks"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  generated_kubernetes_exposure = {
+    mode = "generated"
+    route = {
+      routeApi         = "ingress"
+      controller       = "eks.amazonaws.com/alb"
+      ingressClassName = "alb"
+      labels           = {}
+      annotations      = {}
+      provider = {
+        provider   = "awsAlb"
+        scheme     = "internet-facing"
+        targetType = "ip"
+        subnetIds  = var.kubernetes_cluster_mode == "create" ? data.aws_subnets.kubernetes_public_selected[0].ids : []
+      }
+    }
+    certificate = {
+      mode = "none"
+    }
+  }
+  kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))
+  deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
+  deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = compact([for id in var.public_subnet_ids : trimspace(id)]), privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)]), securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)]) }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
+  deployment_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        vpcId               = null
+        cidrBlock           = null
+        internetGatewayId   = null
+        natGatewayId        = null
+        eipAllocationId     = null
+        publicSubnetIds     = []
+        privateSubnetIds    = []
+        publicRouteTableId  = null
+        privateRouteTableId = null
+        securityGroupId     = null
+        availabilityZones   = []
+        isByoVpc            = true
+        sandboxNetwork      = null
+      }
+    },
+    {
+      id   = "kubernetes"
+      type = "kubernetes-cluster"
+      importData = {
+        provider           = "eks"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
+        namespace          = var.kubernetes_namespace
+        clusterName        = local.kubernetes_cluster_name
+        clusterId          = local.kubernetes_cluster_name
+        cloudMetadataReady = true
+      }
+    },
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.data.bucket
+        bucketArn  = aws_s3_bucket.data.arn
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        roleName                = aws_iam_role.execution_sa.name
+        roleArn                 = aws_iam_role.execution_sa.arn
+        stackPermissionsApplied = true
+      }
+    }
+  ]
+  kubernetes_cluster_name   = var.kubernetes_cluster_mode == "create" ? aws_eks_cluster.kubernetes[0].name : var.eks_cluster_name
+  kubernetes_kube_context   = local.kubernetes_cluster_name
+  kubernetes_kubeconfig     = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = aws_eks_cluster.kubernetes[0].name, cluster = { server = aws_eks_cluster.kubernetes[0].endpoint, "certificate-authority-data" = aws_eks_cluster.kubernetes[0].certificate_authority[0].data } }], contexts = [{ name = aws_eks_cluster.kubernetes[0].name, context = { cluster = aws_eks_cluster.kubernetes[0].name, user = aws_eks_cluster.kubernetes[0].name } }], "current-context" = aws_eks_cluster.kubernetes[0].name, users = [{ name = aws_eks_cluster.kubernetes[0].name, user = { exec = { apiVersion = "client.authentication.k8s.io/v1beta1", command = "aws", args = ["eks", "get-token", "--cluster-name", aws_eks_cluster.kubernetes[0].name, "--region", var.aws_region] } } }] }) : ""
+  eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
+  eks_oidc_provider_arn     = var.kubernetes_cluster_mode == "create" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn
+  kubernetes_namespace      = var.kubernetes_namespace
+  helm_service_accounts = {
+    execution = {
+      annotations = {
+        "eks.amazonaws.com/role-arn" = aws_iam_role.execution_sa.arn
+      }
+      labels = {}
+    }
+  }
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
+  }
+}
+
+=== retained-data.json ===
+[
+  "aws_s3_bucket.data",
+  "aws_s3_bucket_server_side_encryption_configuration.data",
+  "aws_s3_bucket_ownership_controls.data",
+  "aws_s3_bucket_public_access_block.data"
+]
+
+=== retain-data.py ===
+#!/usr/bin/env python3
+"""Detach the generated retention inventory, keeping a recovery receipt.
+
+AWS Aurora and its network are excluded by the generator and remain managed
+for destroy. KMS keys remain in the inventory.
+"""
+import argparse
+import json
+import os
+import re
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def save(path, value):
+    # Publish only a complete, durable record, without replacing an earlier one.
+    # An interrupted write must not leave an empty intent that cannot be recovered.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(value, output, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary is not None:
+            temporary.unlink()
+
+
+
+def protect_dynamodb_ttl(state, selected):
+    """Use the installer's AWS credentials; never detach while TTL can still run."""
+    addresses = {item['address'] for item in selected}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource.get('type') != 'aws_dynamodb_table':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in addresses:
+                continue
+            attributes = instance.get('attributes', {})
+            arn = attributes.get('arn', '')
+            match = re.fullmatch(r'arn:(aws(?:-us-gov|-cn)?):dynamodb:([a-z0-9-]+):([0-9]{12}):table/([a-zA-Z0-9_.-]+)', arn)
+            if not match or attributes.get('id') != match[4]:
+                raise RuntimeError('Refresh the exact DynamoDB table ARN before retention; nothing detached')
+            def aws(operation, *arguments):
+                try:
+                    result = subprocess.run(
+                        ['aws', 'dynamodb', operation, '--region', match[2], '--table-name', arn,
+                         *arguments, '--output', 'json', '--no-cli-pager'],
+                        capture_output=True, text=True)
+                except FileNotFoundError as error:
+                    raise RuntimeError('DynamoDB retention requires AWS CLI with the installer credentials; nothing detached') from error
+                if result.returncode != 0:
+                    message = result.stderr.strip()
+                    # DynamoDB rejects a TTL change while the previous one, including the one at
+                    # table creation, is still processing, which takes up to an hour.
+                    if 'Time to live has been modified multiple times within a fixed interval' in message:
+                        raise RuntimeError('DynamoDB is still processing an earlier TTL change on this table, which takes up to an hour. Wait and rerun this retention command; nothing detached')
+                    raise RuntimeError(f'DynamoDB {operation} failed: {message}. Retention needs the installer credentials with DescribeTable, DescribeTimeToLive and UpdateTimeToLive permissions; nothing detached')
+                return json.loads(result.stdout)
+            observed = aws('describe-table').get('Table', {})
+            if observed.get('TableArn') != arn:
+                raise RuntimeError('DynamoDB account/table identity changed; nothing detached')
+            ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') == 'ENABLED':
+                attribute = ttl.get('AttributeName')
+                if not isinstance(attribute, str) or not attribute:
+                    raise RuntimeError('DynamoDB TTL attribute is unknown; nothing detached')
+                aws('update-time-to-live', '--time-to-live-specification',
+                    json.dumps({'Enabled': False, 'AttributeName': attribute}))
+                ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') != 'DISABLED':
+                raise RuntimeError('DynamoDB TTL is not confirmed DISABLED. Wait for its transition and rerun this retention command; nothing detached')
+
+
+def installed_inventory(state, module):
+    markers = [resource for resource in state.get('resources', [])
+               if resource.get('mode') == 'managed'
+               and resource.get('type') == 'terraform_data'
+               and resource.get('name') == 'retention_inventory'
+               and resource.get('module', '') == module]
+    if len(markers) != 1 or len(markers[0].get('instances', [])) != 1:
+        raise RuntimeError('Installed retention inventory is unavailable. Upgrade the original resource configuration in place before whole-setup teardown; nothing detached')
+    instance = markers[0]['instances'][0]
+    inventory = instance.get('attributes', {}).get('input', {}).get('value')
+    if (instance.get('deposed') or not isinstance(inventory, dict)
+            or inventory.get('version') != 1
+            or not isinstance(inventory.get('addresses'), list)
+            or not all(isinstance(address, str) for address in inventory['addresses'])):
+        raise RuntimeError('Invalid installed retention inventory; nothing detached')
+    return inventory['addresses']
+
+
+def verify_installed_inventory(state, manifest, module):
+    if installed_inventory(state, module) != manifest:
+        raise RuntimeError('Generated manifest does not match the installed retention inventory; nothing detached')
+
+
+def azure_expiry_guard(state, selected):
+    """Only delete actions that may affect detached blob data block retention."""
+    accounts = set()
+    containers = {}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in selected:
+                continue
+            attributes = instance['attributes']
+            if resource['type'] == 'azurerm_storage_account':
+                accounts.add(attributes['id'].lower())
+            elif resource['type'] == 'azurerm_storage_container':
+                account = attributes.get('storage_account_id')
+                name = attributes.get('name')
+                if not account:
+                    # AzureRM keeps storage_account_id null when the installed
+                    # resource uses storage_account_name. Its resource_manager_id
+                    # still contains the complete account and container identity.
+                    identity = re.fullmatch(
+                        r'(/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Storage/storageAccounts/[^/]+)/blobServices/default/containers/([^/]+)',
+                        attributes.get('resource_manager_id') or '', re.IGNORECASE)
+                    if (identity and identity[2] == name
+                            and identity[1].rsplit('/', 1)[1].lower()
+                            == (attributes.get('storage_account_name') or '').lower()):
+                        account = identity[1]
+                if not account or not name:
+                    raise RuntimeError('Cannot identify retained Azure container account/name; refresh or upgrade the installed package before detachment')
+                containers.setdefault(account.lower(), set()).add(name)
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource['type'] != 'azurerm_storage_management_policy':
+            continue
+        for instance in resource.get('instances', []):
+            attributes = instance['attributes']
+            account = attributes.get('storage_account_id', '').lower()
+            if account not in accounts and account not in containers:
+                continue
+            for rule in attributes.get('rule', []):
+                if not rule.get('enabled', True):
+                    continue
+                filters = rule.get('filters') or []
+                prefixes = [prefix for entry in filters for prefix in entry.get('prefix_match') or []]
+                if (account not in accounts and prefixes
+                        and not any(prefix.startswith(name + '/') or (name + '/').startswith(prefix)
+                                    for name in containers[account] for prefix in prefixes)):
+                    continue
+                # Provider state uses -1/null for unset age fields. Tag filters
+                # cannot prove safety: retained blobs may acquire matching tags.
+                actions = rule.get('actions')
+                if not isinstance(actions, list) or not actions:
+                    raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                for action in actions:
+                    for kind, blocks in action.items():
+                        if kind not in ('base_blob', 'snapshot', 'version'):
+                            raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                        for block in blocks or []:
+                            if any(key.startswith('delete') and value is not None and value != -1
+                                   for key, value in block.items()):
+                                raise RuntimeError('Disable Azure storage lifecycle delete rules affecting retained data, apply; nothing detached')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--detach', action='store_true', help='confirm detachment before whole-setup teardown')
+    parser.add_argument('--module-address', default='', help='exact installed child module address')
+    parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
+    args = parser.parse_args()
+    if os.name != "posix":
+        raise RuntimeError("Use Linux, macOS, or a WSL Linux filesystem for private recovery receipts; native Windows is not supported")
+    manifest_path = Path(__file__).with_name('retained-data.json')
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, list) or not all(isinstance(address, str) for address in manifest):
+        raise RuntimeError('Invalid recovery inventory; nothing detached')
+    prefix = args.module_address + '.' if args.module_address else ''
+    addresses = {prefix + address for address in manifest}
+    # A failed read must abort, never masquerade as an empty installation.
+    state = json.loads(tf('state', 'pull'))
+    if state.get('version') != 4 or not state.get('lineage') or not isinstance(state.get('serial'), int):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing detached')
+    verify_installed_inventory(state, manifest, args.module_address)
+    selected = []
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        if base not in addresses:
+            continue
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            resource_id = instance['attributes'].get('id')
+            if not resource_id:
+                raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            if resource['type'] == 'google_storage_bucket':
+                rules = instance['attributes'].get('lifecycle_rule') or []
+                if any(action.get('type') == 'Delete' for rule in rules for action in rule.get('action', [])):
+                    raise RuntimeError('Remove Cloud Storage delete lifecycle rules and apply before retaining ' + base + suffix + '; nothing detached')
+            if resource['type'] == 'azurerm_storage_container':
+                if instance['attributes'].get('container_access_type') != 'private':
+                    raise RuntimeError('Set Azure container publicRead=false and apply before retaining ' + base + suffix + '; nothing detached')
+            selected.append({'address': base + suffix, 'id': resource_id})
+    azure_expiry_guard(state, {item['address'] for item in selected})
+    print(json.dumps(selected, indent=2))
+    if not args.detach:
+        return
+    os.umask(0o077)
+    args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.receipt_dir.stat().st_mode & 0o077:
+        raise RuntimeError('Receipt directory must be private (mode 0700)')
+    # One immutable receipt per attempt preserves IDs across partial failures/retries.
+    attempt = Path(tempfile.mkdtemp(prefix='detach-', dir=args.receipt_dir))
+    save(attempt / 'state-before.json', state)
+    save(attempt / 'retained.json', selected)
+    save(attempt / 'manifest.json', manifest)
+    save(attempt / 'source.json', {'directory': str(Path.cwd()), 'lineage': state.get('lineage'), 'serial': state.get('serial'), 'module': args.module_address})
+    # Keep the exact inventory before touching cloud expiry, and stop before any state
+    # removal until every selected table confirms DISABLED. A retry re-reads AWS.
+    protect_dynamodb_ttl(state, selected)
+    # Check for a concurrent writer between inventory and mutation. Terraform locks
+    # the state mutation itself. Operators must serialize this entire teardown with
+    # other Terraform runs, just as they do for a multi-command import procedure.
+    current = json.loads(tf('state', 'pull'))
+    if (current.get('lineage'), current.get('serial')) != (state.get('lineage'), state.get('serial')):
+        raise RuntimeError('Terraform state changed; no resources detached. Retry after the other run finishes.')
+    if selected:
+        subprocess.run([CLI, 'state', 'rm', '-lock-timeout=60s', *[item['address'] for item in selected]], check=True)
+    save(attempt / 'state-after.json', json.loads(tf('state', 'pull')))
+    print('Recovery receipt: ' + str(attempt))
+    print('Data is retained. Access has NOT yet been revoked. Run and review terraform plan -destroy, then apply that destroy plan. Do not run an ordinary apply after detaching.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
+=== default_network.tf ===
+data "aws_vpcs" "default_network_default" {
+  filter {
+    name = "is-default"
+    values = [
+      "true"
+    ]
+  }
+}
+
+data "aws_subnets" "default_network_default" {
+  filter {
+    name = "vpc-id"
+    values = [
+      data.aws_vpcs.default_network_default.ids[0]
+    ]
+  }
+
+  filter {
+    name = "default-for-az"
+    values = [
+      "true"
+    ]
+  }
+}
+
+=== kubernetes.tf ===
+data "aws_eks_cluster" "kubernetes_existing" {
+  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  name  = var.eks_cluster_name
+}
+
+data "aws_availability_zones" "kubernetes_eks_supported" {
+  count            = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  state            = "available"
+  exclude_zone_ids = var.unsupported_availability_zone_ids
+}
+
+data "aws_subnets" "kubernetes_public_selected" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+
+  filter {
+    name   = "subnet-id"
+    values = data.aws_subnets.default_network_default.ids
+  }
+
+  filter {
+    name   = "availability-zone-id"
+    values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
+  }
+}
+
+data "aws_subnets" "kubernetes_private_selected" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+
+  filter {
+    name   = "subnet-id"
+    values = data.aws_subnets.default_network_default.ids
+  }
+
+  filter {
+    name   = "availability-zone-id"
+    values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
+  }
+}
+
+data "aws_eks_cluster" "target" {
+  name = local.kubernetes_cluster_name
+  depends_on = [
+    aws_eks_cluster.kubernetes
+  ]
+}
+
+data "aws_eks_cluster_auth" "target" {
+  name = local.kubernetes_cluster_name
+}
+
+data "tls_certificate" "eks_oidc" {
+  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
+data "aws_iam_openid_connect_provider" "eks_existing" {
+  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  url   = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  url   = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+  thumbprint_list = [
+    data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint
+  ]
+  tags = {
+    Name                         = "${local.resource_prefix}-eks-oidc"
+    "deployment-resource-prefix" = local.resource_prefix
+  }
+}
+
+resource "aws_iam_role" "kubernetes_cluster" {
+  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name               = "${local.resource_prefix}-kubernetes-eks"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "eks.amazonaws.com" }, Action = ["sts:AssumeRole", "sts:TagSession"] }] })
+}
+
+resource "aws_iam_role_policy_attachment" "kubernetes_cluster" {
+  for_each   = var.kubernetes_cluster_mode == "create" ? toset(["arn:aws:iam::aws:policy/AmazonEKSClusterPolicy", "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy", "arn:aws:iam::aws:policy/AmazonEKSComputePolicy", "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy", "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy"]) : toset([])
+  role       = aws_iam_role.kubernetes_cluster[0].name
+  policy_arn = each.value
+}
+
+resource "aws_iam_role" "kubernetes_node" {
+  count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name               = "${local.resource_prefix}-kubernetes-node"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+}
+
+resource "aws_iam_role_policy_attachment" "kubernetes_node" {
+  for_each   = var.kubernetes_cluster_mode == "create" ? toset(["arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy", "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly", "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy", "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy"]) : toset([])
+  role       = aws_iam_role.kubernetes_node[0].name
+  policy_arn = each.value
+}
+
+resource "aws_eks_cluster" "kubernetes" {
+  count                         = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name                          = "${local.resource_prefix}-k8s"
+  role_arn                      = aws_iam_role.kubernetes_cluster[0].arn
+  version                       = "1.36"
+  bootstrap_self_managed_addons = false
+
+  vpc_config {
+    subnet_ids              = var.kubernetes_cluster_mode == "create" ? data.aws_subnets.kubernetes_private_selected[0].ids : []
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  compute_config {
+    enabled = true
+    node_pools = [
+      "system",
+      "general-purpose"
+    ]
+    node_role_arn = aws_iam_role.kubernetes_node[0].arn
+  }
+
+  kubernetes_network_config {
+    elastic_load_balancing {
+      enabled = true
+    }
+  }
+
+  storage_config {
+    block_storage {
+      enabled = true
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      version
+    ]
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.kubernetes_cluster,
+    aws_iam_role_policy_attachment.kubernetes_node
+  ]
+}
+
+resource "aws_eks_addon" "kubernetes_vpc_cni" {
+  count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  cluster_name = aws_eks_cluster.kubernetes[0].name
+  addon_name   = "vpc-cni"
+}
+
+resource "aws_eks_addon" "kubernetes_kube_proxy" {
+  count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  cluster_name = aws_eks_cluster.kubernetes[0].name
+  addon_name   = "kube-proxy"
+  depends_on = [
+    aws_eks_cluster.kubernetes
+  ]
+}
+
+resource "aws_eks_addon" "kubernetes_coredns" {
+  count        = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  cluster_name = aws_eks_cluster.kubernetes[0].name
+  addon_name   = "coredns"
+  depends_on = [
+    aws_eks_cluster.kubernetes
+  ]
+}
+
+=== data.tf ===
+resource "aws_s3_bucket" "data" {
+  bucket        = "${local.resource_prefix}-data"
+  force_destroy = false
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "data"
+    "resource-type" = "storage"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket                  = aws_s3_bucket.data.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "data" {
+  bucket = aws_s3_bucket.data.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+=== execution_sa.tf ===
+data "aws_iam_policy_document" "execution_sa_assume_role" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "sts:AssumeRoleWithWebIdentity"
+    ]
+
+    principals {
+      type = "Federated"
+      identifiers = [
+        local.eks_oidc_provider_arn
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.eks_oidc_issuer_host_path}:sub"
+      values = [
+        "system:serviceaccount:${var.kubernetes_namespace}:${trim(substr(format("%s-%s-sa", coalesce(trim(lower(replace(local.resource_prefix, "/[^a-zA-Z0-9]+/", "-")), "-"), "alien"), coalesce(trim(lower(replace("execution", "/[^a-zA-Z0-9]+/", "-")), "-"), "alien")), 0, 63), "-")}"
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.eks_oidc_issuer_host_path}:aud"
+      values = [
+        "sts.amazonaws.com"
+      ]
+    }
+  }
+}
+
+resource "aws_iam_role" "execution_sa" {
+  name               = length(format("%s-%s", local.resource_prefix, "execution-sa")) <= 64 ? format("%s-%s", local.resource_prefix, "execution-sa") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa")), 0, 8))
+  assume_role_policy = data.aws_iam_policy_document.execution_sa_assume_role.json
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
+  }
+}
+
+resource "aws_iam_role_policy" "execution_sa_set_0" {
+  name   = "storage-data-read-0"
+  role   = aws_iam_role.execution_sa.id
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.execution_sa_setup_bc2d3d7b_attachment
+  ]
+}
+
+resource "aws_iam_policy" "execution_sa_setup_bc2d3d7b" {
+  name   = length(format("%s-%s", local.resource_prefix, "execution-sa-setup-bc2d3d7b")) <= 128 ? format("%s-%s", local.resource_prefix, "execution-sa-setup-bc2d3d7b") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa-setup-bc2d3d7b"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa-setup-bc2d3d7b")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadS3Objects", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "execution_sa_setup_bc2d3d7b_attachment" {
+  role       = aws_iam_role.execution_sa.name
+  policy_arn = aws_iam_policy.execution_sa_setup_bc2d3d7b.arn
+  depends_on = [
+    aws_iam_policy.execution_sa_setup_bc2d3d7b
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "execution_sa_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.execution_sa_setup_bc2d3d7b_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = {}
+    basePlatform                = local.deployment_base_platform
+  }
+  depends_on = [
+    aws_iam_openid_connect_provider.eks,
+    aws_iam_role.kubernetes_cluster,
+    aws_iam_role_policy_attachment.kubernetes_cluster,
+    aws_iam_role.kubernetes_node,
+    aws_iam_role_policy_attachment.kubernetes_node,
+    aws_eks_cluster.kubernetes,
+    aws_eks_addon.kubernetes_vpc_cni,
+    aws_eks_addon.kubernetes_kube_proxy,
+    aws_eks_addon.kubernetes_coredns,
+    aws_s3_bucket.data,
+    aws_s3_bucket_server_side_encryption_configuration.data,
+    aws_s3_bucket_ownership_controls.data,
+    aws_s3_bucket_public_access_block.data,
+    aws_s3_bucket_policy.data,
+    aws_s3_bucket_lifecycle_configuration.data,
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_policy.execution_sa_setup_bc2d3d7b,
+    aws_iam_role_policy_attachment.execution_sa_setup_bc2d3d7b_attachment,
+    terraform_data.execution_sa_setup_policies_barrier
+  ]
+
+  lifecycle {
+    precondition {
+      condition     = try(local.deployment_settings.setupManagement, "manual") == "manual"
+      error_message = format("This setup module was built for manual setup, but the settings request %s setup. Regenerate the setup artifact for the requested setup management.", nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "manual", true))) ? "manual" : nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "automatic", false))) ? "automatic" : "invalid")
+    }
+  }
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "eks"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
+}
+
+output "kubernetes_namespace" {
+  value       = var.kubernetes_namespace
+  description = "Kubernetes namespace for runtime resources."
+}
+
+output "kubernetes_kubeconfig" {
+  value       = local.kubernetes_kubeconfig
+  description = "Kubeconfig for managed Kubernetes clusters created by this module."
+  sensitive   = true
+}
+
+output "kubernetes_kube_context" {
+  value       = local.kubernetes_kube_context
+  description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "kubernetes_update_kubeconfig_command" {
+  value       = "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
+  description = "AWS CLI command template for configuring kubectl access to the target EKS cluster."
+}
+
+output "chart_infrastructure_json" {
+  value       = jsonencode({ data = { service = "s3", bucketName = aws_s3_bucket.data.bucket, type = "storage" } })
+  description = "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`."
+}
+
+output "chart_service_accounts_json" {
+  value       = jsonencode({ serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
+  description = "The Helm chart's `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created), as JSON. Merge it into the chart's values."
+}
+
+=== README.md ===
+# Deployment setup - eks-use-default
+
+Target: `eks`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+AWS settings:
+
+- `aws_region`: AWS region used by the provider.
+- `managing_role_arn`: management identity allowed to assume setup-created roles.
+- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+
+Network settings:
+
+- `network_mode`: `create-new`, `use-existing`, or `use-default`.
+- `vpc_cidr`, `availability_zones`: used with `create-new`.
+- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.
+
+Kubernetes settings:
+
+- `kubernetes_cluster_mode`: `create` or `existing`.
+- `kubernetes_namespace`: namespace for runtime resources.
+- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = "existing"`.
+- `custom_domain_name`, `custom_domain_certificate_arn`: optional EKS public route hostname and ACM certificate ARN. Leave empty to use the generated load balancer hostname.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="eks-use-default"
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
+- `deployment_id`: emitted only when Terraform performs registration.
+
+## Kubernetes Operations
+
+Before inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:
+
+```bash
+AWS_PROFILE=<target-profile> aws sts get-caller-identity
+terraform output kubernetes_update_kubeconfig_command
+AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)
+kubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events
+```
+
+Treat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.
+
+## Destroy Order
+
+If `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.
+
+If `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install.
+## Retain AWS setup data during uninstall
+
+Setup-owned S3 buckets, DynamoDB tables and ECR repositories are protected against replacement and destroy. This includes empty resources. Their KMS keys survive with them. Aurora PostgreSQL, its managed password secret, writer instance, parameter group, security group, subnet group and setup-created network are deleted during teardown, without a final database snapshot. Their KMS keys remain retained. Apply this package to the existing installation before teardown; older state may still allow destructive deletion. Removing data declarations from an installed configuration is not supported by this helper. `prevent_destroy` protection disappears when a block is removed; keep the installed declarations until whole-setup detachment. Never bypass protection to force a replacement.
+
+Use Python 3 on Linux or macOS (on Windows, use WSL with receipts on its Linux filesystem) and the same Terraform backend, workspace and working directory used to install this setup. Stop deployment workloads first. Serialize the following procedure with all other Terraform runs. For a child module, add `--module-address 'module.<name>'` (including any module instance index).
+
+```bash
+# Preview exactly which addresses and cloud IDs will be retained.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
+# Save private recovery state and detach only the generated retention inventory.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup --detach
+terraform plan -destroy -out=uninstall.tfplan
+terraform apply uninstall.tfplan
+```
+
+Review the destroy plan before applying: it must remove this setup's application/management roles and bucket policies, while the retained resources stay absent from the delete list. Detachment alone does not revoke access. Retained bucket encryption, object ownership, public-access-block and versioning settings stay in place; lifecycle-expiration configuration remains managed and is removed during destroy. Existing external grants are outside this setup's ownership and require a separate access review.
+
+The receipt contains exact addresses, cloud IDs, state lineage and full before/after state. Keep it private and backed up: Terraform state can contain secrets. A retry creates a new receipt without overwriting earlier IDs. The helper fails on state-read errors and keeps Terraform locking enabled. Do not run ordinary `terraform apply` after whole-setup detachment: it would try to recreate the resources. To resume management, restore their declarations and use `terraform import ADDRESS ID` for each retained instance, then review an in-place plan. Do not restore a full old state over newer state.
+
+
+
+Retained resources continue to incur cloud charges, including storage and KMS. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure. DynamoDB tables with point-in-time recovery keep an AWS-managed backup for up to 35 days after the table is deleted.
+
+When retaining DynamoDB tables, install AWS CLI and use the same target-account installer credentials as Terraform. The helper verifies the recorded table ARN, disables its observed TTL attribute and requires AWS to report `DISABLED` before removing any selected resource from state. If TTL is transitioning, or AWS is still processing an earlier TTL change (including the one at table creation; this takes up to an hour), wait and rerun the same command; no resources are detached. Required metadata/control permissions are `DescribeTable`, `DescribeTimeToLive` and `UpdateTimeToLive`.
+
+=== retention-inventory.tf ===
+resource "terraform_data" "retention_inventory" {
+  input = {
+    version = 1
+    addresses = [
+      "aws_s3_bucket.data",
+      "aws_s3_bucket_server_side_encryption_configuration.data",
+      "aws_s3_bucket_ownership_controls.data",
+      "aws_s3_bucket_public_access_block.data"
+    ]
+  }
+}

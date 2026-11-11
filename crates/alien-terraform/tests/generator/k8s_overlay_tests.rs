@@ -1133,6 +1133,16 @@ fn eks_module_outputs_the_charts_infrastructure_values() {
     }
     assert!(compact.contains("type = \"storage\""), "{outputs}");
     assert!(compact.contains("service = \"s3\""), "{outputs}");
+    // The identity annotations the chart's service accounts need come from the module too.
+    assert!(
+        compact.contains("output \"chart_service_accounts_json\""),
+        "{outputs}"
+    );
+    assert!(compact.contains("local.helm_service_accounts"), "{outputs}");
+    assert!(
+        compact.contains("local.helm_manager_service_account"),
+        "{outputs}"
+    );
 }
 
 fn eks_stack_with_databases() -> Stack {

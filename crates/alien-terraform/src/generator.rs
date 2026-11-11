@@ -487,6 +487,7 @@ pub(crate) fn render_terraform_module(
             &mut shared_locals,
         )?;
     }
+    let has_chart_service_accounts = shared_locals.contains_key("helm_service_accounts");
     if matches!(platform, alien_core::Platform::Gcp) {
         dedupe_gcp_support_resources(&mut per_resource)?;
     }
@@ -800,6 +801,7 @@ pub(crate) fn render_terraform_module(
                 .into_iter()
                 .chain(chart_infrastructure_output(chart_infrastructure))
                 .chain(installer_bindings_output(&installer_bindings))
+                .chain(chart_service_accounts_output(has_chart_service_accounts))
                 .collect(),
         ))?,
     );
@@ -2058,6 +2060,26 @@ fn chart_infrastructure_output(
         "chart_infrastructure_json".to_string(),
         expr::jsonencode(expr::object(bindings)),
         "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`.".to_string(),
+    ))
+}
+
+/// `chart_service_accounts_json`: the chart's `serviceAccounts` and `managerServiceAccount`
+/// values (the cloud identity annotations of the roles this module created), as JSON. Merge it
+/// into the chart's values.
+fn chart_service_accounts_output(present: bool) -> Option<(String, Expression, String)> {
+    if !present {
+        return None;
+    }
+    Some((
+        "chart_service_accounts_json".to_string(),
+        expr::jsonencode(expr::object([
+            ("serviceAccounts", expr::raw("local.helm_service_accounts")),
+            (
+                "managerServiceAccount",
+                expr::raw("local.helm_manager_service_account"),
+            ),
+        ])),
+        "The Helm chart's `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created), as JSON. Merge it into the chart's values.".to_string(),
     ))
 }
 
