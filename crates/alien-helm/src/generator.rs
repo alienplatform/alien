@@ -8042,10 +8042,6 @@ fn argocd_example(chart_name: &str) -> String {
 # (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
 # repository with the manager's install credentials.
 #
-# A stack with a sandbox also needs `sandbox.runtimeClassName` in the values below. Argo CD
-# renders without cluster access, so the chart cannot choose the class from the Kubernetes
-# version: `isolated-sandbox` on EKS, `gvisor` on GKE, the cluster's Kata RuntimeClass on AKS.
-#
 # `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
 # chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check
 # yours. Where it doesn't, pin an exact version and let Renovate or Argo CD Image
