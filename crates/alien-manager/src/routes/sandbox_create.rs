@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
 
 /// What a caller chooses. An unknown field is refused, so nothing else can be asked for.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateRemoteSandboxRequest {
     pub deployment_id: String,
@@ -56,7 +57,23 @@ pub fn creates_through_manager(deployment: &DeploymentRecord) -> bool {
             .is_some_and(|settings| settings.signing.is_some())
 }
 
-async fn create_sandbox(
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/bindings/sandboxes/create",
+    tag = "bindings",
+    request_body = CreateRemoteSandboxRequest,
+    responses(
+        (status = 200, description = "The sandbox the data plane created, as it reports it", body = serde_json::Value),
+        (status = 400, description = "The deployment creates its own sandboxes, or the install's verifier refused the request", body = alien_error::AlienError),
+        (status = 401, description = "Authentication is required", body = alien_error::AlienError),
+        (status = 403, description = "The caller cannot create sandboxes for this deployment", body = alien_error::AlienError),
+        (status = 404, description = "The deployment was not found", body = alien_error::AlienError)
+    ),
+    security(
+        ("bearer" = [])
+    )
+))]
+pub async fn create_sandbox(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: axum::body::Bytes,

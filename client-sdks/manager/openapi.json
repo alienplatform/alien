@@ -104,6 +104,79 @@
         ]
       }
     },
+    "/v1/bindings/sandboxes/create": {
+      "post": {
+        "tags": [
+          "bindings"
+        ],
+        "operationId": "create_sandbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRemoteSandboxRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sandbox the data plane created, as it reports it",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "The deployment creates its own sandboxes, or the install's verifier refused the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller cannot create sandboxes for this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The deployment was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/commands": {
       "post": {
         "tags": [
@@ -8861,6 +8934,33 @@
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateRemoteSandboxRequest": {
+        "type": "object",
+        "description": "What a caller chooses. An unknown field is refused, so nothing else can be asked for.",
+        "required": [
+          "deploymentId",
+          "resourceId"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "description": "Variables placed in the sandbox.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "resourceId": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -18711,6 +18811,13 @@
               "null"
             ],
             "description": "Declared sandbox ceilings, where the declaration named them."
+          },
+          "createViaManager": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Set when this install creates its remote callers' sandboxes itself: the caller's own role\ncannot, so `POST /v1/bindings/sandboxes/create` does, from the signed release. Absent\neverywhere else, and for a client that predates it the data plane is the path."
           },
           "dataPlaneEndpoint": {
             "type": "string",

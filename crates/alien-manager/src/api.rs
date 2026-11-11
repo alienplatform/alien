@@ -97,6 +97,7 @@ impl Modify for BearerSecurity {
         // Credentials
         // Remote bindings
         crate::routes::bindings::resolve_binding,
+        crate::routes::sandbox_create::create_sandbox,
         // Vault secrets
         crate::routes::vault::set_secret,
         crate::routes::vault::get_secret,
@@ -171,6 +172,7 @@ impl Modify for BearerSecurity {
         // Credentials types
         // Remote binding types
         crate::routes::bindings::ResolveBindingRequest,
+        crate::routes::sandbox_create::CreateRemoteSandboxRequest,
         crate::routes::bindings::ResolveBindingResponse,
         // Vault types
         crate::routes::vault::SetSecretRequest,
