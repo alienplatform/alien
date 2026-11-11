@@ -223,6 +223,24 @@ impl Gcp {
         Ok(())
     }
 
+    /// POST a body to Agent Platform under the install's project and region (`path` is below
+    /// `locations/<region>`), and answer with the long-running operation it starts.
+    pub async fn create_agent_platform(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = format!(
+            "https://{region}-aiplatform.googleapis.com/v1/projects/{}/locations/{region}/{path}",
+            self.project,
+            region = self.region
+        );
+        self.call(
+            reqwest::Method::POST,
+            &url,
+            Some(body),
+            &format!("aiplatform.create {path}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{path} was not created"))))
+    }
+
     /// Create a Pub/Sub topic or subscription (`collection` is `topics` or `subscriptions`) with
     /// the body the controller built.
     pub async fn create_pubsub(&self, collection: &str, name: &str, body: &Value) -> Result<()> {

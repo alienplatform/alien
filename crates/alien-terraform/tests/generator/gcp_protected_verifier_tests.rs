@@ -436,3 +436,42 @@ fn the_verifier_holds_its_pubsub_permissions_only_on_the_installs_own_queues() {
         "the condition names the install's topic prefix"
     );
 }
+
+#[test]
+fn the_verifier_alone_holds_the_permissions_that_create_sandbox_engines_and_templates() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .expect("stack");
+    let settings = StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let text = module_text(&render(&stack, TerraformTarget::Gcp, settings));
+    let (roles, bindings) = verifier_custom_roles(&text);
+    for permission in [
+        "aiplatform.reasoningEngines.create",
+        "aiplatform.sandboxEnvironmentTemplates.create",
+    ] {
+        let holders: Vec<&String> = roles
+            .iter()
+            .filter(|(_, permissions)| permissions.iter().any(|held| held == permission))
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(holders, ["signing_verifier_sandboxes"], "{permission}");
+    }
+    assert!(
+        bindings.iter().any(|(role, _)| role == "signing_verifier_sandboxes"),
+        "the sandbox role is bound: {bindings:?}"
+    );
+}

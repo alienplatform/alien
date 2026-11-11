@@ -128,6 +128,14 @@ pub enum ResourceWrite {
         name: String,
         body: Value,
     },
+    /// Agent Platform create reasoning engine for the signed sandbox: the engine its templates
+    /// and sessions live under. Only the display name is sent.
+    #[serde(rename_all = "camelCase")]
+    CreateSandboxEngine { display_name: String },
+    /// Agent Platform create sandbox template under `engine`, with the template as the client
+    /// sends it. The image a sandbox boots is part of it, so it is the signed sandbox's.
+    #[serde(rename_all = "camelCase")]
+    CreateSandboxTemplate { engine: String, body: Value },
 }
 
 impl ResourceWrite {
@@ -150,6 +158,8 @@ impl ResourceWrite {
             ResourceWrite::CreateBlobContainer { .. } => "CreateBlobContainer",
             ResourceWrite::PutEventSubscription { .. } => "PutEventSubscription",
             ResourceWrite::UpdateBlobContainer { .. } => "UpdateBlobContainer",
+            ResourceWrite::CreateSandboxEngine { .. } => "CreateSandboxEngine",
+            ResourceWrite::CreateSandboxTemplate { .. } => "CreateSandboxTemplate",
         }
     }
 }
@@ -211,6 +221,19 @@ pub fn aws_partition(region: &str) -> &'static str {
 }
 
 impl ResourceFacts<'_> {
+    /// The resource, which must be a sandbox of the signed stack.
+    pub fn sandbox(&self) -> Result<&alien_core::Sandbox> {
+        self.entry()?
+            .config
+            .downcast_ref::<alien_core::Sandbox>()
+            .ok_or_else(|| {
+                refused(format!(
+                    "resource '{}' is not a sandbox in the signed stack",
+                    self.resource_id
+                ))
+            })
+    }
+
     /// The resource, which must be a queue of the signed stack.
     pub fn queue(&self) -> Result<&Queue> {
         self.entry()?.config.downcast_ref::<Queue>().ok_or_else(|| {
@@ -396,7 +419,9 @@ pub fn check_aws_write(
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
         | ResourceWrite::UpdateBlobContainer { .. }
-        | ResourceWrite::PutEventSubscription { .. } => {
+        | ResourceWrite::PutEventSubscription { .. }
+        | ResourceWrite::CreateSandboxEngine { .. }
+        | ResourceWrite::CreateSandboxTemplate { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -748,7 +773,9 @@ pub async fn forward_aws_write(
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
         | ResourceWrite::UpdateBlobContainer { .. }
-        | ResourceWrite::PutEventSubscription { .. } => {
+        | ResourceWrite::PutEventSubscription { .. }
+        | ResourceWrite::CreateSandboxEngine { .. }
+        | ResourceWrite::CreateSandboxTemplate { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -787,6 +814,19 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
         ResourceWrite::SetPublicAccessPrevention { bucket, value } => {
             let storage = own_bucket(bucket)?;
             check_public_access_prevention(value, storage.public_read).map_err(refused)
+        }
+        ResourceWrite::CreateSandboxEngine { display_name } => {
+            facts.sandbox()?;
+            let own = gcp_sandbox_engine_name(facts);
+            if *display_name != own {
+                return Err(refused(format!(
+                    "CreateSandboxEngine names {display_name}, not {own}"
+                )));
+            }
+            Ok(())
+        }
+        ResourceWrite::CreateSandboxTemplate { engine, body } => {
+            check_sandbox_template(facts.sandbox()?, &facts.place.prefix, engine, body)
         }
         ResourceWrite::CreateTopic { topic, body } => {
             facts.queue()?;
@@ -864,6 +904,108 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
 /// The topic this install gives queue `facts.resource_id` on GCP.
 pub fn gcp_topic_name(facts: &ResourceFacts<'_>) -> String {
     format!("{}-{}", facts.place.prefix, facts.resource_id)
+}
+
+/// The display name this install gives the Agent Platform engine of sandbox `facts.resource_id`.
+pub fn gcp_sandbox_engine_name(facts: &ResourceFacts<'_>) -> String {
+    format!(
+        "{}-{}",
+        facts.place.prefix,
+        alien_core::GcpAgentPlatformEngine::id_for_sandbox(facts.resource_id)
+    )
+}
+
+/// Check a sandbox template: the image is the signed sandbox's, the limits, egress and port are
+/// what the signed sandbox declares, and nothing else is set.
+pub fn check_sandbox_template(
+    sandbox: &alien_core::Sandbox,
+    prefix: &str,
+    engine: &str,
+    body: &Value,
+) -> Result<()> {
+    use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
+    // The engine id is assigned by the cloud: a bare segment is all that is known of it.
+    if engine.is_empty() || !engine.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(refused(format!("'{engine}' is not an engine id")));
+    }
+    let signed_image = match &sandbox.code {
+        alien_core::SandboxCode::Image { image, .. } => image,
+        _ => return Err(refused("the signed sandbox has no built image")),
+    };
+    let signed_egress = sandbox
+        .egress
+        .internet_access_switch()
+        .ok_or_else(|| refused("the signed sandbox's egress is not one Agent Platform expresses"))?;
+    let limits = sandbox.resolved_limits();
+    let own_name = format!("{prefix}-{}", sandbox.id());
+    let template: alien_gcp_clients::gcp::agent_platform::SandboxEnvironmentTemplate =
+        serde_json::from_value(body.clone())
+            .map_err(|error| refused(format!("the template is not one: {error}")))?;
+    if template.name.is_some() || template.state.is_some() || !template.extra.is_empty() {
+        return Err(refused("the template sets a field the controller does not"));
+    }
+    if template.display_name.as_deref() != Some(own_name.as_str()) {
+        return Err(refused(format!("the template's display name is not {own_name}")));
+    }
+    if template.egress_control_config.as_ref().map(|e| (e.internet_access, e.extra.is_empty()))
+        != Some((Some(signed_egress), true))
+    {
+        return Err(refused(format!(
+            "the template's egress is not the signed internetAccess {signed_egress}"
+        )));
+    }
+    let environment = template
+        .custom_container_environment
+        .ok_or_else(|| refused("the template has no custom container environment"))?;
+    if !environment.extra.is_empty() {
+        return Err(refused("the template's environment sets a field the controller does not"));
+    }
+    let spec = environment
+        .custom_container_spec
+        .ok_or_else(|| refused("the template names no image"))?;
+    if !spec.extra.is_empty() {
+        return Err(refused("the template's container spec sets a field the controller does not"));
+    }
+    if !sandbox_image_is_signed(signed_image, &spec.image_uri) {
+        return Err(refused(format!(
+            "image {} is not the signed sandbox image {signed_image}",
+            spec.image_uri
+        )));
+    }
+    let expected_ports = [(i32::from(GCP_AGENT_PLATFORM.port), Some("TCP".to_string()))];
+    let ports: Vec<_> = environment
+        .ports
+        .iter()
+        .map(|port| (port.port, port.protocol.clone()))
+        .collect();
+    if ports != expected_ports {
+        return Err(refused("the template's ports are not the agent's one TCP port"));
+    }
+    let resources = environment.resources.unwrap_or_default();
+    let expected_limits = std::collections::HashMap::from([
+        ("cpu".to_string(), limits.cpu),
+        ("memory".to_string(), limits.memory),
+    ]);
+    if resources.requests.is_some() || resources.limits != Some(expected_limits) {
+        return Err(refused("the template's resources are not the signed limits"));
+    }
+    Ok(())
+}
+
+/// Whether `sent` names the signed sandbox image: the same reference, or the same path on an
+/// Artifact Registry host, which is how Agent Platform is told to pull an image the release
+/// pushed through the manager. Artifact Registry paths start with the registry's project, which
+/// only its owner can push to.
+fn sandbox_image_is_signed(signed: &str, sent: &str) -> bool {
+    if signed == sent {
+        return true;
+    }
+    match (signed.split_once('/'), sent.split_once('/')) {
+        (Some((_, signed_path)), Some((sent_host, sent_path))) => {
+            sent_host.ends_with("-docker.pkg.dev") && signed_path == sent_path
+        }
+        _ => false,
+    }
 }
 
 /// The pull subscription this install gives the queue.
@@ -1212,6 +1354,17 @@ pub async fn forward_gcp_write(gcp: &crate::gcp::Gcp, write: &ResourceWrite) -> 
         ResourceWrite::SetPublicAccessPrevention { bucket, value } => {
             gcp.set_public_access_prevention(bucket, value).await?;
             Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::CreateSandboxEngine { display_name } => {
+            gcp.create_agent_platform("reasoningEngines", &json!({ "displayName": display_name }))
+                .await
+        }
+        ResourceWrite::CreateSandboxTemplate { engine, body } => {
+            gcp.create_agent_platform(
+                &format!("reasoningEngines/{engine}/sandboxEnvironmentTemplates"),
+                body,
+            )
+            .await
         }
         ResourceWrite::CreateTopic { topic, body } => {
             gcp.create_pubsub("topics", topic, body).await?;

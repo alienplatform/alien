@@ -737,6 +737,8 @@ mod tests {
                 ResourceWrite::CreateBlobContainer { body, .. }
                 | ResourceWrite::UpdateBlobContainer { body, .. }
                 | ResourceWrite::PutEventSubscription { body, .. } => body.to_string(),
+                ResourceWrite::CreateSandboxEngine { display_name } => display_name.clone(),
+                ResourceWrite::CreateSandboxTemplate { body, .. } => body.to_string(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -1386,6 +1388,73 @@ mod tests {
             let reason = refusal(verifier.handle(request(notified, write)).await);
             assert!(reason.starts_with("Refused: "), "{name}: {reason}");
             assert!(backend.forwarded.lock().unwrap().is_empty(), "{name}: sent");
+        }
+    }
+
+    /// A sandbox template is accepted only as the signed sandbox declares it: its own name, its
+    /// image (or the same path on an Artifact Registry host), its limits and egress, and no
+    /// other field. (Signed releases do not carry sandboxes yet, so the check is tested on its
+    /// own.)
+    #[test]
+    fn a_gcp_sandbox_template_is_checked_against_the_signed_sandbox() {
+        use crate::cloud_write::resource::check_sandbox_template;
+        let signed = "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent";
+        let native = "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc:sbx-agent";
+        let sandbox = alien_core::Sandbox::new("agent".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: signed.to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let limits = sandbox.resolved_limits();
+        let name = format!("{PREFIX}-agent");
+        let template = |image: &str| {
+            json!({
+                "displayName": name,
+                "customContainerEnvironment": {
+                    "customContainerSpec": {"imageUri": image},
+                    "resources": {"limits": {"cpu": limits.cpu, "memory": limits.memory}},
+                    "ports": [{"port": alien_core::sandbox_image::GCP_AGENT_PLATFORM.port,
+                               "protocol": "TCP"}]
+                },
+                "egressControlConfig": {"internetAccess": false}
+            })
+        };
+        let check = |engine: &str, body: &Value| {
+            check_sandbox_template(&sandbox, PREFIX, engine, body)
+        };
+        check("123", &template(signed)).expect("the signed template");
+        check("123", &template(native)).expect("the signed image on the native host");
+
+        let mut other_name = template(signed);
+        other_name["displayName"] = json!("other");
+        let mut open_egress = template(signed);
+        open_egress["egressControlConfig"] = json!({"internetAccess": true});
+        let mut other_limits = template(signed);
+        other_limits["customContainerEnvironment"]["resources"]["limits"]["cpu"] = json!("64");
+        let mut command = template(signed);
+        command["customContainerEnvironment"]["customContainerSpec"]["command"] = json!(["sh"]);
+        let mut other_port = template(signed);
+        other_port["customContainerEnvironment"]["ports"][0]["port"] = json!(1);
+        let mut state = template(signed);
+        state["state"] = json!("ACTIVE");
+        for (what, engine, body) in [
+            ("an image of another registry", "123", template("evil.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent")),
+            ("another path on an Artifact Registry host", "123", template("us-central1-docker.pkg.dev/evil/repo/img:1")),
+            ("another display name", "123", other_name),
+            ("open egress", "123", open_egress),
+            ("other limits", "123", other_limits),
+            ("a command", "123", command),
+            ("another port", "123", other_port),
+            ("a state", "123", state),
+            ("an engine path", "1/../2", template(signed)),
+        ] {
+            check(engine, &body).expect_err(what);
         }
     }
 

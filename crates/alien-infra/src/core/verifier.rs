@@ -51,6 +51,40 @@ pub fn protected_statements<'a>(
         })
 }
 
+/// On a protected GCP install, send a long-running Agent Platform create (`write`, a sandbox
+/// engine or template) for the signed sandbox `sandbox_id` to the verifier and answer with the
+/// name of the operation it started, which the controller then polls as usual. `None` on an
+/// unprotected install: the caller creates it itself.
+pub async fn gcp_sandbox_operation(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    write: ResourceWrite,
+) -> Result<Option<String>> {
+    let Some(release) = protected_statements(ctx, sandbox_id)? else {
+        return Ok(None);
+    };
+    let written = apply_resource_write(
+        &gcp_verifier(ctx)?,
+        release,
+        ctx.deployment_config.signed_config.as_ref(),
+        sandbox_id,
+        vec![write],
+    )
+    .await?;
+    written
+        .answers
+        .first()
+        .and_then(|answer| answer["name"].as_str())
+        .map(|name| Some(name.to_string()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "The verifier's answer to the Agent Platform create names no operation"
+                    .to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        })
+}
+
 /// Whether the install is protected: its Live functions are created, changed and deleted only
 /// by its verifier.
 pub fn is_protected(ctx: &ResourceControllerContext<'_>) -> bool {
@@ -472,6 +506,15 @@ pub enum ResourceWrite {
     PutEventSubscription {
         account: String,
         name: String,
+        body: serde_json::Value,
+    },
+    /// Agent Platform create of the reasoning engine a sandbox's templates live under.
+    #[serde(rename_all = "camelCase")]
+    CreateSandboxEngine { display_name: String },
+    /// Agent Platform create of a sandbox template under `engine`, as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateSandboxTemplate {
+        engine: String,
         body: serde_json::Value,
     },
 }

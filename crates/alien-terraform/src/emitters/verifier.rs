@@ -625,6 +625,13 @@ const GCP_VERIFIER_BUCKET_PERMISSIONS: &[&str] = &[
 /// What the GCP verifier may do with the install's Pub/Sub topics and subscriptions: create them
 /// and set who may reach them. Bound under a condition on their names; the verifier checks every
 /// request against the signed stack before it sends it.
+/// What the verifier needs to create the Agent Platform engine and sandbox templates of the
+/// signed sandboxes. The cloud names an engine, so no name condition can scope these.
+const GCP_VERIFIER_SANDBOX_PERMISSIONS: &[&str] = &[
+    "aiplatform.reasoningEngines.create",
+    "aiplatform.sandboxEnvironmentTemplates.create",
+];
+
 const GCP_VERIFIER_QUEUE_PERMISSIONS: &[&str] = &[
     "pubsub.topics.create",
     "pubsub.topics.getIamPolicy",
@@ -758,6 +765,12 @@ fn gcp_verifier_blocks(
             GCP_VERIFIER_QUEUE_PERMISSIONS,
         ),
         custom_role(
+            "signing_verifier_sandboxes",
+            "verifier_sandboxes",
+            "verifier: the install's sandbox engines and templates",
+            GCP_VERIFIER_SANDBOX_PERMISSIONS,
+        ),
+        custom_role(
             "signing_verifier_shared",
             "verifier_shared",
             "verifier: network and images",
@@ -852,6 +865,22 @@ fn gcp_verifier_blocks(
                         ),
                     ],
                 )),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_sandboxes",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_sandboxes",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
             ],
         ),
         resource_block(
