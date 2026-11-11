@@ -72,17 +72,20 @@ pub fn targets_resource(target_resources: &Option<Vec<String>>, resource_id: &st
     }
 }
 
-/// Whether an environment variable is delivered to `resource_id`.
+/// Whether a deployment environment variable with these `target_resources` applies to
+/// `resource_id`: its targets match, and the resource is not one Alien adds itself.
 ///
-/// This is [`targets_resource`], except that a resource Alien adds itself (the sandbox
-/// egress gateway, `alien_added`) only receives a variable that names it. Untargeted
-/// variables are for the stack's own workloads.
-pub fn env_delivered_to_resource(
+/// This is the one rule for delivering variables, for the secrets and permissions that
+/// follow from them, and for telling an operator what a change restarts. The sandbox egress
+/// gateway is Alien's own: its environment is never the application's, not even for a `*`
+/// pattern. Its ID is reserved (the sandbox gateway mutation refuses a user resource with
+/// it), so the rule needs only the ID.
+pub fn environment_variable_applies(
     target_resources: &Option<Vec<String>>,
     resource_id: &str,
-    alien_added: bool,
 ) -> bool {
-    targets_resource(target_resources, resource_id) && !(alien_added && target_resources.is_none())
+    resource_id != crate::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID
+        && targets_resource(target_resources, resource_id)
 }
 
 /// Environment variable handling for a stack input mapping.
@@ -679,5 +682,46 @@ mod environment_tests {
         assert_eq!(variables.len(), 1);
         assert_eq!(variables[0].name, "REGION");
         assert_eq!(variables[0].value, "rack-7");
+    }
+}
+
+#[cfg(test)]
+mod environment_variable_applies_tests {
+    use super::*;
+
+    fn targets(patterns: &[&str]) -> Option<Vec<String>> {
+        Some(patterns.iter().map(|p| p.to_string()).collect())
+    }
+
+    #[test]
+    fn the_gateway_never_receives_a_variable() {
+        let gateway = crate::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        for t in [
+            None,
+            targets(&["*"]),
+            targets(&["sandbox-*"]),
+            targets(&[gateway]),
+        ] {
+            assert!(!environment_variable_applies(&t, gateway), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn other_resources_follow_their_targets() {
+        assert!(environment_variable_applies(&None, "backend"));
+        assert!(environment_variable_applies(&targets(&["*"]), "backend"));
+        assert!(environment_variable_applies(
+            &targets(&["back*"]),
+            "backend"
+        ));
+        assert!(environment_variable_applies(
+            &targets(&["backend"]),
+            "backend"
+        ));
+        assert!(!environment_variable_applies(
+            &targets(&["redis"]),
+            "backend"
+        ));
+        assert!(!environment_variable_applies(&targets(&[]), "backend"));
     }
 }
