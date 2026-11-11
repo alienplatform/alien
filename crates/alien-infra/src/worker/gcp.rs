@@ -1987,28 +1987,15 @@ impl GcpWorkerController {
                 state: None,
             };
 
-            match scheduler_client
-                .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                .await
-            {
-                Ok(_) => {}
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        job=%job_id,
-                        "Cloud Scheduler job already exists; treating as created"
-                    );
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                            job_id, cfg.id
-                        ),
-                        resource_id: Some(cfg.id.clone()),
-                    }));
-                }
-            }
+            create_scheduler_job(
+                ctx,
+                &cfg.id,
+                scheduler_client.as_ref(),
+                gcp_config,
+                &job_id,
+                job,
+            )
+            .await?;
 
             if !self.scheduler_job_names.contains(&job_full_name) {
                 self.scheduler_job_names.push(job_full_name);
@@ -3648,28 +3635,15 @@ impl GcpWorkerController {
                         state: None,
                     };
 
-                    match scheduler_client
-                        .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) if is_remote_resource_conflict(&e) => {
-                            info!(
-                                worker=%current_config.id,
-                                job=%job_id,
-                                "Cloud Scheduler job already exists; treating as created"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(e.context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                                    job_id, current_config.id
-                                ),
-                                resource_id: Some(current_config.id.clone()),
-                            }));
-                        }
-                    }
+                    create_scheduler_job(
+                        ctx,
+                        &current_config.id,
+                        scheduler_client.as_ref(),
+                        gcp_config,
+                        &job_id,
+                        job,
+                    )
+                    .await?;
 
                     if !self.scheduler_job_names.contains(&job_full_name) {
                         self.scheduler_job_names.push(job_full_name);
@@ -6293,6 +6267,59 @@ impl GcpWorkerController {
 /// Pub/Sub accepts acknowledgement deadlines of 10 to 600 seconds. A command
 /// is handled inside the push request, so the deadline follows the worker's
 /// timeout up to that ceiling, as the Terraform emitter does.
+/// Create a Cloud Scheduler job. On a protected install management may not create one that
+/// calls a service as another identity, so the verifier checks it and sends it unchanged.
+/// A job that already exists is adopted.
+async fn create_scheduler_job(
+    ctx: &ResourceControllerContext<'_>,
+    worker_id: &str,
+    client: &dyn alien_gcp_clients::cloudscheduler::CloudSchedulerApi,
+    gcp_config: &alien_gcp_clients::GcpClientConfig,
+    job_id: &str,
+    mut job: SchedulerJob,
+) -> Result<()> {
+    if let Some(statements) = crate::core::verifier::protected_statements(ctx, worker_id)? {
+        job.name = Some(format!(
+            "projects/{}/locations/{}/jobs/{}",
+            gcp_config.project_id, gcp_config.region, job_id
+        ));
+        let body = serde_json::to_value(&job).into_alien_error().context(
+            ErrorData::CloudPlatformError {
+                message: "The scheduler job does not serialize".to_string(),
+                resource_id: Some(worker_id.to_string()),
+            },
+        )?;
+        crate::core::verifier::apply_resource_write(
+            &crate::core::verifier::gcp_verifier(ctx)?,
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            worker_id,
+            vec![crate::core::verifier::ResourceWrite::CreateSchedulerJob {
+                job: job_id.to_string(),
+                body,
+            }],
+        )
+        .await?;
+        return Ok(());
+    }
+    match client
+        .create_job(gcp_config.region.clone(), job_id.to_string(), job)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if is_remote_resource_conflict(&e) => {
+            info!(worker=%worker_id, job=%job_id, "Cloud Scheduler job already exists; treating as created");
+            Ok(())
+        }
+        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Cloud Scheduler job '{job_id}' for worker '{worker_id}'"
+            ),
+            resource_id: Some(worker_id.to_string()),
+        })),
+    }
+}
+
 fn pubsub_ack_deadline_seconds(timeout_seconds: u32) -> i32 {
     timeout_seconds.clamp(10, 600) as i32
 }

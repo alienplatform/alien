@@ -282,6 +282,24 @@ impl Gcp {
         Ok(())
     }
 
+    /// Create a Cloud Scheduler job with the body the controller built; its `name` carries the
+    /// location, which the check has already compared with the install's region.
+    pub async fn create_scheduler_job(&self, body: &Value) -> Result<()> {
+        let url = format!(
+            "https://cloudscheduler.googleapis.com/v1/projects/{}/locations/{}/jobs",
+            self.project, self.region
+        );
+        self.call(
+            reqwest::Method::POST,
+            &url,
+            Some(body),
+            "cloudscheduler.jobs.create",
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed("the scheduler job was not created")))?;
+        Ok(())
+    }
+
     /// The email of the project's Cloud Storage service agent, the one identity that publishes a
     /// bucket's notifications.
     pub async fn storage_service_agent(&self) -> Result<String> {
@@ -905,18 +923,26 @@ impl Backend for GcpBackend {
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<()> {
         use crate::cloud_write::resource::{
-            check_command_subscription, check_gcp_state, gcp_worker_service_name, ResourceWrite,
+            check_command_subscription, check_gcp_state, check_scheduler_job,
+            gcp_worker_service_name, ResourceWrite,
         };
         if let ResourceWrite::CreateCommandSubscription { subscription, body } = write {
             let service = ServiceStore::get(&self.0, &gcp_worker_service_name(facts)?).await?;
-            let uri = service["uri"]
-                .as_str()
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::Refused {
-                        reason: "the Cloud Run service reports no URL".to_string(),
-                    })
-                })?;
+            let uri = service["uri"].as_str().ok_or_else(|| {
+                AlienError::new(ErrorData::Refused {
+                    reason: "the Cloud Run service reports no URL".to_string(),
+                })
+            })?;
             return check_command_subscription(facts, subscription, body, Some(uri));
+        }
+        if let ResourceWrite::CreateSchedulerJob { job, body } = write {
+            let service = ServiceStore::get(&self.0, &gcp_worker_service_name(facts)?).await?;
+            let uri = service["uri"].as_str().ok_or_else(|| {
+                AlienError::new(ErrorData::Refused {
+                    reason: "the Cloud Run service reports no URL".to_string(),
+                })
+            })?;
+            return check_scheduler_job(facts, job, body, Some(&self.0.region), Some(uri));
         }
         let current = match write {
             ResourceWrite::SetBucketIamPolicy { bucket, .. } => {

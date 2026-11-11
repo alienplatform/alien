@@ -120,6 +120,10 @@ pub enum ResourceWrite {
     /// Cloud Run service, as the worker's own service account when the worker is private.
     #[serde(rename_all = "camelCase")]
     CreateCommandSubscription { subscription: String, body: Value },
+    /// Cloud Scheduler create of one of a worker's schedule jobs: it calls the worker's own Cloud
+    /// Run service on the signed cron, as the worker's own service account.
+    #[serde(rename_all = "camelCase")]
+    CreateSchedulerJob { job: String, body: Value },
     /// Cloud SQL create of the install's database instance, as the client sends it. It carries
     /// no password: the controller sets the database user's password afterwards.
     #[serde(rename_all = "camelCase")]
@@ -202,6 +206,7 @@ impl ResourceWrite {
             ResourceWrite::CreateTopic { .. } => "CreateTopic",
             ResourceWrite::CreateSubscription { .. } => "CreateSubscription",
             ResourceWrite::CreateCommandSubscription { .. } => "CreateCommandSubscription",
+            ResourceWrite::CreateSchedulerJob { .. } => "CreateSchedulerJob",
             ResourceWrite::CreateDatabaseInstance { .. } => "CreateDatabaseInstance",
             ResourceWrite::PatchDatabaseInstance { .. } => "PatchDatabaseInstance",
             ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
@@ -509,6 +514,7 @@ pub fn check_aws_write(
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
         | ResourceWrite::CreateCommandSubscription { .. }
+        | ResourceWrite::CreateSchedulerJob { .. }
         | ResourceWrite::CreateDatabaseInstance { .. }
         | ResourceWrite::PatchDatabaseInstance { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
@@ -931,6 +937,7 @@ pub async fn forward_aws_write(
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
         | ResourceWrite::CreateCommandSubscription { .. }
+        | ResourceWrite::CreateSchedulerJob { .. }
         | ResourceWrite::CreateDatabaseInstance { .. }
         | ResourceWrite::PatchDatabaseInstance { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
@@ -1040,6 +1047,9 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
         }
         ResourceWrite::CreateCommandSubscription { subscription, body } => {
             check_command_subscription(facts, subscription, body, None)
+        }
+        ResourceWrite::CreateSchedulerJob { job, body } => {
+            check_scheduler_job(facts, job, body, None, None)
         }
         ResourceWrite::CreateDatabaseInstance { body } => {
             check_database_instance(facts.place, facts.postgres()?, facts.resource_id, body)
@@ -1477,6 +1487,165 @@ fn check_command_subscription_of(
         return Err(refused(
             "a public worker's subscription carries an OIDC token",
         ));
+    }
+    Ok(())
+}
+
+/// Check one Cloud Scheduler job of a worker. The job is `<service>-cron-<index>` for the trigger
+/// at that index, and runs exactly the signed cron (UTC) as an HTTP POST to the worker's own Cloud
+/// Run service, authenticated as the worker's own service account with the service URL as the
+/// audience. It carries no body, headers or other target. `region` and `service_uri` are what the
+/// verifier knows from its own place and from Cloud Run; without them (the shape check) the name's
+/// location and the URL are only required to be well formed.
+pub fn check_scheduler_job(
+    facts: &ResourceFacts<'_>,
+    job: &str,
+    body: &Value,
+    region: Option<&str>,
+    service_uri: Option<&str>,
+) -> Result<()> {
+    check_scheduler_job_of(
+        facts.worker()?,
+        facts.place,
+        facts.resource_id,
+        job,
+        body,
+        region,
+        service_uri,
+    )
+}
+
+fn check_scheduler_job_of(
+    worker: &alien_core::Worker,
+    place: &Place,
+    resource_id: &str,
+    job: &str,
+    body: &Value,
+    region: Option<&str>,
+    service_uri: Option<&str>,
+) -> Result<()> {
+    let service = place.function_name(resource_id)?;
+    let project = match &place.install {
+        alien_signing::InstallId::Gcp { project, .. } => project.as_str(),
+        _ => return Err(refused("this install is not a GCP install")),
+    };
+    let index = job
+        .strip_prefix(&format!("{service}-cron-"))
+        .and_then(|rest| rest.parse::<usize>().ok())
+        .filter(|index| job == format!("{service}-cron-{index}"))
+        .ok_or_else(|| {
+            refused(format!(
+                "CreateSchedulerJob names {job}, not a {service}-cron-<index> job"
+            ))
+        })?;
+    let cron = match worker.triggers.get(index) {
+        Some(alien_core::WorkerTrigger::Schedule { cron }) => cron,
+        _ => {
+            return Err(refused(format!(
+                "trigger {index} of worker '{}' is not a schedule in the signed stack",
+                resource_id
+            )))
+        }
+    };
+    let fields = body
+        .as_object()
+        .ok_or_else(|| refused("the scheduler job is not a JSON object"))?;
+    if let Some(field) = fields.keys().find(|key| {
+        !matches!(
+            key.as_str(),
+            "name" | "description" | "schedule" | "timeZone" | "httpTarget"
+        )
+    }) {
+        return Err(refused(format!(
+            "CreateSchedulerJob sets '{field}': only the schedule and the call to the worker are allowed"
+        )));
+    }
+    let name_tail = format!("/jobs/{job}");
+    let name = fields
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refused("the scheduler job has no name"))?;
+    let name_head = format!("projects/{project}/locations/");
+    let location = name
+        .strip_prefix(&name_head)
+        .and_then(|rest| rest.strip_suffix(&name_tail))
+        .filter(|location| !location.is_empty() && !location.contains('/'))
+        .ok_or_else(|| refused("the scheduler job's name is not its own"))?;
+    if region.is_some_and(|region| region != location) {
+        return Err(refused("the scheduler job is not in the install's region"));
+    }
+    if fields.get("schedule").and_then(Value::as_str) != Some(cron.as_str()) {
+        return Err(refused(
+            "the scheduler job's schedule is not the signed cron",
+        ));
+    }
+    if fields
+        .get("timeZone")
+        .is_some_and(|zone| zone != &json!("UTC"))
+    {
+        return Err(refused("the scheduler job's time zone is not UTC"));
+    }
+    if fields
+        .get("description")
+        .is_some_and(|description| !description.is_string())
+    {
+        return Err(refused("the scheduler job's description is not text"));
+    }
+    let target = fields
+        .get("httpTarget")
+        .and_then(Value::as_object)
+        .ok_or_else(|| refused("the scheduler job has no HTTP target"))?;
+    if let Some(field) = target
+        .keys()
+        .find(|key| !matches!(key.as_str(), "uri" | "httpMethod" | "oidcToken"))
+    {
+        return Err(refused(format!("the scheduler target sets '{field}'")));
+    }
+    if target
+        .get("httpMethod")
+        .is_some_and(|method| method != &json!("POST"))
+    {
+        return Err(refused("the scheduler target's method is not POST"));
+    }
+    let uri = target
+        .get("uri")
+        .and_then(Value::as_str)
+        .filter(|uri| uri.starts_with("https://"))
+        .ok_or_else(|| refused("the scheduler target is not an https URL"))?;
+    if let Some(service_uri) = service_uri {
+        if uri != service_uri {
+            return Err(refused(format!(
+                "the scheduler target is not the URL of Cloud Run service {service}"
+            )));
+        }
+    }
+    let install = alien_permissions::gcp_resource_grants::GcpInstall {
+        prefix: &place.prefix,
+        project_id: project,
+        project_number: None,
+        region: "",
+    };
+    let account = alien_permissions::gcp_resource_grants::profile_service_account_email(
+        &install,
+        worker.get_permissions(),
+    );
+    let oidc = target
+        .get("oidcToken")
+        .and_then(Value::as_object)
+        .ok_or_else(|| refused("the scheduler target has no OIDC token"))?;
+    if oidc
+        .keys()
+        .any(|key| !matches!(key.as_str(), "serviceAccountEmail" | "audience"))
+    {
+        return Err(refused("the OIDC token sets a field it should not"));
+    }
+    if oidc.get("serviceAccountEmail").and_then(Value::as_str) != Some(account.as_str()) {
+        return Err(refused(format!(
+            "the OIDC token is not for the worker's own service account {account}"
+        )));
+    }
+    if oidc.get("audience").and_then(Value::as_str) != Some(uri) {
+        return Err(refused("the OIDC audience is not the service URL"));
     }
     Ok(())
 }
@@ -1933,6 +2102,10 @@ pub async fn forward_gcp_write(gcp: &crate::gcp::Gcp, write: &ResourceWrite) -> 
                 .await?;
             Ok(json!({ "subscription": subscription }))
         }
+        ResourceWrite::CreateSchedulerJob { job, body } => {
+            gcp.create_scheduler_job(body).await?;
+            Ok(json!({ "job": job }))
+        }
         ResourceWrite::CreateDatabaseInstance { body } => {
             gcp.sql_write(reqwest::Method::POST, None, body).await
         }
@@ -2220,6 +2393,180 @@ mod command_subscription_tests {
             Some(URI)
         )
         .is_err());
+    }
+
+    fn scheduler_body(uri: &str) -> Value {
+        json!({
+            "name": "projects/acme-project/locations/us-central1/jobs/acme-api-cron-1",
+            "description": "Schedule trigger for worker 'api' (index 1)",
+            "schedule": "*/5 * * * *",
+            "timeZone": "UTC",
+            "httpTarget": {
+                "uri": uri,
+                "httpMethod": "POST",
+                "oidcToken": {"serviceAccountEmail": execution_account(), "audience": uri},
+            },
+        })
+    }
+
+    fn scheduled_worker() -> alien_core::Worker {
+        let mut worker = worker(false);
+        worker.triggers = vec![
+            alien_core::WorkerTrigger::Schedule {
+                cron: "0 * * * *".into(),
+            },
+            alien_core::WorkerTrigger::Schedule {
+                cron: "*/5 * * * *".into(),
+            },
+        ];
+        worker
+    }
+
+    fn check_job(job: &str, body: &Value, uri: Option<&str>) -> Result<()> {
+        check_scheduler_job_of(
+            &scheduled_worker(),
+            &place(),
+            "api",
+            job,
+            body,
+            Some("us-central1"),
+            uri,
+        )
+    }
+
+    #[test]
+    fn a_scheduler_job_is_accepted_only_as_the_signed_cron_calling_the_workers_own_service() {
+        let signed = scheduler_body(URI);
+        check_job("acme-api-cron-1", &signed, None).expect("shape");
+        check_job("acme-api-cron-1", &signed, Some(URI)).expect("with the service URL");
+
+        let mutate = |f: &dyn Fn(&mut Value)| {
+            let mut body = signed.clone();
+            f(&mut body);
+            body
+        };
+        let refusals: Vec<(&str, &str, Value, Option<&str>)> = vec![
+            (
+                "another cron",
+                "acme-api-cron-1",
+                mutate(&|b| b["schedule"] = json!("* * * * *")),
+                Some(URI),
+            ),
+            (
+                "the other trigger's name",
+                "acme-api-cron-0",
+                signed.clone(),
+                Some(URI),
+            ),
+            (
+                "a trigger that does not exist",
+                "acme-api-cron-7",
+                signed.clone(),
+                Some(URI),
+            ),
+            (
+                "a padded index",
+                "acme-api-cron-01",
+                signed.clone(),
+                Some(URI),
+            ),
+            (
+                "another service's job",
+                "acme-other-cron-1",
+                signed.clone(),
+                Some(URI),
+            ),
+            (
+                "a target elsewhere",
+                "acme-api-cron-1",
+                scheduler_body("https://evil.example"),
+                Some(URI),
+            ),
+            (
+                "another service URL",
+                "acme-api-cron-1",
+                signed.clone(),
+                Some("https://other-abc123-uc.a.run.app"),
+            ),
+            (
+                "another service account",
+                "acme-api-cron-1",
+                mutate(&|b| {
+                    b["httpTarget"]["oidcToken"]["serviceAccountEmail"] =
+                        json!("acme-management-sa@acme-project.iam.gserviceaccount.com")
+                }),
+                Some(URI),
+            ),
+            (
+                "another audience",
+                "acme-api-cron-1",
+                mutate(&|b| {
+                    b["httpTarget"]["oidcToken"]["audience"] = json!("https://evil.example")
+                }),
+                Some(URI),
+            ),
+            (
+                "no OIDC token",
+                "acme-api-cron-1",
+                mutate(&|b| {
+                    b["httpTarget"].as_object_mut().unwrap().remove("oidcToken");
+                }),
+                Some(URI),
+            ),
+            (
+                "a body",
+                "acme-api-cron-1",
+                mutate(&|b| b["httpTarget"]["body"] = json!("e30=")),
+                Some(URI),
+            ),
+            (
+                "headers",
+                "acme-api-cron-1",
+                mutate(&|b| b["httpTarget"]["headers"] = json!({"a": "b"})),
+                Some(URI),
+            ),
+            (
+                "a method",
+                "acme-api-cron-1",
+                mutate(&|b| b["httpTarget"]["httpMethod"] = json!("DELETE")),
+                Some(URI),
+            ),
+            (
+                "an extra field",
+                "acme-api-cron-1",
+                mutate(&|b| b["pubsubTarget"] = json!({})),
+                Some(URI),
+            ),
+            (
+                "another region",
+                "acme-api-cron-1",
+                mutate(&|b| {
+                    b["name"] =
+                        json!("projects/acme-project/locations/europe-west1/jobs/acme-api-cron-1")
+                }),
+                Some(URI),
+            ),
+            (
+                "another project",
+                "acme-api-cron-1",
+                mutate(&|b| {
+                    b["name"] = json!("projects/other/locations/us-central1/jobs/acme-api-cron-1")
+                }),
+                Some(URI),
+            ),
+            (
+                "another time zone",
+                "acme-api-cron-1",
+                mutate(&|b| b["timeZone"] = json!("Europe/Paris")),
+                Some(URI),
+            ),
+        ];
+        for (name, job, body, uri) in refusals {
+            assert!(
+                check_job(job, &body, uri).is_err(),
+                "{name} must be refused"
+            );
+        }
     }
 }
 

@@ -511,3 +511,39 @@ fn the_verifier_alone_holds_the_permissions_that_create_and_resize_database_inst
         "the database role is bound: {bindings:?}"
     );
 }
+
+#[test]
+fn the_verifier_alone_holds_the_permissions_that_create_schedule_jobs() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .expect("stack");
+    let settings = StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let text = module_text(&render(&stack, TerraformTarget::Gcp, settings));
+    let (roles, bindings) = verifier_custom_roles(&text);
+    for permission in ["cloudscheduler.jobs.create"] {
+        let holders: Vec<&String> = roles
+            .iter()
+            .filter(|(_, permissions)| permissions.iter().any(|held| held == permission))
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(holders, ["signing_verifier_schedules"], "{permission}");
+    }
+    assert!(
+        bindings.iter().any(|(role, _)| role == "signing_verifier_schedules"),
+        "the schedule role is bound: {bindings:?}"
+    );
+}

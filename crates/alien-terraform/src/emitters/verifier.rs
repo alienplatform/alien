@@ -638,6 +638,11 @@ const GCP_VERIFIER_SANDBOX_PERMISSIONS: &[&str] = &[
 const GCP_VERIFIER_DATABASE_PERMISSIONS: &[&str] =
     &["cloudsql.instances.create", "cloudsql.instances.update"];
 
+/// What the verifier needs to create a worker's schedule jobs. Cloud Scheduler names the job in the
+/// request, so the verifier checks the name; running the job as the worker's service account
+/// takes the `actAs` the verifier already holds on each runtime service account.
+const GCP_VERIFIER_SCHEDULE_PERMISSIONS: &[&str] = &["cloudscheduler.jobs.create"];
+
 const GCP_VERIFIER_QUEUE_PERMISSIONS: &[&str] = &[
     "pubsub.topics.create",
     "pubsub.topics.getIamPolicy",
@@ -783,6 +788,12 @@ fn gcp_verifier_blocks(
             GCP_VERIFIER_DATABASE_PERMISSIONS,
         ),
         custom_role(
+            "signing_verifier_schedules",
+            "verifier_schedules",
+            "verifier: the install's schedule jobs",
+            GCP_VERIFIER_SCHEDULE_PERMISSIONS,
+        ),
+        custom_role(
             "signing_verifier_shared",
             "verifier_shared",
             "verifier: network and images",
@@ -905,6 +916,22 @@ fn gcp_verifier_blocks(
                     expr::traversal([
                         "google_project_iam_custom_role",
                         "signing_verifier_databases",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_schedules",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_schedules",
                         "name",
                     ]),
                 ),

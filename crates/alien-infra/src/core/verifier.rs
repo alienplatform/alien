@@ -547,6 +547,12 @@ pub enum ResourceWrite {
         subscription: String,
         body: serde_json::Value,
     },
+    /// Cloud Scheduler create of a worker's schedule job: the job as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateSchedulerJob {
+        job: String,
+        body: serde_json::Value,
+    },
     /// Cloud SQL create of the install's database instance: the instance as the client sends it,
     /// without a password.
     #[serde(rename_all = "camelCase")]
