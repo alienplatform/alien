@@ -283,6 +283,38 @@ async fn deleting_a_created_key_removes_its_assignments_and_keeps_vault_key_and_
     assert_eq!(removed.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn a_failed_grant_removal_keeps_the_assignments_that_are_left() {
+    let mut mocks = Mocks::new();
+    mocks.authorization.expect_delete_role_assignment_by_id().returning(|id| {
+        if id.ends_with("/roleAssignments/a2") {
+            Err(forbidden())
+        } else {
+            Ok(None)
+        }
+    });
+    let ids: Vec<String> = ["a1", "a2", "a3"]
+        .iter()
+        .map(|n| format!("/subscriptions/s/x/providers/Microsoft.Authorization/roleAssignments/{n}"))
+        .collect();
+    let controller = AzureKeyController {
+        state: AzureKeyState::Ready,
+        key_id: Some("https://v.vault.azure.net/keys/key/v1".to_string()),
+        origin: KeyOrigin::Created,
+        role_assignment_ids: ids,
+        ..Default::default()
+    };
+    let mut executor = executor(mocks.provider(), controller, true).await;
+    executor.delete().unwrap();
+    for _ in 0..4 {
+        let _ = executor.step().await;
+    }
+    assert_ne!(executor.status(), ResourceStatus::Deleted);
+    let controller = executor.internal_state::<AzureKeyController>().unwrap();
+    // a3 was removed first; a2 failed, so a2 and a1 are still recorded for the retry.
+    assert_eq!(controller.role_assignment_ids.len(), 2, "{:?}", controller.role_assignment_ids);
+}
+
 #[test]
 fn vault_names_fit_azure_and_are_stable() {
     let name = vault_name("a_Very_long_prefix_that_goes_on", "data-key");

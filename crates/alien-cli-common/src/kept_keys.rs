@@ -96,10 +96,11 @@ fn azure_delete_commands(vault_resource_id: &str, vault_name: Option<&str>) -> V
             None => return Vec::new(),
         },
     };
-    vec![
-        format!("az keyvault delete --name {vault} --resource-group {group}"),
-        format!("az group delete --name {group}"),
-    ]
+    // The group is shared by every key of the deployment, so it is never part of one key's
+    // commands.
+    vec![format!(
+        "az keyvault delete --name {vault} --resource-group {group}"
+    )]
 }
 
 /// The report's lines: one per key, then its commands.
@@ -170,14 +171,19 @@ mod tests {
             kept_key_lines(&keys),
             vec![
                 format!("data-key ({arn})"),
-                format!("    aws kms schedule-key-deletion --key-id {arn} --pending-window-in-days 30"),
+                format!(
+                    "    aws kms schedule-key-deletion --key-id {arn} --pending-window-in-days 30"
+                ),
             ]
         );
     }
 
     #[test]
     fn an_imported_key_is_not_reported() {
-        for internal in [serde_json::json!({"origin": "Imported"}), serde_json::json!({})] {
+        for internal in [
+            serde_json::json!({"origin": "Imported"}),
+            serde_json::json!({}),
+        ] {
             let state = state(
                 internal,
                 outputs(KeyFingerprint::Aws {
@@ -200,8 +206,14 @@ mod tests {
             }),
         );
         let lines = kept_key_lines(&kept_keys(Some(&gcp)));
-        assert!(lines[1].contains("gcloud kms keys versions destroy"), "{lines:?}");
-        assert!(lines[1].contains("--keyring test-data-key-aabbcc"), "{lines:?}");
+        assert!(
+            lines[1].contains("gcloud kms keys versions destroy"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("--keyring test-data-key-aabbcc"),
+            "{lines:?}"
+        );
 
         let azure = state(
             serde_json::json!({"origin": "Created"}),
@@ -212,7 +224,14 @@ mod tests {
             }),
         );
         let lines = kept_key_lines(&kept_keys(Some(&azure)));
-        assert_eq!(lines[1], "    az keyvault delete --name v1 --resource-group test-keys");
-        assert_eq!(lines[2], "    az group delete --name test-keys");
+        assert_eq!(
+            lines[1],
+            "    az keyvault delete --name v1 --resource-group test-keys"
+        );
+        assert_eq!(
+            lines.len(),
+            2,
+            "no command may delete the group shared with sibling keys"
+        );
     }
 }

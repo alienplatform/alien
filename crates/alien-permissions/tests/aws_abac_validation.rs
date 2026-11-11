@@ -1119,6 +1119,8 @@ fn action_requires_tag_condition(action: &str) -> bool {
         // that from being a way to pull a foreign function into this stack's scope is
         // `lambda_resource_tag_statements_are_name_pinned`.
         "lambda:TagResource"
+            | "kms:CreateKey"
+            | "kms:TagResource"
             | "acm:ImportCertificate"
             | "acm:AddTagsToCertificate"
             | "acm:DeleteCertificate"

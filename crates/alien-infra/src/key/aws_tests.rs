@@ -505,7 +505,7 @@ mod created_keys {
         let mut iam = MockIamApi::new();
         iam.expect_put_role_policy().returning(|_, _, _| Ok(()));
         let mut executor = executor(
-            provider(kms, MockResourceGroupsTaggingApi::new(), iam),
+            provider(kms, tagged(&[]), iam),
             AwsKeyController::default(),
             true,
         )
@@ -627,6 +627,41 @@ mod created_keys {
         let controller = executor.internal_state::<AwsKeyController>().unwrap();
         assert_eq!(controller.key_arn.as_deref(), Some(NEW_ARN));
         assert_eq!(controller.origin, KeyOrigin::Created);
+    }
+
+    #[tokio::test]
+    async fn the_create_flag_is_saved_before_create_key_is_ever_sent() {
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        let mut first = executor(
+            provider(kms, MockResourceGroupsTaggingApi::new(), MockIamApi::new()),
+            AwsKeyController::default(),
+            true,
+        )
+        .await;
+        // One step: CreateStart. Nothing has called the cloud yet, and the state a crash
+        // here would leave behind already has the flag.
+        first.step().await.unwrap();
+        let saved = first.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(saved.state, AwsKeyState::CreatingKey);
+        assert!(saved.create_requested);
+        assert!(saved.key_arn.is_none());
+
+        // The rerun starts from that saved state and finds the key the lost call made.
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        kms.expect_put_key_policy().returning(|_, _| Ok(()));
+        let mut second = executor(
+            provider(kms, tagged(&[NEW_ARN]), MockIamApi::new()),
+            saved.clone(),
+            true,
+        )
+        .await;
+        second.step().await.unwrap();
+        let adopted = second.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(adopted.key_arn.as_deref(), Some(NEW_ARN));
     }
 
     #[tokio::test]

@@ -4,8 +4,9 @@
 //! disposable test project) and `GCP_REGION`. Run with
 //! `cargo nextest run -p alien-infra --all-features --test gcp_key_live --run-ignored ignored-only --no-capture`.
 //! It creates a service account, a key ring and keys. Key rings and keys cannot be deleted in
-//! Cloud KMS; the test destroys the key versions and deletes the service account, and prints what
-//! stays (the empty rings and keys).
+//! Cloud KMS, and the client has no call to destroy a key version, so the test deletes only the
+//! service accounts. The key versions stay enabled (billed per active version) until someone
+//! schedules them for destruction; the test prints the rings and keys to clean up by hand.
 #![cfg(feature = "gcp")]
 
 use std::sync::Arc;
@@ -174,7 +175,7 @@ async fn a_direct_setup_creates_adopts_refuses_a_planted_key_and_keeps_the_key_o
             .is_ok()
         );
     }
-    eprintln!("LEFT BEHIND (Cloud KMS cannot delete these): key rings with prefixes {prefix}-data-key and {planted_prefix}-data-key");
+    eprintln!("LEFT BEHIND, schedule the key versions for destruction by hand (Cloud KMS cannot delete rings or keys): key rings with prefixes {prefix}-data-key and {planted_prefix}-data-key");
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }

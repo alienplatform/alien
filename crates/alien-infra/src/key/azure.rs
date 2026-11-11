@@ -460,7 +460,7 @@ impl AzureKeyController {
             let authorization = ctx
                 .service_provider
                 .get_azure_authorization_client(ctx.get_azure_config()?)?;
-            for id in std::mem::take(&mut self.role_assignment_ids) {
+            while let Some(id) = self.role_assignment_ids.last().cloned() {
                 match authorization.delete_role_assignment_by_id(id.clone()).await {
                     Ok(_) => {}
                     Err(error)
@@ -475,6 +475,7 @@ impl AzureKeyController {
                         }));
                     }
                 }
+                self.role_assignment_ids.pop();
             }
         }
         Ok(HandlerAction::Continue {
@@ -631,6 +632,7 @@ impl AzureKeyController {
             return Err(super::key_created_by_setup(&key.id));
         }
         let (group, vault) = self.group_and_vault(&key.id)?;
+        let scope_group = group.clone();
         let scope = Scope::Resource {
             resource_group_name: group,
             resource_provider: "Microsoft.KeyVault".to_string(),
@@ -638,8 +640,16 @@ impl AzureKeyController {
             resource_type: "keys".to_string(),
             resource_name: KEY_NAME.to_string(),
         };
+        // The key permission sets use `${resourceName}` as the whole assignment scope, so it
+        // is the key's full resource id, not its short name.
+        let key_resource_id = format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}/keys/{KEY_NAME}",
+            ctx.get_azure_config()?.subscription_id,
+            scope_group,
+            vault
+        );
         let permission_context =
-            ResourcePermissionsHelper::build_azure_permission_context(ctx, KEY_NAME)?;
+            ResourcePermissionsHelper::build_azure_permission_context(ctx, &key_resource_id)?;
         let planned = AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
             ctx,
             &key.id,
@@ -649,7 +659,7 @@ impl AzureKeyController {
         )
         .await?;
         ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx, &key.id, KEY_NAME, scope, "Key", "key",
+            ctx, &key.id, &key_resource_id, scope, "Key", "key",
         )
         .await?;
         let authorization = ctx

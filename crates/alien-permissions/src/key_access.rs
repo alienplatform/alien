@@ -53,6 +53,9 @@ pub struct KeyAccessPlan {
     /// Service accounts that read or write objects of a Storage encrypted with this key, and so
     /// need `key/native-storage` on it.
     pub native_storage_accounts: Vec<String>,
+    /// A Storage encrypted with this key is published through Remote Bindings, so the remote
+    /// access identity writes its objects and needs `key/native-storage` too.
+    pub remote_storage_access: bool,
 }
 
 /// Ids of the service accounts whose profile grants object data access (by the Storage's id or
@@ -132,6 +135,15 @@ pub fn key_access_plan(stack: &Stack, key_id: &str) -> crate::Result<KeyAccessPl
         runtime_cryptography: cryptography_service_accounts(stack, key_id),
         policy_runtime_accounts: crate::aws_key_policy::key_runtime_service_accounts(stack, key_id)?,
         native_storage_accounts: native_storage_service_accounts(stack, key_id),
+        remote_storage_access: has_resource(alien_core::RemoteBindings::RESOURCE_TYPE)
+            && stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::Storage>()
+                    .and_then(|storage| storage.encryption_key.as_ref())
+                    .is_some_and(|key| key.id() == key_id)
+                    && alien_core::remote_bindings::remote_binding_for_entry(entry).is_some()
+            }),
     })
 }
 
@@ -325,5 +337,32 @@ mod tests {
             native_storage_service_accounts(&stack, "secrets"),
             vec!["reader-sa".to_string()]
         );
+    }
+
+    #[test]
+    fn a_remotely_published_storage_encrypted_with_the_key_needs_the_access_role() {
+        use alien_core::{RemoteBindings, ResourceRef, Storage};
+        let build = |remote: bool| {
+            let storage = Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "secrets"))
+                .build();
+            let stack = Stack::new("stack".to_string()).add(
+                Key::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+            let stack = if remote {
+                stack.add_with_remote_access(storage, ResourceLifecycle::Frozen)
+            } else {
+                stack.add(storage, ResourceLifecycle::Frozen)
+            };
+            stack
+                .add(
+                    RemoteBindings::new("remote-bindings".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        assert!(key_access_plan(&build(true), "secrets").unwrap().remote_storage_access);
+        assert!(!key_access_plan(&build(false), "secrets").unwrap().remote_storage_access);
     }
 }

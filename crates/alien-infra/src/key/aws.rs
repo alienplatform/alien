@@ -39,7 +39,7 @@ pub struct AwsKeyController {
     /// Whether Alien made this key in a direct setup run. Older states are imports.
     #[serde(default)]
     pub(crate) origin: super::KeyOrigin,
-    /// Set before `CreateKey` is sent, so a crash after the call is found on the rerun.
+    /// Saved by the step before the one that sends `CreateKey`, so a crash after the call is found on the rerun.
     #[serde(default)]
     pub(crate) create_requested: bool,
     /// Digest of the key policy and grants last written.
@@ -60,6 +60,9 @@ impl AwsKeyController {
             return Err(super::key_created_by_setup(&key.id));
         }
         self.region = Some(ctx.get_aws_config()?.region.clone());
+        // Saved with this step's transition, before any CreateKey call: a crash after the
+        // call finds the flag set and looks for the key it may have made.
+        self.create_requested = true;
         Ok(HandlerAction::Continue {
             state: CreatingKey,
             suggested_delay: None,
@@ -106,9 +109,6 @@ impl AwsKeyController {
             }
         }
 
-        // Recorded first: CreateKey is not idempotent, and the runner saves the state at
-        // the end of this step only if the call below returns.
-        self.create_requested = true;
         let created = client
             .create_key(CreateKeyRequest {
                 description: alien_core::key_description(&key.id),
@@ -245,7 +245,9 @@ impl AwsKeyController {
                 .service_provider
                 .get_aws_iam_client(ctx.get_aws_config()?)
                 .await?;
-            for (role, policy) in std::mem::take(&mut self.grants) {
+            // An entry leaves the list only once its delete succeeded, so a retry after a
+            // failure still knows the grants that are left.
+            while let Some((role, policy)) = self.grants.last().cloned() {
                 match iam.delete_role_policy(&role, &policy).await {
                     Ok(()) => {}
                     Err(error)
@@ -260,6 +262,7 @@ impl AwsKeyController {
                         }));
                     }
                 }
+                self.grants.pop();
             }
         }
         Ok(HandlerAction::Continue {
@@ -545,6 +548,14 @@ fn desired_grants(
             role: format!("{prefix}-{account}"),
             policy: format!("{key_id}-key-runtime"),
             document: document(vec![grants.cryptography.clone()]),
+        });
+    }
+    // The remote access role writes objects of a Storage published through Remote Bindings.
+    if plan.remote_storage_access {
+        wanted.push(RoleGrant {
+            role: format!("{prefix}-access"),
+            policy: format!("{key_id}-key-native-storage"),
+            document: document(vec![grants.native_storage.clone()]),
         });
     }
     // Roles that read or write objects of a Storage encrypted with this key.

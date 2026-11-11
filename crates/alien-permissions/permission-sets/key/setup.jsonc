@@ -11,7 +11,7 @@
         "label": "create-key",
         "description": "Create a KMS key carrying this deployment's tags.",
         "grant": {
-          "actions": ["kms:CreateKey", "kms:TagResource"]
+          "actions": ["kms:CreateKey"]
         },
         "binding": {
           "stack": {
@@ -20,6 +20,29 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // A tagged CreateKey is also authorized as TagResource on the new key, whose ARN is not
+      // known yet. A key that already carries another stack's tag cannot be retagged.
+      {
+        "label": "tag-created-key",
+        "description": "Tag a key being created with this deployment's tags.",
+        "grant": {
+          "actions": ["kms:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
             }
           }
