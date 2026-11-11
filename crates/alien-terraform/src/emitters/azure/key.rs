@@ -159,10 +159,14 @@ impl TfEmitter for AzureKeyEmitter {
             ],
         ));
 
+        emit_disk_encryption_set(ctx, label, &mut fragment);
         emit_remote_access(ctx, label, &mut fragment)?;
         emit_management_access(ctx, label, &mut fragment)?;
-        fragment.retain_resources(|kind, _| {
+        let des_label = format!("{label}_disks");
+        fragment.retain_resources(|kind, name| {
             matches!(kind, "azurerm_key_vault" | "azurerm_key_vault_key")
+                || (kind == "azurerm_disk_encryption_set" && name == des_label)
+                || (kind == "azurerm_role_assignment" && name == format!("{des_label}_key"))
         });
         fragment.retain_state(|kind, _| kind == "random_id");
         Ok(fragment)
@@ -170,7 +174,7 @@ impl TfEmitter for AzureKeyEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([
+        let mut fields = vec![
             (
                 "vaultResourceId",
                 expr::traversal(["azurerm_key_vault", label, "id"]),
@@ -187,7 +191,18 @@ impl TfEmitter for AzureKeyEmitter {
                 "keyId",
                 expr::traversal(["azurerm_key_vault_key", label, "id"]),
             ),
-        ]))
+        ];
+        if volumes_use_key(ctx) {
+            fields.push((
+                "diskEncryptionSetId",
+                expr::traversal([
+                    "azurerm_disk_encryption_set",
+                    format!("{label}_disks").as_str(),
+                    "id",
+                ]),
+            ));
+        }
+        Ok(expr::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -200,6 +215,74 @@ impl TfEmitter for AzureKeyEmitter {
             ),
         ])))
     }
+}
+
+/// Whether a Container volume in the stack is encrypted with this key.
+fn volumes_use_key(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::Container>()
+            .and_then(|container| container.persistent_storage.as_ref())
+            .and_then(|storage| storage.encryption_key.as_ref())
+            .is_some_and(|key| key.id() == ctx.resource_id)
+    })
+}
+
+/// A Disk Encryption Set for the volumes that use this key. A managed disk can only name a set
+/// that already exists, and the runtime never creates one or assigns roles, so setup does. The
+/// set's own identity reads the key; disabling the key stops the disks.
+fn emit_disk_encryption_set(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) {
+    if !volumes_use_key(ctx) {
+        return;
+    }
+    let des_label = format!("{label}_disks");
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_disk_encryption_set",
+        &des_label,
+        [
+            attr(
+                "name",
+                expr::raw(format!(
+                    "\"${{local.resource_prefix}}-{}-disks\"",
+                    ctx.resource_id
+                )),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr("location", expr::raw("var.azure_location")),
+            attr(
+                "key_vault_key_id",
+                expr::traversal(["azurerm_key_vault_key", label, "versionless_id"]),
+            ),
+            nested(crate::block::block(
+                "identity",
+                [attr("type", Expression::String("SystemAssigned".to_string()))],
+            )),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_assignment",
+        &format!("{des_label}_key"),
+        [
+            attr(
+                "scope",
+                expr::traversal(["azurerm_key_vault_key", label, "resource_versionless_id"]),
+            ),
+            attr(
+                "role_definition_name",
+                Expression::String("Key Vault Crypto Service Encryption User".to_string()),
+            ),
+            attr(
+                "principal_id",
+                expr::raw(format!(
+                    "azurerm_disk_encryption_set.{des_label}.identity[0].principal_id"
+                )),
+            ),
+        ],
+    ));
 }
 
 fn emit_management_access(

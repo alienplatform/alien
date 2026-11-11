@@ -110,6 +110,48 @@ impl TfEmitter for GcpKeyEmitter {
             ));
         }
 
+        // A Container volume encrypted with this key is created at run time by Compute Engine,
+        // which wraps the disk's data key as its own service agent. Setup grants that agent the
+        // key because the runtime never edits key policy.
+        if volumes_use_key(ctx) {
+            let agent_label = format!("{label}_compute_agent");
+            fragment.resource_blocks.push(resource_block(
+                "google_project_service_identity",
+                &agent_label,
+                [
+                    // Service agents exist only in the google-beta provider.
+                    attr("provider", expr::raw("google-beta")),
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "service",
+                        Expression::String("compute.googleapis.com".to_string()),
+                    ),
+                ],
+            ));
+            fragment.resource_blocks.push(resource_block(
+                "google_kms_crypto_key_iam_member",
+                &format!("{label}_compute_disks"),
+                [
+                    attr(
+                        "crypto_key_id",
+                        expr::traversal(["google_kms_crypto_key", label, "id"]),
+                    ),
+                    attr(
+                        "role",
+                        Expression::String(
+                            "roles/cloudkms.cryptoKeyEncrypterDecrypter".to_string(),
+                        ),
+                    ),
+                    attr(
+                        "member",
+                        expr::template(format!(
+                            "serviceAccount:${{google_project_service_identity.{agent_label}.email}}"
+                        )),
+                    ),
+                ],
+            ));
+        }
+
         if let Some(management_label) = management_label(ctx) {
             fragment.resource_blocks.push(resource_block(
                 "google_kms_crypto_key_iam_member",
@@ -199,4 +241,16 @@ fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
                 .flatten()
         })
     })?
+}
+
+/// Whether a Container volume in the stack is encrypted with this key.
+fn volumes_use_key(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::Container>()
+            .and_then(|container| container.persistent_storage.as_ref())
+            .and_then(|storage| storage.encryption_key.as_ref())
+            .is_some_and(|key| key.id() == ctx.resource_id)
+    })
 }
