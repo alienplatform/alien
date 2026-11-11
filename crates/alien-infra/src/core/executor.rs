@@ -1113,18 +1113,7 @@ impl StackExecutor {
         if self.dependency_settled(dependency.id(), state) {
             return Ok(true);
         }
-        let Some(dependency_state) = state.resources.get(dependency.id()) else {
-            return Ok(false);
-        };
-        if !dependency_state
-            .get_internal_controller()?
-            .is_some_and(|controller| controller.dependents_may_update())
-        {
-            return Ok(false);
-        }
-        Ok(dependent
-            .get_internal_controller()?
-            .is_some_and(|controller| controller.updates_during_dependency_change(dependency)))
+        dependency_opens_update(dependent, dependency, state)
     }
 
     /// Whether every dependency of `desired` allows `dependent` to update now.
@@ -2454,6 +2443,11 @@ impl StackExecutor {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
+                                controller.plan_update(
+                                    (current_state.status == ResourceStatus::Running)
+                                        .then_some(&current_state.config),
+                                    new_config,
+                                );
                                 let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config = Some(current_state.config.clone()); // Store old config
@@ -3578,4 +3572,27 @@ impl StackExecutor {
 
         desired_resources_are_synced && deleting_resources_are_synced
     }
+}
+
+/// The two-sided opt-in for updating against a dependency that is still changing: the
+/// dependency says its dependents may update in its current state, and the dependent says it
+/// can. Used by the planner and by the environment builder when it reads a link's binding, so
+/// both agree on the order.
+pub(crate) fn dependency_opens_update(
+    dependent: &StackResourceState,
+    dependency: &ResourceRef,
+    state: &StackState,
+) -> Result<bool> {
+    let Some(dependency_state) = state.resources.get(dependency.id()) else {
+        return Ok(false);
+    };
+    if !dependency_state
+        .get_internal_controller()?
+        .is_some_and(|controller| controller.dependents_may_update())
+    {
+        return Ok(false);
+    }
+    Ok(dependent
+        .get_internal_controller()?
+        .is_some_and(|controller| controller.updates_during_dependency_change(dependency)))
 }

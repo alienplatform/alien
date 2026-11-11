@@ -770,6 +770,14 @@ pub trait ResourceController: Send + Sync + Debug {
         false
     }
 
+    /// Called by the executor when it plans an update, right after
+    /// [`Self::transition_to_update`] and before any handler runs, so the controller can record
+    /// facts about the change that [`Self::dependents_may_update`] reports to dependents
+    /// stepped in the same step. `applied` is the config the resource last ran, and only when
+    /// it was `Running`; it is `None` for a resource whose last update or create failed, whose
+    /// stored config may not be what actually runs.
+    fn plan_update(&mut self, _applied: Option<&Resource>, _desired: &Resource) {}
+
     /// As a dependency: whether its dependents may apply their updates in its current state,
     /// although it is not Running. A dependent updates against it only when it also opts in
     /// with [`Self::updates_during_dependency_change`].

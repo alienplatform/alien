@@ -678,3 +678,257 @@ mod update_during_dependency_change {
         Ok(())
     }
 }
+
+/// Reading a link's binding follows the same two-sided opt-in as the planner: a dependent
+/// whose link is still Updating may read it only when the dependency lets dependents update and
+/// the dependent says it can. Without both, it waits (`DependencyNotReady`), as before.
+#[test]
+fn linked_resource_read_during_update_needs_both_opt_ins() {
+    use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+    use crate::worker::{TestWorkerController, TestWorkerState};
+
+    for (dependents_may_update, updates_during_dependency_change) in
+        [(true, true), (true, false), (false, true), (false, false)]
+    {
+        let both = dependents_may_update && updates_during_dependency_change;
+        let dependency = TestWorkerController {
+            state: TestWorkerState::UpdateCodePolling,
+            dependents_may_update,
+            ..Default::default()
+        };
+        let dependent = TestWorkerController {
+            state: TestWorkerState::Ready,
+            updates_during_dependency_change,
+            ..Default::default()
+        };
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(test_function("daemon")), Vec::new())
+                .with_linked_resource(test_function("cluster"), dependency)
+                .with_linked_resource(test_function("daemon"), dependent);
+        let ctx = harness.ctx();
+        let links = [ResourceRef::new(Worker::RESOURCE_TYPE, "cluster")];
+
+        let read = crate::core::ensure_linked_resources_running(&links, &ctx, "daemon");
+        assert_eq!(
+            read.is_ok(),
+            both,
+            "dependency opts in: {dependents_may_update}, dependent opts in: \
+             {updates_during_dependency_change}"
+        );
+    }
+}
+
+/// A controller that opts in for config-only updates, as a container controller can: it reads
+/// its links in UpdateStart and records there whether the update kept the image. These tests
+/// run the whole executor over a dependency and a dependent that both change in one plan.
+mod config_only_updates_in_parallel {
+    use super::*;
+    use crate::core::state_utils::StackResourceStateExt;
+    use crate::worker::{TestWorkerController, TestWorkerState};
+    use alien_core::StackState;
+
+    fn worker(id: &str, image: &str, timeout_seconds: u32, link: Option<&Worker>) -> Worker {
+        let mut worker = test_function_with_image(id, image);
+        worker.timeout_seconds = timeout_seconds;
+        if let Some(link) = link {
+            worker.links = vec![ResourceRef::new(Worker::RESOURCE_TYPE, link.id.clone())];
+        }
+        worker
+    }
+
+    fn stack(cluster_image: &str, timeout_seconds: u32) -> Stack {
+        let cluster = worker("cluster", cluster_image, timeout_seconds, None);
+        let daemon = worker("daemon", "daemon-v1", timeout_seconds, Some(&cluster));
+        Stack::new("config-only-updates".to_owned())
+            .add(cluster, ResourceLifecycle::Live)
+            .add_with_dependencies(
+                daemon,
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "cluster")],
+            )
+            .build()
+    }
+
+    /// Both resources Running on v1, and both controllers opted in.
+    async fn running_and_opted_in() -> Result<StackState> {
+        let mut state =
+            run_to_synced(&new_executor(&stack("cluster-v1", 30))?, new_test_state()).await?;
+        for id in ["cluster", "daemon"] {
+            let resource = state.resources.get_mut(id).expect("resource state");
+            let mut controller =
+                resource.get_internal_controller_typed::<TestWorkerController>()?;
+            controller.config_only_opt_in = true;
+            resource.set_internal_controller(Some(Box::new(controller)))?;
+        }
+        Ok(state)
+    }
+
+    fn daemon_controller_state(state: &StackState) -> TestWorkerState {
+        state.resources["daemon"]
+            .get_internal_controller_typed::<TestWorkerController>()
+            .expect("daemon controller")
+            .state
+    }
+
+    /// An env-style change to both, with the image untouched: after the first step the
+    /// dependent has started its update next to the dependency's, not behind it.
+    #[tokio::test]
+    async fn a_config_only_change_updates_dependency_and_dependent_in_the_same_step() -> Result<()>
+    {
+        let state = running_and_opted_in().await?;
+        let next = new_executor(&stack("cluster-v1", 60))?
+            .step(state)
+            .await?
+            .next_state;
+
+        assert_eq!(get_status(&next, "cluster"), Some(ResourceStatus::Updating));
+        assert_eq!(get_status(&next, "daemon"), Some(ResourceStatus::Updating));
+        assert_ne!(
+            daemon_controller_state(&next),
+            TestWorkerState::UpdateStart,
+            "the dependent must have sent its update while the dependency was updating"
+        );
+        Ok(())
+    }
+
+    /// An image change to the dependency keeps the order: the dependent does not start its
+    /// update in any step until the dependency is Running.
+    #[tokio::test]
+    async fn an_image_change_to_the_dependency_still_makes_the_dependent_wait() -> Result<()> {
+        let mut state = running_and_opted_in().await?;
+        let executor = new_executor(&stack("cluster-v2", 60))?;
+        let mut cluster_was_updating = false;
+        for _ in 0..200 {
+            state = executor.step(state).await?.next_state;
+            if get_status(&state, "cluster") != Some(ResourceStatus::Running) {
+                cluster_was_updating = true;
+                assert_eq!(
+                    daemon_controller_state(&state),
+                    TestWorkerState::UpdateStart,
+                    "the dependent must not start while an image change is rolling"
+                );
+            } else if cluster_was_updating
+                && get_status(&state, "daemon") == Some(ResourceStatus::Running)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(cluster_was_updating, "the dependency's update ran");
+        assert_eq!(get_status(&state, "cluster"), Some(ResourceStatus::Running));
+        assert_eq!(get_status(&state, "daemon"), Some(ResourceStatus::Running));
+        Ok(())
+    }
+
+    const APPS: [&str; 7] = [
+        "protocol",
+        "temporal-worker",
+        "scheduler",
+        "ingest",
+        "web",
+        "cron",
+        "reports",
+    ];
+
+    /// The shape of the 11-10 stack: a `backend` that the other app containers link, an
+    /// egress `gateway` Alien adds itself, and a Worker. `timeout_seconds` stands for an env
+    /// value: an untargeted change reaches every app resource and never the gateway.
+    fn demo_stack(backend_image: &str, app_timeout: u32) -> Stack {
+        let backend = worker("backend", backend_image, app_timeout, None);
+        let mut builder =
+            Stack::new("demo".to_owned()).add(backend.clone(), ResourceLifecycle::Live);
+        for id in APPS {
+            builder = builder.add_with_dependencies(
+                worker(id, &format!("{id}-v1"), app_timeout, Some(&backend)),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "backend")],
+            );
+        }
+        builder
+            .add(
+                worker("gateway", "gateway-v1", 30, None),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    async fn demo_running() -> Result<StackState> {
+        let mut state = run_to_synced(
+            &new_executor(&demo_stack("backend-v1", 30))?,
+            new_test_state(),
+        )
+        .await?;
+        for (id, resource) in state.resources.iter_mut() {
+            if id == "gateway" {
+                continue;
+            }
+            let mut controller =
+                resource.get_internal_controller_typed::<TestWorkerController>()?;
+            controller.config_only_opt_in = true;
+            resource.set_internal_controller(Some(Box::new(controller)))?;
+        }
+        Ok(state)
+    }
+
+    /// An untargeted env-only change on the 11-10 shape: one step starts every app
+    /// resource's update, `backend` and its dependents together, and the gateway is untouched.
+    #[tokio::test]
+    async fn an_env_only_change_updates_every_app_resource_in_one_wave_and_not_the_gateway(
+    ) -> Result<()> {
+        let state = demo_running().await?;
+        let next = new_executor(&demo_stack("backend-v1", 60))?
+            .step(state)
+            .await?
+            .next_state;
+
+        for id in std::iter::once("backend").chain(APPS) {
+            assert_eq!(
+                get_status(&next, id),
+                Some(ResourceStatus::Updating),
+                "{id}"
+            );
+            let controller =
+                next.resources[id].get_internal_controller_typed::<TestWorkerController>()?;
+            assert_ne!(
+                controller.state,
+                TestWorkerState::UpdateStart,
+                "{id} waited"
+            );
+        }
+        assert_eq!(get_status(&next, "gateway"), Some(ResourceStatus::Running));
+        Ok(())
+    }
+
+    /// An image change to `backend` keeps every dependent waiting until it is Running.
+    #[tokio::test]
+    async fn an_image_change_to_backend_keeps_all_its_dependents_waiting() -> Result<()> {
+        let mut state = demo_running().await?;
+        let executor = new_executor(&demo_stack("backend-v2", 60))?;
+        let mut backend_rolled = false;
+        for _ in 0..300 {
+            state = executor.step(state).await?.next_state;
+            if get_status(&state, "backend") != Some(ResourceStatus::Running) {
+                backend_rolled = true;
+                for id in APPS {
+                    let controller = state.resources[id]
+                        .get_internal_controller_typed::<TestWorkerController>()?;
+                    assert_eq!(
+                        controller.state,
+                        TestWorkerState::UpdateStart,
+                        "{id} started early"
+                    );
+                }
+            } else if backend_rolled
+                && APPS
+                    .iter()
+                    .all(|id| get_status(&state, id) == Some(ResourceStatus::Running))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(backend_rolled);
+        assert_eq!(get_status(&state, "gateway"), Some(ResourceStatus::Running));
+        Ok(())
+    }
+}

@@ -42,16 +42,28 @@ fn running_linked_resource<'a>(
     ctx: &'a ResourceControllerContext<'_>,
     resource_id: &str,
 ) -> Result<&'a alien_core::StackResourceState> {
-    ctx.state
-        .resources
-        .get(link.id())
-        .filter(|dependency| dependency.status == ResourceStatus::Running)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: resource_id.to_string(),
-                dependency_id: link.id().to_string(),
+    let dependency = ctx.state.resources.get(link.id());
+    let readable = match dependency {
+        Some(dependency) if dependency.status == ResourceStatus::Running => true,
+        // Still updating: readable only when both controllers opted in (the same rule the
+        // planner applies), so a config-only update does not wait for its dependency.
+        Some(dependency) if dependency.status == ResourceStatus::Updating => ctx
+            .state
+            .resources
+            .get(resource_id)
+            .map(|dependent| {
+                crate::core::executor::dependency_opens_update(dependent, link, ctx.state)
             })
+            .transpose()?
+            .unwrap_or(false),
+        _ => false,
+    };
+    dependency.filter(|_| readable).ok_or_else(|| {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: resource_id.to_string(),
+            dependency_id: link.id().to_string(),
         })
+    })
 }
 
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
