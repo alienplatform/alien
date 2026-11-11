@@ -584,9 +584,15 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         runner["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-probe-runner"],
         probe_name
     );
-    // The runner may open any egress: no port list (the API server's translated port differs
-    // per cluster).
-    assert!(runner["spec"]["egress"][0].get("ports").is_none());
+    // The runner's egress keeps its port list: without it the EKS network policy agent stopped
+    // refusing the `denied` probe pod.
+    let runner_ports: Vec<_> = runner["spec"]["egress"][0]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|port| port["port"].as_u64().unwrap())
+        .collect();
+    assert_eq!(runner_ports, vec![443, 6443]);
     let egress = serde_yaml::to_string(allow("egress")).unwrap();
     assert!(egress.contains("denied") && egress.contains("NotIn"), "{egress}");
     let listener = serde_yaml::to_string(allow("listener")).unwrap();
