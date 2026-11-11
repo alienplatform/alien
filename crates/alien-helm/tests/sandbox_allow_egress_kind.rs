@@ -169,6 +169,7 @@ fn allow_egress_install_proceeds_where_network_policy_is_enforced() {
         "networkpolicy",
         "alien-sbx-agent",
     ]);
+    resolves_names_but_reaches_no_other_private_host_on_53();
 }
 
 /// Install a chart with one `allow` sandbox into `context`, which must be the current context.
@@ -278,4 +279,86 @@ fn kubectl(arguments: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).expect("kubectl output")
+}
+
+/// A sandbox pod under the allow policy resolves names through CoreDNS, and a pod in the cluster
+/// that merely listens on port 53 is not reachable. The CNI checks the policy after the Service
+/// address is translated, so the DNS pod's own address is what has to be admitted.
+fn resolves_names_but_reaches_no_other_private_host_on_53() {
+    let pod = |name: &str, labels: &str, command: &str| {
+        apply(&format!(
+            r#"apiVersion: v1
+kind: Pod
+metadata:
+  name: {name}
+  namespace: {NAMESPACE}
+  labels:
+    {labels}
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: p
+      image: busybox:1.37
+      command: ["sh", "-c", "{command}"]
+"#
+        ));
+    };
+    pod("sandbox-probe", "alien.dev/sandbox: agent", "sleep 600");
+    pod("listener", "app: listener", "httpd -f -p 53");
+    pod("plain", "app: plain", "sleep 600");
+    for name in ["sandbox-probe", "listener", "plain"] {
+        kubectl(&[
+            "--namespace",
+            NAMESPACE,
+            "wait",
+            "--for=condition=Ready",
+            &format!("pod/{name}"),
+            "--timeout=180s",
+        ]);
+    }
+    // Let the CNI program the policy for the new pod.
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    let exec = |pod: &str, command: &str| {
+        Command::new("kubectl")
+            .args([
+                "--namespace",
+                NAMESPACE,
+                "exec",
+                pod,
+                "--",
+                "sh",
+                "-c",
+                command,
+            ])
+            .output()
+            .expect("run kubectl exec")
+    };
+    let lookup = exec(
+        "sandbox-probe",
+        "nslookup kubernetes.default.svc.cluster.local",
+    );
+    assert!(
+        lookup.status.success(),
+        "a sandbox pod must resolve names through the cluster's DNS:\n{}\n{}",
+        String::from_utf8_lossy(&lookup.stdout),
+        String::from_utf8_lossy(&lookup.stderr)
+    );
+    let listener = kubectl(&[
+        "--namespace",
+        NAMESPACE,
+        "get",
+        "pod",
+        "listener",
+        "-o",
+        "jsonpath={.status.podIP}",
+    ]);
+    let reach = format!("nc -w 3 -z {listener} 53");
+    assert!(
+        exec("plain", &reach).status.success(),
+        "the listener must be reachable by a pod the policy does not select"
+    );
+    assert!(
+        !exec("sandbox-probe", &reach).status.success(),
+        "a sandbox pod must not reach another pod on port 53"
+    );
 }

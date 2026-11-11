@@ -148,13 +148,14 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             let excepts: String = non_public_ipv4_ranges()
                 .map(|range| format!("            - {range}\n"))
                 .collect();
-            // DNS goes to the cluster's resolver address(es) alone, from `sandbox.clusterDNS`: the
-            // excepts cover the private ranges a resolver lives in, the address differs per
-            // cluster (10.100.0.10 on EKS Auto Mode, a node-local link-local address with NodeLocal
-            // DNS or AKS LocalDNS), and a chart rendered by Argo CD cannot look it up. Port 53 to
-            // any other private host, and every other port on these, stays refused.
+            // DNS goes to two places, port 53 only. A CNI that checks policy after the Service
+            // address is translated (kindnet, Calico, Cilium) sees the DNS pod's address, so the
+            // kube-dns pods are admitted by selector. A resolver that is no pod (EKS Auto Mode's
+            // service address, a node-local cache) is admitted by the address in
+            // `sandbox.clusterDNS`, which Helm cannot look up under Argo CD. Port 53 to any other
+            // private host, and every other port on these, stays refused.
             dns_values = CLUSTER_DNS_VALUES.to_string();
-            let dns = "    - to:\n{{- range $dns }}\n        - ipBlock:\n            cidr: {{ printf \"%s/32\" . }}\n{{- end }}\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
+            let dns = "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n{{- range $dns }}\n        - ipBlock:\n            cidr: {{ printf \"%s/32\" . }}\n{{- end }}\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
             format!(
                 "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
             )
