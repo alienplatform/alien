@@ -6,11 +6,12 @@
 //! are defaults, so a customer installs it with a deployment-group token and
 //! their own infrastructure values only.
 //!
-//! Charts are rendered on request from the release; rendering is
-//! deterministic, so a release and an Operator image always yield the same
-//! digests. The chart version names both, `1.<n>.<operator>` for the n-th
-//! release, so a version never changes content and GitOps tools that pin or
-//! compare versions see an Operator upgrade as a new, higher version:
+//! A chart is rendered the first time its version is served, and the manager
+//! keeps its manifest, config and archive bytes in the release store. From
+//! then on it serves the kept bytes, so a version keeps its digest across
+//! manager upgrades. The chart version names the release and the Operator
+//! image, `1.<n>.<operator>` for the n-th release, so GitOps tools that pin
+//! or compare versions see an Operator upgrade as a new, higher version:
 //!
 //! - `<n>` counts every release, oldest first, so a newer release sorts
 //!   above an older one under any Operator image.
@@ -20,15 +21,11 @@
 //!   such a tag can move to other content, so its charts can't be immutable
 //!   either.
 //!
-//! A manager serves only the versions for its own Operator image. Other
-//! versions, including the `1.0.<n>` versions earlier managers served, are
-//! unknown: their content can't be reproduced here, and serving another
-//! chart under them is what made versions mutable.
-
-use std::{
-    collections::HashMap,
-    sync::{Arc, LazyLock, Mutex},
-};
+//! A manager renders only versions for its own Operator image, and serves
+//! versions of other Operator images only from its store (they were served by
+//! an earlier manager). The `1.0.<n>` versions earlier managers served were
+//! never kept, so they are unknown: serving another chart under them is what
+//! made versions mutable.
 
 use alien_core::{DeploymentModel, Platform, StackSettings};
 use alien_helm::{
@@ -45,7 +42,10 @@ use sha2::{Digest, Sha256};
 use super::AppState;
 use crate::{
     auth::{Scope, Subject},
-    traits::{deploy_cli_downloads, BundleSource, BundleSources, ReleaseRecord, SourceCredentials},
+    traits::{
+        deploy_cli_downloads, BundleSource, BundleSources, ReleaseRecord, SourceCredentials,
+        StoredChart,
+    },
 };
 
 /// Repository namespace for charts in the manager's registry.
@@ -120,35 +120,6 @@ impl ChartSettings {
     }
 }
 
-struct Blob {
-    media_type: &'static str,
-    bytes: Arc<Vec<u8>>,
-}
-
-/// Rendered blobs by digest (manifests, configs and chart archives). Content
-/// addressed, so entries never go stale.
-static BLOBS: LazyLock<Mutex<HashMap<String, Blob>>> = LazyLock::new(Default::default);
-
-/// Digests of each rendered chart, by release ID and chart version.
-static RENDERED: LazyLock<Mutex<HashMap<(String, String), ChartDigests>>> =
-    LazyLock::new(Default::default);
-
-/// The three blobs that make up one chart version.
-#[derive(Clone)]
-struct ChartDigests {
-    manifest: String,
-    config: String,
-    chart: String,
-}
-
-impl ChartDigests {
-    fn contains(&self, digest: &str) -> bool {
-        [&self.manifest, &self.config, &self.chart]
-            .iter()
-            .any(|known| known.as_str() == digest)
-    }
-}
-
 /// Serve an OCI read for a path under [`CHART_NAMESPACE`].
 pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &str) -> Response {
     if matches!(
@@ -191,29 +162,24 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
 
     if let Some(reference) = operation.strip_prefix("manifests/") {
         if reference.starts_with("sha256:") {
-            return visible_blob(state, &settings, &charts, method, reference);
+            return visible_blob(state, subject, &charts, method, reference).await;
         }
         let Some((version, release)) = charts.iter().find(|(version, _)| version == reference)
         else {
-            return oci_error(
-                StatusCode::NOT_FOUND,
-                "MANIFEST_UNKNOWN",
-                format!(
-                    "chart '{name}' has no version '{reference}'; this manager serves \
-                     versions 1.<release>.{} for its Operator image {}",
-                    operator_number(settings.operator_tag()),
-                    settings.operator_image
-                ),
-            );
+            // A version of an earlier Operator image is served from the store.
+            return match kept_version(state, subject, &charts, reference).await {
+                Ok(Some(chart)) => blob_response(method, MANIFEST_MEDIA_TYPE, &chart.manifest),
+                Ok(None) => unknown_version(&settings, name, reference),
+                Err(response) => response,
+            };
         };
-        return match render(state, &settings, release, version) {
-            Ok(digests) => blob_response(method, &digests.manifest),
+        return match chart_version(state, &settings, subject, release, version).await {
+            Ok(chart) => blob_response(method, MANIFEST_MEDIA_TYPE, &chart.manifest),
             Err(response) => response,
         };
     }
-
     if let Some(digest) = operation.strip_prefix("blobs/") {
-        return visible_blob(state, &settings, &charts, method, digest);
+        return visible_blob(state, subject, &charts, method, digest).await;
     }
 
     oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path")
@@ -257,27 +223,94 @@ pub(crate) async fn served_bundle_sources(
     }))
 }
 
-/// Serve `digest` only if it belongs to one of `charts`, the charts this
-/// caller may read. The blob cache is shared across callers, so a digest
-/// alone must not grant access.
-fn visible_blob(
+/// Serve `digest` only if it belongs to a chart kept for one of `charts`'
+/// releases, the charts this caller may read. A digest alone must not grant
+/// access. A digest comes from a manifest, which is kept when first served.
+async fn visible_blob(
     state: &AppState,
-    settings: &ChartSettings,
+    subject: &Subject,
     charts: &[(String, ReleaseRecord)],
     method: &Method,
     digest: &str,
 ) -> Response {
-    for (version, release) in charts {
-        match render(state, settings, release, version) {
-            Ok(digests) if digests.contains(digest) => return blob_response(method, digest),
-            Ok(_) => {}
-            Err(response) => return response,
+    let release_ids: Vec<String> = charts.iter().map(|(_, r)| r.id.clone()).collect();
+    let kept = match state
+        .release_store
+        .stored_charts(subject, &release_ids)
+        .await
+    {
+        Ok(kept) => kept,
+        Err(e) => return store_failed("read kept charts", e),
+    };
+    for chart in &kept {
+        for (media_type, bytes) in [
+            (MANIFEST_MEDIA_TYPE, &chart.manifest),
+            (CONFIG_MEDIA_TYPE, &chart.config),
+            (CHART_MEDIA_TYPE, &chart.archive),
+        ] {
+            if sha256_digest(bytes) == digest {
+                return blob_response(method, media_type, bytes);
+            }
         }
     }
     oci_error(
         StatusCode::NOT_FOUND,
         "BLOB_UNKNOWN",
         format!("unknown digest {digest}"),
+    )
+}
+
+/// The kept chart for `reference`, a version of an Operator image this
+/// manager doesn't serve now: it belongs to the release with the same number
+/// among `charts`.
+async fn kept_version(
+    state: &AppState,
+    subject: &Subject,
+    charts: &[(String, ReleaseRecord)],
+    reference: &str,
+) -> Result<Option<StoredChart>, Response> {
+    let release_part = |version: &str| {
+        version
+            .rsplit_once('.')
+            .map(|(release, _)| release.to_string())
+    };
+    let Some(wanted) = release_part(reference) else {
+        return Ok(None);
+    };
+    let Some((_, release)) = charts
+        .iter()
+        .find(|(version, _)| release_part(version).as_ref() == Some(&wanted))
+    else {
+        return Ok(None);
+    };
+    let kept = state
+        .release_store
+        .stored_charts(subject, std::slice::from_ref(&release.id))
+        .await
+        .map_err(|e| store_failed("read kept charts", e))?;
+    Ok(kept.into_iter().find(|chart| chart.version == reference))
+}
+
+fn unknown_version(settings: &ChartSettings, name: &str, reference: &str) -> Response {
+    oci_error(
+        StatusCode::NOT_FOUND,
+        "MANIFEST_UNKNOWN",
+        format!(
+            "chart '{name}' has no version '{reference}'; this manager serves \
+             versions 1.<release>.{} for its Operator image {}, and versions it served \
+             before. Versions 1.0.<n> from earlier managers are no longer served: pin \
+             1.<release>.<operator> instead, or a range such as 1.x",
+            operator_number(settings.operator_tag()),
+            settings.operator_image
+        ),
+    )
+}
+
+fn store_failed(action: &str, error: alien_error::AlienError) -> Response {
+    oci_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "UNKNOWN",
+        format!("failed to {action}: {error}"),
     )
 }
 
@@ -316,17 +349,39 @@ async fn chart_releases(
         .collect())
 }
 
-/// Render a release's chart once, cache its blobs, and return their digests.
+/// The chart of `release` at `version`: the kept copy, or, the first time
+/// the version is served, a render that is kept before it is returned. The
+/// store keeps the first copy when managers race, and every one returns it.
+async fn chart_version(
+    state: &AppState,
+    settings: &ChartSettings,
+    subject: &Subject,
+    release: &ReleaseRecord,
+    version: &str,
+) -> Result<StoredChart, Response> {
+    let kept = state
+        .release_store
+        .stored_charts(subject, std::slice::from_ref(&release.id))
+        .await
+        .map_err(|e| store_failed("read kept charts", e))?;
+    if let Some(chart) = kept.into_iter().find(|chart| chart.version == version) {
+        return Ok(chart);
+    }
+    let rendered = render(state, settings, release, version)?;
+    state
+        .release_store
+        .store_chart_if_absent(subject, rendered)
+        .await
+        .map_err(|e| store_failed("keep the chart", e))
+}
+
+/// Render a release's chart.
 fn render(
     state: &AppState,
     settings: &ChartSettings,
     release: &ReleaseRecord,
     version: &str,
-) -> Result<ChartDigests, Response> {
-    let key = (release.id.clone(), version.to_string());
-    if let Some(digests) = rendered().get(&key) {
-        return Ok(digests.clone());
-    }
+) -> Result<StoredChart, Response> {
     let render_failed =
         |message: String| oci_error(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", message);
     let stack = release
@@ -396,8 +451,8 @@ fn render(
     .to_string()
     .into_bytes();
 
-    let config_digest = store(CONFIG_MEDIA_TYPE, config.clone());
-    let chart_digest = store(CHART_MEDIA_TYPE, archive.clone());
+    let config_digest = sha256_digest(&config);
+    let chart_digest = sha256_digest(&archive);
     let manifest = serde_json::json!({
         "schemaVersion": 2,
         "mediaType": MANIFEST_MEDIA_TYPE,
@@ -419,59 +474,32 @@ fn render(
     })
     .to_string()
     .into_bytes();
-    let digests = ChartDigests {
-        manifest: store(MANIFEST_MEDIA_TYPE, manifest),
-        config: config_digest,
-        chart: chart_digest,
-    };
-    rendered().insert(key, digests.clone());
-    Ok(digests)
+    Ok(StoredChart {
+        release_id: release.id.clone(),
+        version: version.to_string(),
+        manifest,
+        config,
+        archive,
+    })
 }
 
-fn rendered() -> std::sync::MutexGuard<'static, HashMap<(String, String), ChartDigests>> {
-    RENDERED
-        .lock()
-        .expect("rendered chart index is never held across a panic")
+fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn store(media_type: &'static str, bytes: Vec<u8>) -> String {
-    let digest = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
-    blobs().entry(digest.clone()).or_insert(Blob {
-        media_type,
-        bytes: Arc::new(bytes),
-    });
-    digest
-}
-
-fn blob_response(method: &Method, digest: &str) -> Response {
-    let Some((media_type, bytes)) = blobs()
-        .get(digest)
-        .map(|blob| (blob.media_type, blob.bytes.clone()))
-    else {
-        return oci_error(
-            StatusCode::NOT_FOUND,
-            "BLOB_UNKNOWN",
-            format!("unknown digest {digest}"),
-        );
-    };
+fn blob_response(method: &Method, media_type: &'static str, bytes: &[u8]) -> Response {
     let mut response = if *method == Method::HEAD {
         Response::new(Body::empty())
     } else {
-        Response::new(Body::from(bytes.as_ref().clone()))
+        Response::new(Body::from(bytes.to_vec()))
     };
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes.len()));
-    if let Ok(value) = HeaderValue::from_str(digest) {
+    if let Ok(value) = HeaderValue::from_str(&sha256_digest(bytes)) {
         headers.insert("docker-content-digest", value);
     }
     response
-}
-
-fn blobs() -> std::sync::MutexGuard<'static, HashMap<String, Blob>> {
-    BLOBS
-        .lock()
-        .expect("chart blob cache is never held across a panic")
 }
 
 /// The Operator release version in `tag` (`v3.3.59` or `3.3.59`) as one

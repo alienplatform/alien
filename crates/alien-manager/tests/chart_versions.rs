@@ -318,22 +318,21 @@ async fn a_new_operator_image_publishes_new_higher_chart_versions() {
         );
     }
 
-    // A version always resolves to the same digest; the manager that serves
-    // another Operator image doesn't serve it at all.
+    // A version always resolves to the same digest, also after a manager
+    // upgrade: the manager stores a chart the first time it serves it, and a
+    // manager with another Operator image serves the stored bytes.
     for (version, operator_tag) in [(&before_tags[0], "v3.3.57"), (&before_tags[1], "v3.3.57")] {
         let digest = manifest_digest(&before, version).await;
         assert_eq!(manifest_digest(&before, version).await, digest);
-        let elsewhere = pull(&after, &format!("charts/{CHART}/manifests/{version}")).await;
         assert_eq!(
-            elsewhere.status,
-            StatusCode::NOT_FOUND,
-            "{version} must not resolve under another Operator image, got digest {:?}",
-            elsewhere.digest
+            manifest_digest(&after, version).await,
+            digest,
+            "{version} must keep its digest after the manager upgrade"
         );
+        let (_, upgraded_values) = chart_files(&after, version).await;
         assert!(
-            elsewhere.text().contains("MANIFEST_UNKNOWN"),
-            "{}",
-            elsewhere.text()
+            upgraded_values.contains(&format!("    tag: \"{operator_tag}\"\n")),
+            "{version} must keep installing Operator {operator_tag}:\n{upgraded_values}"
         );
 
         // The version installs the Operator image it names.
@@ -367,4 +366,46 @@ async fn a_new_operator_image_publishes_new_higher_chart_versions() {
             earlier.text()
         );
     }
+}
+
+#[tokio::test]
+async fn the_first_stored_copy_of_a_version_wins() {
+    use alien_manager::traits::StoredChart;
+
+    let stores = stores().await;
+    create_release(&stores, CHART).await;
+    let release_id = stores
+        .release_store
+        .list_releases(&Subject::system())
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    let chart = |byte: u8| StoredChart {
+        release_id: release_id.clone(),
+        version: "1.1.3003057".to_string(),
+        manifest: vec![byte],
+        config: vec![byte],
+        archive: vec![byte],
+    };
+
+    let first = stores
+        .release_store
+        .store_chart_if_absent(&Subject::system(), chart(1))
+        .await
+        .unwrap();
+    // A second replica that rendered at the same time keeps the first copy.
+    let second = stores
+        .release_store
+        .store_chart_if_absent(&Subject::system(), chart(2))
+        .await
+        .unwrap();
+    assert_eq!(first, chart(1));
+    assert_eq!(second, chart(1));
+    let kept = stores
+        .release_store
+        .stored_charts(&Subject::system(), std::slice::from_ref(&release_id))
+        .await
+        .unwrap();
+    assert_eq!(kept, [chart(1)]);
 }
