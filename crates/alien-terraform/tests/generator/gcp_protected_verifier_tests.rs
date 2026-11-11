@@ -384,7 +384,7 @@ fn the_verifier_holds_its_bucket_permissions_only_on_the_installs_own_buckets() 
         "the bucket role is bound without a name condition: {bindings:?}"
     );
     assert!(
-        text.contains(r#"resource.name.startsWith("projects/_/buckets/${local.resource_prefix}-")"#),
+        text.contains(r#"resource.name.startsWith(\"projects/_/buckets/${local.resource_prefix}-\")"#),
         "the condition names the install's bucket prefix"
     );
 }
