@@ -276,6 +276,27 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
             "{address} {protocol}/{port} must stay reachable: {rules:#?}"
         );
     }
+    // A CNI that checks after the Service address is translated sees a DNS pod address, so the
+    // kube-dns pods are admitted by selector, on port 53 alone.
+    let kube_dns = rules
+        .iter()
+        .find(|rule| {
+            rule["to"].as_sequence().is_some_and(|peers| {
+                peers.iter().any(|peer| {
+                    peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]
+                        == "kube-system"
+                        && peer["podSelector"]["matchLabels"]["k8s-app"] == "kube-dns"
+                })
+            })
+        })
+        .expect("a rule admitting the cluster's DNS pods");
+    assert_eq!(
+        kube_dns["ports"],
+        serde_yaml::from_str::<serde_yaml::Value>(
+            "[{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]"
+        )
+        .unwrap()
+    );
     // The configured resolver lives in a denied private range, so it is admitted by address, on
     // port 53 alone: any other port on it stays refused.
     for (protocol, port) in [("UDP", 53), ("TCP", 53)] {
@@ -1097,7 +1118,8 @@ fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
     let rendered = super::test_utils::helm_template(&chart.files, None);
     let output = format!("{rendered:?}");
     assert!(
-        output.contains("sandbox.clusterDNS") && output.contains("grep nameserver /etc/resolv.conf"),
+        output.contains("sandbox.clusterDNS")
+            && output.contains("grep nameserver /etc/resolv.conf"),
         "the failure must name the value and the command that finds it: {output}"
     );
     // An address that is not an IPv4 literal is refused by the values schema.
