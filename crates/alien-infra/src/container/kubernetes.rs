@@ -176,6 +176,21 @@ pub(super) fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
     format!("tcp-{}", port.port)
 }
 
+/// DNS name of a container's internal Service: `<name>.<namespace>.svc.<domain>`.
+/// Without a known cluster domain the name stops at `.svc`, which the pod's
+/// resolver search path completes; a guessed domain would be wrong on clusters
+/// that don't use `cluster.local`.
+fn internal_dns_name(workload_name: &str, namespace: Option<&str>, domain: Option<&str>) -> String {
+    let service = match namespace {
+        Some(namespace) => format!("{workload_name}.{namespace}.svc"),
+        None => format!("{workload_name}.svc"),
+    };
+    match domain {
+        Some(domain) => format!("{service}.{domain}"),
+        None => service,
+    }
+}
+
 #[controller]
 pub struct KubernetesContainerController {
     /// The name of the created Kubernetes Deployment or StatefulSet.
@@ -2050,10 +2065,11 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 // The internal Service shares the workload's name.
-                internal_dns: match &self.namespace {
-                    Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
-                    None => format!("{workload_name}.svc.cluster.local"),
-                },
+                internal_dns: internal_dns_name(
+                    workload_name,
+                    self.namespace.as_deref(),
+                    crate::sandbox::kubernetes_egress::detected_cluster_domain().as_deref(),
+                ),
                 internal_urls: self.internal_urls(),
                 replicas: Vec::new(), // Replica details tracked separately
                 // Kubernetes leaves volume snapshots to the cluster's own tooling. With no
@@ -3042,6 +3058,18 @@ impl KubernetesContainerController {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn internal_dns_uses_the_detected_cluster_domain() {
+        use super::internal_dns_name;
+        assert_eq!(
+            internal_dns_name("api", Some("prod"), Some("corp.example")),
+            "api.prod.svc.corp.example"
+        );
+        // No guessed `cluster.local`: without a domain the name stops at `.svc`.
+        assert_eq!(internal_dns_name("api", Some("prod"), None), "api.prod.svc");
+        assert_eq!(internal_dns_name("api", None, None), "api.svc");
+    }
+
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
 
