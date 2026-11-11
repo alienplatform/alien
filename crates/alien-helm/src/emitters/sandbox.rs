@@ -23,13 +23,14 @@ use alien_error::AlienError;
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 
-/// Link-local space, where node-local resolvers answer: NodeLocal DNSCache at 169.254.20.10 by
-/// default, AKS LocalDNS at 169.254.10.10 and .11, or an address the cluster chose. Under `allow`
-/// it is reachable on port 53 only. The metadata and credential services in this range (IMDS at
-/// .169.254, ECS at .170.2, EKS Pod Identity at .170.23) serve them over HTTP, not port 53; what
-/// does answer on 53 there (the AWS VPC resolver at .169.253, the GCP metadata server's resolver)
-/// is DNS, the upstream the cluster's own resolver already forwards to.
-const LINK_LOCAL_DNS: &str = "169.254.0.0/16";
+/// Reads `sandbox.clusterDNS` for an allow-egress policy and stops the render when it is missing,
+/// so an upgrade that would leave sandboxes with no name resolution never applies and the running
+/// release keeps its policy.
+const CLUSTER_DNS_VALUES: &str = r#"{{- $dns := dig "clusterDNS" (list) (default dict .Values.sandbox) -}}
+{{- if not $dns -}}
+{{- fail "sandbox.clusterDNS is not set. A sandbox with allow egress needs the address of the cluster DNS service (the nameserver in a pod's /etc/resolv.conf). Find it with: kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}' and set sandbox.clusterDNS=[<that address>]." -}}
+{{- end -}}
+"#;
 
 /// Path the broker's RBAC lands at. Fixed rather than per-sandbox: the ClusterRole is one per
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
@@ -112,6 +113,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             )
         })
         .collect();
+    let mut dns_values = String::new();
     let egress = match sandbox.egress {
         SandboxEgress::None => String::new(),
         // Select the Service's backing pods in this namespace and release. Kubernetes
@@ -146,15 +148,13 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             let excepts: String = non_public_ipv4_ranges()
                 .map(|range| format!("            - {range}\n"))
                 .collect();
-            // DNS by selector rather than address: the excepts cover the private ranges a
-            // cluster's DNS service lives in — 172.20/16 on EKS, 10.0/16 on AKS, 10.96/12 on
-            // kubeadm. A cluster with a node-local resolver points pods at a link-local
-            // address instead; link-local is admitted on port 53 alone, so resolution keeps
-            // working without opening anything else the node serves there.
-            let dns_ports = "      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
-            let dns = format!(
-                "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n{dns_ports}    - to:\n        - ipBlock:\n            cidr: {LINK_LOCAL_DNS}\n{dns_ports}"
-            );
+            // DNS goes to the cluster's resolver address(es) alone, from `sandbox.clusterDNS`: the
+            // excepts cover the private ranges a resolver lives in, the address differs per
+            // cluster (10.100.0.10 on EKS Auto Mode, a node-local link-local address with NodeLocal
+            // DNS or AKS LocalDNS), and a chart rendered by Argo CD cannot look it up. Port 53 to
+            // any other private host, and every other port on these, stays refused.
+            dns_values = CLUSTER_DNS_VALUES.to_string();
+            let dns = "    - to:\n{{- range $dns }}\n        - ipBlock:\n            cidr: {{ printf \"%s/32\" . }}\n{{- end }}\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
             format!(
                 "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
             )
@@ -162,7 +162,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
     };
 
     Ok(format!(
-        r#"{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
+        r#"{dns_values}{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
 {{{{- $scopeValue := include "deployment.serviceAccountPrefix" . -}}}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -189,6 +189,7 @@ spec:
           port: {agent_port}
 {egress}"#,
         id = sandbox.id(),
+        dns_values = dns_values,
         label = LABEL_SANDBOX,
         agent_port = AGENT_PORT,
     ))

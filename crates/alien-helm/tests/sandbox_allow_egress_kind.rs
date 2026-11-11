@@ -209,6 +209,8 @@ fn install_allow_chart(context: &str) -> (Cleanup, Output) {
             "runtime.cleanup.onUninstall.enabled=false",
             "--set-string",
             "management.defaultUrl=https://manager.example.test",
+            "--set",
+            "sandbox.clusterDNS={10.96.0.10}",
         ])
         .output()
         .expect("run helm install");

@@ -169,7 +169,10 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
         )
         .build();
     let chart = render(&stack, StackSettings::default());
-    let rendered = super::test_utils::helm_template(&chart.files, None);
+    let rendered = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  clusterDNS:\n    - 10.100.0.10\n"),
+    );
     rendered.assert_ok("legacy allow sandbox");
     let documents = rendered_documents(&rendered);
     let policy = documents
@@ -226,11 +229,12 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
         "169.254.169.254", // instance metadata (AWS, GCP, Azure)
         "169.254.170.2",   // ECS task credentials
         "169.254.170.23",  // EKS Pod Identity agent
-        "169.254.20.10",   // NodeLocal DNSCache, outside port 53
-        "169.254.10.10",   // AKS LocalDNS (VNet DNS), outside port 53
-        "169.254.10.11",   // AKS LocalDNS (cluster DNS), outside port 53
-        "168.63.129.16",   // Azure wire server
-        "100.64.0.10",     // shared address space: CGNAT, EKS custom pod networking
+        "169.254.20.10",   // a node-local resolver that is not the configured one
+        "169.254.169.253", // the VPC resolver: only the configured cluster DNS is admitted
+        "10.100.0.11",     // another private host on port 53, next to the configured resolver
+        "10.100.0.0",
+        "168.63.129.16", // Azure wire server
+        "100.64.0.10",   // shared address space: CGNAT, EKS custom pod networking
         "100.127.255.254",
         "10.0.0.1",
         "172.16.0.1",
@@ -256,10 +260,6 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
             ("UDP", 53),
             ("TCP", 53),
         ] {
-            // Link-local DNS is admitted below; every other link-local port stays denied.
-            if address.starts_with("169.254.") && port == 53 {
-                continue;
-            }
             assert!(
                 !reachable(address, protocol, port),
                 "{address} {protocol}/{port} must be denied: {rules:#?}"
@@ -270,41 +270,26 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
         ("8.8.8.8", "TCP", 443),
         ("1.1.1.1", "UDP", 53),
         ("203.0.114.1", "TCP", 22),
-        // Node-local resolvers answer on link-local addresses that vary by cluster
-        // (NodeLocal DNSCache, AKS LocalDNS, custom ones), so all of link-local is DNS-only.
-        ("169.254.20.10", "UDP", 53),
-        ("169.254.20.10", "TCP", 53),
-        ("169.254.10.10", "UDP", 53),
-        ("169.254.10.10", "TCP", 53),
-        ("169.254.10.11", "UDP", 53),
-        ("169.254.10.11", "TCP", 53),
-        ("169.254.25.10", "UDP", 53),
     ] {
         assert!(
             reachable(address, protocol, port),
             "{address} {protocol}/{port} must stay reachable: {rules:#?}"
         );
     }
-    // The cluster resolver lives in a denied private range, so it is admitted by selector.
-    let kube_dns = rules
-        .iter()
-        .find(|rule| {
-            rule["to"].as_sequence().is_some_and(|peers| {
-                peers.iter().any(|peer| {
-                    peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]
-                        == "kube-system"
-                        && peer["podSelector"]["matchLabels"]["k8s-app"] == "kube-dns"
-                })
-            })
-        })
-        .expect("a rule admitting the cluster's DNS pods");
-    assert_eq!(
-        kube_dns["ports"],
-        serde_yaml::from_str::<serde_yaml::Value>(
-            "[{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]"
-        )
-        .unwrap()
-    );
+    // The configured resolver lives in a denied private range, so it is admitted by address, on
+    // port 53 alone: any other port on it stays refused.
+    for (protocol, port) in [("UDP", 53), ("TCP", 53)] {
+        assert!(
+            reachable("10.100.0.10", protocol, port),
+            "the configured cluster DNS must answer on {protocol}/{port}: {rules:#?}"
+        );
+    }
+    for (protocol, port) in [("TCP", 80), ("TCP", 443), ("TCP", 10250), ("UDP", 54)] {
+        assert!(
+            !reachable("10.100.0.10", protocol, port),
+            "the cluster DNS address is admitted on port 53 only, not {protocol}/{port}: {rules:#?}"
+        );
+    }
 
     // These denials are real only on a CNI that enforces NetworkPolicy, so installing and
     // upgrading the chart first proves enforcement.
@@ -960,4 +945,40 @@ fn platform_scoped_storage_is_absent_from_kubernetes_chart() {
     assert_helm_valid(&chart, "off-platform storage");
     let values: serde_yaml::Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
     assert!(values["infrastructure"]["data"].is_null());
+}
+
+/// An upgrade of a stack with an allow-egress sandbox and no `sandbox.clusterDNS` must stop at
+/// render time with a message that names the value and how to find it, so the release that is
+/// running keeps its policy. Without the value the policy would admit no DNS at all.
+#[test]
+fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
+    let stack = Stack::new("sandbox-allow-no-dns".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(&chart.files, None);
+    let output = format!("{rendered:?}");
+    assert!(
+        output.contains("sandbox.clusterDNS") && output.contains("get svc -n kube-system kube-dns"),
+        "the failure must name the value and the command that finds it: {output}"
+    );
+    // An address that is not an IPv4 literal is refused by the values schema.
+    let bad = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  clusterDNS:\n    - kube-dns.kube-system\n"),
+    );
+    assert!(format!("{bad:?}").contains("clusterDNS"), "{bad:?}");
 }
