@@ -3659,6 +3659,14 @@ spec:
         app.kubernetes.io/instance: {{ $.Release.Name }}
     spec:
       automountServiceAccountToken: false
+      # The official image's postgres user is 999. fsGroup makes the data volume writable by it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       {{- with $.Values.runtime.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -3666,6 +3674,10 @@ spec:
       containers:
         - name: postgres
           image: {{ printf "%s:%s" $database.image.repository $database.image.tag | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           ports:
             - name: postgres
               containerPort: 5432

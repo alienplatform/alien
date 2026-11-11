@@ -238,3 +238,43 @@ fn chart_yaml_names_the_kubernetes_versions_and_the_operator_version() {
     // A tag that isn't a release version leaves the chart version as the app version.
     assert!(packaged("dev").contains("appVersion: \"1.4.3003059\"\n"));
 }
+
+#[test]
+fn the_chart_run_database_runs_as_the_postgres_user_with_limits() {
+    use alien_core::{Postgres, ResourceLifecycle};
+    let stack = Stack::new("db-hardening".to_string())
+        .add(
+            Postgres::new("metadata".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default()).files;
+    let values = "management:\n  token: test-credential\npostgres:\n  metadata:\n    enabled: true\n    existingPasswordSecret: pg-password\n    image:\n      repository: pgvector/pgvector\n      tag: pg16-bookworm\n    recordedImage: pgvector/pgvector:pg16-bookworm\n";
+    let rendered = test_utils::helm_template(&chart, Some(values));
+    rendered.assert_ok("database enabled");
+    let statefulset = yaml_documents(&rendered.stdout)
+        .into_iter()
+        .find(|document| document["kind"] == "StatefulSet")
+        .expect("the chart runs the database");
+    let pod = &statefulset["spec"]["template"]["spec"];
+    assert_eq!(pod["securityContext"]["runAsNonRoot"], true);
+    assert_eq!(pod["securityContext"]["runAsUser"], 999);
+    assert_eq!(pod["securityContext"]["fsGroup"], 999);
+    assert_eq!(
+        pod["securityContext"]["seccompProfile"]["type"],
+        "RuntimeDefault"
+    );
+    let container = &pod["containers"][0];
+    assert_eq!(
+        container["securityContext"]["allowPrivilegeEscalation"],
+        false
+    );
+    assert_eq!(
+        container["securityContext"]["capabilities"]["drop"][0],
+        "ALL"
+    );
+    assert_eq!(
+        container["resources"]["limits"]["memory"],
+        container["resources"]["requests"]["memory"]
+    );
+}
