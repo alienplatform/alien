@@ -1339,7 +1339,13 @@ mod tests {
     async fn write_the_default_daemonset_for_the_kind_test() {
         let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
         let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
-        let mut config = manifest_test_daemon(&[]);
+        let mut config = match std::env::var("ALIEN_KIND_CONFIG") {
+            Ok(path) => serde_json::from_str(&std::fs::read_to_string(path).expect("config"))
+                .expect("daemon config"),
+            Err(_) => manifest_test_daemon(&[]),
+        };
+        let name = std::env::var("ALIEN_KIND_NAME").unwrap_or_else(|_| "agent".to_string());
+        let out = std::env::var("ALIEN_KIND_OUT").unwrap_or_else(|_| "daemon.yaml".to_string());
         config.code = DaemonCode::Image { image };
         let mut harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         if let Ok(registry) = std::env::var("ALIEN_KIND_IMAGE_REGISTRY") {
@@ -1348,7 +1354,7 @@ mod tests {
         let daemonset = manifest_test_controller()
             .build_daemonset(
                 &config,
-                "agent",
+                &name,
                 "default",
                 Some("default"),
                 None,
@@ -1366,7 +1372,7 @@ mod tests {
             .expect("metadata")
             .remove("namespace");
         std::fs::write(
-            std::path::Path::new(&dir).join("daemon.yaml"),
+            std::path::Path::new(&dir).join(out),
             serde_json::to_string_pretty(&value).expect("json"),
         )
         .expect("write manifest");

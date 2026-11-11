@@ -125,4 +125,106 @@ case "$reason" in
   *runAsNonRoot*) echo "root image refused: $reason" ;;
   *) echo "expected the kubelet to refuse the root image, got: '$reason'" >&2; exit 1 ;;
 esac
+
+# --- 3. every example stack that targets Kubernetes ---------------------------------------------
+# Each container and daemon an example declares is rendered by the Operator's controllers from
+# the example's own stack (security, ports, environment, persistent storage) and applied to its
+# own namespace that enforces `restricted`. Images:
+#   - `image` code (the examples' postgres and redis): the real image, copied into the mirror,
+#     so the opt-out's user and writable paths are proven against the real image;
+#   - source code: stand-in for the image `alien build` produces, which runs as 65532:65532 on
+#     Kubernetes (see `kubernetes_image_user`); the stand-in is the non-root test image.
+# Links to storage, queues and the like are dropped: their bindings need a cloud, and they do not
+# change the pod's security context.
+# Every pod must reach Running; readiness is not asserted because the stand-ins do not serve.
+bun_bin="${ALIEN_BUN:-bun}"
+sdk="$work/sdk"
+mkdir -p "$sdk/node_modules/@alienplatform/core"
+printf '{ "name": "@alienplatform/core", "type": "module", "exports": "./index.ts" }\n' \
+  >"$sdk/node_modules/@alienplatform/core/package.json"
+printf 'export * from "%s/packages/core/src/index.ts"\n' "$root" >"$sdk/node_modules/@alienplatform/core/index.ts"
+
+kube_images=()
+for example in "$root"/examples/*/; do
+  name="$(basename "$example")"
+  [ -f "$example/alien.ts" ] || continue
+  cp "$example/alien.ts" "$sdk/$name.ts"
+  (cd "$sdk" && "$bun_bin" -e "const c = await import('./$name.ts'); console.log(JSON.stringify(c.default))") \
+    >"$work/$name.stack.json" 2>"$work/$name.stack.err" || {
+      echo "skip $name: alien.ts does not evaluate here: $(tail -1 "$work/$name.stack.err")"; continue; }
+  # One config file per container or daemon: <example>.<resource>.<kind>.json plus its image.
+  python3 - "$work/$name.stack.json" "$work/res" "$name" <<'PY'
+import json, os, sys
+stack = json.load(open(sys.argv[1]))
+out, example = sys.argv[2], sys.argv[3]
+os.makedirs(out, exist_ok=True)
+for rid, res in stack.get("resources", {}).items():
+    config = res["config"]
+    kind = config.get("type")
+    if kind not in ("container", "daemon"):
+        continue
+    code = config.get("code") or {}
+    image = code.get("image") if code.get("type") == "image" else ""
+    path = os.path.join(out, f"{example}.{rid}.{kind}.json")
+    json.dump({**{k: v for k, v in config.items() if k != "type"}, "links": []}, open(path, "w"))
+    open(path + ".image", "w").write(image or "")
+PY
+done
+
+shopt -s nullglob
+configs=("$work"/res/*.json)
+[ "${#configs[@]}" -gt 0 ] || { echo "no example declares a container or daemon" >&2; exit 1; }
+for config in "${configs[@]}"; do
+  base="$(basename "$config" .json)"            # <example>.<resource>.<kind>
+  kind="${base##*.}"; rest="${base%.*}"; resource="${rest#*.}"; example="${rest%%.*}"
+  ns="ex-$(echo "$example-$resource" | tr '[:upper:]_.' '[:lower:]--' | cut -c1-58)"
+  source_image="$(cat "$config.image")"
+  if [ -n "$source_image" ]; then
+    # Copy the real image into the mirror and pin it by digest.
+    repo="examples/$(echo "$source_image" | tr ':/' '--')"
+    docker pull -q "$source_image" >/dev/null
+    docker tag "$source_image" "${mirror}/${repo}:v1"
+    digest="$(docker push "${mirror}/${repo}:v1" 2>&1 | sed -n 's/.*digest: \(sha256:[a-f0-9]*\).*/\1/p' | tail -1)"
+    image="registry.invalid/${repo}@${digest}"; expect="localhost:5001/${repo}@sha256:"
+    kube_images+=("$source_image")
+  else
+    image="registry.invalid/test/nonroot@${nonroot_digest}"; expect="localhost:5001/test/nonroot@sha256:"
+  fi
+  dir="$work/ex/$ns"; mkdir -p "$dir"
+  if [ "$kind" = container ]; then test_name=write_the_default_deployment_for_the_kind_test; crate_path=container
+  else test_name=write_the_default_daemonset_for_the_kind_test; crate_path=daemon; fi
+  (cd "$root" && ALIEN_KIND_MANIFEST_DIR="$dir" ALIEN_KIND_IMAGE="$image" ALIEN_KIND_IMAGE_REGISTRY="$mirror" \
+    ALIEN_KIND_CONFIG="$config" ALIEN_KIND_NAME="$resource" ALIEN_KIND_OUT=workload.json \
+    cargo test -p alien-infra --features all-platforms,test-utils --lib "${crate_path}::kubernetes::tests::${test_name}" -- --ignored >"$work/cargo.out" 2>&1) \
+    || { grep -A6 panicked "$work/cargo.out" >&2; echo "could not render $example/$resource" >&2; exit 1; }
+  enforce "$ns"
+  kubectl -n "$ns" apply -f "$dir/workload.json"
+  echo "applied $example/$resource ($kind) to $ns"
+done
+
+# Wait for every example pod to be Running, and require the mirror, by digest.
+deadline=$((SECONDS + 300))
+while :; do
+  bad="$(kubectl get pods -A -o json | python3 -c '
+import json, sys
+bad = []
+for pod in json.load(sys.stdin)["items"]:
+    ns = pod["metadata"]["namespace"]
+    if not ns.startswith("ex-"):
+        continue
+    if pod["status"].get("phase") != "Running":
+        bad.append(ns + "/" + pod["metadata"]["name"] + ": " + pod["status"].get("phase", "?"))
+    for status in pod["status"].get("containerStatuses", []):
+        if "@sha256:" not in status.get("imageID", "") or not status["imageID"].startswith("localhost:5001/"):
+            bad.append(ns + "/" + pod["metadata"]["name"] + " imageID " + status.get("imageID", ""))
+print("\n".join(bad))
+')"
+  pods="$(kubectl get pods -A --no-headers | grep -c '^ex-' || true)"
+  [ -z "$bad" ] && [ "$pods" -ge "${#configs[@]}" ] && break
+  [ "$SECONDS" -lt "$deadline" ] || { echo "example pods not Running from the mirror:" >&2; echo "$bad" >&2; kubectl get pods -A >&2; exit 1; }
+  sleep 5
+done
+kubectl get pods -A | grep '^ex-' || { echo "no example pods were created" >&2; exit 1; }
+echo "every example container and daemon runs in a restricted namespace"
+printf 'images that run as root under their opt-out: %s\n' "${kube_images[*]:-none}"
 echo "restricted pods and mirror: ok"
