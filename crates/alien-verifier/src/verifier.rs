@@ -381,8 +381,8 @@ impl Verifier {
             .await
     }
 
-    /// The release a scale or removal reads the signed bounds from: verified,
-    /// or the one kept at the install's floor, and no older than the floor.
+    /// The release a scale or removal reads the signed bounds from: verified
+    /// under the current signer list.
     async fn bounds_release(
         &self,
         signer_lists: &[alien_signing::SignedStatement],

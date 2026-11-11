@@ -3530,7 +3530,7 @@ fn verify_machine_agent(
             settings.fingerprint, settings.channel
         ),
     };
-    // Join checks the agent build only; the agent keeps the install's floors.
+    // Join checks the agent build only; the agent holds the install's signer list version.
     let trust = Trust::new(
         settings.clone(),
         install.clone(),

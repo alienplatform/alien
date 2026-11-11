@@ -5,11 +5,12 @@
 //! derives the install id from the cluster (`k8s:<kube-system uid>:<ns>/<release>`);
 //! nothing here comes from the manager or the Operator's own environment.
 //! The install's ledger (the trust root it accepted state under, the signer
-//! list version, and the release and config floors) lives in the kept
+//! list version) lives in the kept
 //! ConfigMap `<release>-signing-ledger`, which setup creates beside the
 //! settings, and is copied to the Operator's database. At start the two
 //! merge, entry by entry, to the higher; every accepted target raises both,
-//! the ConfigMap first. So losing the database never lowers a floor. Once
+//! the ConfigMap first. So losing the database never lowers the signer list
+//! version. Once
 //! the ledger holds a trust root, settings that are missing or different
 //! stop the Operator (protection is sticky).
 //!
@@ -479,10 +480,8 @@ impl ReleaseSigning {
     ///
     /// The signer chain starts from the one this Operator accepted, so a
     /// manager can deliver newer list versions but never an older one. The
-    /// release at the ledger's floor is the one this install accepted: it is
-    /// kept unless the current list denies it, even if its signer has left
-    /// the list since. Any other release must verify under the current list
-    /// and be above the floor.
+    /// release must verify under the current list: one whose signer has left
+    /// the list is refused until a current signer signs it.
     pub fn verify_release(
         &self,
         platform: Platform,

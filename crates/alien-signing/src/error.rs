@@ -122,24 +122,6 @@ pub enum ErrorData {
         role: String,
     },
 
-    /// The statement is older than what this install already accepted, or a
-    /// different statement with the same sequence.
-    #[error(
-        code = "SIGNING_SEQUENCE_REPLAYED",
-        message = "The '{kind}' statement has sequence {sequence}, below or beside the accepted {floor}",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 409
-    )]
-    SequenceReplayed {
-        /// Statement kind.
-        kind: String,
-        /// Sequence of the refused statement.
-        sequence: u64,
-        /// Highest sequence already accepted for this kind.
-        floor: u64,
-    },
-
     /// The statement's `notAfter` has passed.
     #[error(
         code = "SIGNING_EXPIRED",
