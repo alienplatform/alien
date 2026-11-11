@@ -192,6 +192,39 @@ mod tests {
     }
 
     #[test]
+    fn key_stack_includes_the_setup_set_that_lets_setup_create_keys() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                alien_core::Key::new("data-key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let ids = initial_setup_permission_set_ids(&stack);
+        assert!(
+            ids.contains(&"key/setup".to_string()),
+            "Expected key/setup in {ids:?}"
+        );
+
+        let context = crate::PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-2")
+            .with_stack_prefix("deploy");
+        let policy = generate_aws_initial_setup_policy(&context).unwrap();
+        let create = policy
+            .statement
+            .iter()
+            .find(|statement| statement.action.contains(&"kms:CreateKey".to_string()))
+            .expect("setup may create a key");
+        let condition = serde_json::to_value(&create.condition).unwrap();
+        assert_eq!(
+            condition["StringEquals"][format!("aws:RequestTag/{}", alien_core::ALIEN_STACK_TAG_KEY)],
+            "deploy",
+            "key creation is limited to this deployment's tags: {condition}"
+        );
+    }
+
+    #[test]
     fn cross_cutting_service_account_always_included() {
         let stack = Stack::new("empty-stack".to_string()).build();
 
