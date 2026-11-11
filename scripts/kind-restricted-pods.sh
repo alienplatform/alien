@@ -166,7 +166,13 @@ for rid, res in stack.get("resources", {}).items():
     code = config.get("code") or {}
     image = code.get("image") if code.get("type") == "image" else ""
     path = os.path.join(out, f"{example}.{rid}.{kind}.json")
-    json.dump({**{k: v for k, v in config.items() if k != "type"}, "links": []}, open(path, "w"))
+    config = {k: v for k, v in config.items() if k != "type"}
+    # The single Kind node is small; resource sizes do not change the security context.
+    if "cpu" in config:
+        config["cpu"] = {"min": "0.05", "desired": "0.1"}
+    if "memory" in config:
+        config["memory"] = {"min": "32Mi", "desired": "128Mi"}
+    json.dump({**config, "links": []}, open(path, "w"))
     open(path + ".image", "w").write(image or "")
 PY
 done
@@ -214,14 +220,19 @@ for pod in json.load(sys.stdin)["items"]:
         continue
     if pod["status"].get("phase") != "Running":
         bad.append(ns + "/" + pod["metadata"]["name"] + ": " + pod["status"].get("phase", "?"))
-    for status in pod["status"].get("containerStatuses", []):
+    statuses = pod["status"].get("containerStatuses", [])
+    if not statuses:
+        bad.append(ns + "/" + pod["metadata"]["name"] + ": no container status yet")
+    for status in statuses:
+        if "running" not in status.get("state", {}):
+            bad.append(ns + "/" + pod["metadata"]["name"] + " container " + status["name"] + " is not running: " + json.dumps(status.get("state")))
         if "@sha256:" not in status.get("imageID", "") or not status["imageID"].startswith("localhost:5001/"):
             bad.append(ns + "/" + pod["metadata"]["name"] + " imageID " + status.get("imageID", ""))
 print("\n".join(bad))
 ')"
   pods="$(kubectl get pods -A --no-headers | grep -c '^ex-' || true)"
   [ -z "$bad" ] && [ "$pods" -ge "${#configs[@]}" ] && break
-  [ "$SECONDS" -lt "$deadline" ] || { echo "example pods not Running from the mirror:" >&2; echo "$bad" >&2; kubectl get pods -A >&2; exit 1; }
+  [ "$SECONDS" -lt "$deadline" ] || { echo "example pods not Running from the mirror:" >&2; echo "$bad" >&2; kubectl get pods -A >&2; kubectl describe pods -A 2>&1 | grep -E "^Name:|Warning|Events" -A3 | tail -80 >&2; exit 1; }
   sleep 5
 done
 kubectl get pods -A | grep '^ex-' || { echo "no example pods were created" >&2; exit 1; }

@@ -24,6 +24,8 @@ pub const SECURITY_OPT_OUT: &str = "security: { profile: \"unrestricted\" }";
 
 /// Writable path every restricted container gets.
 const DEFAULT_WRITABLE_PATH: &str = "/tmp";
+/// Group of the non-root user source-built Kubernetes images run as.
+const DEFAULT_FS_GROUP: i64 = 65532;
 
 /// Security settings to put on one pod and its single container.
 #[derive(Debug, Default)]
@@ -104,7 +106,11 @@ pub fn pod_security(
             run_as_non_root: Some(true),
             run_as_user: user,
             run_as_group: group,
-            fs_group: group,
+            // Without an explicit user or group the pod runs as the image's own user (source-built
+            // images: 65532). Give volumes that group so persistent storage is writable. When the
+            // stack names a user, fsGroup stays as declared: a group-writable data directory is
+            // rejected by some databases.
+            fs_group: group.or_else(|| user.is_none().then_some(DEFAULT_FS_GROUP)),
             seccomp_profile: Some(seccomp.clone()),
             ..Default::default()
         }),
@@ -232,6 +238,7 @@ mod tests {
         let security = pod_security("api", None, &[]).unwrap();
         let pod = security.pod.unwrap();
         assert_eq!(pod.run_as_non_root, Some(true));
+        assert_eq!(pod.fs_group, Some(65532));
         assert_eq!(pod.seccomp_profile.unwrap().type_, "RuntimeDefault");
         let container = security.container.unwrap();
         assert_eq!(container.allow_privilege_escalation, Some(false));

@@ -4246,7 +4246,9 @@ async fn helm_upgrade(
             "--set-string",
             &format!("{key}.repository={}", image.repository),
         ])
-        .args(["--set-string", &format!("{key}.tag={}", image.tag)]);
+        .args(["--set-string", &format!("{key}.tag={}", image.tag)])
+        // The tag carries the pin; a digest from the values would name another image.
+        .args(["--set-string", &format!("{key}.digest=")]);
     }
     if let Some(secret) = pull_secret {
         cmd.args([

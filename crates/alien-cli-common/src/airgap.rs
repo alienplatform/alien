@@ -817,6 +817,13 @@ pub fn chart_images(
                 .filter(|value| !value.is_empty())
         };
         match (field("repository"), field("tag")) {
+            // A pinned digest wins over the tag in the chart, so it is the image the site needs.
+            (Some(repository), _) if field("digest").is_some() => {
+                images.insert(
+                    key.to_string(),
+                    format!("{repository}@{}", field("digest").unwrap_or_default()),
+                );
+            }
             (Some(repository), Some(tag)) => {
                 images.insert(key.to_string(), format!("{repository}:{tag}"));
             }
@@ -1665,6 +1672,17 @@ mod tests {
         )
         .unwrap();
         let images = chart_images(&path, &serde_json::Value::Null, &[enabled.clone()]).unwrap();
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let pinned: serde_yaml::Value = serde_yaml::from_str(&format!(
+            "runtime: {{image: {{digest: '{digest}'}}, cleanup: {{onUninstall: {{image: {{digest: '{digest}'}}}}}}}}"
+        ))
+        .unwrap();
+        let pinned = chart_images(&path, &serde_json::Value::Null, &[pinned]).unwrap();
+        assert_eq!(
+            pinned["runtime.image"],
+            format!("registry.example.com/alien-operator@{digest}")
+        );
+        assert!(pinned["runtime.cleanup.onUninstall.image"].ends_with(&format!("@{digest}")));
         let disabled = chart_images(&path, &serde_json::Value::Null, &[]).unwrap();
         assert!(!disabled.keys().any(|key| key.starts_with("postgres.")));
         for target in [
