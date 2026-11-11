@@ -91,6 +91,43 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
     assert_helm_valid(&chart, "sandbox_layer");
 }
 
+/// A live sandbox gets the same chart-owned rules as a frozen one: the deployment template
+/// refers to the RuntimeClass helper whenever the stack has a sandbox, so skipping the emitter for
+/// a live one leaves a chart that fails at install with a missing template.
+#[test]
+fn a_live_sandbox_emits_the_same_chart_resources_as_a_frozen_one() {
+    let stack = Stack::new("sandbox-live-chart".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(3600),
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+
+    for file in [
+        "templates/sandbox-agent-networkpolicy.yaml",
+        "templates/sandbox-broker-rbac.yaml",
+        "templates/_sandbox.tpl",
+    ] {
+        assert!(
+            chart.files.contains_key(file),
+            "{file} must render for a live sandbox: {:?}",
+            chart.files.keys().collect::<Vec<_>>()
+        );
+    }
+    assert_helm_valid(&chart, "sandbox_layer_live");
+}
+
 /// Internet sessions can only reach this release's gateway, which resolves names on
 /// their behalf. Helm/kubeconform validate the complete rendered resource set.
 #[test]

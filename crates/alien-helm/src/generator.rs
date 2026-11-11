@@ -3843,8 +3843,12 @@ impl ChartAnalysis {
             }
 
             // Frozen resources contribute operator-local infrastructure bindings; live
-            // (workload) resources do not — they ARE the workload.
-            if entry.lifecycle != ResourceLifecycle::Frozen {
+            // (workload) resources do not — they ARE the workload. A sandbox is the exception:
+            // its NetworkPolicy, broker RBAC, RuntimeClass helper and CNI probe belong to the chart
+            // whichever lifecycle it has (the Operator creates the pods, the chart owns the rules
+            // that confine them), and the deployment template refers to the helper unconditionally.
+            let is_sandbox = entry.config.downcast_ref::<alien_core::Sandbox>().is_some();
+            if entry.lifecycle != ResourceLifecycle::Frozen && !is_sandbox {
                 continue;
             }
 
