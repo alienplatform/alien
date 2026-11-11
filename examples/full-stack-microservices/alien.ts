@@ -15,6 +15,8 @@ const postgres = new alien.Container("postgres")
   })
   .permissions("app")
   .persistentStorage("10Gi")
+  // The image runs as the postgres user (uid 70). Applies on Kubernetes only.
+  .security({ runAsUser: 70, runAsGroup: 70, writablePaths: ["/var/run/postgresql"] })
   .build()
 
 const redis = new alien.Container("redis")
@@ -23,6 +25,8 @@ const redis = new alien.Container("redis")
   .memory("256Mi")
   .port(6379)
   .permissions("app")
+  // The image runs as the redis user (uid 999). Applies on Kubernetes only.
+  .security({ runAsUser: 999, runAsGroup: 999, writablePaths: ["/data"] })
   .build()
 
 const api = new alien.Container("api")
