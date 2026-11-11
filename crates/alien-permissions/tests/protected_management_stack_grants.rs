@@ -400,7 +400,7 @@ fn azure_role_set(roles: &[&str]) -> PermissionSet {
 }
 
 #[test]
-fn an_azure_stack_grant_outside_the_allow_list_is_refused() {
+fn an_azure_stack_grant_in_a_family_is_refused() {
     for action in [
         "Microsoft.Compute/*/action",
         "Microsoft.Compute/virtualMachineScaleSets/*/runCommand/action",
@@ -408,7 +408,8 @@ fn an_azure_stack_grant_outside_the_allow_list_is_refused() {
         "Microsoft.App/*",
         "Microsoft.KeyVault/*",
         "Microsoft.KeyVault/vaults/*",
-        "Microsoft.Network/virtualNetworks/write",
+        "Microsoft.Storage/storageAccounts/listKeys/action",
+        "Microsoft.Authorization/roleAssignments/write",
         "*/action",
         "*/read*",
         "*",
@@ -416,7 +417,7 @@ fn an_azure_stack_grant_outside_the_allow_list_is_refused() {
         let set = azure_set(&["Microsoft.Storage/storageAccounts/read", action]);
         let error = render_azure(&set, true)
             .expect_err(&format!("{action} must be refused on a protected install"));
-        assert_refused(&error, action, ALLOW_LIST_AZURE);
+        assert_family_refused(&error, action);
 
         let unprotected = render_azure(&set, false).expect("an unprotected install is unchanged");
         assert!(
@@ -427,17 +428,25 @@ fn an_azure_stack_grant_outside_the_allow_list_is_refused() {
 }
 
 #[test]
-fn an_azure_stack_grant_of_what_only_the_verifier_may_do_is_dropped_not_granted() {
-    let set = azure_set(&[
-        "Microsoft.Storage/storageAccounts/read",
+fn an_azure_stack_grant_of_what_only_the_verifier_may_do_is_refused_not_dropped() {
+    for action in [
         "Microsoft.Compute/virtualMachines/runCommand/action",
         "Microsoft.App/jobs/start/action",
-        "Microsoft.KeyVault/vaults/secrets/write",
         "Microsoft.KeyVault/vaults/write",
         "Microsoft.Authorization/roleAssignments/write",
         "microsoft.managedidentity/userassignedidentities/assign/action",
+    ] {
+        let set = azure_set(&["Microsoft.Storage/storageAccounts/read", action]);
+        let error = render_azure(&set, true).expect_err(action);
+        assert_family_refused(&error, action);
+    }
+    // A vault secret write is no family action, but the signing vault shares the resource group
+    // until it moves to its own, so it is still left out.
+    let set = azure_set(&[
+        "Microsoft.Storage/storageAccounts/read",
+        "Microsoft.KeyVault/vaults/secrets/write",
     ]);
-    let granted = render_azure(&set, true).expect("the verifier-owned actions are dropped");
+    let granted = render_azure(&set, true).expect("renders");
     assert_eq!(granted, ["Microsoft.Storage/storageAccounts/read"]);
 }
 
@@ -973,4 +982,47 @@ fn no_built_in_set_gives_a_protected_aws_management_identity_a_family_action() {
         }
     }
     assert!(rendered > 100, "only {rendered} built-in policies rendered");
+}
+
+#[test]
+fn no_built_in_set_gives_a_protected_azure_management_identity_a_family_action() {
+    let mut rendered = 0;
+    let mut offenders = Vec::new();
+    for id in list_permission_set_ids() {
+        let set = get_permission_set(id).expect("listed set");
+        // A protected Azure install refuses vaults until the signing vault has its own resource
+        // group, so the vault sets render nothing there yet.
+        if set.platforms.azure.is_none() || id.starts_with("vault/") || !is_management_held(set) {
+            continue;
+        }
+        let plan = match AzureRuntimePermissionsGenerator::new().generate_grant_plan(
+            set,
+            BindingTarget::Stack,
+            &azure_context(true),
+        ) {
+            Ok(plan) => plan,
+            Err(error) if error.message.contains("is not supported by platform") => continue,
+            Err(error) => panic!("{id}: {}", error.message),
+        };
+        rendered += 1;
+        for role in plan.custom_roles {
+            for action in &role.role_definition.actions {
+                let Some(family) = alien_permissions::generators::azure_family(action) else {
+                    continue;
+                };
+                // A wildcard stands for a role that is kept with its REACH actions excluded.
+                let excluded = alien_permissions::generators::azure_reach_exclusions(action);
+                let covered = family == alien_permissions::generators::Family::Reach
+                    && !excluded.is_empty()
+                    && excluded
+                        .iter()
+                        .all(|action| role.role_definition.not_actions.contains(action));
+                if !covered {
+                    offenders.push(format!("{id}: {action} ({})", family.name()));
+                }
+            }
+        }
+    }
+    assert!(rendered > 20, "only {rendered} built-in sets rendered");
+    assert_eq!(offenders, Vec::<String>::new());
 }

@@ -61,4 +61,4 @@ pub use verifier_owned::{
     azure_verifier_owned_data_action, azure_write_or_delete,
     AWS_VERIFIER_OWNED,
 };
-pub use families::{aws_family, gcp_family, Family};
+pub use families::{aws_family, azure_family, azure_reach_exclusions, gcp_family, Family};

@@ -19,10 +19,11 @@ use crate::{
     StackMutation,
 };
 use alien_core::{
-    DeploymentConfig, ManagementPermissions, PermissionSetReference, Platform, SetupManagement,
+    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform, SetupManagement,
     Stack, StackState,
 };
 use alien_error::AlienError;
+use alien_permissions::generators::{aws_family, aws_passed_to_services, azure_family, gcp_family};
 use async_trait::async_trait;
 
 pub struct ProtectedManagementRefusalMutation;
@@ -31,6 +32,47 @@ fn on_a_cloud(stack_state: &StackState, config: &DeploymentConfig) -> bool {
     [Platform::Aws, Platform::Gcp, Platform::Azure]
         .into_iter()
         .any(|cloud| runs_on_platform_or_base(stack_state, config, cloud))
+}
+
+/// The first action of a built-in set the renderer would drop from a protected install's
+/// management identity, as `(action, family)`. The built-in profile is filtered silently; a set
+/// the stack adds is refused instead, so the vendor gets all of it or a clear error.
+fn first_dropped_action(set: &PermissionSet) -> Option<(String, &'static str)> {
+    for entry in set.platforms.aws.iter().flatten() {
+        if !entry.effect.is_allow() {
+            continue;
+        }
+        let services = [&entry.binding.stack, &entry.binding.resource]
+            .into_iter()
+            .flatten()
+            .find_map(aws_passed_to_services);
+        for action in entry.grant.actions.iter().flatten() {
+            if let Some(family) = aws_family(action, services.as_deref()) {
+                return Some((action.clone(), family.name()));
+            }
+        }
+    }
+    for entry in set.platforms.gcp.iter().flatten() {
+        let permissions = entry
+            .grant
+            .permissions
+            .iter()
+            .chain(&entry.grant.residual_permissions)
+            .flatten();
+        for permission in permissions {
+            if let Some(family) = gcp_family(permission) {
+                return Some((permission.clone(), family.name()));
+            }
+        }
+    }
+    for entry in set.platforms.azure.iter().flatten() {
+        for action in entry.grant.actions.iter().flatten() {
+            if let Some(family) = azure_family(action) {
+                return Some((action.clone(), family.name()));
+            }
+        }
+    }
+    None
 }
 
 fn refusal(message: String, resource_id: &str) -> AlienError<ErrorData> {
@@ -85,8 +127,27 @@ impl StackMutation for ProtectedManagementRefusalMutation {
             ManagementPermissions::Extend(profile) => {
                 for (scope, sets) in &profile.0 {
                     for reference in sets {
-                        let PermissionSetReference::Inline(set) = reference else {
-                            continue;
+                        let set = match reference {
+                            PermissionSetReference::Name(id) => {
+                                let Some(set) = alien_permissions::get_permission_set(id) else {
+                                    continue;
+                                };
+                                if let Some((action, family)) = first_dropped_action(set) {
+                                    return Err(refusal(
+                                        format!(
+                                            "the management permissions add the permission set \
+                                             '{id}', which grants '{action}' ({family}). A \
+                                             protected install gives management no action that \
+                                             can run unsigned code, change an identity or open \
+                                             the install to outside access; only the verifier \
+                                             writes those. Remove the set"
+                                        ),
+                                        scope,
+                                    ));
+                                }
+                                continue;
+                            }
+                            PermissionSetReference::Inline(set) => set,
                         };
                         return Err(refusal(
                             format!(
@@ -232,6 +293,17 @@ mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("{platform:?}: {error}"));
         }
+
+        // A built-in set that would lose an action to the family filter is refused by name.
+        let error = prepared(
+            extending(PermissionSetReference::Name("service-account/provision".to_string())),
+            Platform::Aws,
+            protected(),
+        )
+        .await
+        .expect_err("a set with family actions is refused");
+        assert!(error.contains("'service-account/provision'"), "{error}");
+        assert!(error.contains("IDENTITY"), "{error}");
         prepared(
             extending(inline("orders/extra")),
             Platform::Aws,

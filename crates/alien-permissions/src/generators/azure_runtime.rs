@@ -2,7 +2,8 @@ use crate::{
     error::{ErrorData, Result},
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        protected_allowlist::{is_management_held, AllowListCloud, Kind as AllowListKind},
+        families::{azure_family, azure_reach_exclusions, Family},
+        protected_allowlist::{is_built_in_unchanged, is_management_held, AllowListCloud, Kind as AllowListKind},
         verifier_owned::{
             azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
             azure_verifier_owned_data_action,
@@ -628,12 +629,22 @@ impl AzureRuntimePermissionsGenerator {
             .actions
             .clone()
             .unwrap_or_default();
-        requested.extend(substitute_actions(
-            permission_set,
-            &platform_permission.grant,
-            context,
-        ));
         let mut actions = granted_actions(permission_set, &requested, context)?;
+        // A predefined role a protected install replaces keeps its wildcard with the REACH actions
+        // in `NotActions`; one that reaches RUN or IDENTITY is left out.
+        let mut not_actions = Vec::new();
+        for substitute in substitute_actions(permission_set, &platform_permission.grant, context) {
+            match azure_family(&substitute) {
+                None => actions.push(substitute),
+                Some(Family::Reach) if !azure_reach_exclusions(&substitute).is_empty() => {
+                    not_actions.extend(azure_reach_exclusions(&substitute));
+                    actions.push(substitute);
+                }
+                Some(_) => {}
+            }
+        }
+        not_actions.sort();
+        not_actions.dedup();
         let mut data_actions = granted_data_actions(
             permission_set,
             platform_permission
@@ -670,7 +681,7 @@ impl AzureRuntimePermissionsGenerator {
                 ),
             ),
             actions,
-            not_actions: vec![],
+            not_actions,
             data_actions,
             not_data_actions: vec![],
             assignable_scopes: vec![scope.to_string()],
@@ -834,14 +845,17 @@ fn granted_actions(
     context: &PermissionContext,
 ) -> Result<Vec<String>> {
     let kept = kept_actions(actions, context);
-    if context.signing_protected && !is_management_held(permission_set) {
-        // A wildcard the filter would drop is still refused: the stack asked for more than the
-        // allow-list covers. Only a named action that the filter removes is dropped quietly.
-        for action in actions
-            .iter()
-            .filter(|action| action.contains(['*', '?']) || kept.contains(action))
-        {
-            AllowListCloud::Azure.require(&permission_set.id, AllowListKind::Action, action)?;
+    if context.signing_protected && !is_built_in_unchanged(permission_set) {
+        for action in actions {
+            if let Some(family) = azure_family(action) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: action.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
         }
     }
     Ok(kept)
@@ -883,7 +897,9 @@ fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> 
         .iter()
         .filter(|action| {
             !(context.signing_protected
-                && (azure_verifier_owned_action(action) || azure_changes_what_runs(action)))
+                && (azure_family(action).is_some()
+                    || azure_verifier_owned_action(action)
+                    || azure_changes_what_runs(action)))
         })
         .cloned()
         .collect()

@@ -400,6 +400,117 @@ pub fn gcp_family(permission: &str) -> Option<Family> {
     None
 }
 
+/// Azure control-plane paths whose non-read actions are RUN.
+const AZURE_RUN_PATHS: &[&str] = &[
+    "microsoft.app/",
+    "microsoft.compute/",
+    "microsoft.containerinstance/",
+    "microsoft.containerservice/",
+    "microsoft.web/",
+    "microsoft.containerregistry/registries/agentpools/",
+    "microsoft.containerregistry/registries/runs/",
+    "microsoft.containerregistry/registries/taskruns/",
+    "microsoft.containerregistry/registries/tasks/",
+    "microsoft.resources/deployments/",
+    "microsoft.resources/tags/",
+];
+
+/// Azure control-plane paths whose non-read actions are IDENTITY.
+const AZURE_IDENTITY_PATHS: &[&str] = &["microsoft.managedidentity/", "microsoft.authorization/"];
+
+/// Azure actions and paths that are REACH: keys and tokens that read or write the install's data
+/// from outside, network rules, access policies and the writes that carry a public-access field.
+/// A whole write of a storage account, container or registry is the verifier's, because the
+/// public-access field is part of it.
+const AZURE_REACH_FRAGMENTS: &[&str] = &[
+    "/listkeys/",
+    "/listkeys",
+    "/listaccountsas/",
+    "/listservicesas/",
+    "/listcredentials/",
+    "/listcredentials",
+    "/regeneratekey/",
+    "/regeneratekeys/",
+    "/regenerate",
+    "/begingetaccess/",
+    "/authorizationrules/",
+    "/accesspolicies/",
+    "/virtualnetworkpeerings/",
+    "/privateendpointconnections/",
+    "/networksecuritygroups/",
+    "/securityrules/",
+    "/eventsubscriptions/",
+];
+
+/// Whole-resource writes that carry a public-access field.
+const AZURE_REACH_WRITES: &[&str] = &[
+    "microsoft.storage/storageaccounts/write",
+    "microsoft.storage/storageaccounts/blobservices/containers/write",
+    "microsoft.containerregistry/registries/write",
+    "microsoft.keyvault/vaults/write",
+];
+
+/// The concrete Azure actions the REACH fragments above name for network resources. A predefined
+/// role that stands for a wildcard such as `Microsoft.Network/*` is rendered with these in
+/// `NotActions`, so the role keeps everything else.
+const AZURE_REACH_NETWORK_ACTIONS: &[&str] = &[
+    "Microsoft.Network/networkSecurityGroups/write",
+    "Microsoft.Network/networkSecurityGroups/join/action",
+    "Microsoft.Network/networkSecurityGroups/securityRules/write",
+    "Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write",
+    "Microsoft.Network/privateLinkServices/privateEndpointConnections/write",
+];
+
+/// The REACH actions a wildcard Azure action would grant that a role can exclude with
+/// `NotActions`, or none when the pattern reaches a family it can't exclude.
+pub fn azure_reach_exclusions(pattern: &str) -> Vec<String> {
+    AZURE_REACH_NETWORK_ACTIONS
+        .iter()
+        .filter(|action| glob_patterns_overlap(pattern, action))
+        .map(|action| action.to_string())
+        .collect()
+}
+
+/// The family of the Azure control-plane action or action pattern, if it is in one.
+///
+/// A wildcard is in a family when it can match an action in one, unless it ends in `/read`.
+pub fn azure_family(action: &str) -> Option<Family> {
+    let action = action.to_ascii_lowercase();
+    if action.ends_with("/read") && !action.starts_with('*') || action == "*/read" {
+        return None;
+    }
+    if action.starts_with('*') {
+        return Some(Family::Run);
+    }
+    let is_delete = action.ends_with("/delete");
+    let in_paths = |paths: &[&str]| {
+        paths
+            .iter()
+            .any(|path| glob_patterns_overlap(&format!("{path}*"), &action))
+    };
+    // Deleting is out of scope, except an Authorization delete, which removes a lock, policy or
+    // assignment that limits an identity.
+    if in_paths(AZURE_IDENTITY_PATHS) {
+        return Some(Family::Identity);
+    }
+    if is_delete {
+        return None;
+    }
+    if in_paths(AZURE_RUN_PATHS) {
+        return Some(Family::Run);
+    }
+    if AZURE_REACH_FRAGMENTS
+        .iter()
+        .any(|fragment| glob_patterns_overlap(&format!("*{fragment}*"), &action))
+        || AZURE_REACH_WRITES
+            .iter()
+            .any(|write| glob_patterns_overlap(write, &action))
+    {
+        return Some(Family::Reach);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,6 +639,52 @@ mod tests {
             "serviceusage.services.enable",
         ] {
             assert_eq!(gcp_family(permission), None, "{permission}");
+        }
+    }
+
+    #[test]
+    fn azure_family_names_the_family_of_each_action() {
+        for (action, family) in [
+            ("Microsoft.App/containerApps/write", Family::Run),
+            ("Microsoft.App/jobs/start/action", Family::Run),
+            ("Microsoft.Compute/virtualMachines/runCommand/action", Family::Run),
+            ("Microsoft.Compute/*", Family::Run),
+            ("Microsoft.Resources/deployments/write", Family::Run),
+            ("Microsoft.Resources/tags/write", Family::Run),
+            ("Microsoft.ManagedIdentity/userAssignedIdentities/assign/action", Family::Identity),
+            ("Microsoft.Authorization/roleAssignments/write", Family::Identity),
+            ("Microsoft.Authorization/locks/delete", Family::Identity),
+            ("Microsoft.Storage/storageAccounts/listKeys/action", Family::Reach),
+            ("Microsoft.Storage/storageAccounts/regenerateKey/action", Family::Reach),
+            ("Microsoft.Storage/storageAccounts/write", Family::Reach),
+            ("Microsoft.ServiceBus/namespaces/authorizationRules/write", Family::Reach),
+            ("Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write", Family::Reach),
+            ("Microsoft.Network/networkSecurityGroups/securityRules/write", Family::Reach),
+            ("Microsoft.KeyVault/vaults/accessPolicies/write", Family::Reach),
+            ("*", Family::Run),
+            ("*/write", Family::Run),
+        ] {
+            assert_eq!(azure_family(action), Some(family), "{action}");
+        }
+    }
+
+    #[test]
+    fn azure_family_leaves_reads_deletes_and_infrastructure_alone() {
+        for action in [
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Compute/virtualMachineScaleSets/delete",
+            "Microsoft.App/containerApps/delete",
+            "Microsoft.Authorization/roleAssignments/read",
+            "*/read",
+            "Microsoft.Network/virtualNetworks/write",
+            "Microsoft.Network/publicIPAddresses/write",
+            "Microsoft.Storage/storageAccounts/read",
+            "Microsoft.Storage/storageAccounts/delete",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.KeyVault/vaults/read",
+            "Microsoft.Insights/components/write",
+        ] {
+            assert_eq!(azure_family(action), None, "{action}");
         }
     }
 
