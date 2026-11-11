@@ -698,6 +698,8 @@ mod tests {
                 ResourceWrite::PutBucketNotification { configuration, .. } => {
                     configuration.to_string()
                 }
+                ResourceWrite::CreateEventSourceMapping { request }
+                | ResourceWrite::UpdateEventSourceMapping { request, .. } => request.to_string(),
                 ResourceWrite::CreateQueue { queue_name, .. } => queue_name.clone(),
                 ResourceWrite::SetQueueAttributes { attributes, .. } => {
                     json!(attributes).to_string()
@@ -753,6 +755,106 @@ mod tests {
             machine_network: None,
         };
         (verifier, backend)
+    }
+
+    fn worker_release() -> alien_signing::SignedStatement {
+        let jobs = alien_core::Queue::new("jobs".to_string()).build();
+        let other = alien_core::Queue::new("other".to_string()).build();
+        let api = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: format!("registry.example/api@sha256:{}", "a".repeat(64)),
+            })
+            .permissions("execution".to_string())
+            .trigger(alien_core::WorkerTrigger::Queue {
+                queue: alien_core::ResourceRef::new(alien_core::Queue::RESOURCE_TYPE, "jobs"),
+                batch: None,
+            })
+            .build();
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(jobs, alien_core::ResourceLifecycle::Frozen)
+            .add(other, alien_core::ResourceLifecycle::Frozen)
+            .add(api, alien_core::ResourceLifecycle::Live)
+            .build();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Aws,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    /// A mapping reads only from a queue the signed stack triggers the worker from, and feeds
+    /// only the worker's own function; the accepted request goes out unchanged.
+    #[tokio::test]
+    async fn event_source_mappings_are_checked_against_the_signed_stack() {
+        let function = format!("{PREFIX}-api");
+        let queue = |name: &str| format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{PREFIX}-{name}");
+        let request = |write: Value| {
+            json!({"applyResourceWrite": {
+                "release": worker_release(),
+                "signerLists": [signer_list()],
+                "resource": "api",
+                "writes": [write],
+            }})
+        };
+        let create = |source: String, target: &str| {
+            request(json!({"createEventSourceMapping": {"request": {
+                "EventSourceArn": source, "FunctionName": target,
+                "BatchSize": 1, "Enabled": true
+            }}}))
+        };
+        let (verifier, backend) = resource_verifier();
+        verifier
+            .handle(create(queue("jobs"), &function))
+            .await
+            .expect("the signed trigger is accepted");
+        let sent: Value = serde_json::from_str(&backend.forwarded.lock().unwrap()[0]).unwrap();
+        assert_eq!(sent["EventSourceArn"], queue("jobs"), "sent unchanged");
+        let arn = format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{function}");
+        verifier
+            .handle(create(queue("jobs"), &arn))
+            .await
+            .expect("the function's ARN names it too");
+
+        for (name, write) in [
+            ("another queue of the stack", create(queue("other"), &function)),
+            (
+                "another account's queue",
+                create(format!("arn:aws:sqs:{REGION}:999988887777:{PREFIX}-jobs"), &function),
+            ),
+            (
+                "another function",
+                create(queue("jobs"), &format!("{PREFIX}-verifier")),
+            ),
+            (
+                "a field the verifier does not apply",
+                request(json!({"createEventSourceMapping": {"request": {
+                    "EventSourceArn": queue("jobs"), "FunctionName": function,
+                    "SelfManagedEventSource": {}
+                }}})),
+            ),
+            (
+                "an update that moves the mapping to another function",
+                request(json!({"updateEventSourceMapping": {
+                    "uuid": "u-1", "request": {"FunctionName": format!("{PREFIX}-verifier")}
+                }})),
+            ),
+        ] {
+            let forwarded = backend.forwarded.lock().unwrap().len();
+            let reason = refusal(verifier.handle(write).await);
+            assert!(reason.starts_with("Refused: "), "{name}: {reason}");
+            assert_eq!(backend.forwarded.lock().unwrap().len(), forwarded, "{name}");
+        }
+        verifier
+            .handle(request(json!({"updateEventSourceMapping": {
+                "uuid": "u-1", "request": {"BatchSize": 5, "FunctionName": function}
+            }})))
+            .await
+            .expect("batch settings of the worker's own mapping are accepted");
     }
 
     /// A notification document for another bucket, or one that does not parse, is refused before

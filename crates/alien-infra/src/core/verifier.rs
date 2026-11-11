@@ -397,6 +397,15 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: serde_json::Value,
     },
+    /// Lambda CreateEventSourceMapping.
+    #[serde(rename_all = "camelCase")]
+    CreateEventSourceMapping { request: serde_json::Value },
+    /// Lambda UpdateEventSourceMapping.
+    #[serde(rename_all = "camelCase")]
+    UpdateEventSourceMapping {
+        uuid: String,
+        request: serde_json::Value,
+    },
     /// SQS CreateQueue.
     #[serde(rename_all = "camelCase")]
     CreateQueue {

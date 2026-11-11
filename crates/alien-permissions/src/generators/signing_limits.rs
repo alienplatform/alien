@@ -119,11 +119,17 @@ const POLICY_WRITES: &[&str] = &[
     "iam:UntagPolicy",
 ];
 
-/// Writes that open a bucket, topic or queue to another account. Management makes none of them
-/// (there is no client for them), so the limits take them away. Bucket policies, queue
-/// attributes and event source mappings are not here: the controllers write them for the
-/// install's Live resources as management.
+/// Writes that decide who can reach a bucket, topic or queue or where its events go. The
+/// controllers send the ones they make for the install's Live resources to the verifier, which
+/// checks them against the signed stack, so management holds none of them.
 const AWS_SHARING_WRITES: &[&str] = &[
+    "s3:PutBucketPolicy",
+    "s3:PutBucketPublicAccessBlock",
+    "s3:PutBucketNotification",
+    "sqs:CreateQueue",
+    "sqs:SetQueueAttributes",
+    "lambda:CreateEventSourceMapping",
+    "lambda:UpdateEventSourceMapping",
     "s3:PutBucketAcl",
     "s3:PutBucketOwnershipControls",
     "sns:AddPermission",
@@ -328,6 +334,20 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                     "s3:GetBucketNotification"
                 ],
                 "Resource": format!("arn:aws:s3:::{prefix}-*")
+            },
+            {
+                // Which queue feeds a worker is the verifier's to write: it checks the mapping
+                // against the signed stack.
+                "Sid": "MapThisInstallsEventSources",
+                "Effect": "Allow",
+                "Action": ["lambda:CreateEventSourceMapping", "lambda:UpdateEventSourceMapping"],
+                "Resource": "*",
+                "Condition": {
+                    "StringLike": {
+                        "lambda:FunctionArn":
+                            format!("arn:aws:lambda:{region}:{account}:function:{prefix}-*")
+                    }
+                }
             },
             {
                 // Who may send to a queue is the verifier's to write: it checks the policy
@@ -681,23 +701,27 @@ mod tests {
         }
     }
 
-    /// The controllers write these for the install's Live buckets, queues and workers as the
-    /// management role, so the limits cannot deny them without breaking those resources.
+    /// The controllers send these for the install's Live buckets, queues and workers to the
+    /// verifier, so management holds none of them.
     #[test]
-    fn management_keeps_the_writes_its_controllers_make_for_live_resources() {
+    fn management_cannot_write_what_the_verifier_writes_for_live_resources() {
         let limits = aws_management_limits("acme", "111122223333", "us-east-1");
         for (action, resource) in [
             ("s3:PutBucketPolicy", "arn:aws:s3:::acme-uploads"),
+            ("s3:PutBucketPublicAccessBlock", "arn:aws:s3:::acme-uploads"),
+            ("s3:PutBucketNotification", "arn:aws:s3:::acme-uploads"),
+            ("sqs:CreateQueue", "arn:aws:sqs:us-east-1:111122223333:acme-jobs"),
             (
                 "sqs:SetQueueAttributes",
                 "arn:aws:sqs:us-east-1:111122223333:acme-jobs",
             ),
             ("lambda:CreateEventSourceMapping", "*"),
             ("lambda:UpdateEventSourceMapping", "*"),
-            ("lambda:DeleteEventSourceMapping", "*"),
         ] {
-            assert!(!denies(&limits, action, resource), "{action} on {resource}");
+            assert!(denies(&limits, action, resource), "{action} on {resource}");
         }
+        // Removing a mapping changes no reach.
+        assert!(!denies(&limits, "lambda:DeleteEventSourceMapping", "*"));
     }
 
     #[test]

@@ -202,3 +202,23 @@ fn the_verifier_creates_and_configures_only_its_installs_queues() {
     );
     assert_eq!(evaluate(&policy, &send), Decision::NotAllowed);
 }
+
+#[test]
+fn the_verifier_maps_event_sources_only_to_its_installs_functions() {
+    let policy = verifier();
+    for action in [
+        "lambda:CreateEventSourceMapping",
+        "lambda:UpdateEventSourceMapping",
+    ] {
+        let own = Request::new(action, "*").with(
+            "lambda:FunctionArn",
+            "arn:aws:lambda:us-east-1:111122223333:function:acme-worker",
+        );
+        assert_eq!(evaluate(&policy, &own), Decision::Allowed, "{action}");
+        let other = Request::new(action, "*").with(
+            "lambda:FunctionArn",
+            "arn:aws:lambda:us-east-1:111122223333:function:someone-elses",
+        );
+        assert_eq!(evaluate(&policy, &other), Decision::NotAllowed, "{action}");
+    }
+}

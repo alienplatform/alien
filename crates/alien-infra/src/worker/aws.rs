@@ -5845,21 +5845,45 @@ impl AwsWorkerController {
                 if batch.is_none() && !was_batched {
                     return Ok(uuid);
                 }
-                lambda_client
-                    .update_event_source_mapping(
-                        &uuid,
-                        alien_aws_clients::lambda::UpdateEventSourceMappingRequest::builder()
-                            .batch_size(batch_size)
-                            .maximum_batching_window_in_seconds(window)
-                            .function_response_types(response_types)
-                            .scaling_config(scaling)
-                            .build(),
+                let update = alien_aws_clients::lambda::UpdateEventSourceMappingRequest::builder()
+                    .batch_size(batch_size)
+                    .maximum_batching_window_in_seconds(window)
+                    .function_response_types(response_types)
+                    .scaling_config(scaling)
+                    .build();
+                if let Some(release) =
+                    crate::core::verifier::protected_statements(ctx, &worker_config.id)?
+                {
+                    let verifier = crate::core::verifier::LambdaVerifier::new(
+                        lambda_client.clone(),
+                        ctx.resource_prefix,
+                    );
+                    crate::core::verifier::apply_resource_write(
+                        &verifier,
+                        release,
+                        ctx.deployment_config.signed_config.as_ref(),
+                        &worker_config.id,
+                        vec![crate::core::verifier::ResourceWrite::UpdateEventSourceMapping {
+                            uuid: uuid.clone(),
+                            request: serde_json::to_value(&update).into_alien_error().context(
+                                ErrorData::CloudPlatformError {
+                                    message: "The event source mapping request does not serialize"
+                                        .to_string(),
+                                    resource_id: Some(worker_config.id.clone()),
+                                },
+                            )?,
+                        }],
                     )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to reconcile queue event source mapping".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?;
+                    .await?;
+                } else {
+                    lambda_client
+                        .update_event_source_mapping(&uuid, update)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to reconcile queue event source mapping".to_string(),
+                            resource_id: Some(worker_config.id.clone()),
+                        })?;
+                }
                 info!(
                     worker=%worker_config.id,
                     queue_arn=%queue_arn,
@@ -5879,6 +5903,45 @@ impl AwsWorkerController {
             .maybe_scaling_config(batch.map(|_| scaling))
             .enabled(true)
             .build();
+
+        // On a protected install which queue feeds the function is the verifier's to set: it
+        // checks the mapping against the signed stack and sends this very request.
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, &worker_config.id)?
+        {
+            let verifier = crate::core::verifier::LambdaVerifier::new(
+                lambda_client.clone(),
+                ctx.resource_prefix,
+            );
+            let written = crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                &worker_config.id,
+                vec![crate::core::verifier::ResourceWrite::CreateEventSourceMapping {
+                    request: serde_json::to_value(&request).into_alien_error().context(
+                        ErrorData::CloudPlatformError {
+                            message: "The event source mapping request does not serialize"
+                                .to_string(),
+                            resource_id: Some(worker_config.id.clone()),
+                        },
+                    )?,
+                }],
+            )
+            .await?;
+            let uuid = written.answers[0]["uuid"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: "Queue event source mapping response has no UUID".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })
+                })?;
+            if !self.event_source_mappings.contains(&uuid) {
+                self.event_source_mappings.push(uuid.clone());
+            }
+            return Ok(uuid);
+        }
 
         let response = match lambda_client.create_event_source_mapping(request).await {
             Ok(response) => response,

@@ -9,7 +9,10 @@
 
 use std::collections::BTreeMap;
 
-use alien_aws_clients::s3::{NotificationConfiguration, QueueConfiguration};
+use alien_aws_clients::{
+    lambda::{CreateEventSourceMappingRequest, UpdateEventSourceMappingRequest},
+    s3::{NotificationConfiguration, QueueConfiguration},
+};
 use alien_core::{Queue, ResourceEntry, Stack, Storage};
 use alien_permissions::{
     aws_bucket_policy::{check_bucket_policy, check_public_access_block},
@@ -63,6 +66,12 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: Value,
     },
+    /// Lambda CreateEventSourceMapping, with the request as the cloud client serialises it.
+    #[serde(rename_all = "camelCase")]
+    CreateEventSourceMapping { request: Value },
+    /// Lambda UpdateEventSourceMapping of the mapping `uuid`.
+    #[serde(rename_all = "camelCase")]
+    UpdateEventSourceMapping { uuid: String, request: Value },
     /// SQS CreateQueue, as the controller sends it: no attributes.
     #[serde(rename_all = "camelCase")]
     CreateQueue {
@@ -87,6 +96,8 @@ impl ResourceWrite {
             ResourceWrite::PutBucketPolicy { .. } => "PutBucketPolicy",
             ResourceWrite::PutPublicAccessBlock { .. } => "PutPublicAccessBlock",
             ResourceWrite::PutBucketNotification { .. } => "PutBucketNotification",
+            ResourceWrite::CreateEventSourceMapping { .. } => "CreateEventSourceMapping",
+            ResourceWrite::UpdateEventSourceMapping { .. } => "UpdateEventSourceMapping",
             ResourceWrite::CreateQueue { .. } => "CreateQueue",
             ResourceWrite::SetQueueAttributes { .. } => "SetQueueAttributes",
         }
@@ -212,6 +223,29 @@ pub fn check_aws_write(
             notification_document(configuration)?;
             Ok(())
         }
+        ResourceWrite::CreateEventSourceMapping { request } => {
+            let request: CreateEventSourceMappingRequest = parse_exact(request)?;
+            check_function_name(facts, &request.function_name, "CreateEventSourceMapping")?;
+            let (account, region) = aws_account_and_region(facts)?;
+            let allowed = worker_queue_arns(facts, &region, &account)?;
+            if !allowed.contains(&request.event_source_arn) {
+                return Err(refused(format!(
+                    "CreateEventSourceMapping reads from {}, which is not a queue the signed \
+                     stack triggers worker '{}' from",
+                    request.event_source_arn, facts.resource_id
+                )));
+            }
+            Ok(())
+        }
+        ResourceWrite::UpdateEventSourceMapping { request, .. } => {
+            let request: UpdateEventSourceMappingRequest = parse_exact(request)?;
+            facts.worker()?;
+            // A mapping's source can't change; what it delivers to can.
+            if let Some(name) = &request.function_name {
+                check_function_name(facts, name, "UpdateEventSourceMapping")?;
+            }
+            Ok(())
+        }
         ResourceWrite::CreateQueue {
             queue_name,
             attributes,
@@ -304,6 +338,74 @@ pub fn check_aws_write(
             }
             Ok(())
         }
+    }
+}
+
+/// Parse a request the way the verifier will send it, refusing fields it would drop.
+fn parse_exact<T: serde::de::DeserializeOwned + Serialize>(request: &Value) -> Result<T> {
+    let parsed: T = serde_json::from_value(request.clone())
+        .map_err(|error| refused(format!("the request does not parse: {error}")))?;
+    let sent = serde_json::to_value(&parsed)
+        .map_err(|error| refused(format!("the request does not serialize: {error}")))?;
+    if sent != *request {
+        return Err(refused(
+            "the request has fields the verifier does not apply".to_string(),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn check_function_name(facts: &ResourceFacts<'_>, named: &str, operation: &str) -> Result<()> {
+    facts.worker()?;
+    let own = facts.place.function_name(facts.resource_id)?;
+    // A function is named by its name or by its ARN.
+    let own_arn = aws_account_and_region(facts)
+        .map(|(account, region)| {
+            format!("arn:{}:lambda:{region}:{account}:function:{own}", aws_partition(&region))
+        })
+        .ok();
+    if named != own && Some(named) != own_arn.as_deref() {
+        return Err(refused(format!(
+            "{operation} names function {named}, not {own}, the name this install gives worker '{}'",
+            facts.resource_id
+        )));
+    }
+    Ok(())
+}
+
+/// The ARNs of the queues the signed worker is triggered from.
+fn worker_queue_arns(
+    facts: &ResourceFacts<'_>,
+    region: &str,
+    account: &str,
+) -> Result<Vec<String>> {
+    let partition = aws_partition(region);
+    Ok(facts
+        .worker()?
+        .triggers
+        .iter()
+        .filter_map(|trigger| match trigger {
+            alien_core::WorkerTrigger::Queue { queue, .. } => Some(format!(
+                "arn:{partition}:sqs:{region}:{account}:{}",
+                aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, &queue.id)
+            )),
+            _ => None,
+        })
+        .collect())
+}
+
+impl ResourceFacts<'_> {
+    /// The resource, which must be a worker of the signed stack.
+    pub fn worker(&self) -> Result<&alien_core::Worker> {
+        self.entry()?
+            .config
+            .downcast_ref::<alien_core::Worker>()
+            .ok_or_else(|| {
+                refused(format!(
+                    "resource '{}' is not a worker in the signed stack",
+                    self.resource_id
+                ))
+            })
     }
 }
 
@@ -440,6 +542,7 @@ fn aws_account_and_region(facts: &ResourceFacts<'_>) -> Result<(String, String)>
 
 /// Send a checked AWS write unchanged, after confirming no newer release was accepted.
 pub async fn forward_aws_write(
+    lambda: &dyn alien_aws_clients::lambda::LambdaApi,
     s3: &dyn alien_aws_clients::s3::S3Api,
     sqs: &dyn alien_aws_clients::sqs::SqsApi,
     write: &ResourceWrite,
@@ -482,6 +585,26 @@ pub async fn forward_aws_write(
                     operation: format!("s3:PutBucketNotification {bucket}"),
                 })?;
             Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::CreateEventSourceMapping { request } => {
+            let request: CreateEventSourceMappingRequest = parse_exact(request)?;
+            let function = request.function_name.clone();
+            let created = lambda.create_event_source_mapping(request).await.context(
+                crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("lambda:CreateEventSourceMapping {function}"),
+                },
+            )?;
+            Ok(json!({ "uuid": created.uuid }))
+        }
+        ResourceWrite::UpdateEventSourceMapping { uuid, request } => {
+            let request: UpdateEventSourceMappingRequest = parse_exact(request)?;
+            lambda
+                .update_event_source_mapping(uuid, request)
+                .await
+                .context(crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("lambda:UpdateEventSourceMapping {uuid}"),
+                })?;
+            Ok(json!({ "uuid": uuid }))
         }
         ResourceWrite::CreateQueue {
             queue_name, tags, ..

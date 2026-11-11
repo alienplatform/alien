@@ -273,6 +273,7 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         newest: &dyn StillNewest,
     ) -> Result<Value> {
         crate::cloud_write::resource::forward_aws_write(
+            &self.lambda,
             self.s3.as_ref(),
             self.sqs.as_ref(),
             write,

@@ -1227,7 +1227,7 @@ pub struct Cors {
 // ---------------------------------------------------------------------------
 
 /// Request to create an event source mapping
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateEventSourceMappingRequest {
     /// The Amazon Resource Name (ARN) of the event source (e.g., SQS queue)
@@ -1262,7 +1262,7 @@ pub struct CreateEventSourceMappingRequest {
 }
 
 /// Request to update an event source mapping
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateEventSourceMappingRequest {
     /// The maximum number of records in each batch that Lambda pulls from your queue and sends to your function
