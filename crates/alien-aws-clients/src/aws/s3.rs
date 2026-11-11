@@ -39,6 +39,8 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
     async fn get_bucket_policy(&self, bucket: &str) -> Result<GetBucketPolicyOutput>;
     async fn get_bucket_acl(&self, bucket: &str) -> Result<GetBucketAclOutput>;
     async fn put_bucket_versioning(&self, bucket: &str, status: VersioningStatus) -> Result<()>;
+    /// Makes SSE-KMS with `kms_key_arn` the bucket's default encryption, with an S3 Bucket Key.
+    async fn put_bucket_kms_encryption(&self, bucket: &str, kms_key_arn: &str) -> Result<()>;
     /// Replaces the bucket's browser CORS: a read rule (`GET`, `HEAD`) for `read_origins` and
     /// a signed-upload rule (`PUT`) for `upload_origins`. Deletes it when both are empty.
     async fn set_bucket_cors(
@@ -879,6 +881,31 @@ impl S3Api for S3Client {
                 .await;
 
         Self::map_result(result, "PutBucketVersioning", bucket)
+    }
+
+    async fn put_bucket_kms_encryption(&self, bucket: &str, kms_key_arn: &str) -> Result<()> {
+        let host = self.host(bucket);
+        let body = format!(
+            "<ServerSideEncryptionConfiguration><Rule><ApplyServerSideEncryptionByDefault>\
+             <SSEAlgorithm>aws:kms</SSEAlgorithm><KMSMasterKeyID>{}</KMSMasterKeyID>\
+             </ApplyServerSideEncryptionByDefault><BucketKeyEnabled>true</BucketKeyEnabled>\
+             </Rule></ServerSideEncryptionConfiguration>",
+            xml_escape(kms_key_arn)
+        );
+        let digest = md5::compute(body.as_bytes());
+        let content_md5 = STANDARD.encode(digest.0);
+        let builder = self
+            .client
+            .request(Method::PUT, &self.url(bucket, "?encryption"))
+            .host(&host)
+            .content_type_xml()
+            .header("content-md5", &content_md5)
+            .content_sha256(&body)
+            .body(body);
+        let result =
+            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
+                .await;
+        Self::map_result(result, "PutBucketEncryption", bucket)
     }
 
     async fn put_public_access_block(
@@ -2756,4 +2783,11 @@ mod tests {
             Some(ErrorData::RemoteResourceNotFound { .. })
         ));
     }
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

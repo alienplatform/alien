@@ -631,7 +631,9 @@ mod tests {
             let error = broker_url_from("sbx", value.clone()).expect_err("no address is an error");
             assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR", "{value:?}");
             assert!(
-                error.message.contains(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL),
+                error
+                    .message
+                    .contains(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL),
                 "the error names the missing setting: {}",
                 error.message
             );

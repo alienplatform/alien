@@ -809,7 +809,8 @@ async fn retained_data_releases_grantees_after_workload_cleanup() -> Result<()> 
             let waiting_for_workload =
                 get_status(&state, "consumer") != Some(ResourceStatus::Deleted);
             let mut identity_before = serde_json::to_value(&state.resources["reader"]).unwrap();
-            let mut management_before = serde_json::to_value(&state.resources["management"]).unwrap();
+            let mut management_before =
+                serde_json::to_value(&state.resources["management"]).unwrap();
             // The controller checkpoint stays unchanged while deletion reports
             // the workload that still needs this identity.
             if waiting_for_workload {
@@ -1073,7 +1074,13 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
             "other-deployment",
         ),
         (SetupManagement::Automatic, false, false, false, "untagged"),
-        (SetupManagement::Automatic, false, false, false, "other-resource"),
+        (
+            SetupManagement::Automatic,
+            false,
+            false,
+            false,
+            "other-resource",
+        ),
         (
             SetupManagement::Automatic,
             false,
@@ -1214,7 +1221,10 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
             });
         let seen = calls.clone();
         iam.expect_detach_role_policy()
-            .withf(|role, policy| role == "owned-execution-sa" && policy == "arn:aws:iam::123456789012:policy/execution")
+            .withf(|role, policy| {
+                role == "owned-execution-sa"
+                    && policy == "arn:aws:iam::123456789012:policy/execution"
+            })
             .times(if missing { 0 } else { expected })
             .returning(move |_, _| {
                 seen.lock().unwrap().push("detach");
@@ -1308,9 +1318,7 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
                 serde_json::to_value(&state.resources["secrets"]).unwrap(),
                 vault_before
             );
-            if executor.is_synced(&state)
-                || state.resources["execution-sa"].error.is_some()
-            {
+            if executor.is_synced(&state) || state.resources["execution-sa"].error.is_some() {
                 break;
             }
         }
