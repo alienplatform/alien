@@ -257,11 +257,13 @@ fn azure_provider(
                 kid: format!("{AZURE_KEY}/v1"),
                 kty: "RSA-HSM".to_string(),
                 key_ops: vec!["wrapKey".to_string(), "unwrapKey".to_string()],
+                n: None,
             },
             attributes: KeyAttributes {
                 enabled: Some(enabled),
                 recovery_level: Some("Recoverable".to_string()),
             },
+            tags: Default::default(),
         })
     });
     let keys = Arc::new(keys);

@@ -96,6 +96,46 @@
           }
         }
       }
+    ],
+    "azure": [
+      // The vault lives in its own `<prefix>-keys` group so that erasing the deployment's
+      // group never deletes the key. A group that does not exist yet cannot be a scope, so the
+      // group's own create is bound at the subscription, as `azure-resource-group/provision`.
+      {
+        "label": "create-keys-group",
+        "description": "Create the group that holds the key vault.",
+        "grant": {
+          "actions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/write",
+            "Microsoft.Resources/subscriptions/resourceGroups/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}"
+          }
+        }
+      },
+      // Creating the vault, and the role assignment that lets setup create the key in it (a
+      // vault with role-based access gives its creator no data-plane rights). Key data-plane
+      // access comes from that self-assigned Key Vault Crypto Officer role, not from this set.
+      {
+        "label": "create-key-vault",
+        "description": "Create and read the key vault, and assign roles on it.",
+        "grant": {
+          "actions": [
+            "Microsoft.KeyVault/vaults/write",
+            "Microsoft.KeyVault/vaults/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-keys"
+          }
+        }
+      }
     ]
   }
 }
