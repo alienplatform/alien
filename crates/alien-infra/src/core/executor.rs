@@ -158,6 +158,10 @@ pub struct StackExecutor {
     resume_unchanged_failed_resources: bool,
     desired_stack: Stack,
     preserved_resources: HashSet<String>,
+    /// Resources that are neither created nor updated: they wait for something the
+    /// deployment does not have yet. They stay in scope, so completion cannot report
+    /// `Running` while one is held, and one in the target is never planned for deletion.
+    held_resources: HashSet<String>,
 
     // --- Stored from config for use during step() ---
     client_config: ClientConfig,
@@ -488,6 +492,12 @@ pub struct StackExecutorConfig<'a> {
     /// Authority available for setup-owned structural and permission changes.
     #[builder(default = InitialSetupAuthority::ImportedHandoff)]
     initial_setup_authority: InitialSetupAuthority,
+
+    /// Resources to leave alone: no create, update, replace or dependency-propagated
+    /// update is planned for them. Deployments use this while a required deployer
+    /// secret is missing, so only the resources that read it wait.
+    #[builder(default)]
+    held_resources: HashSet<String>,
 }
 
 /// Extension trait to add `build()` method to the builder that returns `Result<StackExecutor>`.
@@ -576,6 +586,7 @@ impl StackExecutor {
         let step_out_of_scope_resources = config.step_out_of_scope_resources;
         let resume_unchanged_failed_resources = config.resume_unchanged_failed_resources;
         let initial_setup_authority = config.initial_setup_authority;
+        let held_resources = config.held_resources;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
         crate::setup_scaffolding::validate_setup_support(stack, platform, initial_setup_authority)?;
@@ -713,6 +724,7 @@ impl StackExecutor {
             resume_unchanged_failed_resources,
             desired_stack: stack.clone(),
             preserved_resources: HashSet::new(),
+            held_resources,
             client_config,
             resource_registry,
             service_provider,
@@ -1715,6 +1727,25 @@ impl StackExecutor {
             }
         }
 
+        // Held resources are left exactly as they are.
+        if !self.held_resources.is_empty() {
+            plan_result
+                .creates
+                .retain(|id| !self.held_resources.contains(id));
+            plan_result
+                .updates
+                .retain(|id, _| !self.held_resources.contains(id));
+            plan_result
+                .replaces
+                .retain(|id| !self.held_resources.contains(id));
+            plan_result
+                .setup_required
+                .retain(|id| !self.held_resources.contains(id));
+            plan_result
+                .dependency_records
+                .retain(|id| !self.held_resources.contains(id));
+        }
+
         // 3. Propagate dependency changes: If a dependency is being updated or created, mark dependent resources for update
         let mut dependency_propagation_needed = true;
         while dependency_propagation_needed {
@@ -1724,7 +1755,8 @@ impl StackExecutor {
 
             for (resource_id, desired_config) in &self.resources {
                 // Skip if this resource is already marked for update, creation, or deletion
-                if current_updates.contains(resource_id)
+                if self.held_resources.contains(resource_id)
+                    || current_updates.contains(resource_id)
                     || plan_result.creates.contains(resource_id)
                     || plan_result.deletes.contains(resource_id)
                     || plan_result.replaces.contains(resource_id)
@@ -2630,6 +2662,17 @@ impl StackExecutor {
                 if status_halts_stepping(current_resource_view.status) {
                     continue; // Skip resources already in a terminal status (Running, Deleted, *Failed)
                 }
+            }
+
+            // A held resource that is mid-create or mid-update waits where it is. A running one
+            // still gets its health handler.
+            if self.held_resources.contains(resource_id)
+                && matches!(
+                    current_resource_view.status,
+                    ResourceStatus::Provisioning | ResourceStatus::Updating
+                )
+            {
+                continue;
             }
 
             // Lifecycle filters define mutation scope. Already-running managed
