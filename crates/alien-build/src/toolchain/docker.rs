@@ -1370,14 +1370,8 @@ fn rewrite_archive(
         ))
 }
 
-/// Give a normalized single-image archive the run-as `user` when the image would run as root.
-/// An image whose Dockerfile already sets a non-root user keeps it. Returns whether the archive
-/// was rewritten. The config and manifest blobs get new digests, so the index (and the Docker
-/// compatibility manifest, when present) are rewritten to match.
-pub(crate) fn set_archive_user_if_root(tarball_path: &Path, user: &str) -> Result<bool> {
-    const SMALL_BLOB_BYTES: u64 = 1 << 20;
-    let mut index: Option<Value> = None;
-    let mut blobs: HashMap<String, Value> = HashMap::new();
+/// Read one JSON entry of the archive by path, whatever its size. `None` when it is absent.
+fn read_archive_json(tarball_path: &Path, wanted: &str) -> Result<Option<Value>> {
     let source = File::open(tarball_path)
         .into_alien_error()
         .context(docker_read_error(
@@ -1398,16 +1392,19 @@ pub(crate) fn set_archive_user_if_root(tarball_path: &Path, user: &str) -> Resul
             .context(docker_read_error("Failed to read OCI tarball entry path"))?
             .to_string_lossy()
             .into_owned();
-        if path == "index.json" {
-            index = Some(read_entry_json(&mut entry)?);
-        } else if path.starts_with("blobs/") && entry.size() <= SMALL_BLOB_BYTES {
-            if let Some(digest) = blob_path_to_digest(&path) {
-                if let Ok(value) = read_entry_json(&mut entry) {
-                    blobs.insert(digest, value);
-                }
-            }
+        if path == wanted {
+            return read_entry_json(&mut entry).map(Some);
         }
     }
+    Ok(None)
+}
+
+/// Give a normalized single-image archive the run-as `user` when the image would run as root.
+/// An image whose Dockerfile already sets a non-root user keeps it. Returns whether the archive
+/// was rewritten. The config and manifest blobs get new digests, so the index (and the Docker
+/// compatibility manifest, when present) are rewritten to match.
+pub(crate) fn set_archive_user_if_root(tarball_path: &Path, user: &str) -> Result<bool> {
+    let index: Option<Value> = read_archive_json(tarball_path, "index.json")?;
     let invalid = |what: &str| AlienError::new(docker_read_error(what));
     let mut index = index.ok_or_else(|| invalid("OCI archive has no index.json"))?;
     let descriptor = index["manifests"]
@@ -1419,17 +1416,17 @@ pub(crate) fn set_archive_user_if_root(tarball_path: &Path, user: &str) -> Resul
         .as_str()
         .ok_or_else(|| invalid("OCI image descriptor has no digest"))?
         .to_string();
-    let mut manifest = blobs
-        .get(&manifest_digest)
-        .cloned()
+    let mut manifest = digest_to_blob_path(&manifest_digest)
+        .and_then(|path| read_archive_json(tarball_path, &path).transpose())
+        .transpose()?
         .ok_or_else(|| invalid("OCI archive is missing the image manifest blob"))?;
     let config_digest = manifest["config"]["digest"]
         .as_str()
         .ok_or_else(|| invalid("OCI image manifest has no config digest"))?
         .to_string();
-    let mut config = blobs
-        .get(&config_digest)
-        .cloned()
+    let mut config = digest_to_blob_path(&config_digest)
+        .and_then(|path| read_archive_json(tarball_path, &path).transpose())
+        .transpose()?
         .ok_or_else(|| invalid("OCI archive is missing the image config blob"))?;
 
     let current = config["config"]["User"].as_str().unwrap_or("").trim();
@@ -1856,6 +1853,32 @@ mod tests {
         assert_eq!(config["config"]["Cmd"], json!(["/app"]));
         let docker_manifest: Value = serde_json::from_slice(&contents["manifest.json"]).unwrap();
         assert!(contents.contains_key(docker_manifest[0]["Config"].as_str().unwrap()));
+        Image::from_tarball(&path).unwrap().get_metadata().unwrap();
+    }
+
+    #[test]
+    fn an_image_config_over_one_mebibyte_still_gets_the_user() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        saved_image_with_layer_links(&path, &[]);
+        DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap();
+        // Pad the config blob the manifest names past 1 MiB.
+        let contents = archive_entries(&path);
+        let index: Value = serde_json::from_slice(&contents["index.json"]).unwrap();
+        let manifest: Value = serde_json::from_slice(
+            &contents
+                [&digest_to_blob_path(index["manifests"][0]["digest"].as_str().unwrap()).unwrap()],
+        )
+        .unwrap();
+        let config_path =
+            digest_to_blob_path(manifest["config"]["digest"].as_str().unwrap()).unwrap();
+        change_saved_entry(&path, &config_path, |_, bytes| {
+            let mut config: Value = serde_json::from_slice(bytes).unwrap();
+            config["config"]["Labels"] = json!({ "big": "x".repeat(2 << 20) });
+            *bytes = serde_json::to_vec(&config).unwrap();
+        });
+
+        assert!(set_archive_user_if_root(&path, "65532:65532").unwrap());
         Image::from_tarball(&path).unwrap().get_metadata().unwrap();
     }
 

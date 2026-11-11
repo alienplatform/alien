@@ -6915,6 +6915,14 @@ spec:
             - name: IMAGE_REGISTRY
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.runtime.imagePullSecrets }}
+            {{- $pullSecretNames := list }}
+            {{- range .Values.runtime.imagePullSecrets }}
+            {{- $pullSecretNames = append $pullSecretNames .name }}
+            {{- end }}
+            - name: IMAGE_PULL_SECRETS
+              value: {{ join "," $pullSecretNames | quote }}
+            {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
             {{- if and (dig "selfUpdate" true .Values.runtime.image) (not (dig "digest" "" .Values.runtime.image)) }}

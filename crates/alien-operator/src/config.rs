@@ -127,6 +127,11 @@ pub struct OperatorConfig {
     /// `global.imageRegistry`. Images keep their path, tag and digest.
     pub image_registry: Option<String>,
 
+    /// Image pull Secret names from the chart's `runtime.imagePullSecrets`, for pods the
+    /// Operator creates at runtime (dynamic containers).
+    #[builder(default)]
+    pub image_pull_secrets: Vec<String>,
+
     /// Operations declared through `OPERATOR_OPERATIONS`, for an Operator
     /// installed without a release.
     pub operations: Option<alien_core::OperationsConfig>,

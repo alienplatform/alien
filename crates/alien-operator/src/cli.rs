@@ -169,6 +169,11 @@ pub struct Args {
     #[arg(long, env = "IMAGE_REGISTRY")]
     pub image_registry: Option<String>,
 
+    /// Names of the image pull Secrets the chart's `runtime.imagePullSecrets` lists
+    /// (comma separated). Dynamic containers use them to pull from a private mirror.
+    #[arg(long, env = "IMAGE_PULL_SECRETS", value_delimiter = ',')]
+    pub image_pull_secrets: Vec<String>,
+
     #[arg(long, env = "PUBLIC_ENDPOINTS")]
     pub public_endpoints: Option<String>,
 
@@ -778,6 +783,13 @@ async fn run_operator_cli(
         .stack_settings(stack_settings)
         .maybe_chart_default_bindings(chart_default_bindings)
         .maybe_image_registry(args.image_registry.clone().filter(|r| !r.trim().is_empty()))
+        .image_pull_secrets(
+            args.image_pull_secrets
+                .iter()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+                .collect(),
+        )
         .maybe_operations(operations)
         .maybe_installed_setup(installed_setup)
         .maybe_setup_release_file(args.setup_release_file.clone())

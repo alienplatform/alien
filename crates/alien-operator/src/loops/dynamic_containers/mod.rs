@@ -139,6 +139,7 @@ pub async fn reconcile(
     deployment_id: &str,
     targets: &[TargetDynamicContainer],
     registry_auth: Option<(&str, &str)>,
+    installation_pull_secrets: &[String],
     stack: &alien_core::Stack,
 ) -> Result<Vec<DynamicContainerReport>> {
     reconcile_with_admission(
@@ -147,6 +148,7 @@ pub async fn reconcile(
         deployment_id,
         targets,
         registry_auth,
+        installation_pull_secrets,
         stack,
         None,
     )
@@ -159,6 +161,7 @@ async fn reconcile_with_admission(
     deployment_id: &str,
     targets: &[TargetDynamicContainer],
     registry_auth: Option<(&str, &str)>,
+    installation_pull_secrets: &[String],
     stack: &alien_core::Stack,
     blocked: Option<(DynamicContainerStatus, String)>,
 ) -> Result<Vec<DynamicContainerReport>> {
@@ -235,12 +238,18 @@ async fn reconcile_with_admission(
                     put_registry_secret(client, namespace, deployment_id, &desired, registry_auth)
                         .await?;
                 put_service(client, namespace, deployment_id, &desired).await?;
+                let pull_secrets = pod_pull_secrets(
+                    &desired,
+                    deployment_id,
+                    pull_secret,
+                    installation_pull_secrets,
+                );
                 let deployment = put_deployment(
                     client,
                     namespace,
                     deployment_id,
                     &desired,
-                    pull_secret,
+                    &pull_secrets,
                     node_selector.clone(),
                 )
                 .await?;
@@ -437,6 +446,7 @@ pub async fn reconcile_saved(
         deployment_id,
         &target,
         registry_auth,
+        &state.config.image_pull_secrets,
         stack,
         blocked,
     )
@@ -444,9 +454,29 @@ pub async fn reconcile_saved(
     .map(Some)
 }
 
+/// Pull Secrets for a dynamic container's pod: the manager credential written for this
+/// container (when it pulls from the manager), then the installation's own pull Secrets, which
+/// carry the site registry's credentials on a mirrored install.
+fn pod_pull_secrets(
+    target: &TargetDynamicContainer,
+    deployment_id: &str,
+    manager_pull_secret: bool,
+    installation_pull_secrets: &[String],
+) -> Vec<String> {
+    let mut names = Vec::new();
+    if manager_pull_secret {
+        names.push(format!(
+            "{}-registry",
+            backend_name(deployment_id, &target.name)
+        ));
+    }
+    names.extend(installation_pull_secrets.iter().cloned());
+    names
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{installed_compute_ready, mirror_targets};
+    use super::{installed_compute_ready, mirror_targets, pod_pull_secrets};
     use alien_core::{
         ComputeCluster, DeploymentState, DeploymentStatus, Platform, ReleaseInfo, Resource,
         ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackState,
@@ -534,5 +564,13 @@ mod tests {
         assert!(mirrored[0]
             .image
             .ends_with("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        // A mirrored install keeps the installation's pull Secrets and drops the manager one.
+        let site = vec!["site-pull".to_string()];
+        assert_eq!(pod_pull_secrets(&target, "dep", false, &site), site);
+        let both = pod_pull_secrets(&target, "dep", true, &site);
+        assert_eq!(both.len(), 2);
+        assert!(both[0].ends_with("-registry"));
+        assert_eq!(both[1], "site-pull");
+        assert!(pod_pull_secrets(&target, "dep", false, &[]).is_empty());
     }
 }
