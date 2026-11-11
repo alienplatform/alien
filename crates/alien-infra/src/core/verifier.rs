@@ -391,6 +391,12 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: serde_json::Value,
     },
+    /// S3 PutBucketNotificationConfiguration: the whole document, as the controller sends it.
+    #[serde(rename_all = "camelCase")]
+    PutBucketNotification {
+        bucket: String,
+        configuration: serde_json::Value,
+    },
     /// SQS CreateQueue.
     #[serde(rename_all = "camelCase")]
     CreateQueue {

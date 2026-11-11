@@ -321,7 +321,12 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 // checks every statement of a bucket policy against the signed stack.
                 "Sid": "SetThisInstallsBucketPolicies",
                 "Effect": "Allow",
-                "Action": ["s3:PutBucketPolicy", "s3:PutBucketPublicAccessBlock"],
+                "Action": [
+                    "s3:PutBucketPolicy",
+                    "s3:PutBucketPublicAccessBlock",
+                    "s3:PutBucketNotification",
+                    "s3:GetBucketNotification"
+                ],
                 "Resource": format!("arn:aws:s3:::{prefix}-*")
             },
             {

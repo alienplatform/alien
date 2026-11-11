@@ -44,6 +44,14 @@ pub trait Backend: Send + Sync {
             write.operation()
         )))
     }
+    /// Check `write` against what the cloud holds now, where the table alone can't tell.
+    async fn check_resource_state(
+        &self,
+        _facts: &ResourceFacts<'_>,
+        _write: &ResourceWrite,
+    ) -> Result<()> {
+        Ok(())
+    }
     /// Send `write`, already checked, to the cloud unchanged.
     async fn forward_resource_write(
         &self,
@@ -262,6 +270,9 @@ impl Verifier {
                         write.operation()
                     ),
                 })?;
+        }
+        for write in &request.writes {
+            self.backend.check_resource_state(&facts, write).await?;
         }
         let acceptance = Acceptance::new(self.store.as_ref(), &place.prefix, &accepted);
         acceptance.accept().await?;
@@ -684,6 +695,9 @@ mod tests {
                 ResourceWrite::PutPublicAccessBlock { configuration, .. } => {
                     configuration.to_string()
                 }
+                ResourceWrite::PutBucketNotification { configuration, .. } => {
+                    configuration.to_string()
+                }
                 ResourceWrite::CreateQueue { queue_name, .. } => queue_name.clone(),
                 ResourceWrite::SetQueueAttributes { attributes, .. } => {
                     json!(attributes).to_string()
@@ -739,6 +753,31 @@ mod tests {
             machine_network: None,
         };
         (verifier, backend)
+    }
+
+    /// A notification document for another bucket, or one that does not parse, is refused before
+    /// the cloud is read, and nothing goes out.
+    #[tokio::test]
+    async fn a_notification_document_for_another_bucket_is_refused() {
+        let request = |bucket: &str, configuration: Value| {
+            json!({"applyResourceWrite": {
+                "release": storage_release(false),
+                "signerLists": [signer_list()],
+                "resource": "assets",
+                "writes": [{"putBucketNotification": {
+                    "bucket": bucket, "configuration": configuration,
+                }}],
+            }})
+        };
+        for (bucket, configuration) in [
+            ("someone-elses-assets".to_string(), json!({})),
+            (format!("{PREFIX}-assets"), json!({"QueueConfiguration": "x"})),
+        ] {
+            let (verifier, backend) = resource_verifier();
+            let reason = refusal(verifier.handle(request(&bucket, configuration)).await);
+            assert!(reason.starts_with("Refused: "), "{bucket}: {reason}");
+            assert!(backend.forwarded.lock().unwrap().is_empty());
+        }
     }
 
     /// The bucket policy the controller builds is accepted unchanged, public read only when the

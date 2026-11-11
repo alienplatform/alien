@@ -2172,6 +2172,38 @@ pub struct QueueConfiguration {
     pub filter: Option<NotificationFilter>,
 }
 
+impl QueueConfiguration {
+    /// The queue configuration a storage notification rule becomes: object creation events,
+    /// filtered by the rule's literal prefix and suffix. Setup, the controller and the verifier
+    /// all derive it here.
+    pub fn for_rule(
+        notification: &alien_core::StorageNotification,
+        queue_arn: String,
+        id: Option<String>,
+    ) -> Self {
+        let filter_rules: Vec<FilterRule> = [
+            ("prefix", &notification.prefix),
+            ("suffix", &notification.suffix),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            value.as_ref().map(|value| FilterRule {
+                name: name.into(),
+                value: value.clone(),
+            })
+        })
+        .collect();
+        Self {
+            id,
+            queue_arn,
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: (!filter_rules.is_empty()).then(|| NotificationFilter {
+                key: S3KeyFilter { filter_rules },
+            }),
+        }
+    }
+}
+
 /// An SNS destination and its event/key filters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]

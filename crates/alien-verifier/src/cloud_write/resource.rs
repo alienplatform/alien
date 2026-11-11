@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use alien_aws_clients::s3::{NotificationConfiguration, QueueConfiguration};
 use alien_core::{Queue, ResourceEntry, Stack, Storage};
 use alien_permissions::{
     aws_bucket_policy::{check_bucket_policy, check_public_access_block},
@@ -56,6 +57,12 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: Value,
     },
+    /// S3 PutBucketNotificationConfiguration: the bucket's whole notification document.
+    #[serde(rename_all = "camelCase")]
+    PutBucketNotification {
+        bucket: String,
+        configuration: Value,
+    },
     /// SQS CreateQueue, as the controller sends it: no attributes.
     #[serde(rename_all = "camelCase")]
     CreateQueue {
@@ -79,6 +86,7 @@ impl ResourceWrite {
         match self {
             ResourceWrite::PutBucketPolicy { .. } => "PutBucketPolicy",
             ResourceWrite::PutPublicAccessBlock { .. } => "PutPublicAccessBlock",
+            ResourceWrite::PutBucketNotification { .. } => "PutBucketNotification",
             ResourceWrite::CreateQueue { .. } => "CreateQueue",
             ResourceWrite::SetQueueAttributes { .. } => "SetQueueAttributes",
         }
@@ -196,6 +204,14 @@ pub fn check_aws_write(
             let storage = own_bucket(facts, bucket, "PutPublicAccessBlock")?;
             check_public_access_block(configuration, storage.public_read).map_err(refused)
         }
+        ResourceWrite::PutBucketNotification {
+            bucket,
+            configuration,
+        } => {
+            own_bucket(facts, bucket, "PutBucketNotification")?;
+            notification_document(configuration)?;
+            Ok(())
+        }
         ResourceWrite::CreateQueue {
             queue_name,
             attributes,
@@ -291,6 +307,123 @@ pub fn check_aws_write(
     }
 }
 
+fn notification_document(configuration: &Value) -> Result<NotificationConfiguration> {
+    serde_json::from_value(configuration.clone()).map_err(|error| {
+        refused(format!(
+            "the bucket notification document does not parse: {error}"
+        ))
+    })
+}
+
+/// The queue entries the signed stack declares for its storage `facts.resource_id`.
+fn desired_queue_entries(
+    facts: &ResourceFacts<'_>,
+    region: &str,
+    account: &str,
+) -> Result<Vec<QueueConfiguration>> {
+    let storage = facts.storage()?;
+    let partition = aws_partition(region);
+    Ok(storage
+        .notifications
+        .iter()
+        .enumerate()
+        .map(|(index, notification)| {
+            QueueConfiguration::for_rule(
+                notification,
+                format!(
+                    "arn:{partition}:sqs:{region}:{account}:{}",
+                    aws_resource_policies::aws_prefixed_resource_name(
+                        &facts.place.prefix,
+                        &notification.queue.id
+                    )
+                ),
+                Some(alien_core::storage_notifications::aws_notification_id(
+                    &facts.place.prefix,
+                    facts.resource_id,
+                    index,
+                )),
+            )
+        })
+        .collect())
+}
+
+/// A bucket's notification document sends the bucket's events to destinations, so it decides who
+/// receives the data: every entry it holds must be one the bucket already has, or one of the
+/// storage's own the signed stack declares. Reads the bucket's current document to tell.
+pub async fn check_notification_state(
+    s3: &dyn alien_aws_clients::s3::S3Api,
+    facts: &ResourceFacts<'_>,
+    write: &ResourceWrite,
+) -> Result<()> {
+    let ResourceWrite::PutBucketNotification {
+        bucket,
+        configuration,
+    } = write
+    else {
+        return Ok(());
+    };
+    use alien_error::Context;
+    let (account, region) = aws_account_and_region(facts)?;
+    let desired = desired_queue_entries(facts, &region, &account)?;
+    let current = s3
+        .get_bucket_notification_configuration(bucket)
+        .await
+        .context(crate::error::ErrorData::CloudCallFailed {
+            operation: format!("s3:GetBucketNotification {bucket}"),
+        })?;
+    check_notification_document(
+        &notification_document(configuration)?,
+        &current,
+        &desired,
+        facts.resource_id,
+    )
+}
+
+/// The rule behind [`check_notification_state`]: no entry of `new` may be one `current` lacks
+/// unless it is in `desired`.
+fn check_notification_document(
+    new: &NotificationConfiguration,
+    current: &NotificationConfiguration,
+    desired: &[QueueConfiguration],
+    resource_id: &str,
+) -> Result<()> {
+    let allowed_queue = |entry: &QueueConfiguration| {
+        current.queue_configurations.contains(entry) || desired.contains(entry)
+    };
+    if let Some(entry) = new.queue_configurations.iter().find(|e| !allowed_queue(e)) {
+        return Err(refused(format!(
+            "PutBucketNotification adds a queue destination {} that is neither already on the              bucket nor one the signed stack declares for '{}'",
+            entry.queue_arn, resource_id
+        )));
+    }
+    if let Some(entry) = new
+        .lambda_function_configurations
+        .iter()
+        .find(|entry| !current.lambda_function_configurations.contains(entry))
+    {
+        return Err(refused(format!(
+            "PutBucketNotification adds a function destination {}",
+            entry.lambda_function_arn
+        )));
+    }
+    if let Some(entry) = new
+        .topic_configurations
+        .iter()
+        .find(|entry| !current.topic_configurations.contains(entry))
+    {
+        return Err(refused(format!(
+            "PutBucketNotification adds a topic destination {}",
+            entry.topic_arn
+        )));
+    }
+    if new.event_bridge_configuration.is_some() && current.event_bridge_configuration.is_none() {
+        return Err(refused(
+            "PutBucketNotification turns on EventBridge delivery".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn own_queue_name(facts: &ResourceFacts<'_>) -> String {
     aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, facts.resource_id)
 }
@@ -338,6 +471,18 @@ pub async fn forward_aws_write(
                 })?;
             Ok(json!({ "bucket": bucket }))
         }
+        ResourceWrite::PutBucketNotification {
+            bucket,
+            configuration,
+        } => {
+            let document = notification_document(configuration)?;
+            s3.put_bucket_notification_configuration(bucket, &document)
+                .await
+                .context(crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("s3:PutBucketNotification {bucket}"),
+                })?;
+            Ok(json!({ "bucket": bucket }))
+        }
         ResourceWrite::CreateQueue {
             queue_name, tags, ..
         } => {
@@ -369,6 +514,98 @@ pub async fn forward_aws_write(
                 operation: format!("sqs:SetQueueAttributes {queue_url}"),
             })?;
             Ok(json!({ "queueUrl": queue_url }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use alien_aws_clients::s3::{
+        EventBridgeConfiguration, LambdaFunctionConfiguration, TopicConfiguration,
+    };
+
+    fn queue(id: &str, arn: &str) -> QueueConfiguration {
+        QueueConfiguration {
+            id: Some(id.into()),
+            queue_arn: arn.into(),
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: None,
+        }
+    }
+
+    fn check(
+        new: &NotificationConfiguration,
+        current: &NotificationConfiguration,
+        desired: &[QueueConfiguration],
+    ) -> Result<()> {
+        check_notification_document(new, current, desired, "assets")
+    }
+
+    #[test]
+    fn the_signed_entries_and_the_buckets_own_are_accepted_unchanged() {
+        let signed = queue("acme-assets-0", "arn:aws:sqs:us-east-1:1:acme-jobs");
+        let hand_made = queue("theirs", "arn:aws:sqs:us-east-1:1:other");
+        let current = NotificationConfiguration {
+            queue_configurations: vec![hand_made.clone()],
+            ..Default::default()
+        };
+        let new = NotificationConfiguration {
+            queue_configurations: vec![hand_made, signed.clone()],
+            ..Default::default()
+        };
+        check(&new, &current, &[signed]).expect("accepted");
+        check(&NotificationConfiguration::default(), &current, &[]).expect("removal is accepted");
+    }
+
+    #[test]
+    fn a_destination_the_stack_does_not_declare_is_refused() {
+        let signed = queue("acme-assets-0", "arn:aws:sqs:us-east-1:1:acme-jobs");
+        let current = NotificationConfiguration::default();
+        let foreign_queue = NotificationConfiguration {
+            queue_configurations: vec![queue("acme-assets-0", "arn:aws:sqs:us-east-1:9:evil")],
+            ..Default::default()
+        };
+        let changed_filter = NotificationConfiguration {
+            queue_configurations: vec![QueueConfiguration {
+                events: vec!["s3:ObjectRemoved:*".into()],
+                ..signed.clone()
+            }],
+            ..Default::default()
+        };
+        let function = NotificationConfiguration {
+            lambda_function_configurations: vec![LambdaFunctionConfiguration {
+                id: None,
+                lambda_function_arn: "arn:aws:lambda:us-east-1:9:function:evil".into(),
+                events: vec!["s3:ObjectCreated:*".into()],
+                filter: None,
+            }],
+            ..Default::default()
+        };
+        let topic = NotificationConfiguration {
+            topic_configurations: vec![TopicConfiguration {
+                id: None,
+                topic_arn: "arn:aws:sns:us-east-1:9:evil".into(),
+                events: vec!["s3:ObjectCreated:*".into()],
+                filter: None,
+            }],
+            ..Default::default()
+        };
+        let event_bridge = NotificationConfiguration {
+            event_bridge_configuration: Some(EventBridgeConfiguration {}),
+            ..Default::default()
+        };
+        for (name, new) in [
+            ("foreign queue", foreign_queue),
+            ("changed events", changed_filter),
+            ("function", function),
+            ("topic", topic),
+            ("event bridge", event_bridge),
+        ] {
+            assert!(
+                check(&new, &current, std::slice::from_ref(&signed)).is_err(),
+                "{name} was accepted"
+            );
         }
     }
 }
