@@ -2674,14 +2674,18 @@ async fn prepare_prebuilt_sandbox(
 /// other targets were chosen for.
 fn sandbox_base_settings(settings: &BuildSettings) -> BuildSettings {
     let mut sandbox_settings = settings.clone();
-    // Kubernetes layers the agent onto the amd64 image, the one the layering reads.
     if matches!(
         settings.platform.runtime_platform(),
-        Platform::Aws | Platform::Azure | Platform::Gcp | Platform::Kubernetes
+        Platform::Aws | Platform::Azure | Platform::Gcp
     ) {
         sandbox_settings.targets = Some(BinaryTarget::defaults_for_platform(
             settings.platform.runtime_platform(),
         ));
+    }
+    // Kubernetes layers the agent onto the amd64 image, the one the layering reads. Its default
+    // target is not amd64, so it is named: an arm64 base would not take the amd64 agent.
+    if settings.platform.runtime_platform() == Platform::Kubernetes {
+        sandbox_settings.targets = Some(vec![BinaryTarget::LinuxX64]);
     }
     sandbox_settings
 }

@@ -256,19 +256,19 @@ async fn azure_declares_no_lifetime_and_sends_nothing() {
     refuses_a_created_lifetime(&sandbox).await;
 }
 
-/// Kubernetes has `activeDeadlineSeconds`, but the pool's pods are already running under the
-/// deadline the declaration fixed by the time a claim reaches them. So this binding narrows the
-/// platform's flag to false, and the claim route counts what a refusal must not cost.
+/// Kubernetes honours a lifetime: the broker records the deadline on the pod at the claim and the
+/// Operator ends the session at it. So the binding declares the platform's flag as it is, and a
+/// `timeoutMs` reaches the broker in the claim rather than being refused or dropped.
 #[tokio::test]
-async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
-    let hits = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&hits);
+async fn kubernetes_declares_a_lifetime_and_sends_it_with_the_claim() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+    let seen = Arc::clone(&bodies);
     let broker = serve(Router::new().route(
         "/v1/sandbox/sessions",
-        post(move || {
-            let counted = Arc::clone(&counted);
+        post(move |Json(body): Json<serde_json::Value>| {
+            let seen = Arc::clone(&seen);
             async move {
-                counted.fetch_add(1, Ordering::SeqCst);
+                seen.lock().unwrap().push(body);
                 Json(json!({
                     "sessionId": "s1",
                     "endpoint": "http://127.0.0.1:1",
@@ -300,18 +300,19 @@ async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
     .expect("the binding is complete");
 
     assert!(
-        alien_core::SandboxCapabilities::for_platform(alien_core::Platform::Kubernetes)
-            .expect("Kubernetes has a sandbox backend")
-            .sandbox_lifetime,
-        "the platform row stays true, which is what gates a declared maxLifetimeSeconds at plan \
-         time; only this binding narrows it"
+        sandbox.capabilities().sandbox_lifetime,
+        "the broker records the deadline on the pod, so the binding keeps the platform's flag"
     );
-    refuses_a_created_lifetime(&sandbox).await;
+    sandbox
+        .create(with_lifetime())
+        .await
+        .expect("a lifetime is accepted");
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
     assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "a refusal must cost no claim: a pod taken from the pool and then discarded is a pod the \
-         next caller has to wait for"
+        bodies[0]["timeoutMs"], 600_000,
+        "the requested lifetime reaches the broker: {}",
+        bodies[0]
     );
 }
 
