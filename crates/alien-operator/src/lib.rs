@@ -70,7 +70,7 @@ impl OperatorRuntimeOptions {
     }
 }
 
-fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>> {
+pub(crate) fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>> {
     let key = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY");
     let value = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE");
     match (key, value) {

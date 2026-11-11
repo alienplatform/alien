@@ -1,4 +1,4 @@
-use super::{backend_name, failed, labels, missing, owned};
+use super::{backend_name, failed, has_runtime_scope, labels, missing, object_labels, owned};
 use crate::error::{ErrorData, Result};
 use alien_core::sync::TargetDynamicContainer;
 use alien_error::{Context, ContextError};
@@ -158,7 +158,7 @@ fn desired_deployment(
         metadata: ObjectMeta {
             name: Some(name.clone()),
             namespace: Some(namespace.to_string()),
-            labels: Some(scope.clone()),
+            labels: Some(object_labels(deployment_id, &target.name)),
             ..Default::default()
         },
         spec: Some(DeploymentSpec {
@@ -264,7 +264,8 @@ fn deployment_matches(current: &Deployment, desired: &Deployment) -> bool {
     ) else {
         return false;
     };
-    current_pod.containers.len() == 1
+    has_runtime_scope(&current.metadata)
+        && current_pod.containers.len() == 1
         && current_app.name == "app"
         && current_pod
             .init_containers

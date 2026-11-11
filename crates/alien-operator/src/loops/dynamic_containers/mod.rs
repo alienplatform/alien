@@ -35,6 +35,34 @@ fn labels(deployment_id: &str, name: &str) -> BTreeMap<String, String> {
     ])
 }
 
+/// The runtime scope label (`ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY` and `..._VALUE`, the
+/// same pair every other object of the release carries), when the Operator runs under
+/// a chart that sets one. The chart's pre-delete cleanup selects on it.
+fn runtime_scope() -> Option<(String, String)> {
+    crate::runtime_deployment_scope_from_env().ok().flatten()
+}
+
+/// Labels for the metadata of everything a dynamic container creates: its own
+/// labels, plus the release's runtime scope label so `helm uninstall` removes it. Pod
+/// selectors keep using [`labels`]: a Deployment's selector can't change.
+fn object_labels(deployment_id: &str, name: &str) -> BTreeMap<String, String> {
+    let mut object_labels = labels(deployment_id, name);
+    if let Some((key, value)) = runtime_scope() {
+        object_labels.insert(key, value);
+    }
+    object_labels
+}
+
+/// Whether `meta` carries the runtime scope label, or there is none to carry.
+fn has_runtime_scope(meta: &ObjectMeta) -> bool {
+    runtime_scope().is_none_or(|(key, value)| {
+        meta.labels
+            .as_ref()
+            .and_then(|labels| labels.get(&key))
+            .is_some_and(|stored| *stored == value)
+    })
+}
+
 fn owned(meta: &ObjectMeta, deployment_id: &str, name: &str) -> bool {
     meta.labels.as_ref().is_some_and(|labels| {
         labels
@@ -480,5 +508,68 @@ mod tests {
             .unwrap()
             .status = ResourceStatus::RefreshFailed;
         assert!(!installed_compute_ready(&state, &stack));
+    }
+}
+
+#[cfg(test)]
+mod runtime_scope_tests {
+    use super::{has_runtime_scope, labels, object_labels};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    // temp_env serializes the tests that touch the process environment.
+    #[test]
+    fn dynamic_container_objects_carry_the_release_runtime_scope_label() {
+        temp_env::with_vars(
+            [
+                (
+                    "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY",
+                    Some("alien.dev/deployment"),
+                ),
+                ("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE", Some("release-a")),
+                ("OPERATOR_RESOURCE_PREFIX", None),
+                ("OPERATOR_HELM_RELEASE", None),
+            ],
+            || {
+                let object = object_labels("dep_1", "web");
+                assert_eq!(
+                    object.get("alien.dev/deployment").map(String::as_str),
+                    Some("release-a")
+                );
+                assert_eq!(
+                    object
+                        .get("alien.dev/dynamic-deployment")
+                        .map(String::as_str),
+                    Some("dep_1")
+                );
+                // Selectors and ownership checks stay what they were: a Deployment's
+                // selector can't change, and objects created before this label existed
+                // still match.
+                assert!(!labels("dep_1", "web").contains_key("alien.dev/deployment"));
+
+                // An object made before the label existed is rewritten to gain it.
+                let old = ObjectMeta {
+                    labels: Some(labels("dep_1", "web")),
+                    ..Default::default()
+                };
+                assert!(!has_runtime_scope(&old));
+                let new = ObjectMeta {
+                    labels: Some(object),
+                    ..Default::default()
+                };
+                assert!(has_runtime_scope(&new));
+            },
+        );
+
+        // No chart scope (a standalone Operator): nothing to add or to require.
+        temp_env::with_vars(
+            [
+                ("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY", None::<&str>),
+                ("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE", None),
+            ],
+            || {
+                assert_eq!(object_labels("dep_1", "web"), labels("dep_1", "web"));
+                assert!(has_runtime_scope(&ObjectMeta::default()));
+            },
+        );
     }
 }
