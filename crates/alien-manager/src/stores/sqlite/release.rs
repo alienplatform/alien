@@ -139,6 +139,34 @@ impl ReleaseStore for SqliteReleaseStore {
         }
     }
 
+    async fn latest_release_id(
+        &self,
+        _caller: &crate::auth::Subject,
+    ) -> Result<Option<String>, AlienError> {
+        let sql = Query::select()
+            .column(Releases::Id)
+            .from(Releases::Table)
+            .order_by(Releases::CreatedAt, Order::Desc)
+            .limit(1)
+            .to_string(SqliteQueryBuilder);
+
+        let conn = self.db.conn().lock().await;
+        let mut rows = conn
+            .query(&sql, ())
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to query latest release id".to_string(),
+            })?;
+
+        match rows.next().await.into_alien_error().context(GenericError {
+            message: "Failed to fetch release id row".to_string(),
+        })? {
+            Some(row) => Ok(Some(RowParser::new(&row).string(0, "id")?)),
+            None => Ok(None),
+        }
+    }
+
     async fn get_latest_release(
         &self,
         _caller: &crate::auth::Subject,
