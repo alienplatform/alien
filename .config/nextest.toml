@@ -37,6 +37,11 @@ filter = 'package(alien-test) and test(push_|pull_)'
 test-group = 'e2e-tests'
 
 [[profile.default.overrides]]
+# Both tests use the same cloud prefix and delete the same secret.
+filter = 'binary_id(alien-test::secret_wait)'
+test-group = 'e2e-tests'
+
+[[profile.default.overrides]]
 filter = 'binary_id(alien-local::worker_integration)'
 test-group = 'worker-integration-tests'
 
