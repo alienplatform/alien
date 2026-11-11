@@ -301,13 +301,13 @@ impl KubernetesWorkerController {
                     });
                 }
                 debug!(deployment_name=%deployment_name, "Deployment not yet ready");
-                if let Some(selector) = deployment
-                    .spec
-                    .as_ref()
-                    .and_then(|spec| spec.selector.match_labels.as_ref())
-                {
-                    crate::core::fail_if_root_image_blocked(ctx, namespace, selector, &config.id)
-                        .await?;
+                if let Some((selector, template)) = deployment.spec.as_ref().and_then(|spec| {
+                    Some((spec.selector.match_labels.as_ref()?, &spec.template))
+                }) {
+                    crate::core::fail_if_root_image_blocked(
+                        ctx, namespace, selector, template, &config.id,
+                    )
+                    .await?;
                 }
             }
             Err(e)

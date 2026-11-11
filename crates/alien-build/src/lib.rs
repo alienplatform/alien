@@ -3573,6 +3573,24 @@ async fn build_target_to_file(
             if materialize_complete_oci_tarball(tarball_path, output_path).await? {
                 info!("Copied complete OCI tarball to {}", output_path.display());
             }
+            // A Dockerfile that leaves the image running as root cannot start under the
+            // restricted pod profile; give it the unprivileged user unless it set its own.
+            if let Some(user) = image_user {
+                let archive = output_path.to_path_buf();
+                let rewritten = tokio::task::spawn_blocking(move || {
+                    toolchain::docker::set_archive_user_if_root(&archive, user)
+                })
+                .await
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: resource_name.to_string(),
+                    reason: "Setting the image user task failed".to_string(),
+                    build_output: None,
+                })??;
+                if rewritten {
+                    info!("Set the image user to {user} (the Dockerfile ran as root)");
+                }
+            }
         }
 
         toolchain::ImageBuildStrategy::FromBaseImage {

@@ -287,14 +287,18 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
-        if let (Some(namespace), Some(selector)) = (
+        if let (Some(namespace), Some((selector, template))) = (
             self.namespace.as_deref(),
-            self.read_daemonset(ctx)
-                .await?
-                .and_then(|daemonset| daemonset.spec?.selector.match_labels),
+            self.read_daemonset(ctx).await?.and_then(|daemonset| {
+                let spec = daemonset.spec?;
+                Some((spec.selector.match_labels?, spec.template))
+            }),
         ) {
             let config = ctx.desired_resource_config::<Daemon>()?;
-            crate::core::fail_if_root_image_blocked(ctx, namespace, &selector, &config.id).await?;
+            crate::core::fail_if_root_image_blocked(
+                ctx, namespace, &selector, &template, &config.id,
+            )
+            .await?;
         }
         self.record_workload_failure(ctx).await;
 

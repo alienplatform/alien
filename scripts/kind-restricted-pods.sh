@@ -151,7 +151,8 @@ for example in "$root"/examples/*/; do
   cp "$example/alien.ts" "$sdk/$name.ts"
   (cd "$sdk" && "$bun_bin" -e "const c = await import('./$name.ts'); console.log(JSON.stringify(c.default))") \
     >"$work/$name.stack.json" 2>"$work/$name.stack.err" || {
-      echo "skip $name: alien.ts does not evaluate here: $(tail -1 "$work/$name.stack.err")"; continue; }
+      # An example that does not evaluate would go unchecked, so it fails the run.
+      echo "example $name: alien.ts does not evaluate: $(tail -1 "$work/$name.stack.err")" >&2; exit 1; }
   # One config file per container or daemon: <example>.<resource>.<kind>.json plus its image.
   python3 - "$work/$name.stack.json" "$work/res" "$name" <<'PY'
 import json, os, sys

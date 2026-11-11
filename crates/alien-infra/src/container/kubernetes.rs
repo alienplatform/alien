@@ -660,6 +660,7 @@ impl KubernetesContainerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
+        let mut template = None;
         // Check workload status (different API for Deployment vs StatefulSet)
         let (ready_replicas, replicas, healthy) = if self.is_stateful {
             match deployment_client
@@ -669,6 +670,7 @@ impl KubernetesContainerController {
                 Ok(statefulset) => {
                     self.replace_obsolete_unready_pod(&statefulset, config, namespace, ctx)
                         .await?;
+                    template = statefulset.spec.as_ref().map(|spec| spec.template.clone());
 
                     if let Some(status) = &statefulset.status {
                         (
@@ -717,6 +719,7 @@ impl KubernetesContainerController {
             {
                 Ok(deployment) => {
                     self.workload_failure = deployment_failure_progress(&deployment);
+                    template = deployment.spec.as_ref().map(|spec| spec.template.clone());
                     if let Some(status) = &deployment.status {
                         (
                             status.ready_replicas,
@@ -774,13 +777,16 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
-        crate::core::fail_if_root_image_blocked(
-            ctx,
-            namespace,
-            &self.workload_labels(ctx, &config.id, self.build_labels(workload_name)),
-            &config.id,
-        )
-        .await?;
+        if let Some(template) = &template {
+            crate::core::fail_if_root_image_blocked(
+                ctx,
+                namespace,
+                &self.workload_labels(ctx, &config.id, self.build_labels(workload_name)),
+                template,
+                &config.id,
+            )
+            .await?;
+        }
         if self.is_stateful {
             self.workload_failure =
                 crate::kubernetes_priority_events::missing_priority_class_progress(

@@ -12,8 +12,8 @@ use alien_core::ContainerSecurity;
 use alien_error::{AlienError, Context};
 use alien_k8s_clients::label_selector;
 use k8s_openapi::api::core::v1::{
-    Capabilities, EmptyDirVolumeSource, Pod, PodSecurityContext, SeccompProfile, SecurityContext,
-    Volume, VolumeMount,
+    Capabilities, EmptyDirVolumeSource, Pod, PodSecurityContext, PodTemplateSpec, SeccompProfile,
+    SecurityContext, Volume, VolumeMount,
 };
 
 use crate::core::ResourceControllerContext;
@@ -138,11 +138,19 @@ pub fn pod_security(
 /// The kubelet refuses to start a container whose image runs as root under
 /// `runAsNonRoot`. Returns the message that names the opt-out when one of
 /// `pods` is stuck that way.
-pub fn root_image_blocked(pods: &[Pod], resource_id: &str) -> Option<String> {
-    // A pod that is being deleted is a leftover of the previous rollout; its replacement decides.
+///
+/// Only pods of the desired `template` count: a pod of an earlier template that is still
+/// stuck, or being deleted, is a leftover of the previous rollout, and a corrective release
+/// must not fail because of it.
+pub fn root_image_blocked(
+    pods: &[Pod],
+    template: &PodTemplateSpec,
+    resource_id: &str,
+) -> Option<String> {
     let blocked = pods
         .iter()
         .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .filter(|pod| pod_runs_template(pod, template))
         .any(|pod| {
             pod.status
                 .as_ref()
@@ -166,6 +174,42 @@ pub fn root_image_blocked(pods: &[Pod], resource_id: &str) -> Option<String> {
     })
 }
 
+/// Whether `pod` was created from `template`: its containers run the template's images, and
+/// the user settings the kubelet checks are the template's.
+fn pod_runs_template(pod: &Pod, template: &PodTemplateSpec) -> bool {
+    let Some(pod_spec) = pod.spec.as_ref() else {
+        return false;
+    };
+    let Some(template_spec) = template.spec.as_ref() else {
+        return false;
+    };
+    let user = |context: Option<&PodSecurityContext>| {
+        context.map(|c| (c.run_as_non_root, c.run_as_user, c.run_as_group))
+    };
+    let pod_user = |spec: &k8s_openapi::api::core::v1::PodSpec| {
+        user(spec.security_context.as_ref()).unwrap_or((None, None, None))
+    };
+    if pod_user(pod_spec) != pod_user(template_spec) {
+        return false;
+    }
+    template_spec.containers.iter().all(|wanted| {
+        pod_spec
+            .containers
+            .iter()
+            .find(|container| container.name == wanted.name)
+            .is_some_and(|actual| {
+                let security = |container: &k8s_openapi::api::core::v1::Container| {
+                    container
+                        .security_context
+                        .as_ref()
+                        .map(|c| (c.run_as_non_root, c.run_as_user))
+                        .unwrap_or((None, None))
+                };
+                actual.image == wanted.image && security(actual) == security(wanted)
+            })
+    })
+}
+
 /// Fail the controller step when a pod of the workload cannot start because
 /// its image runs as root, so the error names the opt-out instead of the
 /// step timing out.
@@ -173,6 +217,7 @@ pub async fn fail_if_root_image_blocked(
     ctx: &ResourceControllerContext<'_>,
     namespace: &str,
     selector: &BTreeMap<String, String>,
+    template: &PodTemplateSpec,
     resource_id: &str,
 ) -> Result<()> {
     if selector.is_empty() {
@@ -188,7 +233,7 @@ pub async fn fail_if_root_image_blocked(
             message: format!("Failed to inspect the pods of '{resource_id}'"),
             resource_id: Some(resource_id.to_string()),
         })?;
-    match root_image_blocked(&pods.items, resource_id) {
+    match root_image_blocked(&pods.items, template, resource_id) {
         Some(message) => Err(AlienError::new(ErrorData::ResourceControllerConfigError {
             resource_id: resource_id.to_string(),
             message,
@@ -204,9 +249,21 @@ mod tests {
     #[test]
     fn a_pod_blocked_by_run_as_non_root_names_the_opt_out() {
         use k8s_openapi::api::core::v1::{
-            ContainerState, ContainerStateWaiting, ContainerStatus, PodStatus,
+            Container, ContainerState, ContainerStateWaiting, ContainerStatus, PodSpec, PodStatus,
         };
-        let pod = |reason: &str, message: &str| Pod {
+        let template = |image: &str| PodTemplateSpec {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "api".to_string(),
+                    image: Some(image.to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pod = |image: &str, reason: &str, message: &str| Pod {
+            spec: template(image).spec,
             status: Some(PodStatus {
                 container_statuses: Some(vec![ContainerStatus {
                     name: "api".to_string(),
@@ -223,14 +280,21 @@ mod tests {
             }),
             ..Default::default()
         };
-        let blocked = pod(
-            "CreateContainerConfigError",
-            "container has runAsNonRoot and image will run as root (pod: \"api-1\", container: api)",
-        );
-        let message = root_image_blocked(&[blocked], "api").expect("blocked");
+        let root = "container has runAsNonRoot and image will run as root (pod: \"api-1\", container: api)";
+        let blocked = pod("app:v2", "CreateContainerConfigError", root);
+        let message = root_image_blocked(&[blocked], &template("app:v2"), "api").expect("blocked");
         assert!(message.contains("unrestricted"), "{message}");
-        let pulling = pod("ImagePullBackOff", "back-off pulling image");
-        assert!(root_image_blocked(&[pulling], "api").is_none());
+        let pulling = pod("app:v2", "ImagePullBackOff", "back-off pulling image");
+        assert!(root_image_blocked(&[pulling], &template("app:v2"), "api").is_none());
+
+        // A corrective release: the stuck pod belongs to the old template, or is being deleted.
+        let old = pod("app:v1", "CreateContainerConfigError", root);
+        assert!(root_image_blocked(&[old], &template("app:v2"), "api").is_none());
+        let mut deleting = pod("app:v2", "CreateContainerConfigError", root);
+        deleting.metadata.deletion_timestamp = Some(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(k8s_openapi::chrono::Utc::now()),
+        );
+        assert!(root_image_blocked(&[deleting], &template("app:v2"), "api").is_none());
     }
 
     #[test]
