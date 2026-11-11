@@ -216,7 +216,26 @@ pub(crate) fn sandbox_pod_with_labels(
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image),
-                env: capability_public_key.map(capability_environment),
+                env: capability_public_key.map(|key| {
+                    let mut env = capability_environment(key);
+                    // The ports the agent may forward to, from the declaration. The agent checks
+                    // a request's port against this, so what a caller names is never the source.
+                    if !sandbox.preview_ports.is_empty() {
+                        env.push(EnvVar {
+                            name: "ALIEN_SANDBOX_PREVIEW_PORTS".to_string(),
+                            value: Some(
+                                sandbox
+                                    .preview_ports
+                                    .iter()
+                                    .map(u16::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                            ),
+                            value_from: None,
+                        });
+                    }
+                    env
+                }),
                 volume_mounts: Some(vec![
                     VolumeMount {
                         name: SCRATCH_VOLUME.to_string(),

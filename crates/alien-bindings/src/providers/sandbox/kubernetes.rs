@@ -449,14 +449,10 @@ impl Sandbox for KubernetesSandbox {
         self
     }
 
-    /// Narrows the platform ceiling to this binding: the pool's pods carry
-    /// `activeDeadlineSeconds` from the declaration and are already running when a claim reaches
-    /// them, so nothing a create says can set a deadline. The declared ceiling still applies.
+    /// What a Kubernetes sandbox offers: the platform table, unchanged.
     fn capabilities(&self) -> SandboxCapabilities {
-        let mut capabilities = SandboxCapabilities::for_platform(Platform::Kubernetes)
-            .expect("Kubernetes has a sandbox backend");
-        capabilities.sandbox_lifetime = false;
-        capabilities
+        SandboxCapabilities::for_platform(Platform::Kubernetes)
+            .expect("Kubernetes has a sandbox backend")
     }
 
     /// Claims a warm pod through the broker.
@@ -613,12 +609,61 @@ impl Sandbox for KubernetesSandbox {
         agent_protocol::write_files(self, sandbox_id, files).await
     }
 
-    async fn preview(&self, _sandbox_id: &str, _port: u16) -> Result<PreviewCapability> {
-        Err(self.failed(
-            "preview",
-            "preview needs a gateway that validates a sandbox-and-port capability, which this \
-             backend has none of",
-        ))
+    /// Mints a capability for one declared port of the session's own server and returns the
+    /// agent's in-cluster URL for it. Only workloads that link the sandbox reach that address.
+    async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability> {
+        let claim = self.claimed(sandbox_id).await?.ok_or_else(|| {
+            self.failed(
+                "sandbox.preview",
+                &format!("sandbox '{sandbox_id}' does not exist; it may have been terminated"),
+            )
+        })?;
+        let response = self
+            .client
+            .post(format!("{}/preview", self.session_url(&claim.session_id)))
+            .bearer_auth(self.identity_token().await?)
+            .json(&serde_json::json!({ "port": port }))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::OperationNotSupported {
+                operation: "sandbox.preview".to_string(),
+                reason: "the sandbox broker is unreachable".to_string(),
+            })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let reason = if status == reqwest::StatusCode::FORBIDDEN {
+                format!("port {port} is not one of this sandbox's declared preview ports")
+            } else {
+                format!("the sandbox broker returned {status}")
+            };
+            return Err(self.failed("sandbox.preview", &reason));
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Grant {
+            endpoint: String,
+            capability: String,
+            expires_at: i64,
+        }
+        let grant: Grant = response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::OperationNotSupported {
+                operation: "sandbox.preview".to_string(),
+                reason: "the sandbox broker's answer was unreadable".to_string(),
+            })?;
+        Ok(PreviewCapability {
+            endpoint: grant.endpoint,
+            headers: BTreeMap::from([(
+                "Authorization".to_string(),
+                format!("Bearer {}", grant.capability),
+            )]),
+            allowed_ports: vec![port],
+            expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
+                .unwrap_or(0),
+        })
     }
 
     async fn pause(&self, _sandbox_id: &str) -> Result<()> {

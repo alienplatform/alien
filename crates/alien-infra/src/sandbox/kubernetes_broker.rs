@@ -542,6 +542,127 @@ pub(crate) async fn reattach_session_for_deployment(
     }))
 }
 
+/// The longest a preview capability lives. A caller asks again before it ends.
+const PREVIEW_LIFETIME_SECONDS: i64 = 900;
+
+/// What a caller needs to reach one port of a session's own server.
+#[derive(Debug, Clone)]
+pub struct PreviewGrant {
+    /// The agent's address and the preview route for the port
+    pub endpoint: String,
+    /// A preview capability for this pod and this port
+    pub capability: String,
+    /// Unix seconds after which the capability is void. Never later than the session's deadline.
+    pub expires_at: i64,
+}
+
+/// Why a preview capability was not minted.
+#[derive(Debug)]
+pub enum PreviewError {
+    /// The port is not one the sandbox declared for preview.
+    PortNotDeclared,
+    /// No such session for this deployment, or its deadline has passed.
+    NotFound,
+    /// The cluster could not answer; worth retrying.
+    Unavailable(AlienError<ErrorData>),
+}
+
+/// Mints a preview capability for `port` of the pod that serves `session_id`.
+///
+/// The deployment label check is the same one a reattach makes, so a caller can preview only a
+/// session of its own deployment. The port is checked against the declaration the controller
+/// published, not against anything in the request.
+pub(crate) async fn preview_session_for_deployment(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    sandbox_id: &str,
+    namespace: &str,
+    session_id: &str,
+    secret_name: &str,
+    now_unix: i64,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+    port: u16,
+) -> std::result::Result<PreviewGrant, PreviewError> {
+    let unavailable = PreviewError::Unavailable;
+    let secret = secrets
+        .get_secret(namespace, secret_name)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("the capability Secret for '{sandbox_id}' is unreadable"),
+            resource_id: Some(sandbox_id.to_string()),
+        })
+        .map_err(unavailable)?;
+    let declared: Vec<u16> = secret
+        .data
+        .as_ref()
+        .and_then(|data| data.get(crate::sandbox::PREVIEW_PORTS_SECRET_KEY))
+        .and_then(|value| serde_json::from_slice(&value.0).ok())
+        .unwrap_or_default();
+    if port == AGENT_PORT || !declared.contains(&port) {
+        return Err(PreviewError::PortNotDeclared);
+    }
+    let (signing_key, key, value) = signing_key(
+        secrets,
+        namespace,
+        secret_name,
+        sandbox_id,
+        Some((deployment_label_key, deployment_label_value)),
+    )
+    .await
+    .map_err(unavailable)?;
+    let mut found = claimed_pods(pods, namespace, sandbox_id, Some(session_id), &key, &value)
+        .await
+        .map_err(unavailable)?;
+    found.sort_by_key(|pod| {
+        (
+            recorded(pod, i64::MAX).0,
+            pod.metadata.name.clone().unwrap_or_default(),
+        )
+    });
+    let Some(pod) = found.into_iter().next() else {
+        return Err(PreviewError::NotFound);
+    };
+    if crate::sandbox::session_deadline_passed(&pod, now_unix) {
+        return Err(PreviewError::NotFound);
+    }
+    let (Some(uid), Some(address)) = (
+        pod.metadata.uid.clone().filter(|uid| !uid.is_empty()),
+        pod.status.as_ref().and_then(|status| status.pod_ip.clone()),
+    ) else {
+        return Err(PreviewError::NotFound);
+    };
+    let deadline = pod
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(crate::sandbox::ANNOTATION_SESSION_DEADLINE))
+        .and_then(|value| value.parse::<i64>().ok());
+    let expires_at = (now_unix + PREVIEW_LIFETIME_SECONDS).min(deadline.unwrap_or(i64::MAX));
+    let (_, generation, _) = recorded(&pod, now_unix);
+    let capability = sandbox_capability_token::mint(
+        &SandboxCapabilityClaims {
+            session_id: uid,
+            operation: SandboxOperationClass::Preview,
+            generation: if generation == 0 { 1 } else { 1 },
+            expires_at,
+            key_id: secret_name.to_string(),
+            port: Some(port),
+        },
+        &signing_key,
+    )
+    .context(ErrorData::CloudPlatformError {
+        message: "failed to mint a preview capability".to_string(),
+        resource_id: Some(sandbox_id.to_string()),
+    })
+    .map_err(unavailable)?;
+    Ok(PreviewGrant {
+        endpoint: format!("http://{address}:{AGENT_PORT}/v1/preview/{port}"),
+        capability,
+        expires_at,
+    })
+}
+
 /// Why a session request could not be answered by finding or creating the session.
 #[derive(Debug)]
 pub(crate) enum SessionRequestError {
@@ -1025,6 +1146,191 @@ mod tests {
         assert!(check(Some("true"), Some("10.100.0.10")).await.is_ok());
         assert!(check(Some("false"), Some("10.96.0.10")).await.is_ok());
         assert!(check(None, None).await.is_ok());
+    }
+
+    fn claimed_pod_with_deadline(deadline: i64) -> Pod {
+        let mut claimed = idle_pod("pool-a", "10.0.0.7");
+        claimed
+            .metadata
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
+        claimed.metadata.annotations = Some(BTreeMap::from([(
+            crate::sandbox::ANNOTATION_SESSION_DEADLINE.to_string(),
+            deadline.to_string(),
+        )]));
+        claimed
+    }
+
+    fn preview_secret(ports: &[u16]) -> Secret {
+        let mut secret = key_secret();
+        secret.data.as_mut().unwrap().insert(
+            crate::sandbox::PREVIEW_PORTS_SECRET_KEY.to_string(),
+            k8s_openapi::ByteString(serde_json::to_vec(ports).unwrap()),
+        );
+        secret
+    }
+
+    async fn preview(
+        pod: Pod,
+        secret: Secret,
+        port: u16,
+        now: i64,
+    ) -> std::result::Result<PreviewGrant, PreviewError> {
+        let mut mock = MockPodApi::new();
+        mock.expect_list_pods().returning(move |_, _, _| {
+            Ok(k8s_openapi::List {
+                items: vec![pod.clone()],
+                ..Default::default()
+            })
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(mock);
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        preview_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s1",
+            "key",
+            now,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+            port,
+        )
+        .await
+    }
+
+    /// A preview capability is for one pod and one port, expires within 15 minutes and never
+    /// after the session's deadline, and is minted only for a port the declaration lists.
+    #[tokio::test]
+    async fn a_preview_capability_is_for_one_pod_and_one_declared_port() {
+        let secret = preview_secret(&[8080]);
+        let public = {
+            let seed = secret.data.as_ref().unwrap()["signingKey"].0.clone();
+            ed25519_compact::KeyPair::from_slice(&seed).unwrap().pk
+        };
+        let grant = preview(
+            claimed_pod_with_deadline(10_000),
+            secret.clone(),
+            8080,
+            1_000,
+        )
+        .await
+        .ok()
+        .expect("a declared port is previewable");
+        assert_eq!(
+            grant.endpoint,
+            format!("http://10.0.0.7:{AGENT_PORT}/v1/preview/8080")
+        );
+        assert_eq!(grant.expires_at, 1_000 + 900);
+        let identity = |uid: &str| alien_core::sandbox_capability::SandboxSessionIdentity {
+            session_id: uid.to_string(),
+            generation: 1,
+        };
+        let verified = sandbox_capability_token::verify(
+            &grant.capability,
+            &public,
+            &identity("uid-pool-a"),
+            SandboxOperationClass::Preview,
+            1_001,
+        )
+        .expect("verifies for this pod and the preview class");
+        assert!(verified.admits_port(8080) && !verified.admits_port(8971));
+        // Not for another pod, not as a shell, not after it expires.
+        assert!(sandbox_capability_token::verify(
+            &grant.capability,
+            &public,
+            &identity("uid-another-pod"),
+            SandboxOperationClass::Preview,
+            1_001
+        )
+        .is_err());
+        assert!(sandbox_capability_token::verify(
+            &grant.capability,
+            &public,
+            &identity("uid-pool-a"),
+            SandboxOperationClass::Execute,
+            1_001
+        )
+        .is_err());
+        assert!(sandbox_capability_token::verify(
+            &grant.capability,
+            &public,
+            &identity("uid-pool-a"),
+            SandboxOperationClass::Preview,
+            1_000 + 900
+        )
+        .is_err());
+        // The session's own deadline caps it.
+        let near_deadline = preview(claimed_pod_with_deadline(1_120), secret, 8080, 1_000)
+            .await
+            .ok()
+            .unwrap();
+        assert_eq!(near_deadline.expires_at, 1_120);
+    }
+
+    #[tokio::test]
+    async fn a_preview_for_an_undeclared_port_or_the_agent_port_is_refused() {
+        for port in [8081, AGENT_PORT] {
+            let refused = preview(
+                claimed_pod_with_deadline(10_000),
+                preview_secret(&[8080, AGENT_PORT]),
+                port,
+                1_000,
+            )
+            .await;
+            assert!(
+                matches!(refused, Err(PreviewError::PortNotDeclared)),
+                "port {port} must be refused"
+            );
+        }
+        // No declaration at all: nothing is previewable.
+        let none = preview(claimed_pod_with_deadline(10_000), key_secret(), 8080, 1_000).await;
+        assert!(matches!(none, Err(PreviewError::PortNotDeclared)));
+    }
+
+    #[tokio::test]
+    async fn a_preview_for_an_ended_or_unknown_session_is_not_found() {
+        let ended = preview(
+            claimed_pod_with_deadline(999),
+            preview_secret(&[8080]),
+            8080,
+            1_000,
+        )
+        .await;
+        assert!(matches!(ended, Err(PreviewError::NotFound)));
+        // The listing is already scoped to the caller's deployment, so another deployment's pod
+        // is never returned and the answer is the same as for an unknown id.
+        let mut mock = MockPodApi::new();
+        mock.expect_list_pods()
+            .returning(|_, _, _| Ok(k8s_openapi::List::default()));
+        let pods: Arc<dyn PodApi> = Arc::new(mock);
+        let mut secrets = MockSecretsApi::new();
+        let secret = preview_secret(&[8080]);
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        let unknown = preview_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "nobody",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+            8080,
+        )
+        .await;
+        assert!(matches!(unknown, Err(PreviewError::NotFound)));
     }
 
     #[tokio::test]

@@ -230,6 +230,10 @@ pub fn broker_router_with_authorization(
             "/v1/sandbox/{sandbox}/sessions/{session}",
             axum::routing::get(reattach).delete(release),
         )
+        .route(
+            "/v1/sandbox/{sandbox}/sessions/{session}/preview",
+            post(preview),
+        )
         .with_state(BrokerRouteState {
             broker: state,
             authorization,
@@ -369,6 +373,53 @@ async fn list(
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     Ok(Json(SessionList { session_ids }))
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewRequest {
+    port: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewResponse {
+    endpoint: String,
+    capability: String,
+    expires_at: i64,
+}
+
+/// Mints a preview capability for one declared port of a session of the caller's deployment.
+async fn preview(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path((sandbox_id, session)): Path<(String, String)>,
+    Json(request): Json<PreviewRequest>,
+) -> Result<Json<PreviewResponse>, StatusCode> {
+    use crate::sandbox::kubernetes_broker::PreviewError;
+    let authorization = authorize(&state, &headers).await?;
+    let grant = crate::sandbox::kubernetes_broker::preview_session_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &sandbox_id,
+        &state.broker.namespace,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        chrono::Utc::now().timestamp(),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+        request.port,
+    )
+    .await
+    .map_err(|error| match error {
+        PreviewError::PortNotDeclared => StatusCode::FORBIDDEN,
+        PreviewError::NotFound => StatusCode::NOT_FOUND,
+        PreviewError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+    })?;
+    Ok(Json(PreviewResponse {
+        endpoint: grant.endpoint,
+        capability: grant.capability,
+        expires_at: grant.expires_at,
+    }))
 }
 
 async fn release(

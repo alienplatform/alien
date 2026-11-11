@@ -370,8 +370,6 @@ impl SandboxCapabilities {
             }),
             Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
-            // Preview needs a gateway that validates a sandbox-and-port capability, which this
-            // backend has none of.
             Platform::Kubernetes => Ok(Self {
                 files: true,
                 reconnect: true,
@@ -381,7 +379,12 @@ impl SandboxCapabilities {
                 // capability before the one it holds expires, so a command outlives any single
                 // capability.
                 interactive_commands: true,
-                preview: false,
+                // In-cluster callers (workloads that link the sandbox) only; external preview is
+                // not yet supported. `preview` returns the sandbox agent's in-cluster URL and a
+                // bearer capability for one declared port of one session. The agent checks the
+                // capability against its own pod and forwards to 127.0.0.1 on that port, so the
+                // port is reachable by nothing else, and the agent's own port never is.
+                preview: true,
                 // Nitro Sandboxes, gVisor and Kata pods cannot checkpoint a running pod, so a
                 // paused session would lose its state. `resume` on a running sandbox is a no-op.
                 pause_resume: false,
@@ -1848,8 +1851,8 @@ mod tests {
         let k8s =
             SandboxCapabilities::for_platform(Platform::Kubernetes).expect("k8s is supported");
         assert!(
-            !k8s.preview,
-            "the sandbox-scoped ingress gateway does not exist yet"
+            k8s.preview,
+            "an in-cluster caller previews through the agent route"
         );
     }
 

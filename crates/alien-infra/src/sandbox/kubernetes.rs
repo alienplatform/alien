@@ -600,6 +600,7 @@ async fn replenish_warm_pool(
         namespace,
         &pod,
         matches!(sandbox.egress, alien_core::SandboxEgress::Allow),
+        &sandbox.preview_ports,
     )
     .await
     {
@@ -790,6 +791,7 @@ async fn publish_pod_template(
     namespace: &str,
     pod: &k8s_openapi::api::core::v1::Pod,
     requires_cluster_dns: bool,
+    preview_ports: &[u16],
 ) -> Result<()> {
     let client = ctx
         .service_provider
@@ -816,15 +818,23 @@ async fn publish_pod_template(
     } else {
         b"false".to_vec()
     };
+    let ports = serde_json::to_vec(preview_ports).unwrap_or_else(|_| b"[]".to_vec());
     if data
         .get(POD_TEMPLATE_SECRET_KEY)
         .is_some_and(|existing| existing.0 == template)
         && data
             .get(REQUIRES_CLUSTER_DNS_SECRET_KEY)
             .is_some_and(|existing| existing.0 == dns_flag)
+        && data
+            .get(PREVIEW_PORTS_SECRET_KEY)
+            .is_some_and(|existing| existing.0 == ports)
     {
         return Ok(());
     }
+    data.insert(
+        PREVIEW_PORTS_SECRET_KEY.to_string(),
+        k8s_openapi::ByteString(ports),
+    );
     data.insert(
         REQUIRES_CLUSTER_DNS_SECRET_KEY.to_string(),
         k8s_openapi::ByteString(dns_flag),
@@ -1208,6 +1218,11 @@ pub(crate) const POD_TEMPLATE_SECRET_KEY: &str = "podTemplate";
 /// Key marking a sandbox whose network policy admits DNS only to `sandbox.clusterDNS`, so the
 /// broker checks that value before it starts a new session.
 pub(crate) const REQUIRES_CLUSTER_DNS_SECRET_KEY: &str = "requiresClusterDNS";
+
+/// Key holding the sandbox's declared preview ports, as a JSON array. The broker mints a preview
+/// capability only for a port in it, so what a caller asks for is checked against what the
+/// declaration says, never against the request.
+pub(crate) const PREVIEW_PORTS_SECRET_KEY: &str = "previewPorts";
 
 #[cfg(feature = "kubernetes")]
 fn capability_secret_labels_match_deployment(
