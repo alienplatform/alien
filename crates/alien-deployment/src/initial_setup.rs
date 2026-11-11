@@ -570,6 +570,54 @@ pub async fn handle_initial_setup_failed(
         .await;
     }
 
+    // A Helm install runs manual setup: its frozen resources belong to the
+    // installed chart. A corrective release with the same frozen setup is
+    // prepared here, as an automatic install does; the compatibility check
+    // against the installed setup refuses one that changes it, and the way
+    // out is `helm upgrade` to that release's chart.
+    if current.platform == alien_core::Platform::Kubernetes
+        && current.runtime_metadata.as_ref().is_some_and(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::ImportedHandoff
+        })
+    {
+        let mut stack_state = current.stack_state.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Stack state required for retry".to_string(),
+            })
+        })?;
+        let existing = current.runtime_metadata.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Runtime metadata with prepared stack required for setup retry"
+                    .to_string(),
+            })
+        })?;
+        let mut metadata = crate::pending::prepare_imported_setup_retry(
+            target_stack,
+            &stack_state,
+            &config,
+            &client_config,
+            existing,
+        )
+        .await?;
+        metadata.pending_prepared_release_id = current
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+        retry_failed_setup_resources(&mut stack_state, &metadata, &config)?;
+        next.status = DeploymentStatus::InitialSetup;
+        next.stack_state = Some(stack_state);
+        next.runtime_metadata = Some(metadata);
+        next.error = None;
+        next.retry_requested = false;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     info!("Retrying failed resources");
 
     let mut stack_state = current.stack_state.ok_or_else(|| {
