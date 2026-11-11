@@ -350,6 +350,13 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 }
             },
             {
+                // It reads a mapping before it changes it, to be sure it is the worker's own.
+                "Sid": "ReadEventSourceMappings",
+                "Effect": "Allow",
+                "Action": "lambda:GetEventSourceMapping",
+                "Resource": format!("arn:aws:lambda:{region}:{account}:event-source-mapping:*")
+            },
+            {
                 // Who may send to a queue is the verifier's to write: it checks the policy
                 // against the signed stack.
                 "Sid": "SetThisInstallsQueues",

@@ -222,3 +222,13 @@ fn the_verifier_maps_event_sources_only_to_its_installs_functions() {
         assert_eq!(evaluate(&policy, &other), Decision::NotAllowed, "{action}");
     }
 }
+
+#[test]
+fn the_verifier_reads_event_source_mappings_before_it_changes_them() {
+    let policy = verifier();
+    let read = Request::new(
+        "lambda:GetEventSourceMapping",
+        "arn:aws:lambda:us-east-1:111122223333:event-source-mapping:abc",
+    );
+    assert_eq!(evaluate(&policy, &read), Decision::Allowed);
+}

@@ -453,10 +453,14 @@ fn desired_queue_entries(
 /// receives the data: every entry it holds must be one the bucket already has, or one of the
 /// storage's own the signed stack declares. Reads the bucket's current document to tell.
 pub async fn check_notification_state(
+    lambda: &dyn alien_aws_clients::lambda::LambdaApi,
     s3: &dyn alien_aws_clients::s3::S3Api,
     facts: &ResourceFacts<'_>,
     write: &ResourceWrite,
 ) -> Result<()> {
+    if let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write {
+        return check_mapping_is_own(lambda, facts, uuid).await;
+    }
     let ResourceWrite::PutBucketNotification {
         bucket,
         configuration,
@@ -479,6 +483,42 @@ pub async fn check_notification_state(
         &desired,
         facts.resource_id,
     )
+}
+
+/// An update may only change a mapping that already reads from a queue the signed stack triggers
+/// this worker from and feeds this worker's own function, so it can't touch another worker's.
+pub(crate) async fn check_mapping_is_own(
+    lambda: &dyn alien_aws_clients::lambda::LambdaApi,
+    facts: &ResourceFacts<'_>,
+    uuid: &str,
+) -> Result<()> {
+    use alien_error::Context;
+    let (account, region) = aws_account_and_region(facts)?;
+    let mapping = lambda.get_event_source_mapping(uuid).await.context(
+        crate::error::ErrorData::CloudCallFailed {
+            operation: format!("lambda:GetEventSourceMapping {uuid}"),
+        },
+    )?;
+    let source = mapping.event_source_arn.unwrap_or_default();
+    if !worker_queue_arns(facts, &region, &account)?.contains(&source) {
+        return Err(refused(format!(
+            "mapping {uuid} reads from {source}, not a queue the signed stack triggers worker '{}' from",
+            facts.resource_id
+        )));
+    }
+    let own = facts.place.function_name(facts.resource_id)?;
+    let own_arn = format!(
+        "arn:{}:lambda:{region}:{account}:function:{own}",
+        aws_partition(&region)
+    );
+    let function = mapping.function_arn.unwrap_or_default();
+    if function != own_arn {
+        return Err(refused(format!(
+            "mapping {uuid} feeds {function}, not {own_arn}, the function of worker '{}'",
+            facts.resource_id
+        )));
+    }
+    Ok(())
 }
 
 /// The rule behind [`check_notification_state`]: no entry of `new` may be one `current` lacks

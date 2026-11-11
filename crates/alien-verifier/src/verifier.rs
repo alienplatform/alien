@@ -665,6 +665,8 @@ mod tests {
     /// forwards.
     struct ResourceForwards {
         forwarded: Mutex<Vec<String>>,
+        /// What the cloud says an existing mapping reads from and feeds.
+        mapping: Mutex<(String, String)>,
     }
 
     #[async_trait]
@@ -682,6 +684,25 @@ mod tests {
             write: &ResourceWrite,
         ) -> Result<()> {
             crate::cloud_write::resource::check_aws_write(facts, write, REGION)
+        }
+        async fn check_resource_state(
+            &self,
+            facts: &ResourceFacts<'_>,
+            write: &ResourceWrite,
+        ) -> Result<()> {
+            let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write else {
+                return Ok(());
+            };
+            let (source, function) = self.mapping.lock().unwrap().clone();
+            let mut lambda = alien_aws_clients::lambda::MockLambdaApi::new();
+            lambda.expect_get_event_source_mapping().returning(move |uuid| {
+                Ok(serde_json::from_value(json!({
+                    "UUID": uuid, "EventSourceArn": source, "FunctionArn": function
+                }))
+                .unwrap())
+            });
+            let _ = uuid;
+            crate::cloud_write::resource::check_mapping_is_own(&lambda, facts, uuid).await
         }
         async fn forward_resource_write(
             &self,
@@ -745,6 +766,10 @@ mod tests {
         let store = Arc::new(MemoryStore::protected(&settings()));
         let backend = Arc::new(ResourceForwards {
             forwarded: Mutex::new(Vec::new()),
+            mapping: Mutex::new((
+                format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{PREFIX}-jobs"),
+                format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PREFIX}-api"),
+            )),
         });
         let verifier = Verifier {
             own_name: format!("{PREFIX}-verifier"),
@@ -849,12 +874,35 @@ mod tests {
             assert!(reason.starts_with("Refused: "), "{name}: {reason}");
             assert_eq!(backend.forwarded.lock().unwrap().len(), forwarded, "{name}");
         }
-        verifier
-            .handle(request(json!({"updateEventSourceMapping": {
+        let update = || {
+            request(json!({"updateEventSourceMapping": {
                 "uuid": "u-1", "request": {"BatchSize": 5, "FunctionName": function}
-            }})))
+            }}))
+        };
+        verifier
+            .handle(update())
             .await
             .expect("batch settings of the worker's own mapping are accepted");
+        // A mapping that belongs to another function, or reads from another queue, is not this
+        // worker's to change.
+        for (name, source, target) in [
+            (
+                "another worker's mapping",
+                queue("jobs"),
+                format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PREFIX}-other"),
+            ),
+            (
+                "a mapping from an unrelated queue",
+                queue("other"),
+                format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PREFIX}-api"),
+            ),
+        ] {
+            *backend.mapping.lock().unwrap() = (source, target);
+            let forwarded = backend.forwarded.lock().unwrap().len();
+            let reason = refusal(verifier.handle(update()).await);
+            assert!(reason.starts_with("Refused: "), "{name}: {reason}");
+            assert_eq!(backend.forwarded.lock().unwrap().len(), forwarded, "{name}");
+        }
     }
 
     /// A notification document for another bucket, or one that does not parse, is refused before

@@ -262,7 +262,12 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<()> {
-        crate::cloud_write::resource::check_notification_state(self.s3.as_ref(), facts, write)
+        crate::cloud_write::resource::check_notification_state(
+            &self.lambda,
+            self.s3.as_ref(),
+            facts,
+            write,
+        )
             .await
     }
 
