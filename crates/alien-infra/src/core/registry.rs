@@ -124,6 +124,11 @@ impl ResourceRegistry {
         ResourceRegistration::new(self, resource_type)
     }
 
+    /// Every (resource type, platform) that has a controller.
+    pub fn registered_controllers(&self) -> impl Iterator<Item = &(ResourceType, Platform)> {
+        self.controller_factories.keys()
+    }
+
     /// Gets a controller for the given resource type and platform
     pub fn get_controller(
         &self,
