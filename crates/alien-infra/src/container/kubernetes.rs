@@ -3702,6 +3702,74 @@ mod tests {
         }
     }
 
+    /// Writes the container's Deployment, as the controller renders it, for the Kind test that
+    /// applies it to a namespace enforcing the `restricted` Pod Security profile.
+    /// `ALIEN_KIND_MANIFEST_DIR` receives `container.yaml`; `ALIEN_KIND_IMAGE` is the release's
+    /// image and `ALIEN_KIND_IMAGE_REGISTRY` the site registry it must be pulled from.
+    #[tokio::test]
+    #[ignore = "writes manifests for the Kind pod security test"]
+    async fn write_the_default_deployment_for_the_kind_test() {
+        let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
+        let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
+        // ALIEN_KIND_CONFIG names a container from an example stack; the default is the
+        // controller test fixture, which declares no `security`.
+        let mut config = match std::env::var("ALIEN_KIND_CONFIG") {
+            Ok(path) => serde_json::from_str(&std::fs::read_to_string(path).expect("config"))
+                .expect("container config"),
+            Err(_) => manifest_test_container(&[], false),
+        };
+        let name = std::env::var("ALIEN_KIND_NAME").unwrap_or_else(|_| "web".to_string());
+        let out = std::env::var("ALIEN_KIND_OUT").unwrap_or_else(|_| "container.yaml".to_string());
+        config.code = ContainerCode::Image { image };
+        config.replicas = Some(1);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let controller = manifest_test_controller();
+        let mut value = if config.persistent_storage.is_some() {
+            let set = controller
+                .build_statefulset(
+                    &config,
+                    &name,
+                    "default",
+                    "default",
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("statefulset manifest");
+            let mut value = serde_json::to_value(&set).expect("serialize");
+            value["kind"] = "StatefulSet".into();
+            value
+        } else {
+            let deployment = controller
+                .build_deployment(
+                    &config,
+                    &name,
+                    "default",
+                    "default",
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("deployment manifest");
+            let mut value = serde_json::to_value(&deployment).expect("serialize");
+            value["kind"] = "Deployment".into();
+            value
+        };
+        value["apiVersion"] = "apps/v1".into();
+        // The Kind test chooses the namespace.
+        value["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("namespace");
+        std::fs::write(
+            std::path::Path::new(&dir).join(out),
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write manifest");
+    }
+
     /// A deployment whose secrets vault is Kubernetes Secrets in `test-ns`.
     fn secrets_vault_state() -> alien_core::StackState {
         use crate::core::state_utils::StackResourceStateExt;
