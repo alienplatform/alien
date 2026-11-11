@@ -447,7 +447,8 @@ fn gcp_data_access_reads_only_its_own_instances_token() {
     );
     let own = format!("{TOKEN_PREFIX}/my-stack-cache/tokenAuthUsers/default");
     let sibling = format!("{TOKEN_PREFIX}/my-stack-cache-prod/tokenAuthUsers/default");
-    let number_form = "projects/123456789012/locations/us-east4/instances/my-stack-cache/tokenAuthUsers/default";
+    let number_form =
+        "projects/123456789012/locations/us-east4/instances/my-stack-cache/tokenAuthUsers/default";
     assert!(gcp_condition_allows(&conditions[0], &own));
     assert!(!gcp_condition_allows(&conditions[0], &sibling));
     assert!(!gcp_condition_allows(&conditions[0], number_form));
