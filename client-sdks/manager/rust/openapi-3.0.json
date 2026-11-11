@@ -8419,6 +8419,15 @@
           "port": {
             "$ref": "#/components/schemas/BindingValue_u16"
           },
+          "serverCaCertificates": {
+            "nullable": true,
+            "description": "PEM root certificates that sign the server's certificate, for servers whose CA is not\nin the runtime's trust store (for example a managed database's regional CA).\nUsed by `verify-full`; when missing or empty the runtime's system trust store is used.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_Vec_String"
+              }
+            ]
+          },
           "sslMode": {
             "$ref": "#/components/schemas/ExternalPostgresSslMode",
             "description": "Explicit TLS policy. Missing legacy configuration defaults to verified TLS."
