@@ -14,6 +14,7 @@ on:
       - 'crates/alien-core/**'
       - 'crates/alien-helm/**'
       - 'crates/alien-infra/**'
+      - 'crates/alien-manager/**'
       - 'crates/alien-operator/**'
       - 'crates/alien-terraform/**'
       - '.github/workflows/kind-lifecycle.yml'
@@ -76,6 +77,8 @@ jobs:
           cargo test --locked -p alien-helm --test sandbox_allow_egress_kind --no-run
           cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
           cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind --no-run
+          cargo test --locked -p alien-manager --lib kind_ --no-run
+          cargo test --locked -p alien-infra --features all-platforms --test kubernetes_service_account_refresh_kind --no-run
 
       # A second disposable cluster, deleted before the main one starts. Kind's kindnet enforces
       # NetworkPolicy, so this cluster replaces it with a CNI that only wires pods: the node
@@ -183,6 +186,18 @@ jobs:
           cargo build --locked -p alien-sandbox-agent
           cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind -- \
             --ignored --nocapture --test-threads=1
+
+      - name: Helm rollback and first-install recovery reported to the manager
+        run: |
+          cargo test --locked -p alien-manager --lib kind_ -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: A Helm-owned ServiceAccount that disappears fails the health check at once
+        env:
+          KIND_CONTEXT: kind-alien-product-lifecycle
+        run: |
+          cargo test --locked -p alien-infra --features all-platforms \
+            --test kubernetes_service_account_refresh_kind -- --ignored --nocapture
 
       - name: Product Remote Operator Helm and Terraform lifecycle
         env:

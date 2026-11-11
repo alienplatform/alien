@@ -24,7 +24,7 @@ use alien_permissions::{
 use chrono::Utc;
 
 /// Generates the GCP service account ID for RemoteStackManagement.
-fn get_gcp_management_service_account_id(prefix: &str) -> String {
+pub(crate) fn get_gcp_management_service_account_id(prefix: &str) -> String {
     format!("{}-management", prefix)
 }
 

@@ -7,6 +7,7 @@ import * as z from "zod";
 import { AiAccessTestSchema } from "./ai-access-test-schema.js";
 import { AiAvailabilityBlockerSchema } from "./ai-availability-blocker-schema.js";
 import { AiModelAvailabilitySchema } from "./ai-model-availability-schema.js";
+import { AiQuotaWarningSchema } from "./ai-quota-warning-schema.js";
 import { ClientApiSchema } from "./client-api-schema.js";
 
 export const AiModelAvailabilityObservationSchema = z.object({
@@ -24,7 +25,11 @@ get "clientApis"(){
               },
 "errorCode": z.string().nullish(),
 "publicModelId": z.string(),
-"testedAt": z.iso.datetime().nullish()
+get "quotaWarnings"(){
+                return z.array(AiQuotaWarningSchema.describe("One quota the account has set well below the cloud's default (under 10%).")).describe("Applied quotas far below the cloud's default for this model. Empty when none were read\nor none are low.").optional()
+              },
+"testedAt": z.iso.datetime().nullish(),
+"throttledLastHour": z.int().min(0).describe("Requests the cloud throttled for this model in the last hour, from the cloud's own\nmetrics. `None` when not read; `Some(0)` is a real zero.").nullish()
     })
 
 export type AiModelAvailabilityObservation = z.infer<typeof AiModelAvailabilityObservationSchema>

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use alien_core::{Platform, Stack};
-use alien_error::AlienError;
+use alien_error::{AlienError, GenericError};
 
 /// A release record. Contains stacks for one or more platforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +39,20 @@ pub struct CreateReleaseParams {
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,
+}
+
+/// The bytes of one served Helm chart version, kept so the version never
+/// changes content. Digests are the SHA-256 of these bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredChart {
+    pub release_id: String,
+    /// Chart version, `1.<release n>.<operator>`.
+    pub version: String,
+    /// OCI manifest JSON; names the config and archive by digest.
+    pub manifest: Vec<u8>,
+    pub config: Vec<u8>,
+    /// Chart archive (`.tgz`).
+    pub archive: Vec<u8>,
 }
 
 /// Persistence for releases. `caller` is metadata-about-who; `params` is
@@ -90,4 +104,29 @@ pub trait ReleaseStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
     ) -> Result<Vec<ReleaseRecord>, AlienError>;
+
+    /// Keep `chart` for its release and version unless one is already kept,
+    /// and return the kept copy. Insert-if-absent, so two managers serving
+    /// the same version at once keep one copy and both return it.
+    ///
+    /// Stores that don't keep charts return an error: a manager that serves
+    /// charts needs durable copies, or a version could change content.
+    async fn store_chart_if_absent(
+        &self,
+        _caller: &crate::auth::Subject,
+        _chart: StoredChart,
+    ) -> Result<StoredChart, AlienError> {
+        Err(AlienError::new(GenericError {
+            message: "this release store cannot keep chart versions".to_string(),
+        }))
+    }
+
+    /// Every kept chart version of the releases in `release_ids`.
+    async fn stored_charts(
+        &self,
+        _caller: &crate::auth::Subject,
+        _release_ids: &[String],
+    ) -> Result<Vec<StoredChart>, AlienError> {
+        Ok(Vec::new())
+    }
 }

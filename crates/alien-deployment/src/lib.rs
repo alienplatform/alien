@@ -4,6 +4,7 @@
 //! across all platforms. It provides one function: `step()` that performs incremental
 //! deployment steps.
 
+mod ai_access_check;
 mod deleting;
 pub use deleting::{destroy_without_runtime, installed_durable_resource_ids};
 mod error;
@@ -17,9 +18,9 @@ mod pending;
 pub mod persisted_digest_key;
 pub use pending::{
     enforce_frozen_gate_fixity, frozen_gating_inputs, prepare_direct_setup_update,
-    resolve_frozen_gate_answers, resolve_frozen_gate_answers_from_presence,
-    strip_declined_live_resources, strip_frozen_declines,
-    strip_frozen_declines_with_compute_settings, FrozenGateFixityCheck,
+    prepare_imported_setup_retry, resolve_frozen_gate_answers,
+    resolve_frozen_gate_answers_from_presence, strip_declined_live_resources,
+    strip_frozen_declines, strip_frozen_declines_with_compute_settings, FrozenGateFixityCheck,
 };
 mod provisioning;
 pub mod runner;
@@ -46,6 +47,7 @@ pub use helpers::{
     set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
     value_digest,
 };
+pub use ai_access_check::check_declared_ai_models;
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};

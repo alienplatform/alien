@@ -224,4 +224,85 @@ impl ReleaseStore for SqliteReleaseStore {
         }
         Ok(releases)
     }
+
+    async fn store_chart_if_absent(
+        &self,
+        caller: &crate::auth::Subject,
+        chart: StoredChart,
+    ) -> Result<StoredChart, AlienError> {
+        {
+            let conn = self.db.conn().lock().await;
+            conn.execute(
+                "INSERT INTO release_charts (release_id, version, manifest, config, archive, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (release_id, version) DO NOTHING",
+                (
+                    chart.release_id.as_str(),
+                    chart.version.as_str(),
+                    chart.manifest.clone(),
+                    chart.config.clone(),
+                    chart.archive.clone(),
+                    Utc::now().timestamp_millis(),
+                ),
+            )
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to store chart".to_string(),
+            })?;
+        }
+        // The kept copy: ours, or the one another manager stored first.
+        self.stored_charts(caller, std::slice::from_ref(&chart.release_id))
+            .await?
+            .into_iter()
+            .find(|kept| kept.version == chart.version)
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "chart {} of release {} is missing right after it was stored",
+                        chart.version, chart.release_id
+                    ),
+                })
+            })
+    }
+
+    async fn stored_charts(
+        &self,
+        _caller: &crate::auth::Subject,
+        release_ids: &[String],
+    ) -> Result<Vec<StoredChart>, AlienError> {
+        let mut charts = Vec::new();
+        let conn = self.db.conn().lock().await;
+        for release_id in release_ids {
+            let mut rows = conn
+                .query(
+                    "SELECT release_id, version, manifest, config, archive
+                     FROM release_charts WHERE release_id = ?1 ORDER BY version",
+                    (release_id.as_str(),),
+                )
+                .await
+                .into_alien_error()
+                .context(GenericError {
+                    message: "Failed to query charts".to_string(),
+                })?;
+            while let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+                message: "Failed to fetch chart row".to_string(),
+            })? {
+                let read = |index: usize, name: &str| -> Result<Vec<u8>, AlienError> {
+                    row.get(index).into_alien_error().context(GenericError {
+                        message: format!("Failed to read chart column '{name}'"),
+                    })
+                };
+                let p = RowParser::new(&row);
+                charts.push(StoredChart {
+                    release_id: p.string(0, "release_id")?,
+                    version: p.string(1, "version")?,
+                    manifest: read(2, "manifest")?,
+                    config: read(3, "config")?,
+                    archive: read(4, "archive")?,
+                });
+            }
+        }
+        Ok(charts)
+    }
 }
