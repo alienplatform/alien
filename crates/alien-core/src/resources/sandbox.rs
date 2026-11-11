@@ -376,9 +376,11 @@ impl SandboxCapabilities {
                 files: true,
                 reconnect: true,
                 jobs: true,
-                // The pod runs the same agent, but this client does not drive its interactive
-                // routes yet, so the capability is not claimed until it is proven here.
-                interactive_commands: false,
+                // The pod runs the same agent and the client drives its `/v1/interactive` stream
+                // through the shared agent-protocol module. The client asks the broker for a new
+                // capability before the one it holds expires, so a command outlives any single
+                // capability.
+                interactive_commands: true,
                 preview: false,
                 pause_resume: false,
                 snapshot: false,
@@ -1706,7 +1708,7 @@ mod tests {
     /// near-misses the cases separate: the key's first segment grants objects a rebuild never
     /// reads, and the object's own directory pins the version segment that moves.
     #[test]
-    fn a_grantable_prefix_stops_above_the_segment_that_moves() {
+    fn a_grantable_prefix_ends_above_the_segment_that_moves() {
         assert_eq!(
             stable_bundle_key_prefix("sandbox-bundle/f00dcafe/bundle.zip"),
             Some("sandbox-bundle")

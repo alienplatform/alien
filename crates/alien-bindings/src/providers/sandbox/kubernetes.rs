@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::agent_protocol::{self, AgentTransport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
-    ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart,
+    PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::bindings::KubernetesSandboxBinding;
 use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
@@ -57,6 +57,106 @@ struct ClaimResponse {
 struct ClaimRequest<'a> {
     sandbox_id: &'a str,
     session_id: &'a str,
+}
+
+/// Asks the broker for a session and a fresh capability. `None` when no pod carries the id.
+async fn fetch_claim(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<Option<ClaimResponse>> {
+    let response = client
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::OperationNotSupported {
+            operation: "sandbox.get".to_string(),
+            reason: "the sandbox broker is unreachable".to_string(),
+        })?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox.get".to_string(),
+            reason: format!("the sandbox broker returned {status}: {body}"),
+        }));
+    }
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::UnexpectedResponseFormat {
+            provider: "kubernetes-sandbox".to_string(),
+            binding_name: "sandbox.get".to_string(),
+            field: "body".to_string(),
+            response_json: "the broker returned a body this provider cannot parse".to_string(),
+        })
+        .map(Some)
+}
+
+/// One session's agent for as long as an interactive command runs.
+///
+/// A command can outlive any capability, and its input is many short requests, so each request
+/// checks the capability it holds and asks the broker for a new one before it expires.
+#[derive(Debug)]
+struct SessionAgent {
+    client: reqwest::Client,
+    session_url: String,
+    token_path: String,
+    binding_name: String,
+    sandbox_id: String,
+    claim: tokio::sync::Mutex<ClaimResponse>,
+}
+
+#[async_trait]
+impl super::interactive::BoundAgent for SessionAgent {
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        let mut claim = self.claim.lock().await;
+        if claim.expires_at - chrono::Utc::now().timestamp() <= CAPABILITY_REFRESH_MARGIN_SECONDS {
+            let token = read_identity_token(&self.token_path, &self.binding_name).await?;
+            *claim = fetch_claim(&self.client, &self.session_url, &token)
+                .await?
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::OperationNotSupported {
+                        operation: "sandbox.agent".to_string(),
+                        reason: format!(
+                            "sandbox '{}' no longer exists; it ended while a command was running",
+                            self.sandbox_id
+                        ),
+                    })
+                })?;
+        }
+        Ok(self
+            .client
+            .request(method, format!("{}{path}", claim.endpoint))
+            .bearer_auth(&claim.capability))
+    }
+
+    fn provider(&self) -> &'static str {
+        "kubernetes-sandbox"
+    }
+}
+
+/// Reads the pod's ServiceAccount token. Per call: Kubernetes rotates projected tokens in place.
+async fn read_identity_token(token_path: &str, binding_name: &str) -> Result<String> {
+    tokio::fs::read_to_string(token_path)
+        .await
+        .into_alien_error()
+        .context(ErrorData::BindingConfigInvalid {
+            binding_name: binding_name.to_string(),
+            env_var: alien_core::bindings::binding_env_var_name(binding_name),
+            reason: format!("could not read the ServiceAccount token at '{token_path}'"),
+        })
 }
 
 /// A Sandbox backed by pods under a sandboxed runtime class.
@@ -145,17 +245,7 @@ impl KubernetesSandbox {
     /// Read per call rather than cached: Kubernetes rotates projected tokens in place, and a
     /// cached copy becomes a token the apiserver refuses at the least convenient moment.
     async fn identity_token(&self) -> Result<String> {
-        tokio::fs::read_to_string(&self.token_path)
-            .await
-            .into_alien_error()
-            .context(ErrorData::BindingConfigInvalid {
-                binding_name: self.binding_name.clone(),
-                env_var: alien_core::bindings::binding_env_var_name(&self.binding_name),
-                reason: format!(
-                    "could not read the ServiceAccount token at '{}'",
-                    self.token_path
-                ),
-            })
+        read_identity_token(&self.token_path, &self.binding_name).await
     }
 
     /// Refused rather than dropped: a claim reaches a pod that is already running under the
@@ -197,41 +287,15 @@ impl KubernetesSandbox {
             }
         }
 
-        let response = self
-            .client
-            .get(self.session_url(sandbox_id))
-            .bearer_auth(self.identity_token().await?)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.get".to_string(),
-                reason: "the sandbox broker is unreachable".to_string(),
-            })?;
-
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
+        let token = self.identity_token().await?;
+        let Some(claim) = fetch_claim(&self.client, &self.session_url(sandbox_id), &token).await?
+        else {
             self.claims
                 .lock()
                 .expect("no panic holds this lock")
                 .remove(sandbox_id);
             return Ok(None);
-        }
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(self.failed(
-                "sandbox.get",
-                &format!("the sandbox broker returned {status}: {body}"),
-            ));
-        }
-        let claim: ClaimResponse = response.json().await.into_alien_error().context(
-            ErrorData::UnexpectedResponseFormat {
-                provider: "kubernetes-sandbox".to_string(),
-                binding_name: "sandbox.get".to_string(),
-                field: "body".to_string(),
-                response_json: "the broker returned a body this provider cannot parse".to_string(),
-            },
-        )?;
+        };
         self.claims
             .lock()
             .expect("no panic holds this lock")
@@ -478,6 +542,28 @@ impl Sandbox for KubernetesSandbox {
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         agent_protocol::run_command(self, sandbox_id, request).await
+    }
+
+    async fn run_interactive(
+        &self,
+        sandbox_id: &str,
+        request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        let claim = self.claimed(sandbox_id).await?.ok_or_else(|| {
+            self.failed(
+                "sandbox.agent",
+                &format!("sandbox '{sandbox_id}' does not exist; it may have been terminated"),
+            )
+        })?;
+        let agent = Arc::new(SessionAgent {
+            client: self.client.clone(),
+            session_url: self.session_url(&claim.session_id),
+            token_path: self.token_path.clone(),
+            binding_name: self.binding_name.clone(),
+            sandbox_id: claim.session_id.clone(),
+            claim: tokio::sync::Mutex::new(claim),
+        });
+        super::interactive::run_interactive(agent, request).await
     }
 
     async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
@@ -765,5 +851,57 @@ mod tests {
             .expires_at = chrono::Utc::now().timestamp() + 10;
         sandbox.get("known").await.unwrap().unwrap();
         assert_eq!(*lookups.lock().unwrap(), 3, "refreshed before it expired");
+    }
+
+    /// A command's input is many short requests over hours, so the agent handle replaces its
+    /// capability before it expires instead of letting a request reach the pod with a dead one.
+    #[tokio::test]
+    async fn an_interactive_command_refreshes_its_capability_before_it_expires() {
+        use super::super::interactive::BoundAgent;
+        let broker = serve(Router::new().route(
+            BROKER_RELEASE_ROUTE,
+            axum::routing::get(|| async {
+                Json(serde_json::json!({
+                    "agentSessionId": "uid-1",
+                    "sessionId": "s1",
+                    "endpoint": "http://10.0.0.9:8080",
+                    "capability": "second",
+                    "expiresAt": chrono::Utc::now().timestamp() + 900,
+                }))
+            }),
+        ))
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        std::fs::write(token.path(), "service-account-token").unwrap();
+        let first = ClaimResponse {
+            agent_session_id: None,
+            session_id: "s1".to_string(),
+            endpoint: "http://10.0.0.1:8080".to_string(),
+            capability: "first".to_string(),
+            expires_at: chrono::Utc::now().timestamp() + 20,
+        };
+        let agent = SessionAgent {
+            client: reqwest::Client::new(),
+            session_url: format!("{broker}/v1/sandbox/sbx-pool/sessions/s1"),
+            token_path: token.path().display().to_string(),
+            binding_name: "sbx".to_string(),
+            sandbox_id: "s1".to_string(),
+            claim: tokio::sync::Mutex::new(first),
+        };
+
+        let request = agent
+            .request(reqwest::Method::POST, "/v1/interactive/input")
+            .await
+            .expect("a request is built")
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.url().as_str(),
+            "http://10.0.0.9:8080/v1/interactive/input"
+        );
+        assert_eq!(
+            request.headers()["authorization"].to_str().unwrap(),
+            "Bearer second"
+        );
     }
 }
