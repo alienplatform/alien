@@ -1941,7 +1941,7 @@ mod tests {
     /// Alien cannot update or adopt such a resource once the binding is gone, so the release
     /// is refused rather than left resolving a target nobody declared.
     #[tokio::test]
-    async fn a_release_that_drops_an_adopted_binding_is_refused() {
+    async fn a_release_that_removes_an_adopted_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
@@ -1988,7 +1988,7 @@ mod tests {
     /// A store bound without remote access carries neither params nor outputs, so the
     /// binding is the only record that it was adopted.
     #[tokio::test]
-    async fn a_release_that_drops_a_binding_carrying_no_state_is_refused() {
+    async fn a_release_that_removes_a_binding_carrying_no_state_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
