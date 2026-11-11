@@ -400,6 +400,14 @@ fn generate_helm_chart_internal(
         "examples/bootstrap.yaml".to_string(),
         bootstrap_values_example(),
     );
+    files.insert(
+        "examples/gitops/flux.yaml".to_string(),
+        flux_example(&chart_name),
+    );
+    files.insert(
+        "examples/gitops/argocd.yaml".to_string(),
+        argocd_example(&chart_name),
+    );
     let mut readme = readme_md(&chart_name);
     if analysis
         .postgres
@@ -7628,6 +7636,125 @@ fn aks_values_example(analysis: &ChartAnalysis) -> String {
         analysis,
         "azure.workload.identity/client-id",
         "00000000-0000-0000-0000-000000000000",
+    )
+}
+
+/// Values a GitOps install sets, written as the `values` of a Flux
+/// HelmRelease or the `valuesObject` of an Argo CD Application. `indent` is
+/// the number of spaces the block starts at.
+fn gitops_values(indent: usize) -> String {
+    let block = r#"gitops:
+  enabled: true
+management:
+  url: https://manager.example.com
+  existingSecret:
+    name: alien-management
+    tokenKey: sync-token
+runtime:
+  image:
+    # The GitOps tool owns the Operator image: a new chart version carries a new
+    # Operator, and the Operator doesn't change its own image.
+    selfUpdate: false
+  encryption:
+    existingSecret:
+      name: alien-encryption
+      key: encryption-key
+  imagePullSecrets:
+    - name: alien-registry
+infrastructureExistingSecret: alien-infrastructure
+logCollector:
+  enabled: true
+  mode: podApi
+"#;
+    block
+        .lines()
+        .map(|line| format!("{}{line}\n", " ".repeat(indent)))
+        .collect()
+}
+
+/// Flux: an OCIRepository that follows the manager's chart versions, and a
+/// HelmRelease that installs them.
+fn flux_example(chart_name: &str) -> String {
+    format!(
+        r#"# Install this chart with Flux. Use one namespace per install.
+#
+# Create these Secrets in the namespace first (not in git, or sealed):
+#   alien-management      key sync-token: the deployment group token
+#   alien-encryption      key encryption-key: 64 hex characters, kept for the life of the install
+#   alien-infrastructure  key external-bindings.json: the `infrastructure` values as JSON
+#                         (the Terraform module's chart_infrastructure_json output)
+#   alien-registry        kubernetes.io/dockerconfigjson: pulls the Operator image and charts
+#                         through the manager
+#
+# `semver: "1.x"` takes every new chart version. A new Operator image is a new chart
+# version, so the Operator upgrades through Flux without a git change. Pin an exact
+# version here to hold it. Use `v1` instead of `v1beta2` on Flux 2.6 and newer.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: {chart_name}
+spec:
+  interval: 10m
+  url: oci://manager.example.com/charts/{chart_name}
+  ref:
+    semver: "1.x"
+  secretRef:
+    name: alien-registry
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {chart_name}
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: {chart_name}
+  values:
+{values}"#,
+        values = gitops_values(4)
+    )
+}
+
+/// Argo CD: an Application that renders this chart from the manager's registry.
+fn argocd_example(chart_name: &str) -> String {
+    format!(
+        r#"# Install this chart with Argo CD. Use one namespace per install.
+#
+# Create the Secrets named below in the destination namespace first (not in git, or
+# sealed): alien-management (sync-token), alien-encryption (encryption-key),
+# alien-infrastructure (external-bindings.json) and alien-registry
+# (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
+# repository with the manager's install credentials.
+#
+# `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
+# chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check
+# yours. Where it doesn't, pin an exact version and let Renovate or Argo CD Image
+# Updater open the bump.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {chart_name}
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: manager.example.com/charts
+    chart: {chart_name}
+    targetRevision: "1.*"
+    helm:
+      valuesObject:
+{values}  destination:
+    server: https://kubernetes.default.svc
+    namespace: {chart_name}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+"#,
+        values = gitops_values(8)
     )
 }
 

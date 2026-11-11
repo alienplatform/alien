@@ -3208,6 +3208,123 @@ management:
 # Add the application inputs required by this chart.
 inputValues: {}
 
+=== examples/gitops/flux.yaml ===
+# Install this chart with Flux. Use one namespace per install.
+#
+# Create these Secrets in the namespace first (not in git, or sealed):
+#   alien-management      key sync-token: the deployment group token
+#   alien-encryption      key encryption-key: 64 hex characters, kept for the life of the install
+#   alien-infrastructure  key external-bindings.json: the `infrastructure` values as JSON
+#                         (the Terraform module's chart_infrastructure_json output)
+#   alien-registry        kubernetes.io/dockerconfigjson: pulls the Operator image and charts
+#                         through the manager
+#
+# `semver: "1.x"` takes every new chart version. A new Operator image is a new chart
+# version, so the Operator upgrades through Flux without a git change. Pin an exact
+# version here to hold it. Use `v1` instead of `v1beta2` on Flux 2.6 and newer.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: data-chart
+spec:
+  interval: 10m
+  url: oci://manager.example.com/charts/data-chart
+  ref:
+    semver: "1.x"
+  secretRef:
+    name: alien-registry
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: data-chart
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: data-chart
+  values:
+    gitops:
+      enabled: true
+    management:
+      url: https://manager.example.com
+      existingSecret:
+        name: alien-management
+        tokenKey: sync-token
+    runtime:
+      image:
+        # The GitOps tool owns the Operator image: a new chart version carries a new
+        # Operator, and the Operator doesn't change its own image.
+        selfUpdate: false
+      encryption:
+        existingSecret:
+          name: alien-encryption
+          key: encryption-key
+      imagePullSecrets:
+        - name: alien-registry
+    infrastructureExistingSecret: alien-infrastructure
+    logCollector:
+      enabled: true
+      mode: podApi
+
+=== examples/gitops/argocd.yaml ===
+# Install this chart with Argo CD. Use one namespace per install.
+#
+# Create the Secrets named below in the destination namespace first (not in git, or
+# sealed): alien-management (sync-token), alien-encryption (encryption-key),
+# alien-infrastructure (external-bindings.json) and alien-registry
+# (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
+# repository with the manager's install credentials.
+#
+# `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
+# chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check
+# yours. Where it doesn't, pin an exact version and let Renovate or Argo CD Image
+# Updater open the bump.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: data-chart
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: manager.example.com/charts
+    chart: data-chart
+    targetRevision: "1.*"
+    helm:
+      valuesObject:
+        gitops:
+          enabled: true
+        management:
+          url: https://manager.example.com
+          existingSecret:
+            name: alien-management
+            tokenKey: sync-token
+        runtime:
+          image:
+            # The GitOps tool owns the Operator image: a new chart version carries a new
+            # Operator, and the Operator doesn't change its own image.
+            selfUpdate: false
+          encryption:
+            existingSecret:
+              name: alien-encryption
+              key: encryption-key
+          imagePullSecrets:
+            - name: alien-registry
+        infrastructureExistingSecret: alien-infrastructure
+        logCollector:
+          enabled: true
+          mode: podApi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data-chart
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
 === README.md ===
 # data-chart
 

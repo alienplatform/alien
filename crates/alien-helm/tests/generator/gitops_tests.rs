@@ -6,6 +6,7 @@
 
 use super::{helpers::render, test_utils};
 use alien_core::{ResourceLifecycle, Stack, StackSettings, Storage};
+use serde::Deserialize;
 
 fn chart_files() -> test_utils::LinterFiles {
     let stack = Stack::new("gitops-app".to_string())
@@ -80,4 +81,52 @@ fn without_the_profile_a_render_still_generates_credentials() {
     // The default (a Helm CLI install) is unchanged.
     let values = "management:\n  token: test-credential\n";
     test_utils::helm_template(&chart_files(), Some(values)).assert_ok("helm cli install");
+}
+
+fn yaml_documents(text: &str) -> Vec<serde_yaml::Value> {
+    serde_yaml::Deserializer::from_str(text)
+        .map(|document| serde_yaml::Value::deserialize(document).expect("valid YAML document"))
+        .collect()
+}
+
+fn to_yaml(value: &serde_yaml::Value) -> String {
+    serde_yaml::to_string(value).unwrap()
+}
+
+#[test]
+fn the_flux_example_installs_with_its_own_values() {
+    let chart = chart_files();
+    let documents = yaml_documents(&chart["examples/gitops/flux.yaml"]);
+    let kinds: Vec<_> = documents
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["OCIRepository", "HelmRelease"]);
+    assert_eq!(documents[0]["spec"]["ref"]["semver"], "1.x");
+    let values = &documents[1]["spec"]["values"];
+    assert_eq!(values["runtime"]["image"]["selfUpdate"], false);
+    test_utils::helm_template(&chart, Some(&to_yaml(values))).assert_ok("flux example values");
+}
+
+#[test]
+fn the_argo_example_installs_with_its_own_values() {
+    let chart = chart_files();
+    let documents = yaml_documents(&chart["examples/gitops/argocd.yaml"]);
+    assert_eq!(documents.len(), 1);
+    let application = &documents[0];
+    assert_eq!(application["kind"], "Application");
+    assert_eq!(application["spec"]["source"]["targetRevision"], "1.*");
+    assert_eq!(
+        application["spec"]["destination"]["namespace"],
+        application["spec"]["source"]["chart"]
+    );
+    let values = &application["spec"]["source"]["helm"]["valuesObject"];
+    assert_eq!(values["runtime"]["image"]["selfUpdate"], false);
+    for key in ["existingSecret"] {
+        assert!(values["management"][key]["name"].is_string());
+        assert!(values["runtime"]["encryption"][key]["name"].is_string());
+    }
+    assert!(values["infrastructureExistingSecret"].is_string());
+    assert!(values["runtime"]["imagePullSecrets"][0]["name"].is_string());
+    test_utils::helm_template(&chart, Some(&to_yaml(values))).assert_ok("argo example values");
 }
