@@ -16,6 +16,7 @@ use alien_aws_clients::{
 use alien_core::{Queue, ResourceEntry, Stack, Storage};
 use alien_permissions::{
     aws_bucket_policy::{check_bucket_policy, check_public_access_block},
+    gcp_bucket_iam::{check_bucket_iam, check_public_access_prevention},
     aws_queue_policy::check_queue_policy,
     aws_resource_policies,
 };
@@ -87,6 +88,12 @@ pub enum ResourceWrite {
         queue_url: String,
         attributes: BTreeMap<String, String>,
     },
+    /// Cloud Storage setIamPolicy of a bucket: the bucket's whole policy, as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    SetBucketIamPolicy { bucket: String, policy: Value },
+    /// Cloud Storage patch of a bucket's public access prevention (`enforced` or `inherited`).
+    #[serde(rename_all = "camelCase")]
+    SetPublicAccessPrevention { bucket: String, value: String },
 }
 
 impl ResourceWrite {
@@ -100,6 +107,8 @@ impl ResourceWrite {
             ResourceWrite::UpdateEventSourceMapping { .. } => "UpdateEventSourceMapping",
             ResourceWrite::CreateQueue { .. } => "CreateQueue",
             ResourceWrite::SetQueueAttributes { .. } => "SetQueueAttributes",
+            ResourceWrite::SetBucketIamPolicy { .. } => "SetBucketIamPolicy",
+            ResourceWrite::SetPublicAccessPrevention { .. } => "SetPublicAccessPrevention",
         }
     }
 }
@@ -337,6 +346,9 @@ pub fn check_aws_write(
                 }
             }
             Ok(())
+        }
+        ResourceWrite::SetBucketIamPolicy { .. } | ResourceWrite::SetPublicAccessPrevention { .. } => {
+            Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
 }
@@ -678,6 +690,77 @@ pub async fn forward_aws_write(
             })?;
             Ok(json!({ "queueUrl": queue_url }))
         }
+        ResourceWrite::SetBucketIamPolicy { .. } | ResourceWrite::SetPublicAccessPrevention { .. } => {
+            Err(refused(format!("AWS takes no {} write", write.operation())))
+        }
+    }
+}
+
+/// The bucket name this install gives storage `facts.resource_id` on GCP.
+pub fn gcp_bucket_name(facts: &ResourceFacts<'_>) -> String {
+    format!("{}-{}", facts.place.prefix, facts.resource_id)
+}
+
+/// Check a write for a GCP resource: it must name the resource's own cloud name, and everything
+/// it grants must be what the signed stack declares.
+pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Result<()> {
+    let own_bucket = |bucket: &str| -> Result<&Storage> {
+        let storage = facts.storage()?;
+        let own = gcp_bucket_name(facts);
+        if bucket != own {
+            return Err(refused(format!(
+                "{} names bucket {bucket}, not {own}, the name this install gives storage '{}'",
+                write.operation(),
+                facts.resource_id
+            )));
+        }
+        Ok(storage)
+    };
+    match write {
+        ResourceWrite::SetBucketIamPolicy { bucket, policy } => {
+            own_bucket(bucket)?;
+            // What is granted is judged against the bucket's current policy in the state check;
+            // here only the shape.
+            if !policy.is_object() {
+                return Err(refused("the bucket IAM policy is not a JSON object"));
+            }
+            Ok(())
+        }
+        ResourceWrite::SetPublicAccessPrevention { bucket, value } => {
+            let storage = own_bucket(bucket)?;
+            check_public_access_prevention(value, storage.public_read).map_err(refused)
+        }
+        other => Err(refused(format!("GCP takes no {} write", other.operation()))),
+    }
+}
+
+/// Check a GCP write against `current`, the IAM policy the bucket holds now: a new policy may
+/// grant only what the bucket already holds or the public read the signed stack declares.
+pub fn check_gcp_state(facts: &ResourceFacts<'_>, write: &ResourceWrite, current: &Value) -> Result<()> {
+    let ResourceWrite::SetBucketIamPolicy { policy, .. } = write else {
+        return Ok(());
+    };
+    let storage = facts.storage()?;
+    check_bucket_iam(policy, current, storage.public_read).map_err(refused)
+}
+
+/// Send a checked GCP write unchanged.
+pub async fn forward_gcp_write(
+    gcp: &crate::gcp::Gcp,
+    write: &ResourceWrite,
+    newest: &dyn StillNewest,
+) -> Result<Value> {
+    newest.check().await?;
+    match write {
+        ResourceWrite::SetBucketIamPolicy { bucket, policy } => {
+            gcp.set_bucket_iam_policy(bucket, policy).await?;
+            Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::SetPublicAccessPrevention { bucket, value } => {
+            gcp.set_public_access_prevention(bucket, value).await?;
+            Ok(json!({ "bucket": bucket }))
+        }
+        other => Err(refused(format!("GCP takes no {} write", other.operation()))),
     }
 }
 

@@ -613,6 +613,15 @@ const GCP_VERIFIER_CLOUD_RUN_PERMISSIONS: &[&str] = &[
     "run.jobs.run",
 ];
 
+/// What the GCP verifier may do with the install's buckets: who may reach a bucket (its IAM
+/// policy) and whether it may be public. Bound under a condition on the bucket's name; the
+/// verifier checks every policy against the signed stack before it sets it.
+const GCP_VERIFIER_BUCKET_PERMISSIONS: &[&str] = &[
+    "storage.buckets.getIamPolicy",
+    "storage.buckets.setIamPolicy",
+    "storage.buckets.update",
+];
+
 /// What the GCP verifier uses that the install doesn't name: the network its machines join, the
 /// images they boot, the template list (it picks the next template number) and the operations
 /// it waits on.
@@ -724,6 +733,12 @@ fn gcp_verifier_blocks(
             GCP_VERIFIER_CLOUD_RUN_PERMISSIONS,
         ),
         custom_role(
+            "signing_verifier_buckets",
+            "verifier_buckets",
+            "verifier: the install's buckets",
+            GCP_VERIFIER_BUCKET_PERMISSIONS,
+        ),
+        custom_role(
             "signing_verifier_shared",
             "verifier_shared",
             "verifier: network and images",
@@ -762,6 +777,34 @@ fn gcp_verifier_blocks(
                     ]),
                 ),
                 attr("member", member.clone()),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_buckets",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_buckets",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+                nested(block(
+                    "condition",
+                    [
+                        attr("title", Expression::String("The install's own buckets".to_string())),
+                        attr(
+                            "expression",
+                            escaped_template(
+                                r#"resource.type == "storage.googleapis.com/Bucket" && resource.name.startsWith("projects/_/buckets/${local.resource_prefix}-")"#,
+                            ),
+                        ),
+                    ],
+                )),
             ],
         ),
         resource_block(

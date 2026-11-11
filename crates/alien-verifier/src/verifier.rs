@@ -667,6 +667,8 @@ mod tests {
         forwarded: Mutex<Vec<String>>,
         /// What the cloud says an existing mapping reads from and feeds.
         mapping: Mutex<(String, String)>,
+        /// When set, the backend applies the GCP rules, and this is the IAM policy its bucket holds.
+        gcp_bucket_policy: Mutex<Option<Value>>,
     }
 
     #[async_trait]
@@ -683,6 +685,9 @@ mod tests {
             facts: &ResourceFacts<'_>,
             write: &ResourceWrite,
         ) -> Result<()> {
+            if self.gcp_bucket_policy.lock().unwrap().is_some() {
+                return crate::cloud_write::resource::check_gcp_write(facts, write);
+            }
             crate::cloud_write::resource::check_aws_write(facts, write, REGION)
         }
         async fn check_resource_state(
@@ -690,6 +695,9 @@ mod tests {
             facts: &ResourceFacts<'_>,
             write: &ResourceWrite,
         ) -> Result<()> {
+            if let Some(current) = self.gcp_bucket_policy.lock().unwrap().clone() {
+                return crate::cloud_write::resource::check_gcp_state(facts, write, &current);
+            }
             let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write else {
                 return Ok(());
             };
@@ -725,6 +733,8 @@ mod tests {
                 ResourceWrite::SetQueueAttributes { attributes, .. } => {
                     json!(attributes).to_string()
                 }
+                ResourceWrite::SetBucketIamPolicy { policy, .. } => policy.to_string(),
+                ResourceWrite::SetPublicAccessPrevention { value, .. } => value.clone(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -766,6 +776,7 @@ mod tests {
         let store = Arc::new(MemoryStore::protected(&settings()));
         let backend = Arc::new(ResourceForwards {
             forwarded: Mutex::new(Vec::new()),
+            gcp_bucket_policy: Mutex::new(None),
             mapping: Mutex::new((
                 format!("arn:aws:sqs:{REGION}:{ACCOUNT}:{PREFIX}-jobs"),
                 format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PREFIX}-api"),
@@ -927,6 +938,64 @@ mod tests {
             let reason = refusal(verifier.handle(request(&bucket, configuration)).await);
             assert!(reason.starts_with("Refused: "), "{bucket}: {reason}");
             assert!(backend.forwarded.lock().unwrap().is_empty());
+        }
+    }
+
+    fn gcp_bucket_request(public_read: bool, write: Value) -> Value {
+        json!({"applyResourceWrite": {
+            "release": storage_release(public_read),
+            "signerLists": [signer_list()],
+            "resource": "assets",
+            "writes": [write],
+        }})
+    }
+
+    /// A bucket's IAM policy and public access prevention are checked against the signed stack and
+    /// the policy the bucket holds, and sent unchanged.
+    #[tokio::test]
+    async fn gcp_bucket_writes_are_checked_against_the_signed_stack_and_sent_unchanged() {
+        let bucket = format!("{PREFIX}-assets");
+        let held = json!({"etag": "a", "bindings": [
+            {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:app@p.iam"]}]});
+        let with_public = json!({"etag": "a", "bindings": [
+            {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:app@p.iam"]},
+            {"role": "roles/storage.objectViewer", "members": ["allUsers"]}]});
+        let with_attacker = json!({"etag": "a", "bindings": [
+            {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:app@p.iam", "user:attacker@x.y"]}]});
+        let set_policy = |bucket: &str, policy: &Value| {
+            json!({"setBucketIamPolicy": {"bucket": bucket, "policy": policy}})
+        };
+        let prevention = |value: &str| {
+            json!({"setPublicAccessPrevention": {"bucket": bucket, "value": value}})
+        };
+
+        // Accepted, and sent unchanged: the held policy, the declared public read, enforcing.
+        for (declared, write, sent) in [
+            (false, set_policy(&bucket, &held), held.to_string()),
+            (true, set_policy(&bucket, &with_public), with_public.to_string()),
+            (false, prevention("enforced"), "enforced".to_string()),
+            (true, prevention("inherited"), "inherited".to_string()),
+        ] {
+            let (verifier, backend) = resource_verifier();
+            *backend.gcp_bucket_policy.lock().unwrap() = Some(held.clone());
+            verifier
+                .handle(gcp_bucket_request(declared, write.clone()))
+                .await
+                .unwrap_or_else(|error| panic!("{write}: {error:?}"));
+            assert_eq!(*backend.forwarded.lock().unwrap(), vec![sent], "{write}");
+        }
+
+        // Refused, and nothing is sent.
+        for (name, declared, write) in [
+            ("public read the stack does not declare", false, set_policy(&bucket, &with_public)),
+            ("a member the bucket does not hold", true, set_policy(&bucket, &with_attacker)),
+            ("another bucket", false, set_policy("someone-elses-bucket", &held)),
+            ("inherited prevention not declared", false, prevention("inherited")),
+        ] {
+            let (verifier, backend) = resource_verifier();
+            *backend.gcp_bucket_policy.lock().unwrap() = Some(held.clone());
+            refusal(verifier.handle(gcp_bucket_request(declared, write)).await);
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{name}: sent");
         }
     }
 

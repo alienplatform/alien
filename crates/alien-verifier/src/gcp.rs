@@ -139,6 +139,50 @@ impl Gcp {
             .context(failed(format!("{operation}: the response is not JSON")))
     }
 
+    /// A bucket's IAM policy as Cloud Storage holds it now.
+    pub async fn bucket_iam_policy(&self, bucket: &str) -> Result<Value> {
+        let url = format!(
+            "https://storage.googleapis.com/storage/v1/b/{bucket}/iam?optionsRequestedPolicyVersion=3"
+        );
+        self.call(
+            reqwest::Method::GET,
+            &url,
+            None,
+            &format!("storage.buckets.getIamPolicy {bucket}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("bucket {bucket} does not exist"))))
+    }
+
+    /// Replace a bucket's IAM policy, as the controller built it.
+    pub async fn set_bucket_iam_policy(&self, bucket: &str, policy: &Value) -> Result<()> {
+        let url = format!("https://storage.googleapis.com/storage/v1/b/{bucket}/iam");
+        self.call(
+            reqwest::Method::PUT,
+            &url,
+            Some(policy),
+            &format!("storage.buckets.setIamPolicy {bucket}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("bucket {bucket} does not exist"))))?;
+        Ok(())
+    }
+
+    /// Patch a bucket's public access prevention.
+    pub async fn set_public_access_prevention(&self, bucket: &str, value: &str) -> Result<()> {
+        let url = format!("https://storage.googleapis.com/storage/v1/b/{bucket}");
+        let body = json!({"iamConfiguration": {"publicAccessPrevention": value}});
+        self.call(
+            reqwest::Method::PATCH,
+            &url,
+            Some(&body),
+            &format!("storage.buckets.patch {bucket}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("bucket {bucket} does not exist"))))?;
+        Ok(())
+    }
+
     fn service_url(&self, name: &str) -> String {
         format!(
             "https://run.googleapis.com/v2/projects/{}/locations/{}/services/{name}",
@@ -717,6 +761,36 @@ impl Backend for GcpBackend {
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
         crate::cloud_write::cloud_run::check_write(facts, write)
+    }
+
+    fn check_resource_write(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        crate::cloud_write::resource::check_gcp_write(facts, write)
+    }
+
+    async fn check_resource_state(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        let crate::cloud_write::resource::ResourceWrite::SetBucketIamPolicy { bucket, .. } = write
+        else {
+            return Ok(());
+        };
+        let current = self.0.bucket_iam_policy(bucket).await?;
+        crate::cloud_write::resource::check_gcp_state(facts, write, &current)
+    }
+
+    async fn forward_resource_write(
+        &self,
+        _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+        newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        crate::cloud_write::resource::forward_gcp_write(&self.0, write, newest).await
     }
 
     async fn forward(

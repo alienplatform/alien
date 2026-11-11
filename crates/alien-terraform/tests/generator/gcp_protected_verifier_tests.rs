@@ -341,3 +341,50 @@ fn the_verifier_holds_its_cloud_run_permissions_without_a_name_condition() {
         );
     }
 }
+
+/// The verifier sets bucket IAM policies and public access prevention, only on the install's own
+/// buckets: Cloud Storage evaluates `resource.name` of a bucket, so the binding carries the name
+/// condition, and no other verifier role holds a bucket permission.
+#[test]
+fn the_verifier_holds_its_bucket_permissions_only_on_the_installs_own_buckets() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .expect("stack");
+    let settings = StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let text = module_text(&render(&stack, TerraformTarget::Gcp, settings));
+    let (roles, bindings) = verifier_custom_roles(&text);
+    for permission in [
+        "storage.buckets.getIamPolicy",
+        "storage.buckets.setIamPolicy",
+        "storage.buckets.update",
+    ] {
+        let holders: Vec<&String> = roles
+            .iter()
+            .filter(|(_, permissions)| permissions.iter().any(|held| held == permission))
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(holders, ["signing_verifier_buckets"], "{permission}");
+    }
+    assert!(
+        bindings.contains(&("signing_verifier_buckets".to_string(), true)),
+        "the bucket role is bound without a name condition: {bindings:?}"
+    );
+    assert!(
+        text.contains(r#"resource.name.startsWith("projects/_/buckets/${local.resource_prefix}-")"#),
+        "the condition names the install's bucket prefix"
+    );
+}

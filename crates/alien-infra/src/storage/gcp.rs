@@ -122,8 +122,10 @@ impl GcpStorageController {
                 enabled: true,
                 locked_time: None,
             }),
+            // On a protected install who may reach the bucket is the verifier's to set, after
+            // the bucket exists.
             public_access_prevention: Some(
-                if config.public_read {
+                if config.public_read && !crate::core::verifier::is_protected(ctx) {
                     "inherited"
                 } else {
                     "enforced"
@@ -246,6 +248,13 @@ impl GcpStorageController {
         // Step 2: Handle public read access if enabled
         if config.public_read {
             info!(bucket = %bucket_name, "Setting IAM policy for public read access");
+
+            if protected_public_read(ctx, &*client, bucket_name, &config.id, true).await? {
+                return Ok(HandlerAction::Continue {
+                    state: CreatingNotifications,
+                    suggested_delay: None,
+                });
+            }
 
             // First set uniform bucket-level access
             let mut bucket_patch = Bucket::default();
@@ -498,6 +507,15 @@ impl GcpStorageController {
                     message: "Public access on a Frozen bucket must be changed through setup"
                         .to_string(),
                 }));
+            }
+
+            if protected_public_read(ctx, &*client, bucket_name, &config.id, config.public_read)
+                .await?
+            {
+                return Ok(HandlerAction::Continue {
+                    state: UpdatingResourcePermissions,
+                    suggested_delay: None,
+                });
             }
 
             // Privacy does not change the ACL model. In particular, never disable locked
@@ -774,6 +792,80 @@ impl GcpStorageController {
             Ok(None)
         }
     }
+}
+
+/// The writes that make a bucket public or private, in order: becoming public lifts the
+/// prevention first; becoming private removes the grant first. `policy` is the bucket's policy
+/// with the public grant already added or removed, and `changed` whether that changed it.
+fn public_read_writes(
+    bucket_name: &str,
+    policy: serde_json::Value,
+    changed: bool,
+    public: bool,
+) -> Vec<crate::core::verifier::ResourceWrite> {
+    use crate::core::verifier::ResourceWrite;
+    let prevention = |value: &str| ResourceWrite::SetPublicAccessPrevention {
+        bucket: bucket_name.to_string(),
+        value: value.to_string(),
+    };
+    let set_policy = ResourceWrite::SetBucketIamPolicy {
+        bucket: bucket_name.to_string(),
+        policy,
+    };
+    let mut writes = Vec::new();
+    if public {
+        writes.push(prevention("inherited"));
+        if changed {
+            writes.push(set_policy);
+        }
+    } else {
+        if changed {
+            writes.push(set_policy);
+        }
+        writes.push(prevention("enforced"));
+    }
+    writes
+}
+
+/// On a protected install, set whether a bucket is public through the verifier: it checks the
+/// public access prevention and the bucket's IAM policy against the signed stack and the policy
+/// the bucket holds, and sends these very requests. Returns whether it did; an unprotected install
+/// is left to the caller.
+async fn protected_public_read(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn GcsApi,
+    bucket_name: &str,
+    resource_id: &str,
+    public: bool,
+) -> Result<bool> {
+    use crate::core::verifier::{apply_resource_write, gcp_verifier};
+    let Some(release) = crate::core::verifier::protected_statements(ctx, resource_id)? else {
+        return Ok(false);
+    };
+    let mut policy = client
+        .get_bucket_iam_policy(bucket_name.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read IAM policy for bucket '{bucket_name}'"),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    let changed = set_public_viewer(&mut policy, public);
+    let policy = serde_json::to_value(&policy)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "The bucket IAM policy does not serialize".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    let writes = public_read_writes(bucket_name, policy, changed, public);
+    apply_resource_write(
+        &gcp_verifier(ctx)?,
+        release,
+        ctx.deployment_config.signed_config.as_ref(),
+        resource_id,
+        writes,
+    )
+    .await?;
+    Ok(true)
 }
 
 /// Change only public object-viewer membership. Every retry reads a fresh policy, so an
@@ -1673,6 +1765,38 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// What the controller sends the verifier to make a bucket public or private is what the
+    /// verifier's rule accepts for a storage declared public (and refuses for one that is not),
+    /// in the order that never leaves a public grant without the prevention lifted.
+    #[test]
+    fn public_read_writes_follow_the_verifiers_rule() {
+        use crate::core::verifier::ResourceWrite;
+        use crate::storage::gcp::{public_read_writes, set_public_viewer};
+        let held = serde_json::json!({"etag": "a", "bindings": [
+            {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:app@p.iam"]}]});
+        let mut policy: IamPolicy = serde_json::from_value(held.clone()).unwrap();
+        let changed = set_public_viewer(&mut policy, true);
+        assert!(changed);
+        let public = serde_json::to_value(&policy).unwrap();
+        let writes = public_read_writes("acme-assets", public.clone(), changed, true);
+        assert_eq!(writes.len(), 2);
+        assert!(matches!(&writes[0], ResourceWrite::SetPublicAccessPrevention { value, .. } if value == "inherited"));
+        let ResourceWrite::SetBucketIamPolicy { policy: sent, .. } = &writes[1] else {
+            panic!("second write is the policy: {writes:?}")
+        };
+        alien_permissions::gcp_bucket_iam::check_bucket_iam(sent, &held, true)
+            .expect("accepted for a declared public storage");
+        alien_permissions::gcp_bucket_iam::check_bucket_iam(sent, &held, false)
+            .expect_err("refused for a storage that is not declared public");
+
+        // Becoming private: the grant goes first, then the prevention is enforced.
+        let writes = public_read_writes("acme-assets", held.clone(), true, false);
+        assert!(matches!(&writes[0], ResourceWrite::SetBucketIamPolicy { .. }));
+        assert!(matches!(&writes[1], ResourceWrite::SetPublicAccessPrevention { value, .. } if value == "enforced"));
+        // Nothing to remove: only the prevention.
+        assert_eq!(public_read_writes("acme-assets", held, false, false).len(), 1);
     }
 
     /// Test that verifies public read configuration generates correct IAM policy

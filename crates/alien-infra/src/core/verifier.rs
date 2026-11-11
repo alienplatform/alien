@@ -419,6 +419,15 @@ pub enum ResourceWrite {
         queue_url: String,
         attributes: std::collections::BTreeMap<String, String>,
     },
+    /// Cloud Storage setIamPolicy: the bucket's whole policy.
+    #[serde(rename_all = "camelCase")]
+    SetBucketIamPolicy {
+        bucket: String,
+        policy: serde_json::Value,
+    },
+    /// Cloud Storage patch of a bucket's public access prevention.
+    #[serde(rename_all = "camelCase")]
+    SetPublicAccessPrevention { bucket: String, value: String },
 }
 
 /// What `applyResourceWrite` did.
