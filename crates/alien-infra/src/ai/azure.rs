@@ -62,6 +62,7 @@ fn azure_availability(
                 access_test: AiAccessTest::NotChecked,
                 tested_at: Some(Utc::now()),
                 error_code: None,
+                quota_warnings: Vec::new(),
             }
         })
         .collect();

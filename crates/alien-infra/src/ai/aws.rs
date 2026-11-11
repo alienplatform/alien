@@ -80,6 +80,7 @@ fn classify_bedrock_availability(
         access_test: AiAccessTest::NotChecked,
         tested_at: Some(tested_at),
         error_code: None,
+        quota_warnings: Vec::new(),
     }
 }
 
@@ -177,6 +178,7 @@ async fn observe_bedrock_availability(
             access_test: AiAccessTest::NotChecked,
             tested_at: Some(tested_at),
             error_code: None,
+            quota_warnings: Vec::new(),
         })
         .collect();
     models.extend(responses.into_iter().map(|(model, result)| match result {
@@ -199,6 +201,7 @@ async fn observe_bedrock_availability(
                 access_test: AiAccessTest::NotChecked,
                 tested_at: Some(tested_at),
                 error_code: Some("bedrock-observation-failed".to_string()),
+                quota_warnings: Vec::new(),
             }
         }
     }));

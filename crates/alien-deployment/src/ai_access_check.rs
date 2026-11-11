@@ -240,6 +240,7 @@ mod tests {
                             access_test: AiAccessTest::NotChecked,
                             tested_at: None,
                             error_code: None,
+                            quota_warnings: Vec::new(),
                         }],
                     },
                 },

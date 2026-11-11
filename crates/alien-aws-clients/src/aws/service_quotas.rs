@@ -25,6 +25,14 @@ pub struct GetServiceQuotaResponse {
     pub quota: Option<ServiceQuota>,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListServiceQuotasResponse {
+    #[serde(default)]
+    pub quotas: Vec<ServiceQuota>,
+    pub next_token: Option<String>,
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
@@ -34,6 +42,20 @@ pub trait ServiceQuotasApi: Send + Sync + Debug {
         service_code: &str,
         quota_code: &str,
     ) -> Result<GetServiceQuotaResponse>;
+
+    /// One page of the quotas applied to this account for a service.
+    async fn list_service_quotas(
+        &self,
+        service_code: &str,
+        next_token: Option<String>,
+    ) -> Result<ListServiceQuotasResponse>;
+
+    /// One page of the AWS default values for a service's quotas.
+    async fn list_aws_default_service_quotas(
+        &self,
+        service_code: &str,
+        next_token: Option<String>,
+    ) -> Result<ListServiceQuotasResponse>;
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +79,34 @@ impl ServiceQuotasClient {
             credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
+    }
+
+    async fn list_page(
+        &self,
+        operation: &str,
+        service_code: &str,
+        next_token: Option<String>,
+    ) -> Result<ListServiceQuotasResponse> {
+        self.credentials.ensure_fresh().await?;
+        let mut body = serde_json::json!({ "ServiceCode": service_code, "MaxResults": 100 });
+        if let Some(token) = next_token {
+            body["NextToken"] = serde_json::Value::String(token);
+        }
+        let builder = self
+            .client
+            .post(format!("{}/", self.base_url().trim_end_matches('/')))
+            .host(&format!(
+                "servicequotas.{}.amazonaws.com",
+                self.credentials.region()
+            ))
+            .header("X-Amz-Target", format!("ServiceQuotasV20190624.{operation}"))
+            .header("Content-Type", "application/x-amz-json-1.1")
+            .json(&body);
+        builder
+            .sign_aws_request(&self.sign_config())?
+            .with_retry()
+            .send_json()
+            .await
     }
 
     fn base_url(&self) -> String {
@@ -99,6 +149,24 @@ impl ServiceQuotasApi for ServiceQuotasClient {
             .sign_aws_request(&self.sign_config())?
             .with_retry()
             .send_json()
+            .await
+    }
+
+    async fn list_service_quotas(
+        &self,
+        service_code: &str,
+        next_token: Option<String>,
+    ) -> Result<ListServiceQuotasResponse> {
+        self.list_page("ListServiceQuotas", service_code, next_token)
+            .await
+    }
+
+    async fn list_aws_default_service_quotas(
+        &self,
+        service_code: &str,
+        next_token: Option<String>,
+    ) -> Result<ListServiceQuotasResponse> {
+        self.list_page("ListAWSDefaultServiceQuotas", service_code, next_token)
             .await
     }
 }

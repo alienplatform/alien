@@ -1,4 +1,5 @@
 pub mod aws;
+mod aws_quotas;
 pub use aws::AwsAiController;
 
 #[cfg(feature = "aws")]

@@ -1955,6 +1955,20 @@ pub struct AiModelAvailabilityObservation {
     pub tested_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+    /// Applied quotas far below the cloud's default for this model. Empty when none were read
+    /// or none are low.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quota_warnings: Vec<AiQuotaWarning>,
+}
+
+/// One quota the account has set well below the cloud's default (under 10%).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AiQuotaWarning {
+    pub quota_name: String,
+    pub applied: f64,
+    pub default: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1990,6 +2004,7 @@ impl AiAvailabilityObservation {
                     access_test: AiAccessTest::NotChecked,
                     tested_at: None,
                     error_code: None,
+                    quota_warnings: Vec::new(),
                 })
                 .collect(),
         }
