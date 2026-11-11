@@ -26,7 +26,9 @@ use alien_error::AlienError;
 ///
 /// `isolated-sandbox` is the handler of EKS Auto Mode's `isolated-sandbox` RuntimeClass (AWS Nitro
 /// Sandboxes), read from a real cluster: handler `isolated-sandbox`, node selector
-/// `eks.amazonaws.com/nitro-sandbox=true`. AKS's `kata-vm-isolation` matches the `kata` prefix.
+/// `eks.amazonaws.com/nitro-sandbox=true`. AKS's `kata-vm-isolation` class has handler `kata` (read
+/// from a real cluster with a Kata node pool, node selector
+/// `kubernetes.azure.com/kata-vm-isolation=true`), which the list covers.
 const SANDBOXED_HANDLERS: &[&str] = &[
     "gvisor",
     "runsc",
@@ -235,5 +237,22 @@ mod live_cluster_shape {
             message.contains("gvisor"),
             "must list what is available: {message}"
         );
+    }
+
+    /// AKS declares `kata-vm-isolation` (handler `kata`) and `runc` (handler `runc`), read from a
+    /// real cluster with a Kata node pool.
+    #[test]
+    fn aks_kata_vm_isolation_is_accepted_and_runc_is_not() {
+        let aks = |name: &str, handler: &str| {
+            let mut class = autopilot_runtime_classes().remove(0);
+            class.metadata.name = Some(name.to_string());
+            class.handler = handler.to_string();
+            class
+        };
+        let classes = vec![aks("kata-vm-isolation", "kata"), aks("runc", "runc")];
+        require_sandboxed_runtime_class("sbx", "kata-vm-isolation", &classes)
+            .expect("the Kata class of an AKS node pool is a sandboxed runtime");
+        require_sandboxed_runtime_class("sbx", "runc", &classes)
+            .expect_err("runc shares the node kernel");
     }
 }
