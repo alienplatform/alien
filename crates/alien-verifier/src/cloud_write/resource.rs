@@ -116,6 +116,17 @@ pub enum ResourceWrite {
     /// Pub/Sub create subscription, with the subscription as the client sends it (its topic only).
     #[serde(rename_all = "camelCase")]
     CreateSubscription { subscription: String, body: Value },
+    /// Pub/Sub create of a worker's commands push subscription: it delivers to the worker's own
+    /// Cloud Run service, as the worker's own service account when the worker is private.
+    #[serde(rename_all = "camelCase")]
+    CreateCommandSubscription { subscription: String, body: Value },
+    /// Cloud SQL create of the install's database instance, as the client sends it. It carries
+    /// no password: the controller sets the database user's password afterwards.
+    #[serde(rename_all = "camelCase")]
+    CreateDatabaseInstance { body: Value },
+    /// Cloud SQL patch of the install's database instance: tier, availability and disk size.
+    #[serde(rename_all = "camelCase")]
+    PatchDatabaseInstance { instance: String, body: Value },
     /// Pub/Sub setIamPolicy of a topic: its whole policy.
     #[serde(rename_all = "camelCase")]
     SetTopicIamPolicy { topic: String, policy: Value },
@@ -180,6 +191,9 @@ impl ResourceWrite {
             ResourceWrite::SetPublicAccessPrevention { .. } => "SetPublicAccessPrevention",
             ResourceWrite::CreateTopic { .. } => "CreateTopic",
             ResourceWrite::CreateSubscription { .. } => "CreateSubscription",
+            ResourceWrite::CreateCommandSubscription { .. } => "CreateCommandSubscription",
+            ResourceWrite::CreateDatabaseInstance { .. } => "CreateDatabaseInstance",
+            ResourceWrite::PatchDatabaseInstance { .. } => "PatchDatabaseInstance",
             ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
             ResourceWrite::SetSubscriptionIamPolicy { .. } => "SetSubscriptionIamPolicy",
             ResourceWrite::CreateBlobContainer { .. } => "CreateBlobContainer",
@@ -257,6 +271,19 @@ impl ResourceFacts<'_> {
             .ok_or_else(|| {
                 refused(format!(
                     "resource '{}' is not a sandbox in the signed stack",
+                    self.resource_id
+                ))
+            })
+    }
+
+    /// The resource, which must be a postgres database of the signed stack.
+    pub fn postgres(&self) -> Result<&alien_core::Postgres> {
+        self.entry()?
+            .config
+            .downcast_ref::<alien_core::Postgres>()
+            .ok_or_else(|| {
+                refused(format!(
+                    "resource '{}' is not a postgres database in the signed stack",
                     self.resource_id
                 ))
             })
@@ -443,6 +470,9 @@ pub fn check_aws_write(
         | ResourceWrite::SetPublicAccessPrevention { .. }
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
+        | ResourceWrite::CreateCommandSubscription { .. }
+        | ResourceWrite::CreateDatabaseInstance { .. }
+        | ResourceWrite::PatchDatabaseInstance { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
@@ -798,6 +828,9 @@ pub async fn forward_aws_write(
         | ResourceWrite::SetPublicAccessPrevention { .. }
         | ResourceWrite::CreateTopic { .. }
         | ResourceWrite::CreateSubscription { .. }
+        | ResourceWrite::CreateCommandSubscription { .. }
+        | ResourceWrite::CreateDatabaseInstance { .. }
+        | ResourceWrite::PatchDatabaseInstance { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
@@ -902,6 +935,15 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
                 }
             }
             Ok(())
+        }
+        ResourceWrite::CreateCommandSubscription { subscription, body } => {
+            check_command_subscription(facts, subscription, body, None)
+        }
+        ResourceWrite::CreateDatabaseInstance { body } => {
+            check_database_instance(facts.place, facts.postgres()?, facts.resource_id, body)
+        }
+        ResourceWrite::PatchDatabaseInstance { instance, body } => {
+            check_database_patch(facts.place, facts.postgres().map(|_| ())?, facts.resource_id, instance, body)
         }
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             facts.queue()?;
@@ -1036,6 +1078,273 @@ fn sandbox_image_is_signed(signed: &str, sent: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// The name this install gives the Cloud SQL instance of postgres `id`.
+fn database_instance_name(place: &Place, resource_id: &str) -> String {
+    format!("{}-{}", place.prefix, resource_id)
+}
+
+/// Check the create of the database instance. Nothing in the request may reach the database
+/// from outside: private only, Private Service Connect from the install's own project, no
+/// authorized networks and no field the verifier does not know (the body must survive a round
+/// trip through the client's own type unchanged). A password is refused so no secret travels in
+/// the request.
+fn check_database_instance(
+    place: &Place,
+    postgres: &alien_core::Postgres,
+    resource_id: &str,
+    body: &Value,
+) -> Result<()> {
+    use alien_gcp_clients::cloud_sql::{
+        postgres_database_version, DatabaseInstance, IpConfiguration, PscConfig,
+    };
+    let project = match &place.install {
+        alien_signing::InstallId::Gcp { project, .. } => project.as_str(),
+        _ => return Err(refused("this install is not a GCP install")),
+    };
+    let instance: DatabaseInstance = serde_json::from_value(body.clone())
+        .map_err(|error| refused(format!("the instance is not a Cloud SQL instance: {error}")))?;
+    if serde_json::to_value(&instance).ok().as_ref() != Some(body) {
+        return Err(refused(
+            "the instance sets a field the verifier does not know",
+        ));
+    }
+    if instance.root_password.is_some() {
+        return Err(refused(
+            "the instance carries a root password: it is set afterwards, not in this request",
+        ));
+    }
+    let own = database_instance_name(place, resource_id);
+    if instance.name != own {
+        return Err(refused(format!(
+            "the instance is named {}, not {own}",
+            instance.name
+        )));
+    }
+    if instance.database_version != postgres_database_version(&postgres.version) {
+        return Err(refused(
+            "the database version is not the signed stack's",
+        ));
+    }
+    let private = IpConfiguration {
+        ipv4_enabled: false,
+        psc_config: Some(PscConfig {
+            psc_enabled: true,
+            psc_auto_dns_enabled: false,
+            allowed_consumer_projects: vec![project.to_string()],
+        }),
+    };
+    if instance.settings.ip_configuration != private {
+        return Err(refused(
+            "the instance's network settings are not private service connect from this project only",
+        ));
+    }
+    Ok(())
+}
+
+/// Check the patch of the database instance: the instance is the install's own and the patch
+/// sets only size, availability and the concurrency token, never a network field.
+fn check_database_patch(
+    place: &Place,
+    _is_postgres: (),
+    resource_id: &str,
+    instance: &str,
+    body: &Value,
+) -> Result<()> {
+    let own = database_instance_name(place, resource_id);
+    if instance != own {
+        return Err(refused(format!(
+            "PatchDatabaseInstance names {instance}, not {own}"
+        )));
+    }
+    let fields = body
+        .as_object()
+        .filter(|fields| fields.len() == 1)
+        .and_then(|fields| fields.get("settings"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| refused("the patch is not {settings: {...}}"))?;
+    if let Some(field) = fields.keys().find(|key| {
+        !matches!(
+            key.as_str(),
+            "tier" | "availabilityType" | "dataDiskSizeGb" | "settingsVersion"
+        )
+    }) {
+        return Err(refused(format!("the patch sets '{field}'")));
+    }
+    Ok(())
+}
+
+/// The service a GCP worker runs as: the name setup gives its Cloud Run service.
+pub fn gcp_worker_service_name(facts: &ResourceFacts<'_>) -> Result<String> {
+    facts.place.function_name(facts.resource_id)
+}
+
+/// Check the push subscription a worker's commands arrive on. It must be the worker's own
+/// (`<service>-rq-sub` on `<service>-rq`), deliver to the worker's own Cloud Run service and, for
+/// a private worker, carry an OIDC token of the worker's own service account for that service.
+/// `service_uri` is what Cloud Run reports for the service; without it (the shape check) the
+/// endpoint is only required to be an https URL.
+pub fn check_command_subscription(
+    facts: &ResourceFacts<'_>,
+    subscription: &str,
+    body: &Value,
+    service_uri: Option<&str>,
+) -> Result<()> {
+    check_command_subscription_of(
+        facts.worker()?,
+        facts.place,
+        facts.resource_id,
+        subscription,
+        body,
+        service_uri,
+    )
+}
+
+fn check_command_subscription_of(
+    worker: &alien_core::Worker,
+    place: &Place,
+    resource_id: &str,
+    subscription: &str,
+    body: &Value,
+    service_uri: Option<&str>,
+) -> Result<()> {
+    if !worker.commands_enabled {
+        return Err(refused(format!(
+            "worker '{resource_id}' has no commands in the signed stack"
+        )));
+    }
+    let service = place.function_name(resource_id)?;
+    let own = format!("{service}-rq-sub");
+    if subscription != own {
+        return Err(refused(format!(
+            "CreateCommandSubscription names {subscription}, not {own}"
+        )));
+    }
+    let project = match &place.install {
+        alien_signing::InstallId::Gcp { project, .. } => project.as_str(),
+        _ => return Err(refused("this install is not a GCP install")),
+    };
+    let fields = body
+        .as_object()
+        .ok_or_else(|| refused("the subscription is not a JSON object"))?;
+    const ALLOWED: [&str; 8] = [
+        "name",
+        "topic",
+        "pushConfig",
+        "ackDeadlineSeconds",
+        "retainAckedMessages",
+        "labels",
+        "enableMessageOrdering",
+        "detached",
+    ];
+    if let Some(field) = fields.keys().find(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(refused(format!(
+            "CreateCommandSubscription sets '{field}': only the topic, push delivery and the \
+             controller's own settings are allowed"
+        )));
+    }
+    if fields.get("topic").and_then(Value::as_str)
+        != Some(format!("projects/{project}/topics/{service}-rq").as_str())
+    {
+        return Err(refused(format!(
+            "the subscription's topic is not {service}-rq"
+        )));
+    }
+    if let Some(name) = fields.get("name") {
+        if name.as_str() != Some(format!("projects/{project}/subscriptions/{own}").as_str()) {
+            return Err(refused("the subscription's name is not its own"));
+        }
+    }
+    if fields.get("retainAckedMessages").is_some_and(|v| v != &json!(false))
+        || fields.get("enableMessageOrdering").is_some_and(|v| v != &json!(false))
+        || fields.get("detached").is_some_and(|v| v != &json!(false))
+    {
+        return Err(refused(
+            "the subscription retains messages, orders them or is detached",
+        ));
+    }
+    if let Some(ack) = fields.get("ackDeadlineSeconds") {
+        if !ack.as_i64().is_some_and(|seconds| (10..=600).contains(&seconds)) {
+            return Err(refused("ackDeadlineSeconds is not between 10 and 600"));
+        }
+    }
+    if let Some(labels) = fields.get("labels") {
+        let labels = labels
+            .as_object()
+            .ok_or_else(|| refused("the subscription's labels are not an object"))?;
+        for (key, value) in labels {
+            let expected = match key.as_str() {
+                "commands" => resource_id,
+                "deployment" => place.prefix.as_str(),
+                other => return Err(refused(format!("the subscription carries label '{other}'"))),
+            };
+            if value.as_str() != Some(expected) {
+                return Err(refused(format!("label '{key}' is not '{expected}'")));
+            }
+        }
+    }
+    let push = fields
+        .get("pushConfig")
+        .and_then(Value::as_object)
+        .ok_or_else(|| refused("the commands subscription has no push delivery"))?;
+    if let Some(field) = push
+        .keys()
+        .find(|key| !matches!(key.as_str(), "pushEndpoint" | "attributes" | "oidcToken"))
+    {
+        return Err(refused(format!("pushConfig sets '{field}'")));
+    }
+    if push
+        .get("attributes")
+        .is_some_and(|attributes| attributes.as_object().is_none_or(|map| !map.is_empty()))
+    {
+        return Err(refused("pushConfig carries attributes"));
+    }
+    let endpoint = push
+        .get("pushEndpoint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refused("pushConfig has no endpoint"))?;
+    let audience = endpoint.trim_end_matches('/');
+    if !endpoint.starts_with("https://") || !endpoint.ends_with('/') {
+        return Err(refused("the push endpoint is not an https URL ending in '/'"));
+    }
+    if let Some(uri) = service_uri {
+        if audience != uri.trim_end_matches('/') {
+            return Err(refused(format!(
+                "the push endpoint is not the URL of Cloud Run service {service}"
+            )));
+        }
+    }
+    let oidc = push.get("oidcToken");
+    if worker.public_endpoints.is_empty() {
+        let install = alien_permissions::gcp_resource_grants::GcpInstall {
+            prefix: &place.prefix,
+            project_id: project,
+            project_number: None,
+            region: "",
+        };
+        let account = alien_permissions::gcp_resource_grants::profile_service_account_email(
+            &install,
+            worker.get_permissions(),
+        );
+        let oidc = oidc
+            .and_then(Value::as_object)
+            .ok_or_else(|| refused("a private worker's subscription has no OIDC token"))?;
+        if oidc.keys().any(|key| !matches!(key.as_str(), "serviceAccountEmail" | "audience")) {
+            return Err(refused("the OIDC token sets a field it should not"));
+        }
+        if oidc.get("serviceAccountEmail").and_then(Value::as_str) != Some(account.as_str()) {
+            return Err(refused(format!(
+                "the OIDC token is not for the worker's own service account {account}"
+            )));
+        }
+        if oidc.get("audience").and_then(Value::as_str) != Some(audience) {
+            return Err(refused("the OIDC audience is not the service URL"));
+        }
+    } else if oidc.is_some() {
+        return Err(refused("a public worker's subscription carries an OIDC token"));
+    }
+    Ok(())
 }
 
 /// The pull subscription this install gives the queue.
@@ -1485,6 +1794,18 @@ pub async fn forward_gcp_write(gcp: &crate::gcp::Gcp, write: &ResourceWrite) -> 
                 .await?;
             Ok(json!({ "subscription": subscription }))
         }
+        ResourceWrite::CreateCommandSubscription { subscription, body } => {
+            gcp.create_pubsub("subscriptions", subscription, body)
+                .await?;
+            Ok(json!({ "subscription": subscription }))
+        }
+        ResourceWrite::CreateDatabaseInstance { body } => {
+            gcp.sql_write(reqwest::Method::POST, None, body).await
+        }
+        ResourceWrite::PatchDatabaseInstance { instance, body } => {
+            gcp.sql_write(reqwest::Method::PATCH, Some(instance), body)
+                .await
+        }
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             gcp.set_pubsub_iam_policy("topics", topic, policy).await?;
             Ok(json!({ "topic": topic }))
@@ -1590,5 +1911,303 @@ mod notification_tests {
                 "{name} was accepted"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod command_subscription_tests {
+    use super::*;
+
+    const URI: &str = "https://acme-api-abc123-uc.a.run.app";
+
+    fn place() -> Place {
+        Place {
+            install: alien_signing::InstallId::Gcp {
+                project: "acme-project".into(),
+                prefix: "acme".into(),
+            },
+            prefix: "acme".into(),
+            vpc: None,
+            machine_network: None,
+        }
+    }
+
+    fn worker(public: bool) -> alien_core::Worker {
+        let mut worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: format!("registry.example/api@sha256:{}", "a".repeat(64)),
+            })
+            .permissions("execution".to_string())
+            .build();
+        worker.commands_enabled = true;
+        if public {
+            worker.public_endpoints = vec![alien_core::WorkerPublicEndpoint {
+                name: "api".into(),
+                host_label: None,
+                wildcard_subdomains: false,
+            }];
+        }
+        worker
+    }
+
+    fn execution_account() -> String {
+        alien_permissions::gcp_resource_grants::profile_service_account_email(
+            &alien_permissions::gcp_resource_grants::GcpInstall {
+                prefix: "acme",
+                project_id: "acme-project",
+                project_number: None,
+                region: "",
+            },
+            "execution",
+        )
+    }
+
+    fn signed_body() -> Value {
+        json!({
+            "name": "projects/acme-project/subscriptions/acme-api-rq-sub",
+            "topic": "projects/acme-project/topics/acme-api-rq",
+            "pushConfig": {
+                "pushEndpoint": format!("{URI}/"),
+                "attributes": {},
+                "oidcToken": {
+                    "serviceAccountEmail": execution_account(),
+                    "audience": URI,
+                },
+            },
+            "ackDeadlineSeconds": 60,
+            "retainAckedMessages": false,
+            "labels": {"commands": "api", "deployment": "acme"},
+            "enableMessageOrdering": false,
+            "detached": false,
+        })
+    }
+
+    fn check(public: bool, body: &Value, uri: Option<&str>) -> Result<()> {
+        check_command_subscription_of(
+            &worker(public),
+            &place(),
+            "api",
+            "acme-api-rq-sub",
+            body,
+            uri,
+        )
+    }
+
+    #[test]
+    fn the_signed_subscription_is_accepted_and_anything_else_refused() {
+        let signed = signed_body();
+        check(false, &signed, None).expect("shape");
+        check(false, &signed, Some(URI)).expect("with the service URL");
+
+        let mutate = |f: &dyn Fn(&mut Value)| {
+            let mut body = signed.clone();
+            f(&mut body);
+            body
+        };
+        let refusals: Vec<(&str, Value, Option<&str>)> = vec![
+            (
+                "endpoint elsewhere",
+                mutate(&|b| b["pushConfig"]["pushEndpoint"] = json!("https://evil.example/")),
+                Some(URI),
+            ),
+            (
+                "another service's URL",
+                signed.clone(),
+                Some("https://other-abc123-uc.a.run.app"),
+            ),
+            (
+                "http endpoint",
+                mutate(&|b| b["pushConfig"]["pushEndpoint"] = json!("http://x/")),
+                None,
+            ),
+            (
+                "another service account",
+                mutate(&|b| {
+                    b["pushConfig"]["oidcToken"]["serviceAccountEmail"] =
+                        json!("acme-management-sa@acme-project.iam.gserviceaccount.com")
+                }),
+                Some(URI),
+            ),
+            (
+                "another audience",
+                mutate(&|b| b["pushConfig"]["oidcToken"]["audience"] = json!("https://evil.example")),
+                Some(URI),
+            ),
+            (
+                "no OIDC on a private worker",
+                mutate(&|b| {
+                    b["pushConfig"].as_object_mut().unwrap().remove("oidcToken");
+                }),
+                Some(URI),
+            ),
+            (
+                "another topic",
+                mutate(&|b| b["topic"] = json!("projects/acme-project/topics/other")),
+                Some(URI),
+            ),
+            (
+                "an extra field",
+                mutate(&|b| b["deadLetterPolicy"] = json!({})),
+                Some(URI),
+            ),
+            (
+                "an attribute on the push config",
+                mutate(&|b| b["pushConfig"]["attributes"] = json!({"x-goog-version": "v1"})),
+                Some(URI),
+            ),
+            (
+                "a foreign label",
+                mutate(&|b| b["labels"]["owner"] = json!("me")),
+                Some(URI),
+            ),
+        ];
+        for (name, body, uri) in refusals {
+            assert!(check(false, &body, uri).is_err(), "{name} must be refused");
+        }
+
+        // A public worker takes no OIDC token.
+        assert!(check(true, &signed, Some(URI)).is_err());
+        let mut public = signed.clone();
+        public["pushConfig"].as_object_mut().unwrap().remove("oidcToken");
+        check(true, &public, Some(URI)).expect("public worker without OIDC");
+
+        // Another subscription name is refused.
+        assert!(check_command_subscription_of(
+            &worker(false),
+            &place(),
+            "api",
+            "acme-other-rq-sub",
+            &signed,
+            Some(URI)
+        )
+        .is_err());
+    }
+}
+
+#[cfg(test)]
+mod database_instance_tests {
+    use super::*;
+    use alien_gcp_clients::cloud_sql::{
+        BackupConfiguration, DatabaseInstance, InstanceSettings, IpConfiguration, PscConfig,
+    };
+
+    fn facts_for<R>(f: impl FnOnce(&Place, &alien_core::Postgres) -> R) -> R {
+        let postgres = alien_core::Postgres::new("db".to_string()).build();
+        let place = Place {
+            install: alien_signing::InstallId::Gcp {
+                project: "acme-project".into(),
+                prefix: "acme".into(),
+            },
+            prefix: "acme".into(),
+            vpc: None,
+            machine_network: None,
+        };
+        f(&place, &postgres)
+    }
+
+    fn instance() -> DatabaseInstance {
+        DatabaseInstance {
+            name: "acme-db".into(),
+            database_version: "POSTGRES_17".into(),
+            region: Some("us-central1".into()),
+            settings: InstanceSettings {
+                tier: "db-custom-1-3840".into(),
+                data_disk_size_gb: Some("20".into()),
+                storage_auto_resize: Some(true),
+                settings_version: None,
+                ip_configuration: IpConfiguration {
+                    ipv4_enabled: false,
+                    psc_config: Some(PscConfig {
+                        psc_enabled: true,
+                        psc_auto_dns_enabled: false,
+                        allowed_consumer_projects: vec!["acme-project".into()],
+                    }),
+                },
+                backup_configuration: BackupConfiguration {
+                    enabled: true,
+                    point_in_time_recovery_enabled: true,
+                },
+                availability_type: Some("ZONAL".into()),
+                edition: Some("ENTERPRISE".into()),
+            },
+            root_password: None,
+            state: None,
+            psc_service_attachment_link: None,
+            ip_addresses: vec![],
+            server_ca_cert: None,
+        }
+    }
+
+    #[test]
+    fn only_a_private_password_free_instance_of_the_signed_stack_is_created() {
+        let signed = serde_json::to_value(instance()).unwrap();
+        facts_for(|place, postgres| {
+            check_database_instance(place, postgres, "db", &signed).expect("signed instance");
+            let mutate = |f: &dyn Fn(&mut Value)| {
+                let mut body = signed.clone();
+                f(&mut body);
+                body
+            };
+            for (name, body) in [
+                ("a root password", mutate(&|b| b["rootPassword"] = json!("secret"))),
+                (
+                    "a public address",
+                    mutate(&|b| b["settings"]["ipConfiguration"]["ipv4Enabled"] = json!(true)),
+                ),
+                (
+                    "an authorized network",
+                    mutate(&|b| {
+                        b["settings"]["ipConfiguration"]["authorizedNetworks"] =
+                            json!([{"value": "0.0.0.0/0"}])
+                    }),
+                ),
+                (
+                    "another consumer project",
+                    mutate(&|b| {
+                        b["settings"]["ipConfiguration"]["pscConfig"]["allowedConsumerProjects"] =
+                            json!(["other"])
+                    }),
+                ),
+                (
+                    "a private network",
+                    mutate(&|b| {
+                        b["settings"]["ipConfiguration"]["privateNetwork"] = json!("projects/x/global/networks/y")
+                    }),
+                ),
+                ("another name", mutate(&|b| b["name"] = json!("other"))),
+                ("another version", mutate(&|b| b["databaseVersion"] = json!("POSTGRES_15"))),
+                ("an unknown field", mutate(&|b| b["replicaConfiguration"] = json!({}))),
+            ] {
+                assert!(check_database_instance(place, postgres, "db", &body).is_err(), "{name} must be refused");
+            }
+        });
+    }
+
+    #[test]
+    fn a_patch_sets_only_size_availability_and_the_token() {
+        facts_for(|place, _| {
+            check_database_patch(
+                place,
+                (),
+                "db",
+                "acme-db",
+                &json!({"settings": {"tier": "db-custom-2-7680", "settingsVersion": "3"}}),
+            )
+            .expect("size patch");
+            for (name, instance, body) in [
+                (
+                    "ip configuration",
+                    "acme-db",
+                    json!({"settings": {"ipConfiguration": {"ipv4Enabled": true}}}),
+                ),
+                ("a top-level field", "acme-db", json!({"settings": {}, "rootPassword": "x"})),
+                ("another instance", "other", json!({"settings": {"tier": "x"}})),
+            ] {
+                assert!(
+                    check_database_patch(place, (), "db", instance, &body).is_err(),
+                    "{name} must be refused"
+                );
+            }
+        });
     }
 }

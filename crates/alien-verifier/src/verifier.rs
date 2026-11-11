@@ -731,7 +731,10 @@ mod tests {
                 ResourceWrite::SetBucketIamPolicy { policy, .. } => policy.to_string(),
                 ResourceWrite::SetPublicAccessPrevention { value, .. } => value.clone(),
                 ResourceWrite::CreateTopic { body, .. }
-                | ResourceWrite::CreateSubscription { body, .. } => body.to_string(),
+                | ResourceWrite::CreateSubscription { body, .. }
+                | ResourceWrite::CreateCommandSubscription { body, .. }
+                | ResourceWrite::CreateDatabaseInstance { body }
+                | ResourceWrite::PatchDatabaseInstance { body, .. } => body.to_string(),
                 ResourceWrite::SetTopicIamPolicy { policy, .. }
                 | ResourceWrite::SetSubscriptionIamPolicy { policy, .. } => policy.to_string(),
                 ResourceWrite::CreateBlobContainer { body, .. }

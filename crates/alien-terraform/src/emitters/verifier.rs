@@ -633,6 +633,11 @@ const GCP_VERIFIER_SANDBOX_PERMISSIONS: &[&str] = &[
     "aiplatform.sandboxEnvironmentTemplates.create",
 ];
 
+/// What the verifier needs to create and resize the install's Cloud SQL instance. Cloud SQL
+/// names the instance in the request, so the verifier checks the name; no condition scopes it.
+const GCP_VERIFIER_DATABASE_PERMISSIONS: &[&str] =
+    &["cloudsql.instances.create", "cloudsql.instances.update"];
+
 const GCP_VERIFIER_QUEUE_PERMISSIONS: &[&str] = &[
     "pubsub.topics.create",
     "pubsub.topics.getIamPolicy",
@@ -772,6 +777,12 @@ fn gcp_verifier_blocks(
             GCP_VERIFIER_SANDBOX_PERMISSIONS,
         ),
         custom_role(
+            "signing_verifier_databases",
+            "verifier_databases",
+            "verifier: the install's database instance",
+            GCP_VERIFIER_DATABASE_PERMISSIONS,
+        ),
+        custom_role(
             "signing_verifier_shared",
             "verifier_shared",
             "verifier: network and images",
@@ -878,6 +889,22 @@ fn gcp_verifier_blocks(
                     expr::traversal([
                         "google_project_iam_custom_role",
                         "signing_verifier_sandboxes",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_databases",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_databases",
                         "name",
                     ]),
                 ),

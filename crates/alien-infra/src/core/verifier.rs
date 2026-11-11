@@ -512,6 +512,23 @@ pub enum ResourceWrite {
         subscription: String,
         body: serde_json::Value,
     },
+    /// Pub/Sub create of a worker's commands push subscription: the subscription as the client
+    /// sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateCommandSubscription {
+        subscription: String,
+        body: serde_json::Value,
+    },
+    /// Cloud SQL create of the install's database instance: the instance as the client sends it,
+    /// without a password.
+    #[serde(rename_all = "camelCase")]
+    CreateDatabaseInstance { body: serde_json::Value },
+    /// Cloud SQL patch of the install's database instance.
+    #[serde(rename_all = "camelCase")]
+    PatchDatabaseInstance {
+        instance: String,
+        body: serde_json::Value,
+    },
     /// Pub/Sub setIamPolicy of a topic: its whole policy.
     #[serde(rename_all = "camelCase")]
     SetTopicIamPolicy {

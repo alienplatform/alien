@@ -241,6 +241,29 @@ impl Gcp {
         .ok_or_else(|| AlienError::new(failed(format!("{path} was not created"))))
     }
 
+    /// Create (`instance` is `None`) or patch the Cloud SQL instance with the body the controller
+    /// built; the answer is the long-running operation the controller polls.
+    pub async fn sql_write(
+        &self,
+        method: reqwest::Method,
+        instance: Option<&str>,
+        body: &Value,
+    ) -> Result<Value> {
+        let url = match instance {
+            Some(name) => format!(
+                "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances/{name}",
+                self.project
+            ),
+            None => format!(
+                "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances",
+                self.project
+            ),
+        };
+        self.call(method, &url, Some(body), "cloudsql.instances.write")
+            .await?
+            .ok_or_else(|| AlienError::new(failed("the Cloud SQL instance write returned nothing")))
+    }
+
     /// Create a Pub/Sub topic or subscription (`collection` is `topics` or `subscriptions`) with
     /// the body the controller built.
     pub async fn create_pubsub(&self, collection: &str, name: &str, body: &Value) -> Result<()> {
@@ -881,7 +904,20 @@ impl Backend for GcpBackend {
         facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<()> {
-        use crate::cloud_write::resource::{check_gcp_state, ResourceWrite};
+        use crate::cloud_write::resource::{
+            check_command_subscription, check_gcp_state, gcp_worker_service_name, ResourceWrite,
+        };
+        if let ResourceWrite::CreateCommandSubscription { subscription, body } = write {
+            let service = ServiceStore::get(&self.0, &gcp_worker_service_name(facts)?).await?;
+            let uri = service["uri"]
+                .as_str()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::Refused {
+                        reason: "the Cloud Run service reports no URL".to_string(),
+                    })
+                })?;
+            return check_command_subscription(facts, subscription, body, Some(uri));
+        }
         let current = match write {
             ResourceWrite::SetBucketIamPolicy { bucket, .. } => {
                 self.0.bucket_iam_policy(bucket).await?

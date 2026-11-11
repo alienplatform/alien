@@ -2185,29 +2185,52 @@ impl GcpWorkerController {
                 "Creating commands Pub/Sub push subscription"
             );
 
-            match pubsub_client
-                .create_subscription(subscription_name.clone(), subscription)
-                .await
-            {
-                Ok(_) => {
-                    self.commands_subscription_name = Some(subscription_name.clone());
-                }
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        subscription=%subscription_name,
-                        "Commands Pub/Sub push subscription already exists, adopting it"
-                    );
-                    self.commands_subscription_name = Some(subscription_name.clone());
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create commands push subscription '{}'",
-                            subscription_name
-                        ),
+            // On a protected install management may not create a push subscription: the
+            // verifier checks it delivers to this worker's own service and sends it unchanged.
+            if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+                let body = serde_json::to_value(&subscription)
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "The commands push subscription does not serialize".to_string(),
                         resource_id: Some(cfg.id.clone()),
-                    }));
+                    })?;
+                verifier::apply_resource_write(
+                    &verifier::gcp_verifier(ctx)?,
+                    statements,
+                    ctx.deployment_config.signed_config.as_ref(),
+                    &cfg.id,
+                    vec![verifier::ResourceWrite::CreateCommandSubscription {
+                        subscription: subscription_name.clone(),
+                        body,
+                    }],
+                )
+                .await?;
+                self.commands_subscription_name = Some(subscription_name.clone());
+            } else {
+                match pubsub_client
+                    .create_subscription(subscription_name.clone(), subscription)
+                    .await
+                {
+                    Ok(_) => {
+                        self.commands_subscription_name = Some(subscription_name.clone());
+                    }
+                    Err(e) if is_remote_resource_conflict(&e) => {
+                        info!(
+                            worker=%cfg.id,
+                            subscription=%subscription_name,
+                            "Commands Pub/Sub push subscription already exists, adopting it"
+                        );
+                        self.commands_subscription_name = Some(subscription_name.clone());
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to create commands push subscription '{}'",
+                                subscription_name
+                            ),
+                            resource_id: Some(cfg.id.clone()),
+                        }));
+                    }
                 }
             }
         }
