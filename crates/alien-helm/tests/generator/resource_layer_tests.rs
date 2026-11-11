@@ -909,6 +909,23 @@ fn workload_priority_create_never_creates_a_class_the_admin_named() {
         .all(|c| c["metadata"]["name"] != "acme-critical"));
 }
 
+/// Mapping a level to the name this release would generate anyway (for example by copying
+/// the rendered map into values) must keep creating that class; otherwise the next upgrade
+/// would delete a class running workloads still use.
+#[test]
+fn workload_priority_create_keeps_the_releases_own_class_when_mapped_to_its_name() {
+    let (map, _) = priority_render("runtime:\n  workloadPriority:\n    create: true\n");
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    let own = map["critical"].as_str().unwrap().to_string();
+    let (mapped, classes) = priority_render(&format!(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: {own}\n"
+    ));
+    let mapped: serde_json::Value = serde_json::from_str(&mapped.unwrap()).unwrap();
+    assert_eq!(mapped["critical"], own.as_str());
+    assert_eq!(classes.len(), 4);
+    assert!(classes.iter().any(|c| c["metadata"]["name"] == own.as_str()));
+}
+
 #[test]
 fn workload_priority_schema_rejects_unknown_levels() {
     let chart = render(&sandbox_with_linked_app(), StackSettings::default());
