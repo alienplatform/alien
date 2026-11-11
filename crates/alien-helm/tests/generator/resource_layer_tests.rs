@@ -555,7 +555,17 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     let egress = serde_yaml::to_string(allow("egress")).unwrap();
     assert!(egress.contains("denied") && egress.contains("NotIn"), "{egress}");
     let listener = serde_yaml::to_string(allow("listener")).unwrap();
-    assert!(!listener.contains("ingress-denied"), "{listener}");
+    // The denied pod must reach the listener's ingress, so only the egress bound can refuse it;
+    // the ingress-denied pod must not, so only the ingress bound can refuse it.
+    let listener_roles: Vec<&str> = allow("listener")["spec"]["ingress"][0]["from"][0]["podSelector"]
+        ["matchExpressions"][0]["values"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|role| role.as_str().unwrap())
+        .collect();
+    assert!(listener_roles.contains(&"denied"), "{listener}");
+    assert!(!listener_roles.contains(&"ingress-denied"), "{listener}");
     assert!(documents
         .iter()
         .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"

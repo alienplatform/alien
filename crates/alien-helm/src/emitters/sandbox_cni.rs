@@ -294,7 +294,7 @@ spec:
             matchExpressions:
               - key: alien.dev/cni-role
                 operator: In
-                values: [control, control-after, ingress-control-after]
+                values: [control, control-after, ingress-control-after, denied]
       ports:
         - protocol: TCP
           port: 8080
