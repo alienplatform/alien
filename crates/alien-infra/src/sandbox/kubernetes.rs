@@ -582,30 +582,13 @@ async fn replenish_warm_pool(
         .get_or_insert_default()
         .insert(ANNOTATION_TEMPLATE_HASH.to_string(), template_hash.clone());
     let mut waiting = 0;
-    for mut stale in stale_idle_pods(idle.items, &template_hash, &mut waiting) {
-        let name = stale.metadata.name.clone().unwrap_or_default();
-        // A session may claim the pod between the listing and the delete. The write that takes it
-        // out of the idle pool carries the resourceVersion that was listed, so it loses to a
-        // claim, and only a pod this controller retired is deleted.
-        stale
-            .metadata
-            .labels
-            .get_or_insert_default()
-            .insert(LABEL_POOL_STATE.to_string(), "retired".to_string());
-        let retired = client.update_pod(namespace, &name, &stale).await;
-        let outcome = match retired {
-            Ok(_) => client.delete_pod(namespace, &name).await,
-            Err(error) => Err(error),
-        };
-        match outcome {
-            Ok(()) => {
-                debug!(sandbox_id = %sandbox.id, pod = %name, "Replaced an idle pool pod built from an older template")
-            }
-            Err(error) => {
-                warn!(sandbox_id = %sandbox.id, pod = %name, error = %error, "Left a stale idle pool pod; it may have been claimed")
-            }
-        }
-    }
+    retire_stale_idle_pods(
+        &client,
+        namespace,
+        &sandbox.id,
+        stale_idle_pods(idle.items, &template_hash, &mut waiting),
+    )
+    .await;
     let deficit = pool_deficit(target, waiting);
 
     // The broker builds a pod from this when a create finds the pool empty, so a create never
@@ -729,7 +712,7 @@ async fn reap_expired_sessions(
 }
 
 /// Annotation holding the digest of the template an idle pool pod was built from.
-const ANNOTATION_TEMPLATE_HASH: &str = "alien.dev/pod-template-hash";
+pub(crate) const ANNOTATION_TEMPLATE_HASH: &str = "alien.dev/pod-template-hash";
 
 /// Digest of the pod the controller would create. The pod is serialized in a fixed field order,
 /// so the same template always gives the same digest.
@@ -744,7 +727,7 @@ fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
 }
 
 /// Idle pods built from a template other than `current`. Counts the others in `fresh`.
-fn stale_idle_pods(
+pub(crate) fn stale_idle_pods(
     idle: Vec<k8s_openapi::api::core::v1::Pod>,
     current: &str,
     fresh: &mut usize,
@@ -763,6 +746,40 @@ fn stale_idle_pods(
         }
     }
     stale
+}
+
+/// Takes idle pods built from an older template out of the pool and deletes them.
+///
+/// A session may claim a pod between the listing and the delete. The write that takes it out of
+/// the idle pool carries the resourceVersion that was listed, so it loses to a claim, and only a
+/// pod this controller retired is deleted.
+pub(crate) async fn retire_stale_idle_pods(
+    client: &std::sync::Arc<dyn alien_k8s_clients::PodApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    stale_pods: Vec<k8s_openapi::api::core::v1::Pod>,
+) {
+    for mut stale in stale_pods {
+        let name = stale.metadata.name.clone().unwrap_or_default();
+        stale
+            .metadata
+            .labels
+            .get_or_insert_default()
+            .insert(LABEL_POOL_STATE.to_string(), "retired".to_string());
+        let retired = client.update_pod(namespace, &name, &stale).await;
+        let outcome = match retired {
+            Ok(_) => client.delete_pod(namespace, &name).await,
+            Err(error) => Err(error),
+        };
+        match outcome {
+            Ok(()) => {
+                debug!(sandbox_id = %sandbox_id, pod = %name, "Replaced an idle pool pod built from an older template")
+            }
+            Err(error) => {
+                warn!(sandbox_id = %sandbox_id, pod = %name, error = %error, "Left a stale idle pool pod; it may have been claimed")
+            }
+        }
+    }
 }
 
 /// Stores the idle pod the controller would create in the capability Secret, for the broker's

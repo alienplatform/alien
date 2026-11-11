@@ -29,8 +29,9 @@ use super::kubernetes_broker::{
     reattach_session_for_deployment, release_session_for_deployment, SessionRequestError,
 };
 use super::{
-    capability_secret_name, idle_pool_pod_with_labels, ANNOTATION_SESSION_DEADLINE, LABEL_SANDBOX,
-    LABEL_SESSION, POD_TEMPLATE_SECRET_KEY,
+    capability_secret_name, idle_pool_pod_with_labels, retire_stale_idle_pods, stale_idle_pods,
+    ANNOTATION_SESSION_DEADLINE, ANNOTATION_TEMPLATE_HASH, LABEL_SANDBOX, LABEL_SESSION,
+    POD_TEMPLATE_SECRET_KEY,
 };
 
 const SANDBOX: &str = "kindbroker";
@@ -298,7 +299,106 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
     listed.sort();
     assert_eq!(listed, ["s1", "warm"]);
 
+    // R7: a new release changes the template. Idle pods built from the old one are retired, but a
+    // pod a session has already claimed keeps running, and a claim that lands between the listing
+    // and the retire wins: the retire's write carries the listed resourceVersion and conflicts.
+    let stale_idle = |name: &str| {
+        let mut pod = template(&namespace);
+        pod.metadata.name = Some(name.to_string());
+        pod.metadata.generate_name = None;
+        pod.metadata
+            .annotations
+            .get_or_insert_default()
+            .insert(ANNOTATION_TEMPLATE_HASH.to_string(), "old".to_string());
+        pod
+    };
+    let list_stale = || async {
+        let idle = pods
+            .list_pods(&namespace, Some(super::idle_selector(SANDBOX)), None)
+            .await
+            .expect("list idle");
+        stale_idle_pods(idle.items, "new", &mut 0)
+    };
+    let wait_ip = |name: &'static str| {
+        let (pods, namespace) = (pods.clone(), namespace.clone());
+        async move {
+            for _ in 0..60 {
+                if pods
+                    .get_pod(&namespace, name)
+                    .await
+                    .unwrap()
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.pod_ip.clone())
+                    .is_some()
+                {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            panic!("{name} never got an address");
+        }
+    };
+    pods.create_pod(&namespace, &stale_idle("alien-kind-raced"))
+        .await
+        .expect("idle pod");
+    wait_ip("alien-kind-raced").await;
+    let listed_before_claim = list_stale().await;
+    assert_eq!(listed_before_claim.len(), 1);
+    let racer = ask("racer", None, None).await.ok().expect("claim");
+    assert!(racer.created);
+    retire_stale_idle_pods(&pods, &namespace, SANDBOX, listed_before_claim).await;
+    let raced = pods
+        .get_pod(&namespace, "alien-kind-raced")
+        .await
+        .expect("claimed pod survives");
+    assert_eq!(
+        raced.metadata.labels.as_ref().unwrap()[LABEL_SESSION],
+        "racer"
+    );
+    assert!(
+        raced.metadata.deletion_timestamp.is_none(),
+        "a claimed pod is never retired"
+    );
+
+    pods.create_pod(&namespace, &stale_idle("alien-kind-stale"))
+        .await
+        .expect("idle pod");
+    wait_ip("alien-kind-stale").await;
+    let to_retire = list_stale().await;
+    assert_eq!(
+        to_retire.len(),
+        1,
+        "only the idle pod built from the old template"
+    );
+    retire_stale_idle_pods(&pods, &namespace, SANDBOX, to_retire).await;
+    for _ in 0..30 {
+        match pods.get_pod(&namespace, "alien-kind-stale").await {
+            Err(_) => break,
+            Ok(pod) if pod.metadata.deletion_timestamp.is_some() => break,
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+        }
+    }
+    let gone = pods.get_pod(&namespace, "alien-kind-stale").await;
+    assert!(
+        gone.as_ref()
+            .map_or(true, |pod| pod.metadata.deletion_timestamp.is_some()),
+        "the stale idle pod is retired"
+    );
     for session in ["s1", "warm"] {
+        let still = pods
+            .list_pods(&namespace, Some(format!("{LABEL_SESSION}={session}")), None)
+            .await
+            .expect("list");
+        assert_eq!(
+            still.items.len(),
+            1,
+            "claimed session {session} survives the roll"
+        );
+        assert!(still.items[0].metadata.deletion_timestamp.is_none());
+    }
+
+    for session in ["s1", "warm", "racer"] {
         release_session_for_deployment(
             &pods,
             &secrets,
