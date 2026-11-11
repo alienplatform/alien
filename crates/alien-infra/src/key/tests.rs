@@ -218,6 +218,9 @@ fn gcp_provider(
             _ => return Err(transport_error()),
         };
         Ok(CryptoKey {
+            labels: Default::default(),
+            version_template: None,
+            rotation_period: None,
             name: GCP_KEY.to_string(),
             purpose: "ENCRYPT_DECRYPT".to_string(),
             primary: Some(CryptoKeyVersion {

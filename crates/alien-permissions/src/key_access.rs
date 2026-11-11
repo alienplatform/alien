@@ -132,6 +132,36 @@ pub fn aws_key_grants(plan: &KeyAccessPlan, key_arn: &str) -> crate::Result<AwsK
     })
 }
 
+/// Role bindings a GCP key's identities hold on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcpKeyRoles {
+    /// Predefined role of [`REMOTE_CRYPTOGRAPHY`], for the access account and runtime accounts.
+    pub cryptography: String,
+    /// Role for the management account, when the management profile holds `key/management`.
+    pub management: Option<&'static str>,
+}
+
+/// Renders the roles of [`KeyAccessPlan`] for GCP. The Terraform emitter and the key controller
+/// both bind these roles, so they agree on who may do what with the key.
+pub fn gcp_key_roles(plan: &KeyAccessPlan) -> crate::Result<GcpKeyRoles> {
+    use alien_error::AlienError;
+    let invalid = |message: String| AlienError::new(crate::ErrorData::InvalidPermissionSet { message });
+    let cryptography = crate::get_permission_set(REMOTE_CRYPTOGRAPHY)
+        .and_then(|set| set.platforms.gcp.as_ref())
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.grant.predefined_roles.as_ref())
+        .and_then(|roles| roles.first().cloned())
+        .ok_or_else(|| invalid(format!("{REMOTE_CRYPTOGRAPHY} has no GCP predefined role")))?;
+    Ok(GcpKeyRoles {
+        cryptography,
+        management: plan
+            .management
+            .iter()
+            .any(|id| id == "key/management")
+            .then_some("roles/cloudkms.viewer"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
