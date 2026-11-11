@@ -13,8 +13,8 @@ use alien_core::{
 };
 use alien_error::Context;
 use alien_permissions::{
-    aws_key_policy::{aws_key_policy, key_has_native_service_use, key_runtime_service_accounts},
-    key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY},
+    aws_key_policy::aws_key_policy,
+    key_access::{key_access_plan, KeyAccessPlan, REMOTE_CRYPTOGRAPHY},
     BindingTarget,
 };
 use hcl::{
@@ -207,7 +207,7 @@ impl TfEmitter for AwsKeyEmitter {
         }
 
         if let Some(permission_set) = alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY) {
-            for account_id in cryptography_service_accounts(ctx.stack, ctx.resource_id) {
+            for account_id in plan_for(ctx)?.runtime_cryptography {
                 let Some(role_label) = ctx.name_for(&account_id) else {
                     continue;
                 };
@@ -260,6 +260,7 @@ impl TfEmitter for AwsKeyEmitter {
 
 /// Policy for a key that setup creates. A customer-supplied key keeps its own policy.
 fn key_policy(ctx: &EmitContext<'_>) -> Result<Expression> {
+    let plan = plan_for(ctx)?;
     let management_role_arn = management_role_label(ctx)
         .map(|label| serde_json::Value::String(format!("${{aws_iam_role.{label}.arn}}")));
     Ok(jsonencode(json_value_to_expression(sorted_keys(aws_key_policy(
@@ -272,20 +273,28 @@ fn key_policy(ctx: &EmitContext<'_>) -> Result<Expression> {
             "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
                 .to_string(),
         ),
-        key_has_native_service_use(ctx.stack, ctx.resource_id),
-        runtime_role_arns(ctx)?,
+        plan.native_service_use,
+        runtime_role_arns(ctx, &plan)?,
     )))))
+}
+
+/// Who may use the key, worked out once from the stack and shared with the other renderers.
+fn plan_for(ctx: &EmitContext<'_>) -> Result<KeyAccessPlan> {
+    key_access_plan(ctx.stack, ctx.resource_id).context(ErrorData::GenericError {
+        message: "Failed to work out which roles may use the Key".to_string(),
+    })
 }
 
 /// Roles that may use a key no AWS service uses: the service accounts granted the
 /// key, and the remote-bindings role when the key has remote access.
-fn runtime_role_arns(ctx: &EmitContext<'_>) -> Result<Vec<serde_json::Value>> {
-    let mut labels = key_runtime_service_accounts(ctx.stack, ctx.resource_id)
-        .context(ErrorData::GenericError {
-            message: "Failed to work out which roles may use the Key".to_string(),
-        })?
-        .into_iter()
-        .filter_map(|account_id| ctx.name_for(&account_id).map(str::to_string))
+fn runtime_role_arns(
+    ctx: &EmitContext<'_>,
+    plan: &KeyAccessPlan,
+) -> Result<Vec<serde_json::Value>> {
+    let mut labels = plan
+        .policy_runtime_accounts
+        .iter()
+        .filter_map(|account_id| ctx.name_for(account_id).map(str::to_string))
         .collect::<Vec<_>>();
     if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
         labels.extend(remote_bindings_label(ctx).map(str::to_string));

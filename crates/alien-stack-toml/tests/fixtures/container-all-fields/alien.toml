@@ -29,6 +29,7 @@ kubernetes-liveness-probe = { path = "/livez", port = 8080 }
 kubernetes-readiness-probe = { path = "/readyz", port = 8080 }
 kubernetes-secret-mounts = [{ secret-name = "ledger-tls", mount-path = "/etc/ledger/tls" }]
 stop-grace-period = "5m"
+priority = "high"
 links = ["cache"]
 permissions = { cache = ["kv/data-read", "kv/data-write"] }
 env = { LOG_LEVEL = "debug", WORKER_THREADS = 4, TRACE = true }

@@ -1,7 +1,7 @@
 
 ## Retain GCP setup data during uninstall
 
-Setup-owned Cloud Storage buckets, Firestore databases, Artifact Registry repositories and Cloud SQL PostgreSQL databases are protected against replacement and destroy, including empty resources. Cloud SQL retention includes the SQL database, login, password secret and version. Encryption keys, their key rings and Cloud Storage's service-agent encryption grant survive with encrypted buckets. Application, public-read and management IAM grants remain managed for removal.
+Setup-owned Cloud Storage buckets, Firestore databases, Artifact Registry repositories, Memorystore Redis instances and Cloud SQL PostgreSQL databases are protected against replacement and destroy, including empty resources. Memorystore retention includes its service-connection policy, which GCP will not delete while the instance exists. Cloud SQL retention includes the SQL database, login, password secret and version. Encryption keys, their key rings and Cloud Storage's service-agent encryption grant survive with encrypted buckets. Application, public-read and management IAM grants remain managed for removal.
 
 Apply the current package to the existing installation before uninstalling. Stop deployment workloads first. Use Python 3 on Linux or macOS, or Windows through WSL with receipts on its Linux filesystem, and the original Terraform backend, workspace and working directory. Serialize this procedure with other Terraform runs. For a child module add `--module-address 'module.<name>'`, including any module instance index.
 

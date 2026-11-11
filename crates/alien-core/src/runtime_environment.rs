@@ -9,6 +9,10 @@ pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
 /// on the operator from the Service it renders in front of the operator, which serves the
 /// broker; the Sandbox controller publishes it in the sandbox binding.
 pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
+/// JSON object mapping workload priority levels (`critical`, `high`, `normal`, `low`) to
+/// Kubernetes PriorityClass names. The Helm chart sets it on the operator only when the
+/// cluster administrator mapped at least one level.
+pub const ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES: &str = "ALIEN_KUBERNETES_PRIORITY_CLASSES";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";

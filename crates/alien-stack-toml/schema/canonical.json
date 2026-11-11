@@ -1001,6 +1001,16 @@
           },
           "type": "array"
         },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/WorkloadPriority"
+            }
+          ]
+        },
         "publicEndpoints": {
           "items": {
             "$ref": "#/components/schemas/PublicEndpoint"
@@ -1350,6 +1360,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/WorkloadPriority"
+            }
           ]
         },
         "publicEndpoints": {
@@ -3156,6 +3176,15 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadPriority": {
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low"
+      ],
+      "type": "string"
     }
   }
 }

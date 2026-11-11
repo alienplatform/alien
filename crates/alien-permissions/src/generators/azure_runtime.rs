@@ -288,7 +288,11 @@ fn without_role_definition_writes(actions: Vec<String>) -> (Vec<String>, Vec<Str
         .collect();
     let not_actions = [ROLE_DEFINITION_DELETE, ROLE_DEFINITION_WRITE]
         .into_iter()
-        .filter(|denied| actions.iter().any(|action| azure_action_covers(action, denied)))
+        .filter(|denied| {
+            actions
+                .iter()
+                .any(|action| azure_action_covers(action, denied))
+        })
         .map(str::to_string)
         .collect();
     (actions, not_actions)
@@ -867,16 +871,21 @@ mod management_role_tests {
         ]))
         .unwrap();
         assert_eq!(roles.roles.len(), 1);
-        assert_eq!(roles.roles[0].actions, vec!["Microsoft.KeyVault/vaults/write"]);
+        assert_eq!(
+            roles.roles[0].actions,
+            vec!["Microsoft.KeyVault/vaults/write"]
+        );
         assert!(roles.roles[0].not_actions.is_empty());
         assert_eq!(
             roles.role_assignment_roles[0].actions,
             vec!["Microsoft.Authorization/roleAssignments/write"]
         );
 
-        let wildcard =
-            management_roles_by_scope(&plan(&["Microsoft.KeyVault/*", "Microsoft.Authorization/*"]))
-                .unwrap();
+        let wildcard = management_roles_by_scope(&plan(&[
+            "Microsoft.KeyVault/*",
+            "Microsoft.Authorization/*",
+        ]))
+        .unwrap();
         assert_eq!(wildcard.roles[0].actions, vec!["Microsoft.KeyVault/*"]);
         assert!(wildcard.roles[0].not_actions.is_empty());
         // `Microsoft.Authorization/*` covers role-assignment writes, so it moves whole to the
@@ -893,7 +902,8 @@ mod management_role_tests {
             ]
         );
 
-        let broad = management_roles_by_scope(&plan(&["Microsoft.Authorization/role*/w*"])).unwrap();
+        let broad =
+            management_roles_by_scope(&plan(&["Microsoft.Authorization/role*/w*"])).unwrap();
         assert_eq!(
             broad.role_assignment_roles[0].not_actions,
             vec!["Microsoft.Authorization/roleDefinitions/write"]

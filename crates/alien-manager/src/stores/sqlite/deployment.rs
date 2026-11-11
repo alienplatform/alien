@@ -1565,6 +1565,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             "provisioning-failed",
         ];
 
+        // A deployment waiting for a secret keeps its status (a first install must not turn into
+        // an update) but takes the newer release, which its next step reads as the target.
+        let waiting_for_secrets = "waiting-for-secrets";
+
         let sql = {
             let mut query = Query::update();
             query
@@ -1578,12 +1582,17 @@ impl DeploymentStore for SqliteDeploymentStore {
                             .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
                         Expr::col(Deployments::Status),
                     )
+                    .case(
+                        Expr::col(Deployments::Status).eq(waiting_for_secrets),
+                        Expr::col(Deployments::Status),
+                    )
                     .finally("update-pending"),
                 )
                 .value(Deployments::NextStepAfter, Option::<String>::None)
                 .cond_where(
                     sea_query::Cond::any()
                         .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
+                        .add(Expr::col(Deployments::Status).eq(waiting_for_secrets))
                         // Only the persisted installed grant permits a release to retry
                         // setup work. A requested setting must not authorize manual setup.
                         .add(

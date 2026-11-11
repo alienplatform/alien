@@ -14,7 +14,7 @@ fn main() {
             println!("cargo:rustc-link-arg=dynamic_lookup");
         }
         Ok("linux") => {
-            println!("cargo:rustc-link-arg=-Wl,--unresolved-symbols=ignore-all");
+            println!("cargo:rustc-link-arg=-Wl,-z,undefs");
         }
         _ => {}
     }

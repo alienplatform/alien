@@ -247,6 +247,24 @@ pub(crate) async fn served_bundle_sources(
     }))
 }
 
+/// The chart version this manager serves for `release_id`, when it serves
+/// charts and the release has one.
+pub(crate) async fn served_chart_version(
+    state: &AppState,
+    subject: &Subject,
+    release: &ReleaseRecord,
+) -> Option<String> {
+    let settings = state.charts.clone()?;
+    let name = release.stacks.get(&Platform::Kubernetes)?.id().to_string();
+    let charts = chart_releases(state, &settings, subject, &name)
+        .await
+        .ok()?;
+    charts
+        .into_iter()
+        .find(|(_, r)| r.id == release.id)
+        .map(|(version, _)| version)
+}
+
 /// Serve `digest` only if it belongs to a chart kept for one of `charts`'
 /// releases, the charts this caller may read. A digest alone must not grant
 /// access. A digest comes from a manifest, which is kept when first served.

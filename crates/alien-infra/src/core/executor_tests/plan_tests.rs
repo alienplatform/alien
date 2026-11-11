@@ -770,3 +770,94 @@ async fn test_plan_only_update() -> Result<()> {
 
     Ok(())
 }
+
+fn executor_holding(stack: &Stack, held: &[&str]) -> Result<StackExecutor> {
+    StackExecutor::builder(stack, alien_core::ClientConfig::Test)
+        .deployment_config(&default_deployment_config())
+        .held_resources(held.iter().map(|id| id.to_string()).collect())
+        .build()
+}
+
+/// A held resource that is absent is not created, one with config drift is not updated,
+/// a dependent of a changed held resource gets no propagated update, and none is deleted.
+#[tokio::test]
+async fn test_plan_leaves_held_resources_alone() -> Result<()> {
+    let api_v1 = test_function_with_image("api", "image-v1");
+    let web_v1 = test_function_with_image("web", "image-v1");
+    let jobs_v1 = test_function_linked("jobs", &api_v1);
+    let stack_v1 = Stack::new("held-plan-test".to_owned())
+        .add(api_v1.clone(), ResourceLifecycle::Live)
+        .add(web_v1, ResourceLifecycle::Live)
+        .add(jobs_v1, ResourceLifecycle::Live)
+        .build();
+    let installed = run_to_synced(&new_executor(&stack_v1)?, new_test_state()).await?;
+
+    // v2: every function changes, and `cache` is new.
+    let api_v2 = test_function_with_image("api", "image-v2");
+    let stack_v2 = Stack::new("held-plan-test".to_owned())
+        .add(api_v2.clone(), ResourceLifecycle::Live)
+        .add(
+            test_function_with_image("web", "image-v2"),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            test_function_linked("jobs", &api_v2),
+            ResourceLifecycle::Live,
+        )
+        .add(test_function("cache"), ResourceLifecycle::Live)
+        .build();
+
+    let free = new_executor(&stack_v2)?.plan(&installed)?;
+    assert!(free.updates.contains_key("api") && free.updates.contains_key("jobs"));
+    assert!(free.creates.contains(&"cache".to_string()));
+
+    let held = executor_holding(&stack_v2, &["api", "jobs", "cache"])?.plan(&installed)?;
+    assert!(held.creates.is_empty(), "held cache is not created");
+    assert_eq!(held.updates.keys().collect::<Vec<_>>(), vec!["web"]);
+    assert!(held.deletes.is_empty() && held.replaces.is_empty());
+    Ok(())
+}
+
+/// A resource that is already mid-update when its secret goes missing is paused, not finished:
+/// the deployment says it is waiting, so the workload must not keep changing underneath it.
+#[tokio::test]
+async fn test_held_resource_mid_update_is_not_stepped() -> Result<()> {
+    let stack_v1 = Stack::new("held-step-test".to_owned())
+        .add(
+            test_function_with_image("api", "image-v1"),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let installed = run_to_synced(&new_executor(&stack_v1)?, new_test_state()).await?;
+
+    let stack_v2 = Stack::new("held-step-test".to_owned())
+        .add(
+            test_function_with_image("api", "image-v2"),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let mut state = installed;
+    for _ in 0..5 {
+        state = new_executor(&stack_v2)?.step(state).await?.next_state;
+        if get_status(&state, "api") == Some(ResourceStatus::Updating) {
+            break;
+        }
+    }
+    assert_eq!(get_status(&state, "api"), Some(ResourceStatus::Updating));
+    let before = serde_json::to_value(&state.resources["api"]).unwrap();
+
+    // The secret goes missing now: `api` is held.
+    let held = executor_holding(&stack_v2, &["api"])?
+        .step(state.clone())
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&held.next_state.resources["api"]).unwrap(),
+        before,
+        "a held resource is not stepped"
+    );
+
+    // Released again, it finishes.
+    let finished = run_to_synced(&new_executor(&stack_v2)?, held.next_state).await?;
+    assert_eq!(get_status(&finished, "api"), Some(ResourceStatus::Running));
+    Ok(())
+}
