@@ -145,6 +145,10 @@ fn a_management_url_that_is_not_https_is_refused_unless_allowed() {
 
     let https = format!("{credentials}  url: https://manager.example.test\n");
     test_utils::helm_template(&chart, Some(&https)).assert_ok("https url");
+
+    // The scheme is case-insensitive.
+    let upper = format!("{credentials}  url: HTTPS://manager.example.test\n");
+    test_utils::helm_template(&chart, Some(&upper)).assert_ok("upper-case scheme");
 }
 
 #[test]
@@ -403,6 +407,41 @@ fn the_operator_network_policy_names_what_it_allows() {
         .map(|port| port["port"].as_u64().unwrap())
         .collect();
     assert_eq!(egress_ports, [53, 53, 443, 6443]);
+
+    // DNS is the DNS Pods, not every Pod of every namespace.
+    let dns = &policy["spec"]["egress"][0]["to"][0];
+    assert_eq!(
+        dns["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"],
+        "kube-system"
+    );
+    assert_eq!(dns["podSelector"]["matchLabels"]["k8s-app"], "kube-dns");
+
+    // Clusters whose resolver is not a Pod (EKS Auto Mode, node-local DNS) name its address.
+    let with_dns_address =
+        render("    dns:\n      clusterIPs: [\"172.20.0.10\", \"169.254.20.10\"]\n");
+    let to = with_dns_address["spec"]["egress"][0]["to"]
+        .as_sequence()
+        .unwrap();
+    assert_eq!(to[1]["ipBlock"]["cidr"], "172.20.0.10/32");
+    assert_eq!(to[2]["ipBlock"]["cidr"], "169.254.20.10/32");
+
+    // The ports of the bindings, and the manager's own port, come from values.
+    let with_ports = test_utils::helm_template(
+        &chart,
+        Some("management:\n  token: test-credential\n  url: https://manager.example.test:8443\nruntime:\n  networkPolicy:\n    enabled: true\n    egress:\n      ports: [443, 5432, 6379]\n"),
+    );
+    with_ports.assert_ok("network policy ports");
+    let policy = yaml_documents(&with_ports.stdout)
+        .into_iter()
+        .find(|document| document["kind"] == "NetworkPolicy")
+        .unwrap();
+    let ports: Vec<_> = policy["spec"]["egress"][1]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|port| port["port"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ports, [443, 5432, 6379, 8443]);
 
     // An installation adds what it needs, such as a database port.
     let with_database = render(

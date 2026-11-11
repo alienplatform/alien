@@ -1,6 +1,5 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
-assertion_line: 41
 expression: buf
 ---
 === Chart.yaml ===
@@ -139,16 +138,26 @@ runtime:
     minAvailable: 1
   # Restricts the Operator Pod. Off by default. Ingress allows Pods in the release
   # namespace to reach the Operator API port (log collectors, linked workloads). Egress
-  # allows DNS, HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the Kubernetes
-  # API server on clusters that expose it there). Add what an installation needs, such as
-  # a database port, to extraRules (NetworkPolicy rules).
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
     ingress:
       enabled: true
       extraRules: []
     egress:
       enabled: true
+      ports: [443, 6443]
       extraRules: []
   cleanup:
     onUninstall:
@@ -500,6 +509,15 @@ postgres: {}
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "dns": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "namespace": { "type": "string" },
+                "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+                "clusterIPs": { "type": "array", "items": { "type": "string" } }
+              }
+            },
             "ingress": {
               "type": "object",
               "additionalProperties": false,
@@ -513,6 +531,7 @@ postgres: {}
               "additionalProperties": false,
               "properties": {
                 "enabled": { "type": "boolean" },
+                "ports": { "type": "array", "items": { "type": "integer" } },
                 "extraRules": { "type": "array", "items": { "type": "object" } }
               }
             }
@@ -1165,7 +1184,7 @@ different namespaces of one cluster from colliding. */ -}}
   {{- end -}}
 {{- end -}}
 {{- $url := default $endpoint .Values.management.url -}}
-{{- if and $url (not (hasPrefix "https://" $url)) (not .Values.management.allowInsecure) -}}
+{{- if and $url (not (hasPrefix "https://" (lower $url))) (not .Values.management.allowInsecure) -}}
   {{- fail (printf "The management URL %q isn't https. The Operator sends its deployment token to it. Fix management.url (or management.defaultUrl), or set management.allowInsecure=true for a local or test manager." $url) -}}
 {{- end -}}
 {{- $url -}}
@@ -3161,20 +3180,34 @@ spec:
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
-    # Cluster DNS.
+    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
+    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
+        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+        - ipBlock:
+            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+        {{- end }}
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
-    # HTTPS to the manager, the image registry and cloud APIs, and the Kubernetes API server.
+    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
+    # ports the bindings use (a database, a cache) and the manager's own port.
+    {{- $ports := .Values.runtime.networkPolicy.egress.ports | default list }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" .Values.management.url)).host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}{{- end }}
     - ports:
+        {{- range $ports | uniq }}
         - protocol: TCP
-          port: 443
-        - protocol: TCP
-          port: 6443
+          port: {{ . }}
+        {{- end }}
     {{- with .Values.runtime.networkPolicy.egress.extraRules }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -3818,9 +3851,12 @@ The `nodeAgent` log collector reads logs on each node and sends them to the Oper
 
 `runtime.networkPolicy.enabled: true` restricts the Operator Pod to these
 connections: ingress from Pods in the release namespace on the API port, and
-egress to cluster DNS and to ports 443 and 6443. Add the ports an installation
-needs, such as a database, to `runtime.networkPolicy.egress.extraRules`. It is
-off by default. Enforcement depends on the cluster's CNI: on EKS, set the VPC CNI
+egress to cluster DNS, to ports 443 and 6443, and to the port in `management.url`
+when it names one. Add the ports of your bindings (a database 5432, a cache 6379)
+to `runtime.networkPolicy.egress.ports`. Set `runtime.networkPolicy.dns.clusterIPs`
+to the cluster's DNS Service address (and the node-local DNS address, if any):
+on EKS Auto Mode and with node-local DNS the resolver is not a Pod the policy can
+select. It is off by default. Enforcement depends on the cluster's CNI: on EKS, set the VPC CNI
 `NETWORK_POLICY_ENFORCING_MODE` to `strict` so a policy applies from a Pod's first packet.
 
 === files/stack.json ===

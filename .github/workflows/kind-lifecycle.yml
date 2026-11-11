@@ -75,6 +75,8 @@ jobs:
           cargo test --locked -p alien-operator --test dynamic_containers_kind --no-run
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
           cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
+          cargo test --locked -p alien-helm --test operator_network_policy_kind --no-run
+          cargo test --locked -p alien-helm --test management_url_upgrade_kind --no-run
           cargo test --locked -p alien-manager --lib kind_ --no-run
           cargo test --locked -p alien-infra --features all-platforms --test kubernetes_service_account_refresh_kind --no-run
 
@@ -104,6 +106,20 @@ jobs:
           ALIEN_SANDBOX_RBAC_KIND_CONTEXT: kind-alien-product-lifecycle
         run: |
           cargo test --locked -p alien-helm --test sandbox_rbac_kind -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: An http management URL is refused while the chart renders
+        env:
+          ALIEN_MGMT_URL_KIND_CONTEXT: kind-alien-product-lifecycle
+        run: |
+          cargo test --locked -p alien-helm --test management_url_upgrade_kind -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: Operator NetworkPolicy keeps DNS and the named ports open
+        env:
+          ALIEN_NETWORK_POLICY_KIND_CONTEXT: kind-alien-product-lifecycle
+        run: |
+          cargo test --locked -p alien-helm --test operator_network_policy_kind -- \
             --ignored --nocapture --test-threads=1
 
       - name: Helm rollback and first-install recovery reported to the manager
