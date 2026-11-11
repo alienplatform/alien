@@ -227,13 +227,31 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
     }
 }
 
+/// The last deployment result logged at info. The deployment loop is the only
+/// writer, so one value for the process is enough.
+static LAST_LOGGED_OUTCOME: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Whether `outcome` differs from the last one reported, and records it.
+fn outcome_changed(outcome: &str) -> bool {
+    let mut last = LAST_LOGGED_OUTCOME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if last.as_deref() == Some(outcome) {
+        return false;
+    }
+    *last = Some(outcome.to_string());
+    true
+}
+
 /// One pass of the deployment loop. Returns how long the loop waits before the
 /// next pass: the step's requested delay, never less than `interval`.
 async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Duration {
     match run_deployment_continuously(state).await {
         Ok((steps, suggested_delay)) => {
             if steps > 0 {
-                info!(steps = steps, "Deployment completed");
+                // A running deployment takes a health step every pass; the
+                // terminal-state log reports when its outcome changes.
+                debug!(steps = steps, "Deployment pass completed");
             }
             interval.max(suggested_delay)
         }
@@ -495,13 +513,29 @@ pub(crate) async fn run_deployment_continuously(
         }
 
         if steps_executed > 0 {
-            info!(
-                status = ?loop_result.final_status,
-                stop_reason = ?loop_result.stop_reason,
-                outcome = ?loop_result.outcome,
-                steps = steps_executed,
-                "Deployment reached terminal state"
-            );
+            // Every pass of a healthy deployment ends here, once per interval:
+            // report at info only when the result differs from the last one.
+            let level_is_info = outcome_changed(&format!(
+                "{:?}/{:?}/{:?}",
+                loop_result.final_status, loop_result.stop_reason, loop_result.outcome
+            ));
+            if level_is_info {
+                info!(
+                    status = ?loop_result.final_status,
+                    stop_reason = ?loop_result.stop_reason,
+                    outcome = ?loop_result.outcome,
+                    steps = steps_executed,
+                    "Deployment reached terminal state"
+                );
+            } else {
+                debug!(
+                    status = ?loop_result.final_status,
+                    stop_reason = ?loop_result.stop_reason,
+                    outcome = ?loop_result.outcome,
+                    steps = steps_executed,
+                    "Deployment reached terminal state"
+                );
+            }
         }
     }
 
@@ -855,6 +889,20 @@ pub(super) async fn resolve_client_config(
                     ),
                 })
         }
+    }
+}
+
+#[cfg(test)]
+mod outcome_log_tests {
+    use super::outcome_changed;
+
+    #[test]
+    fn a_repeated_outcome_is_reported_once() {
+        assert!(outcome_changed("Running/Synced/Success"));
+        assert!(!outcome_changed("Running/Synced/Success"));
+        assert!(!outcome_changed("Running/Synced/Success"));
+        assert!(outcome_changed("Failed/Synced/Failure"));
+        assert!(outcome_changed("Running/Synced/Success"));
     }
 }
 
