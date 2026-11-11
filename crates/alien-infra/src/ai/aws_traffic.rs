@@ -9,10 +9,10 @@
 use std::collections::HashMap;
 
 use alien_aws_clients::cloudwatch::{
-    CloudWatchApi, DimensionFilter, GetMetricDataRequest, ListMetricsRequest, Metric,
-    MetricDataQuery, MetricStat,
+    CloudWatchApi, DimensionFilter, GetMetricDataRequest, ListMetricsRequest, ListMetricsResponse,
+    Metric, MetricDataQuery, MetricStat,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use chrono::Utc;
 
 use crate::error::{ErrorData, Result};
@@ -54,22 +54,37 @@ pub(crate) async fn throttles_for(
     if upstream_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let listed = client
-        .list_metrics(
-            ListMetricsRequest::builder()
-                .namespace(NAMESPACE.to_string())
-                .metric_name(METRIC.to_string())
-                .recently_active("PT3H".to_string())
-                .dimensions(vec![DimensionFilter::builder()
-                    .name("ModelId".to_string())
-                    .build()])
-                .build(),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: "Could not list Bedrock throttle metrics".to_string(),
-            resource_id: None,
-        })?;
+    let mut metrics = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = client
+            .list_metrics(
+                ListMetricsRequest::builder()
+                    .namespace(NAMESPACE.to_string())
+                    .metric_name(METRIC.to_string())
+                    .recently_active("PT3H".to_string())
+                    .dimensions(vec![DimensionFilter::builder()
+                        .name("ModelId".to_string())
+                        .build()])
+                    .maybe_next_token(token.take())
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Could not list Bedrock throttle metrics".to_string(),
+                resource_id: None,
+            })?;
+        metrics.extend(page.metrics);
+        match page.next_token {
+            Some(next) => token = Some(next),
+            None => break,
+        }
+    }
+    let listed = ListMetricsResponse {
+        metrics,
+        next_token: None,
+        owning_accounts: Vec::new(),
+    };
     let mut queries = Vec::new();
     let mut owner: HashMap<String, &str> = HashMap::new();
     for upstream in upstream_ids {
@@ -126,6 +141,22 @@ pub(crate) async fn throttles_for(
             message: "Could not read Bedrock throttle metrics".to_string(),
             resource_id: None,
         })?;
+    // A result that is not complete (or a query message) is an unfinished read, not a zero.
+    let incomplete = data.next_token.is_some()
+        || !data.messages.is_empty()
+        || data.metric_data_results.iter().any(|result| {
+            result
+                .status_code
+                .as_deref()
+                .is_some_and(|code| code != "Complete")
+                || !result.messages.is_empty()
+        });
+    if incomplete {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: "Bedrock throttle metrics were returned incompletely".to_string(),
+            resource_id: None,
+        }));
+    }
     for result in data.metric_data_results {
         if let Some(upstream) = owner.get(&result.id) {
             let sum: f64 = result.values.iter().sum();
@@ -167,6 +198,75 @@ mod tests {
                 "us.anthropic.claude-sonnet-4-6".to_string()
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn an_incomplete_query_result_is_an_error_not_zero() {
+        let mut client = MockCloudWatchApi::new();
+        client.expect_list_metrics().returning(|_| {
+            Ok(ListMetricsResponse {
+                metrics: vec![metric("us.anthropic.claude-sonnet-4-6")],
+                next_token: None,
+                owning_accounts: vec![],
+            })
+        });
+        client.expect_get_metric_data().returning(|_| {
+            Ok(GetMetricDataResponse {
+                metric_data_results: vec![MetricDataResult {
+                    id: "q0".into(),
+                    label: None,
+                    status_code: Some("PartialData".into()),
+                    timestamps: vec![],
+                    values: vec![],
+                    messages: vec![],
+                }],
+                messages: vec![],
+                next_token: None,
+            })
+        });
+        assert!(throttles_for(&client, &["anthropic.claude-sonnet-4-6"])
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn metrics_on_a_later_page_are_found() {
+        let mut client = MockCloudWatchApi::new();
+        let mut calls = 0;
+        client.expect_list_metrics().returning(move |_| {
+            calls += 1;
+            Ok(if calls == 1 {
+                ListMetricsResponse {
+                    metrics: vec![],
+                    next_token: Some("page2".into()),
+                    owning_accounts: vec![],
+                }
+            } else {
+                ListMetricsResponse {
+                    metrics: vec![metric("us.anthropic.claude-sonnet-4-6")],
+                    next_token: None,
+                    owning_accounts: vec![],
+                }
+            })
+        });
+        client.expect_get_metric_data().returning(|_| {
+            Ok(GetMetricDataResponse {
+                metric_data_results: vec![MetricDataResult {
+                    id: "q0".into(),
+                    label: None,
+                    status_code: Some("Complete".into()),
+                    timestamps: vec![1],
+                    values: vec![2.0],
+                    messages: vec![],
+                }],
+                messages: vec![],
+                next_token: None,
+            })
+        });
+        let totals = throttles_for(&client, &["anthropic.claude-sonnet-4-6"])
+            .await
+            .unwrap();
+        assert_eq!(totals["anthropic.claude-sonnet-4-6"], 2);
     }
 
     #[tokio::test]

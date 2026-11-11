@@ -41,7 +41,34 @@ pub async fn check_declared_ai_models(
             }
         };
     let client = BedrockRuntimeClient::new(reqwest::Client::new(), credentials);
-    check_with(&client, &region, declared).await
+    check_within(&client, &region, declared, CHECK_TIME_LIMIT).await
+}
+
+/// The whole check must finish well inside the deployment lock's lease (the setup runner starts
+/// renewing it only after the check). Past this limit every model reports `not-checked`.
+const CHECK_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+pub(crate) async fn check_within(
+    client: &dyn BedrockRuntimeApi,
+    region: &str,
+    declared: Vec<(String, String)>,
+    limit: std::time::Duration,
+) -> Vec<AiAccessCheck> {
+    match tokio::time::timeout(limit, check_with(client, region, declared.clone())).await {
+        Ok(checks) => checks,
+        Err(_) => {
+            warn!(
+                ?limit,
+                "AI access check timed out; reporting every model as not checked"
+            );
+            declared
+                .into_iter()
+                .map(|(resource_id, model_id)| {
+                    not_checked(resource_id, model_id, "the test call took too long")
+                })
+                .collect()
+        }
+    }
 }
 
 /// `(resource id, model id)` for each model an AI resource declares.
@@ -170,6 +197,29 @@ pub(crate) fn apply_checks(
 mod tests {
     use super::*;
     use alien_aws_clients::bedrock_runtime::MockBedrockRuntimeApi;
+
+    #[derive(Debug)]
+    struct Hanging;
+
+    #[async_trait::async_trait]
+    impl BedrockRuntimeApi for Hanging {
+        async fn check_invoke(&self, _model_id: &str) -> InvokeCheck {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_check_that_hangs_is_cut_off_and_reports_not_checked() {
+        let checks = check_within(
+            &Hanging,
+            "us-west-2",
+            vec![("llm".into(), "claude-sonnet-4-6".into())],
+            std::time::Duration::from_secs(60),
+        )
+        .await;
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].result, AiAccessCheckResult::NotChecked);
+    }
 
     #[tokio::test]
     async fn refusal_is_reported_and_claude_uses_the_inference_profile() {

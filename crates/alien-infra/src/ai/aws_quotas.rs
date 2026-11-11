@@ -64,19 +64,20 @@ pub(crate) async fn low_quotas_for(
 /// do not look like `claude-<family>-<version…>`: those are never matched, never guessed.
 fn aws_quota_label(public_id: &str) -> Option<String> {
     let rest = public_id.strip_prefix("claude-")?;
-    let mut parts = rest.split('-');
-    let family = parts.next()?;
-    let version: Vec<&str> = parts.collect();
-    if version.is_empty()
-        || !version
-            .iter()
-            .all(|part| part.chars().all(|c| c.is_ascii_digit()))
-    {
+    let (family, version) = rest.split_once('-')?;
+    // The catalog spells versions `4.6`; aliases spell them `4-6`.
+    let version = version.replace('-', ".");
+    let well_formed = !family.is_empty()
+        && family.chars().all(|c| c.is_ascii_lowercase())
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    if !well_formed {
         return None;
     }
     let mut family = family.to_string();
     family[..1].make_ascii_uppercase();
-    Some(format!("{family} {}", version.join(".")))
+    Some(format!("{family} {version}"))
 }
 
 fn is_inference_rate_quota(name: &str, label: &str) -> bool {
@@ -177,6 +178,17 @@ mod tests {
         let (applied, defaults) = account();
         assert!(low_quotas(&applied, &defaults, "gpt-5").is_empty());
         assert!(low_quotas(&applied, &defaults, "claude-sonnet-4-6-extra").is_empty());
+    }
+
+    #[test]
+    fn catalog_ids_with_dotted_versions_are_matched() {
+        let (applied, defaults) = account();
+        assert_eq!(
+            low_quotas(&applied, &defaults, "claude-sonnet-4.6").len(),
+            1
+        );
+        assert_eq!(low_quotas(&applied, &defaults, "claude-sonnet-5").len(), 1);
+        assert!(low_quotas(&applied, &defaults, "claude-sonnet-4..6").is_empty());
     }
 
     #[test]
