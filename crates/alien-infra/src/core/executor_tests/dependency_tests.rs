@@ -678,3 +678,44 @@ mod update_during_dependency_change {
         Ok(())
     }
 }
+
+/// Reading a link's binding follows the same two-sided opt-in as the planner: a dependent
+/// whose link is still Updating may read it only when the dependency lets dependents update and
+/// the dependent says it can. Without both, it waits (`DependencyNotReady`), as before.
+#[test]
+fn linked_resource_read_during_update_needs_both_opt_ins() {
+    use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+    use crate::worker::{TestWorkerController, TestWorkerState};
+
+    for (dependents_may_update, updates_during_dependency_change) in
+        [(true, true), (true, false), (false, true), (false, false)]
+    {
+        let both = dependents_may_update && updates_during_dependency_change;
+        let dependency = TestWorkerController {
+            state: TestWorkerState::UpdateCodePolling,
+            dependents_may_update,
+            ..Default::default()
+        };
+        let dependent = TestWorkerController {
+            state: TestWorkerState::Ready,
+            updates_during_dependency_change,
+            ..Default::default()
+        };
+        let harness = KubernetesManifestTestHarness::new(
+            Resource::new(test_function("daemon")),
+            Vec::new(),
+        )
+        .with_linked_resource(test_function("cluster"), dependency)
+        .with_linked_resource(test_function("daemon"), dependent);
+        let ctx = harness.ctx();
+        let links = [ResourceRef::new(Worker::RESOURCE_TYPE, "cluster")];
+
+        let read = crate::core::ensure_linked_resources_running(&links, &ctx, "daemon");
+        assert_eq!(
+            read.is_ok(),
+            both,
+            "dependency opts in: {dependents_may_update}, dependent opts in: \
+             {updates_during_dependency_change}"
+        );
+    }
+}
