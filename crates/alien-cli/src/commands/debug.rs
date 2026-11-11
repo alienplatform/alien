@@ -1188,14 +1188,7 @@ async fn request_debug_session(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Manager rejected debug session request (HTTP {}): {}",
-                status.as_u16(),
-                body.trim()
-            ),
-            url: Some(url),
-        }));
+        return Err(debug_session_rejection(status.as_u16(), &body, url));
     }
 
     response
@@ -1206,6 +1199,32 @@ async fn request_debug_session(
             message: "Manager returned a malformed debug session response".to_string(),
             url: Some(url),
         })
+}
+
+/// Turn a refused `POST /v1/debug/sessions` into an error that keeps what the manager said.
+///
+/// The manager answers with a structured error. Carrying it as the source keeps its code, status
+/// and `internal` flag, so a request the manager refused on purpose (for example an unsupported
+/// platform) reads as that refusal rather than as an internal failure. A body that is not a
+/// structured error keeps the raw text.
+fn debug_session_rejection(status: u16, body: &str, url: String) -> AlienError<ErrorData> {
+    let message = format!("Manager rejected debug session request (HTTP {status})");
+    match serde_json::from_str::<AlienError>(body) {
+        Ok(source) => Err::<(), _>(source)
+            .context(ErrorData::ApiRequestFailed {
+                message,
+                url: Some(url),
+            })
+            .unwrap_err(),
+        Err(_) => {
+            let mut error = AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("{message}: {}", body.trim()),
+                url: Some(url),
+            });
+            error.http_status_code = Some(status);
+            error
+        }
+    }
 }
 
 /// Materialize files, build the env, and execute the user command (or a shell).
@@ -1765,6 +1784,27 @@ fn shell_echo_block(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn debug_session_rejection_keeps_the_managers_refusal() {
+        let body = r#"{"code":"FEATURE_NOT_SUPPORTED","message":"runtime debug shell/exec is not supported: platform 'aws' is not supported in v1","retryable":false,"internal":false,"httpStatusCode":501}"#;
+        let error =
+            super::debug_session_rejection(501, body, "https://manager/v1/debug/sessions".into());
+        let report = error.human_report();
+        assert!(
+            !error.internal,
+            "a deliberate refusal is not an internal error"
+        );
+        assert_eq!(error.http_status_code, Some(501));
+        assert!(
+            report.message.contains("is not supported")
+                || report
+                    .causes
+                    .iter()
+                    .any(|c| c.code == "FEATURE_NOT_SUPPORTED"),
+            "{report:?}"
+        );
+    }
+
     use super::*;
 
     fn remote_exec_session(attach_url: &str, token: &str) -> RemoteExecDebugSession {
