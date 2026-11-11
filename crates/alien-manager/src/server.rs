@@ -30,6 +30,7 @@ pub struct AlienManager {
     pub(crate) log_buffer: Arc<LogBuffer>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
     pub(crate) values: Option<Arc<crate::values::ValueStore>>,
+    pub(crate) release_channels: Option<Arc<dyn ReleaseChannelStore>>,
 }
 
 impl AlienManager {
@@ -112,7 +113,8 @@ impl AlienManager {
                         self.server_bindings.clone(),
                         self.dev_status_tx,
                     )
-                    .with_value_store(self.values.clone()),
+                    .with_value_store(self.values.clone())
+                    .with_release_channels(self.release_channels.clone()),
                 ))
             } else {
                 None

@@ -342,15 +342,21 @@ impl AlienManagerBuilder {
         // --- Stores (only set if not already provided) ---
         // Channel routing joins the deployments table, so it comes with the
         // SQLite deployment store.
-        if self.deployment_store.is_none() && self.release_channels.is_none() {
+        // Routing is in the deployment store's database only when this builder
+        // creates both; a channel store supplied by the embedder keeps its own.
+        let routing_in_db = self.deployment_store.is_none() && self.release_channels.is_none();
+        if routing_in_db {
             self.release_channels = Some(Arc::new(
                 crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
             ));
         }
         if self.deployment_store.is_none() {
-            self.deployment_store = Some(Arc::new(
-                crate::stores::sqlite::SqliteDeploymentStore::new(db.clone()),
-            ));
+            let store = crate::stores::sqlite::SqliteDeploymentStore::new(db.clone());
+            self.deployment_store = Some(Arc::new(if routing_in_db {
+                store.with_routing_in_db()
+            } else {
+                store
+            }));
         }
         if self.release_store.is_none() {
             self.release_store = Some(Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(
@@ -1161,7 +1167,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
         charts,
-        release_channels,
+        release_channels: release_channels.clone(),
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
@@ -1206,6 +1212,7 @@ async fn finalize(
         log_buffer,
         command_server,
         values,
+        release_channels,
     })
 }
 
