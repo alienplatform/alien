@@ -229,6 +229,22 @@ pub(crate) async fn served_bundle_sources(
     }))
 }
 
+/// The chart version this manager serves for `release_id`, when it serves
+/// charts and the release has one.
+pub(crate) async fn served_chart_version(
+    state: &AppState,
+    subject: &Subject,
+    release: &ReleaseRecord,
+) -> Option<String> {
+    state.charts.as_ref()?;
+    let name = release.stacks.get(&Platform::Kubernetes)?.id().to_string();
+    let charts = chart_releases(state, subject, &name).await.ok()?;
+    charts
+        .into_iter()
+        .find(|(_, r)| r.id == release.id)
+        .map(|(version, _)| version)
+}
+
 /// Serve `digest` only if it belongs to one of `charts`, the charts this
 /// caller may read. The blob cache is shared across callers, so a digest
 /// alone must not grant access.

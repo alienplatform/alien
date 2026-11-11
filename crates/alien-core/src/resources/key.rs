@@ -18,6 +18,11 @@ pub struct Key {
     pub id: String,
 }
 
+/// The description every setup-owned AWS key carries, from CloudFormation or a direct setup.
+pub fn key_description(key_id: &str) -> String {
+    format!("Encryption key '{key_id}'")
+}
+
 impl Key {
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("key");
 

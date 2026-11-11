@@ -5,11 +5,12 @@ use alien_core::{
     deployer_secret_environment, deployer_secret_location, deployer_secret_slots,
     AwsEnvironmentInfo, AzureEnvironmentInfo, AzureResourceGroupOutputs, ClientConfig, ComputeKind,
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
-    DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
-    EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceLifecycle, ResourceStatus, RuntimeMetadata, SecretDelivery, Stack, StackResourceState,
-    StackState, TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    DeploymentConfig, DeploymentStatus, EnvironmentInfo, EnvironmentVariable,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
+    LocalEnvironmentInfo, OtlpConfig, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata,
+    SecretDelivery, Stack, StackResourceState, StackState, TestEnvironmentInfo, Vault,
+    VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tracing::{debug, info, warn};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
@@ -368,7 +369,7 @@ pub fn inject_environment_variables(
     config: &DeploymentConfig,
     platform: Platform,
     deployer_reports: &[DeployerSecretReport],
-) -> Result<()> {
+) -> Result<BTreeMap<String, Vec<DeployerSecretEnv>>> {
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
@@ -386,6 +387,7 @@ pub fn inject_environment_variables(
         .filter(|id| alien_core::sandbox_egress::is_managed_gateway(stack, id))
         .cloned()
         .collect();
+    let mut injected_deployer_secrets = BTreeMap::new();
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -409,10 +411,54 @@ pub fn inject_environment_variables(
                 platform,
                 &deployer_secrets,
             )?;
+            injected_deployer_secrets.insert(resource_name.clone(), deployer_secrets);
         }
     }
 
-    Ok(())
+    Ok(injected_deployer_secrets)
+}
+
+/// The resources to hold while required deployer secrets are missing: every compute
+/// resource whose injected environment names one, and everything that depends on one,
+/// directly or through others.
+///
+/// `injected` is what [`inject_environment_variables`] wrote into each resource, so the
+/// resources held are exactly the ones that would read the missing value. `stack` supplies
+/// the dependency edges the executor orders by.
+pub fn resources_held_for_missing_secrets(
+    stack: &Stack,
+    injected: &BTreeMap<String, Vec<DeployerSecretEnv>>,
+    blocking: &[&DeployerSecretReport],
+) -> BTreeSet<String> {
+    let blocking_names: BTreeSet<&str> = blocking
+        .iter()
+        .map(|report| report.location.name.as_str())
+        .collect();
+    let mut held: BTreeSet<String> = injected
+        .iter()
+        .filter(|(_, entries)| {
+            entries
+                .iter()
+                .any(|entry| entry.required && blocking_names.contains(entry.secret_name.as_str()))
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    loop {
+        let before = held.len();
+        for (id, entry) in &stack.resources {
+            if !held.contains(id)
+                && entry
+                    .combined_dependencies()
+                    .iter()
+                    .any(|dependency| held.contains(dependency.id()))
+            {
+                held.insert(id.clone());
+            }
+        }
+        if held.len() == before {
+            return held;
+        }
+    }
 }
 
 /// Configuration for runtime-owned secrets.
@@ -1069,6 +1115,42 @@ pub async fn check_deployer_secrets(
         });
     }
     Ok(reports)
+}
+
+/// How often the customer's secret store is asked again while the deployment waits for
+/// secrets. The engine steps far more often while other resources install, and the
+/// stores rate-limit their metadata calls.
+pub const DEPLOYER_SECRET_RECHECK_SECONDS: i64 = 30;
+
+/// [`check_deployer_secrets`], but while the deployment is already waiting for secrets
+/// the last answer stands for [`DEPLOYER_SECRET_RECHECK_SECONDS`]. Any other status
+/// (including a new release's first step) always asks, so new slots are never missed.
+pub async fn refresh_deployer_secrets(
+    status: DeploymentStatus,
+    runtime_metadata: &mut RuntimeMetadata,
+    stack: &Stack,
+    stack_state: &StackState,
+    client_config: &ClientConfig,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<()> {
+    let now = chrono::Utc::now();
+    let fresh = status == DeploymentStatus::WaitingForSecrets
+        && !runtime_metadata.deployer_secrets.is_empty()
+        && runtime_metadata
+            .deployer_secrets_checked_at
+            .is_some_and(|at| {
+                let age = now - at;
+                age >= chrono::Duration::zero()
+                    && age < chrono::Duration::seconds(DEPLOYER_SECRET_RECHECK_SECONDS)
+            });
+    if fresh {
+        return Ok(());
+    }
+    runtime_metadata.deployer_secrets =
+        check_deployer_secrets(stack, stack_state, client_config, config, platform).await?;
+    runtime_metadata.deployer_secrets_checked_at = Some(now);
+    Ok(())
 }
 
 /// The required deployer secrets that keep workloads from starting: filled by
@@ -2631,6 +2713,68 @@ mod tests {
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"
         assert!(!func.environment.contains_key(ENV_ALIEN_SECRETS));
+    }
+
+    /// The held set is exactly what delivery gives the missing secret: the Workers whose
+    /// environment carries it, plus what depends on them. A Worker the secret does not target
+    /// neither holds nor reads it.
+    #[test]
+    fn held_set_matches_delivery() {
+        let mut stack = make_single_function_stack("reader");
+        for id in ["bystander", "dependent"] {
+            let entry = make_single_function_stack(id).resources.shift_remove(id).unwrap();
+            stack.resources.insert(id.to_string(), entry);
+        }
+        stack.resources.get_mut("dependent").unwrap().dependencies =
+            vec![alien_core::ResourceRef::new(Worker::RESOURCE_TYPE, "reader")];
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "API key", "description": "",
+            "env": [{"name": "API_KEY", "targetResources": ["reader"]}]
+        }))
+        .unwrap()];
+        let config = make_config(make_snapshot(&[], &[]));
+        let missing = DeployerSecretReport {
+            input_id: "apiKey".to_string(),
+            label: "API key".to_string(),
+            required: true,
+            status: DeployerSecretStatus::Missing,
+            message: None,
+            version: None,
+            location: alien_core::DeployerSecretLocation {
+                commands: None,
+                store: alien_core::DeployerSecretStore::LocalVault,
+                name: "input-api-key".to_string(),
+                vault_name: None,
+                console_url: None,
+                cli_command: String::new(),
+                delete_command: None,
+            },
+        };
+
+        let injected = inject_environment_variables(
+            &mut stack,
+            &config,
+            Platform::Aws,
+            std::slice::from_ref(&missing),
+        )
+        .unwrap();
+        let held = resources_held_for_missing_secrets(&stack, &injected, &[&missing]);
+
+        let carries_secret = |id: &str| {
+            let worker = stack.resources[id].config.downcast_ref::<Worker>().unwrap();
+            worker
+                .environment
+                .values()
+                .any(|value| value.contains("input-api-key"))
+        };
+        assert!(carries_secret("reader"), "delivery reaches the targeted Worker");
+        assert!(!carries_secret("bystander"));
+        assert_eq!(
+            held,
+            BTreeSet::from(["reader".to_string(), "dependent".to_string()])
+        );
+        assert!(!held.contains("bystander"));
     }
 
     /// Adds an internet-egress sandbox and the egress gateway container Alien installs for it.

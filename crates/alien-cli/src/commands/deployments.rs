@@ -2559,6 +2559,13 @@ async fn delete_deployment_task(
             message: "Failed to deserialize runtime_metadata".to_string(),
         })?;
     let kept_secrets = kept_deployer_secrets(runtime_metadata.as_ref());
+    let kept_keys = alien_cli_common::kept_keys::kept_keys(
+        deployment
+            .stack_state
+            .as_ref()
+            .and_then(|state| serde_json::from_value::<alien_core::StackState>(state.clone()).ok())
+            .as_ref(),
+    );
 
     let action = match request {
         DeleteRequest::Cleanup { yes, erase_data } => {
@@ -2638,6 +2645,7 @@ async fn delete_deployment_task(
         | DeleteDeploymentAction::Retain
         | DeleteDeploymentAction::Erase => {
             print_kept_deployer_secrets(&kept_secrets);
+            alien_cli_common::kept_keys::print_kept_keys(&kept_keys);
             println!(
                 "{} {}",
                 dim_label("Next"),
