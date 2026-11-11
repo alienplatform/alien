@@ -317,6 +317,14 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 ]
             },
             {
+                // Who may reach a storage's data from outside is the verifier's to write: it
+                // checks every statement of a bucket policy against the signed stack.
+                "Sid": "SetThisInstallsBucketPolicies",
+                "Effect": "Allow",
+                "Action": "s3:PutBucketPolicy",
+                "Resource": format!("arn:aws:s3:::{prefix}-*")
+            },
+            {
                 // Uninstall deletes a Live workload through the verifier, which takes its
                 // concurrency, URL, aliases and grants along.
                 "Sid": "DeleteThisInstallsFunctions",

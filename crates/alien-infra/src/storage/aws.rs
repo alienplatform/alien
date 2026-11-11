@@ -1522,18 +1522,35 @@ impl AwsStorageController {
             }));
         }
         if config.public_read {
-            statements.push(serde_json::json!({
-                "Sid": "AllowPublicRead",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": format!("{bucket_arn}/*")
-            }));
+            statements.push(alien_permissions::aws_bucket_policy::public_read_statement(
+                &bucket_arn,
+            ));
         }
         let policy = serde_json::json!({
             "Version": "2012-10-17",
             "Statement": statements
         });
+        // On a protected install who may reach the bucket is the verifier's to set: it checks
+        // every statement against the signed stack and sends this very policy.
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, &config.id)? {
+            let lambda = ctx
+                .service_provider
+                .get_aws_lambda_client(ctx.get_aws_config()?)
+                .await?;
+            let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                &config.id,
+                vec![crate::core::verifier::ResourceWrite::PutBucketPolicy {
+                    bucket: bucket.to_string(),
+                    policy: policy.to_string(),
+                }],
+            )
+            .await?;
+            return Ok(());
+        }
         ctx.service_provider
             .get_aws_s3_client(ctx.get_aws_config()?)
             .await?

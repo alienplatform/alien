@@ -365,6 +365,37 @@ pub struct ApplyWrite {
     pub writes: Vec<CloudWrite>,
 }
 
+/// `applyResourceWrite`: the cloud writes for one resource of the signed stack, in order, with
+/// the statements they rest on. The verifier checks every write before it sends any.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyResourceWrite {
+    pub release: SignedStatement,
+    pub signer_lists: Vec<SignedStatement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<SignedStatement>,
+    pub resource: String,
+    pub writes: Vec<ResourceWrite>,
+}
+
+/// One cloud write for a stack resource, as the verifier deserializes it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceWrite {
+    /// S3 PutBucketPolicy.
+    #[serde(rename_all = "camelCase")]
+    PutBucketPolicy { bucket: String, policy: String },
+}
+
+/// What `applyResourceWrite` did.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WrittenResource {
+    /// The sequence of the release the verifier accepted.
+    pub release: u64,
+    /// What the cloud answered to each write, in order.
+    pub answers: Vec<serde_json::Value>,
+}
+
 /// What `applyWrite` did.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Written {
@@ -382,6 +413,7 @@ pub struct Written {
 #[serde(rename_all = "camelCase")]
 pub enum Request {
     ApplyWrite(ApplyWrite),
+    ApplyResourceWrite(ApplyResourceWrite),
     DeleteWorkload(DeleteWorkload),
 }
 
@@ -507,6 +539,54 @@ pub async fn apply_write(
                 written.function
             ),
             resource_id: Some(workload.to_string()),
+        }));
+    }
+    Ok(written)
+}
+
+/// Hand `writes`, the cloud requests a controller built for `resource` of the signed stack, in
+/// order, to `verifier`, which checks every one against the signed `statements` and `config`
+/// before it sends any and sends them unchanged. A refusal is an error carrying the verifier's
+/// reason, and nothing was written.
+pub async fn apply_resource_write(
+    verifier: &dyn Verifier,
+    statements: &ReleaseStatements,
+    config: Option<&SignedStatement>,
+    resource: &str,
+    writes: Vec<ResourceWrite>,
+) -> Result<WrittenResource> {
+    let count = writes.len();
+    let request = Request::ApplyResourceWrite(ApplyResourceWrite {
+        release: statements.release.clone(),
+        signer_lists: statements.signer_lists.clone(),
+        config: config.cloned(),
+        resource: resource.to_string(),
+        writes,
+    });
+    let answer = match verifier.call(&request).await {
+        Ok(answer) => answer,
+        Err(CallError::Answered { code, reason }) => {
+            return Err(answered(verifier, resource, code, reason))
+        }
+        Err(CallError::Failed(error)) => return Err(error),
+    };
+    let written: WrittenResource = serde_json::from_value(answer).into_alien_error().context(
+        ErrorData::CloudPlatformError {
+            message: format!(
+            "The answer of verifier '{}' to applyResourceWrite is not the writes to one resource",
+            verifier.name()
+        ),
+            resource_id: Some(resource.to_string()),
+        },
+    )?;
+    if written.answers.len() != count {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "Verifier '{}' answered {} of the {count} writes it was sent",
+                verifier.name(),
+                written.answers.len()
+            ),
+            resource_id: Some(resource.to_string()),
         }));
     }
     Ok(written)
@@ -891,6 +971,66 @@ mod tests {
         signed_config, signed_release, signed_release_configuring,
     };
     use alien_core::{Platform, ResourceLifecycle, Stack, Worker, WorkerCode};
+
+    /// A verifier that keeps the request it is sent.
+    struct Capture(std::sync::Mutex<Vec<serde_json::Value>>);
+
+    #[async_trait]
+    impl Verifier for Capture {
+        fn name(&self) -> &str {
+            "shop-verifier"
+        }
+        async fn call(
+            &self,
+            request: &Request,
+        ) -> std::result::Result<serde_json::Value, CallError> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(request).unwrap());
+            Ok(serde_json::json!({"release": 1, "answers": [{"bucket": "shop-assets"}]}))
+        }
+    }
+
+    /// The bytes the controller sends are the shape the verifier's `applyResourceWrite` reads
+    /// (it refuses unknown fields): the policy goes as the document the cloud client sends.
+    #[tokio::test]
+    async fn a_resource_write_is_sent_in_the_shape_the_verifier_reads() {
+        let statements = signed_release(
+            Platform::Aws,
+            &Stack::new("shop".to_string())
+                .add(
+                    alien_core::Storage::new("assets".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+            1,
+        );
+        let verifier = Capture(Default::default());
+        let written = apply_resource_write(
+            &verifier,
+            &statements,
+            None,
+            "assets",
+            vec![ResourceWrite::PutBucketPolicy {
+                bucket: "shop-assets".to_string(),
+                policy: "{}".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(written.release, 1);
+        let sent = verifier.0.lock().unwrap()[0].clone();
+        assert_eq!(
+            sent["applyResourceWrite"]["writes"],
+            serde_json::json!([{"putBucketPolicy": {"bucket": "shop-assets", "policy": "{}"}}])
+        );
+        assert_eq!(sent["applyResourceWrite"]["resource"], "assets");
+        let object = sent["applyResourceWrite"].as_object().unwrap();
+        let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["release", "resource", "signerLists", "writes"]);
+    }
 
     /// The deployment's own secrets list never reaches a protected function, and the signed
     /// config sets only the names the release makes configurable.
