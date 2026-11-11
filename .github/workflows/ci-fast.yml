@@ -876,11 +876,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/setup-zigbuild
+
       - name: Build addon
         run: |
-          pnpm --filter @alienplatform/bindings exec napi build \
-            --platform --release --target ${{ matrix.target }} --use-napi-cross \
-            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+          packages/bindings/scripts/build-linux-addon.sh ${{ matrix.target }}
 
       - name: Verify glibc floor and load on older base images
         run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"

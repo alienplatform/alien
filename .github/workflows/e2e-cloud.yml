@@ -269,12 +269,14 @@ jobs:
           fi
           depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
 
+      - name: Install zig and cargo-zigbuild
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        uses: ./.github/actions/setup-zigbuild
+
       - name: Build TypeScript bindings addon (x86_64)
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         run: |
-          pnpm --filter @alienplatform/bindings exec napi build \
-            --platform --release --target x86_64-unknown-linux-gnu --use-napi-cross \
-            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+          packages/bindings/scripts/build-linux-addon.sh x86_64-unknown-linux-gnu
 
       - name: Verify TypeScript bindings addon (x86_64)
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
@@ -371,12 +373,14 @@ jobs:
           fi
           depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
 
+      - name: Install zig and cargo-zigbuild
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        uses: ./.github/actions/setup-zigbuild
+
       - name: Build TypeScript bindings addon (aarch64)
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         run: |
-          pnpm --filter @alienplatform/bindings exec napi build \
-            --platform --release --target aarch64-unknown-linux-gnu --use-napi-cross \
-            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+          packages/bindings/scripts/build-linux-addon.sh aarch64-unknown-linux-gnu
 
       - name: Verify TypeScript bindings addon (aarch64)
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
