@@ -36,6 +36,8 @@ mod azure_import;
 pub use azure_import::*;
 
 #[cfg(feature = "kubernetes")]
+pub(crate) mod kubernetes_dns;
+#[cfg(feature = "kubernetes")]
 mod kubernetes_eligibility;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes_eligibility::*;

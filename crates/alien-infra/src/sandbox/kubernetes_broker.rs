@@ -140,6 +140,7 @@ async fn claim_session_with_scope(
 ) -> std::result::Result<ClaimedSession, SessionRequestError> {
     let (signing_key, deployment_label_key, deployment_label_value) =
         signing_key(secrets, namespace, secret_name, sandbox_id, expected_scope).await?;
+    require_cluster_dns(secrets, namespace, secret_name, sandbox_id).await?;
     let selector = format!(
         "{},{}={}",
         idle_selector(sandbox_id),
@@ -226,6 +227,43 @@ async fn claim_session_with_scope(
         timeout_seconds,
     )
     .await
+}
+
+/// Refuses a new session on an allow-egress sandbox when `sandbox.clusterDNS` does not include the
+/// resolver this cluster hands its pods. Only creation is gated: a session already running keeps
+/// its pod and its policy, and a lookup by id never comes here.
+async fn require_cluster_dns(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    secret_name: &str,
+    sandbox_id: &str,
+) -> Result<()> {
+    let secret = secrets.get_secret(namespace, secret_name).await.context(
+        ErrorData::CloudPlatformError {
+            message: format!("the capability Secret for '{sandbox_id}' is unreadable"),
+            resource_id: Some(sandbox_id.to_string()),
+        },
+    )?;
+    let required = secret
+        .data
+        .as_ref()
+        .and_then(|data| data.get(crate::sandbox::REQUIRES_CLUSTER_DNS_SECRET_KEY))
+        .is_some_and(|value| value.0 == b"true");
+    if !required {
+        return Ok(());
+    }
+    crate::sandbox::kubernetes_dns::check(
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS)
+            .ok()
+            .as_deref(),
+        &crate::sandbox::kubernetes_dns::read_resolv_conf(),
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message,
+            resource_id: Some(sandbox_id.to_string()),
+        })
+    })
 }
 
 /// How long a cold create waits for the pod to start and receive an address.

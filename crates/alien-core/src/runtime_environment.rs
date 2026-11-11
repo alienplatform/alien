@@ -9,6 +9,10 @@ pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
 /// on the operator from the Service it renders in front of the operator, which serves the
 /// broker; the Sandbox controller publishes it in the sandbox binding.
 pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
+/// The nameserver addresses (comma separated IPv4) the chart admits on port 53 for sandbox pods,
+/// from `sandbox.clusterDNS`. The Operator compares them with its own `/etc/resolv.conf` and
+/// refuses new allow-egress sessions when they differ.
+pub const ENV_ALIEN_SANDBOX_CLUSTER_DNS: &str = "ALIEN_SANDBOX_CLUSTER_DNS";
 /// RuntimeClass the chart chose for sandbox pods (`sandbox.runtimeClassName`, or the cluster's
 /// vendor class when unset). The Operator only checks it; it never picks one.
 pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";

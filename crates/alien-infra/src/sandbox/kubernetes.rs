@@ -611,7 +611,14 @@ async fn replenish_warm_pool(
     // The broker builds a pod from this when a create finds the pool empty, so a create never
     // fails for want of an idle pod. It is rewritten every tick and so follows chart upgrades.
     // Best effort: without it a create still claims from the pool, it just cannot go cold.
-    if let Err(error) = publish_pod_template(ctx, &sandbox.id, namespace, &pod).await {
+    if let Err(error) = publish_pod_template(
+        ctx,
+        &sandbox.id,
+        namespace,
+        &pod,
+        matches!(sandbox.egress, alien_core::SandboxEgress::Allow),
+    )
+    .await {
         warn!(sandbox_id = %sandbox.id, %namespace, error = %error, "Failed to publish the sandbox pod template");
     }
 
@@ -764,6 +771,7 @@ async fn publish_pod_template(
     sandbox_id: &str,
     namespace: &str,
     pod: &k8s_openapi::api::core::v1::Pod,
+    requires_cluster_dns: bool,
 ) -> Result<()> {
     let client = ctx
         .service_provider
@@ -785,12 +793,20 @@ async fn publish_pod_template(
         })
     })?;
     let data = secret.data.get_or_insert_default();
+    let dns_flag = if requires_cluster_dns { b"true".to_vec() } else { b"false".to_vec() };
     if data
         .get(POD_TEMPLATE_SECRET_KEY)
         .is_some_and(|existing| existing.0 == template)
+        && data
+            .get(REQUIRES_CLUSTER_DNS_SECRET_KEY)
+            .is_some_and(|existing| existing.0 == dns_flag)
     {
         return Ok(());
     }
+    data.insert(
+        REQUIRES_CLUSTER_DNS_SECRET_KEY.to_string(),
+        k8s_openapi::ByteString(dns_flag),
+    );
     data.insert(
         POD_TEMPLATE_SECRET_KEY.to_string(),
         k8s_openapi::ByteString(template),
@@ -1166,6 +1182,10 @@ const CAPABILITY_SECRET_KEY: &str = "signingKey";
 
 /// Key holding the idle pod the broker creates when no warm pod is free.
 pub(crate) const POD_TEMPLATE_SECRET_KEY: &str = "podTemplate";
+
+/// Key marking a sandbox whose network policy admits DNS only to `sandbox.clusterDNS`, so the
+/// broker checks that value before it starts a new session.
+pub(crate) const REQUIRES_CLUSTER_DNS_SECRET_KEY: &str = "requiresClusterDNS";
 
 #[cfg(feature = "kubernetes")]
 fn capability_secret_labels_match_deployment(
