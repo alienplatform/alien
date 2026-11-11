@@ -1832,6 +1832,8 @@ struct HelmInstall {
     /// A container of the stack has a public endpoint, so the install needs an
     /// exposure choice.
     public_endpoints: bool,
+    /// The stack has a sandbox, so the install names the cluster's sandboxed RuntimeClass.
+    sandbox: bool,
 }
 
 impl HelmInstall {
@@ -1864,6 +1866,9 @@ impl HelmInstall {
             release: stack.id().to_string(),
             customer: customer.to_string(),
             infrastructure,
+            sandbox: stack
+                .resources()
+                .any(|(_, entry)| entry.config.resource_type().as_ref() == "sandbox"),
             public_endpoints: stack.resources().any(|(_, entry)| {
                 entry
                     .config
@@ -1930,6 +1935,15 @@ impl HelmInstall {
                  mode: custom\n      domain: <app.example.com>\n      route:\n        \
                  routeApi: ingress\n        ingressClassName: <ingress-class>\n      \
                  certificate:\n        mode: tlsSecretRef\n        secretName: <tls-secret>\n",
+            );
+        }
+        if self.sandbox {
+            // Argo CD renders without cluster access, so the chart cannot pick the class from
+            // the Kubernetes version there; naming it also keeps Helm and GitOps renders equal.
+            yaml.push_str(
+                "sandbox:\n  # The sandboxed RuntimeClass of this cluster: isolated-sandbox on EKS,\n  \
+                 # gvisor on GKE, the cluster's Kata RuntimeClass on AKS or on-premises.\n  \
+                 runtimeClassName: <runtime-class>\n",
             );
         }
         if self.infrastructure.is_empty() {
@@ -2246,6 +2260,29 @@ mod tests {
         let plain = HelmInstall::new(&plain, "https://m.example.com", "m.example.com", "c1");
         assert!(plain.values_example().is_empty());
         assert!(!plain.command().contains("--values values.yaml"));
+
+        // A stack with a sandbox names the cluster's sandboxed RuntimeClass.
+        let sandboxed = Stack::new("agent".to_string())
+            .add(
+                alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "ubuntu:24.04".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(alien_core::SandboxEgress::None)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let sandboxed =
+            HelmInstall::new(&sandboxed, "https://m.example.com", "m.example.com", "c1");
+        let values: serde_yaml::Value = serde_yaml::from_str(&sandboxed.values_example()).unwrap();
+        assert_eq!(values["sandbox"]["runtimeClassName"], "<runtime-class>");
+        assert!(sandboxed.values_example().contains("isolated-sandbox"));
     }
 
     fn minimal_stack() -> serde_json::Value {

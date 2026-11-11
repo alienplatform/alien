@@ -2094,6 +2094,9 @@ metadata:
   name: {{ include "deployment.fullname" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+    # The runtime cleanup hook accepts this as proof of ownership when the
+    # chart is rendered by a GitOps tool that adds no Helm annotations.
+    alien.dev/helm-release: {{ .Release.Name | quote }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
   # The operator holds an exclusive lock on its persistent state directory.
@@ -3146,11 +3149,33 @@ spec:
               # scoped dependent after the Job has already listed it.
               manager_name={{ include "deployment.fullname" . | quote }}
               if resource_exists "deployment/$manager_name"; then
-                manager_contract="$(kubectl -n "$namespace" get deployment "$manager_name" -o go-template='{{ "{{" }} printf "%s\t%s\t%s\t%s" (index .metadata.annotations "meta.helm.sh/release-name") (index .metadata.annotations "meta.helm.sh/release-namespace") (index .metadata.labels "app.kubernetes.io/managed-by") (index .metadata.labels "app.kubernetes.io/instance") {{ "}}" }}')"
-                IFS="$(printf '\t')" read -r manager_release_name manager_release_namespace manager_release_service manager_release_instance <<EOF
+                # Helm stamps ownership annotations on the Deployment; a GitOps
+                # tool that renders the chart itself (Argo CD) does not, and its
+                # label tracking overwrites app.kubernetes.io/instance. The chart
+                # therefore also labels the manager Deployment with its release
+                # name. Accept either proof; anything else is refused.
+                manager_contract="$(kubectl -n "$namespace" get deployment "$manager_name" -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"\n"}{.metadata.labels.app\.kubernetes\.io/managed-by}{"\n"}{.metadata.labels.app\.kubernetes\.io/instance}{"\n"}{.metadata.labels.alien\.dev/helm-release}{"\n"}{.metadata.namespace}{"\n"}')" || {
+                  echo "Refusing cleanup: cannot read manager Deployment $namespace/$manager_name." >&2
+                  exit 1
+                }
+                # One field per line: BusyBox ash `read` collapses empty IFS fields.
+                {
+                  read -r manager_release_name
+                  read -r manager_release_namespace
+                  read -r manager_release_service
+                  read -r manager_release_instance
+                  read -r manager_chart_release
+                  read -r manager_namespace
+                } <<EOF
               $manager_contract
               EOF
-                if [ "$manager_release_name" != "$expected_release_name" ] || [ "$manager_release_namespace" != "$expected_release_namespace" ] || [ "$manager_release_service" != "$expected_release_service" ] || [ "$manager_release_instance" != "$expected_release_name" ]; then
+                manager_owned=false
+                if [ "$manager_release_name" = "$expected_release_name" ] && [ "$manager_release_namespace" = "$expected_release_namespace" ] && [ "$manager_release_service" = "$expected_release_service" ] && [ "$manager_release_instance" = "$expected_release_name" ]; then
+                  manager_owned=true
+                elif [ "$manager_chart_release" = "$expected_release_name" ] && [ "$manager_namespace" = "$expected_release_namespace" ]; then
+                  manager_owned=true
+                fi
+                if [ "$manager_owned" != true ]; then
                   echo "Manager Deployment $namespace/$manager_name is not owned by this exact Helm release; refusing cleanup." >&2
                   exit 1
                 fi
@@ -4138,6 +4163,10 @@ spec:
 # alien-infrastructure (external-bindings.json) and alien-registry
 # (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
 # repository with the manager's install credentials.
+#
+# A stack with a sandbox also needs `sandbox.runtimeClassName` in the values below. Argo CD
+# renders without cluster access, so the chart cannot choose the class from the Kubernetes
+# version: `isolated-sandbox` on EKS, `gvisor` on GKE, the cluster's Kata RuntimeClass on AKS.
 #
 # `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
 # chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check

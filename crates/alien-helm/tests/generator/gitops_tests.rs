@@ -492,3 +492,108 @@ fn the_routing_rules_of_the_operator_role_can_be_left_out() {
     // Network policies are not routing: containers with network settings need them.
     assert!(without.contains("networkpolicies"));
 }
+
+/// Runs the manager-ownership part of the rendered runtime cleanup script against a fake
+/// `kubectl` that returns the given Deployment metadata fields, one per line, in the order the
+/// script asks for them. Returns (exit success, stderr).
+fn run_manager_ownership_check(script: &str, fields: [&str; 6]) -> (bool, String) {
+    let start = script
+        .find("manager_name=")
+        .expect("script names the manager Deployment");
+    let end = script
+        .find("kubectl -n \"$namespace\" delete deployment \"$manager_name\"")
+        .expect("script deletes the manager Deployment");
+    let snippet = &script[start..end];
+    let dir = std::env::temp_dir().join(format!(
+        "alien-ownership-{}-{}",
+        std::process::id(),
+        fields.join("_")
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The fake answers `get deployment ... -o name` (resource_exists) and the jsonpath read.
+    let kubectl = format!(
+        "#!/bin/sh\ncase \"$*\" in\n  *jsonpath*) printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' '{}' '{}' '{}' '{}' '{}' '{}' ;;\n  *) echo deployment.apps/x ;;\nesac\n",
+        fields[0], fields[1], fields[2], fields[3], fields[4], fields[5]
+    );
+    std::fs::write(dir.join("kubectl"), kubectl).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join("kubectl"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+    let program = format!(
+        "set -e\nnamespace=ns\nscratch={dir}\nexpected_release_name=rel\nexpected_release_namespace=ns\nexpected_release_service=Helm\nresource_exists() {{ kubectl get \"$1\" -o name >/dev/null || {{ echo fake kubectl failed >&2; exit 9; }}; }}\n{snippet}\nfi\necho OWNED\n",
+        dir = dir.display(),
+    );
+    // The snippet's heredocs keep the indentation the YAML block scalar strips.
+    let program: String = program
+        .lines()
+        .map(|line| line.trim_start())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.join("check.sh"), program).unwrap();
+    let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
+    let output = std::process::Command::new("sh")
+        .arg(dir.join("check.sh"))
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    (
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("OWNED"),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn the_cleanup_hook_accepts_the_chart_release_label_when_argo_adds_no_helm_annotations() {
+    let chart = chart_files();
+    let rendered =
+        test_utils::helm_template(&chart, Some("management:\n  token: test-credential\n"));
+    rendered.assert_ok("default install");
+    let documents = yaml_documents(&rendered.stdout);
+    let manager = documents
+        .iter()
+        .find(|d| {
+            d["kind"] == "Deployment"
+                && d["metadata"]["labels"]["alien.dev/helm-release"].is_string()
+        })
+        .expect("the manager Deployment carries the chart's own release label");
+    assert_eq!(
+        manager["metadata"]["labels"]["alien.dev/helm-release"],
+        "test-release"
+    );
+    let job = documents
+        .iter()
+        .find(|d| {
+            d["kind"] == "Job"
+                && d["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|n| n.ends_with("-cleanup"))
+        })
+        .expect("cleanup Job");
+    let script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
+        .as_str()
+        .expect("script")
+        .to_string();
+
+    // Argo CD: no Helm annotations, `instance` rewritten to the Application name, but the
+    // chart's label and the namespace match.
+    let (ok, stderr) = run_manager_ownership_check(&script, ["", "", "", "my-app", "rel", "ns"]);
+    assert!(ok, "label proof refused: {stderr}");
+    // Helm: annotations and labels, no chart label (an install from before the label existed).
+    let (ok, stderr) = run_manager_ownership_check(&script, ["rel", "ns", "Helm", "rel", "", "ns"]);
+    assert!(ok, "helm proof refused: {stderr}");
+    // Fail closed: another release's label, another namespace, nothing at all.
+    for fields in [
+        ["", "", "", "my-app", "other", "ns"],
+        ["", "", "", "my-app", "rel", "other-ns"],
+        ["", "", "", "rel", "", "ns"],
+    ] {
+        let (ok, stderr) = run_manager_ownership_check(&script, fields);
+        assert!(!ok, "{fields:?} was accepted");
+        assert!(
+            stderr.contains("not owned by this exact Helm release"),
+            "{stderr}"
+        );
+    }
+}
