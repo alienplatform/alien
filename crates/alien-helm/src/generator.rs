@@ -4143,6 +4143,8 @@ logCollector:
   maxStreams: 32
   # nodeAgent only. Generated on first install and retained on upgrade.
   token: ""
+  # nodeAgent only. Pull secrets for the collector image; defaults to runtime.imagePullSecrets.
+  imagePullSecrets: []
   image:
     repository: fluent/fluent-bit
     tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
@@ -4942,6 +4944,16 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
         "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
+        "imagePullSecrets": {
+          "type": "array",
+          "description": "Pull secrets for the node collector image. Defaults to runtime.imagePullSecrets.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "minLength": 1 } }
+          }
+        },
         "image": {
           "type": "object",
           "description": "Node collector image; ignored in podApi mode.",
@@ -7101,6 +7113,10 @@ metadata:
     {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
+{{- with default $.Values.runtime.imagePullSecrets $.Values.logCollector.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -7254,6 +7270,10 @@ spec:
         checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
+      {{- with default $.Values.runtime.imagePullSecrets $.Values.logCollector.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
         - operator: Exists
       securityContext:

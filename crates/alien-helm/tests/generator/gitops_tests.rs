@@ -322,3 +322,49 @@ fn hook_jobs_are_bounded_and_keep_a_failed_run_for_debugging() {
     }
     assert!(!prune.contains("hook-failed"));
 }
+
+#[test]
+fn the_node_log_collector_pulls_with_the_install_pull_secrets() {
+    let chart = chart_files();
+    let rendered_with = |values: &str| {
+        let rendered = test_utils::helm_template(&chart, Some(values));
+        rendered.assert_ok("node collector");
+        let documents = yaml_documents(&rendered.stdout);
+        let daemonset = documents
+            .iter()
+            .find(|document| document["kind"] == "DaemonSet")
+            .expect("the node collector DaemonSet")
+            .clone();
+        let account_name = daemonset["spec"]["template"]["spec"]["serviceAccountName"].clone();
+        let service_account = documents
+            .iter()
+            .find(|document| {
+                document["kind"] == "ServiceAccount" && document["metadata"]["name"] == account_name
+            })
+            .expect("the node collector ServiceAccount")
+            .clone();
+        (daemonset, service_account)
+    };
+    let base = "management:\n  token: test-credential\nlogCollector:\n  enabled: true\n  mode: nodeAgent\n";
+
+    let (daemonset, service_account) = rendered_with(&format!(
+        "{base}runtime:\n  imagePullSecrets:\n    - name: install-registry\n"
+    ));
+    assert_eq!(
+        daemonset["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
+        "install-registry"
+    );
+    assert_eq!(
+        service_account["imagePullSecrets"][0]["name"],
+        "install-registry"
+    );
+
+    // The collector can use its own secret.
+    let (daemonset, _) = rendered_with(&format!(
+        "{base}  imagePullSecrets:\n    - name: collector-registry\nruntime:\n  imagePullSecrets:\n    - name: install-registry\n"
+    ));
+    assert_eq!(
+        daemonset["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
+        "collector-registry"
+    );
+}
