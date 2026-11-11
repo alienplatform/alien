@@ -533,6 +533,28 @@ pub fn azure_data_family(action: &str) -> Option<Family> {
 mod tests {
     use super::*;
 
+    /// Which machine a marked profile starts is what tells horizond a machine is the
+    /// verifier's. Creating or changing an instance profile, and attaching one to an
+    /// instance, are all kept off management by the families.
+    #[test]
+    fn instance_profile_writes_are_family_actions() {
+        for action in [
+            "iam:CreateInstanceProfile",
+            "iam:AddRoleToInstanceProfile",
+            "iam:RemoveRoleFromInstanceProfile",
+            "iam:DeleteInstanceProfile",
+            "iam:TagInstanceProfile",
+            "ec2:AssociateIamInstanceProfile",
+            "ec2:ReplaceIamInstanceProfileAssociation",
+            "ec2:DisassociateIamInstanceProfile",
+        ] {
+            assert!(
+                aws_family(action, None).is_some(),
+                "{action} must be in a family"
+            );
+        }
+    }
+
     #[test]
     fn aws_family_names_the_family_of_each_action() {
         for (action, family) in [
