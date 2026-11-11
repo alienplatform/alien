@@ -1870,7 +1870,7 @@ impl StackExecutor {
     /// A check that fails changes nothing: it cannot mark a resource failed or end an update
     /// that is in progress. A check that succeeds hands back the controller's new state, so
     /// work a controller spaces out over many checks (a lookup it repeats every 15 minutes) is
-    /// not repeated on every call. Only the controller state of a resource that was Running
+    /// not repeated on every call. Only the controller state and outputs of a resource that was Running
     /// before and is Running without an error after is taken. The rest of the returned state
     /// is the state that was passed in.
     ///
@@ -1895,6 +1895,9 @@ impl StackExecutor {
                 && after.retry_attempt == 0
             {
                 before.internal_state = after.internal_state;
+                // Dependents are suspended or resumed from these, so a key that comes back
+                // must show as available on the observation path too.
+                before.outputs = after.outputs;
             }
         }
         Ok(RunningObservation {
