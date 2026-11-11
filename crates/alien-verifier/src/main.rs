@@ -140,6 +140,12 @@ impl Aws {
                     http.clone(),
                     credentials.clone(),
                 )),
+                microvms: Box::new(
+                    alien_aws_clients::lambda_microvms::LambdaMicrovmsClient::new(
+                        http.clone(),
+                        credentials.clone(),
+                    ),
+                ),
                 lambda: LambdaClient::new(http.clone(), credentials.clone()),
                 machines: AwsMachines {
                     ec2: Ec2Client::new(http.clone(), credentials.clone()),

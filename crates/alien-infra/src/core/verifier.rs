@@ -85,6 +85,33 @@ pub async fn gcp_sandbox_operation(
         })
 }
 
+/// On a protected AWS install, send a write for the signed sandbox's MicroVM image (its bundle,
+/// the build or a roll) to the verifier and answer with what the cloud answered. `None` on an
+/// unprotected install: the caller writes it itself.
+pub async fn aws_sandbox_write(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    write: ResourceWrite,
+) -> Result<Option<serde_json::Value>> {
+    let Some(release) = protected_statements(ctx, sandbox_id)? else {
+        return Ok(None);
+    };
+    let lambda = ctx
+        .service_provider
+        .get_aws_lambda_client(ctx.get_aws_config()?)
+        .await?;
+    let verifier = LambdaVerifier::new(lambda, ctx.resource_prefix);
+    let written = apply_resource_write(
+        &verifier,
+        release,
+        ctx.deployment_config.signed_config.as_ref(),
+        sandbox_id,
+        vec![write],
+    )
+    .await?;
+    Ok(Some(written.answers.into_iter().next().unwrap_or_default()))
+}
+
 /// On a protected Azure install, build the signed sandbox's disk image through the verifier and
 /// answer with the image it started. `None` on an unprotected install: the caller builds it
 /// itself.
@@ -106,9 +133,10 @@ pub async fn azure_sandbox_disk_image(
             group: group.to_string(),
             base: request.base.clone(),
             labels: request.labels.clone(),
-            registry_credentials: request.registry_credentials.clone().map(
-                |(username, token)| RegistryCredentials { username, token },
-            ),
+            registry_credentials: request
+                .registry_credentials
+                .clone()
+                .map(|(username, token)| RegistryCredentials { username, token }),
         }],
     )
     .await?;
@@ -571,6 +599,19 @@ pub enum ResourceWrite {
         labels: std::collections::BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         registry_credentials: Option<RegistryCredentials>,
+    },
+    /// Writes the bundle a sandbox's MicroVM image is built from; the verifier renders it from
+    /// `image`, the signed one.
+    #[serde(rename_all = "camelCase")]
+    PutSandboxBundle { image: String },
+    /// Lambda CreateMicrovmImage, as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateMicrovmImage { request: serde_json::Value },
+    /// Lambda UpdateMicrovmImage of `image` (its ARN), as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    UpdateMicrovmImage {
+        image: String,
+        request: serde_json::Value,
     },
     /// Agent Platform create of the reasoning engine a sandbox's templates live under.
     #[serde(rename_all = "camelCase")]

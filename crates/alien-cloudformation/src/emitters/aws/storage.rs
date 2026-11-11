@@ -304,14 +304,25 @@ struct EmailInboundContribution {
     enabled_when: Option<String>,
 }
 
-/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// The one principal that may write sandbox bundles: the management role the controller runs as,
+/// or the verifier on a protected install.
 /// A bundle is what the next image is built from, so a workload able to write one could choose
 /// what a sandbox runs; its grants reach this bucket like any other of the stack's.
 fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<CfExpression> {
-    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
-        .then(|| remote_stack_management_role_id(ctx))
-        .flatten()
-        .map(|role_id| CfExpression::get_att(&role_id, "Arn"))
+    if storage.id() != SANDBOX_BUNDLE_STORAGE_ID {
+        return None;
+    }
+    // A protected install's bundles are written by its verifier, which renders them from the
+    // signed release; management never writes one.
+    if ctx.stack.resources().any(|(_, entry)| {
+        entry.config.resource_type() == alien_core::SigningVerifier::RESOURCE_TYPE
+    }) {
+        return Some(CfExpression::get_att(
+            super::verifier::VERIFIER_ROLE_ID,
+            "Arn",
+        ));
+    }
+    remote_stack_management_role_id(ctx).map(|role_id| CfExpression::get_att(&role_id, "Arn"))
 }
 
 fn bucket_policy_document(

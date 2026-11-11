@@ -555,6 +555,35 @@ mod tests {
         }
     }
 
+    /// A Live sandbox's image decides what its sessions run: building it, rolling it and
+    /// handing it its build role are the verifier's, so management holds none of them.
+    #[test]
+    fn building_a_sandbox_image_is_a_family_action() {
+        for action in [
+            "lambda:CreateMicrovmImage",
+            "lambda:UpdateMicrovmImage",
+            "lambda:TagResource",
+        ] {
+            assert_eq!(
+                aws_family(action, None),
+                Some(Family::Run),
+                "{action} must be in the RUN family"
+            );
+        }
+        assert_eq!(
+            aws_family("iam:PassRole", Some(&["lambda.amazonaws.com".to_string()])),
+            Some(Family::Identity)
+        );
+        // Reading a build and deleting an image stay management's.
+        for action in ["lambda:GetMicrovmImage", "lambda:DeleteMicrovmImage"] {
+            assert_eq!(
+                aws_family(action, None),
+                None,
+                "{action} stays with management"
+            );
+        }
+    }
+
     #[test]
     fn aws_family_names_the_family_of_each_action() {
         for (action, family) in [

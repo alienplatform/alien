@@ -207,6 +207,8 @@ pub struct AwsBackend<L, M> {
     pub s3: Box<dyn alien_aws_clients::s3::S3Api>,
     /// SQS, for the queues of the stack.
     pub sqs: Box<dyn alien_aws_clients::sqs::SqsApi>,
+    /// Lambda MicroVMs, for the images of the stack's sandboxes.
+    pub microvms: Box<dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi>,
     /// Lambda.
     pub lambda: L,
     /// EC2 and Auto Scaling.
@@ -255,10 +257,12 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
 
     async fn forward_resource_write(
         &self,
-        _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<Value> {
         crate::cloud_write::resource::forward_aws_write(
+            facts,
+            self.microvms.as_ref(),
             &self.lambda,
             self.s3.as_ref(),
             self.sqs.as_ref(),

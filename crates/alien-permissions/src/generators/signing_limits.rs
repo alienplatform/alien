@@ -347,6 +347,56 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 ]
             },
             {
+                // A Live sandbox's image is built from a bundle the verifier renders from the
+                // signed image, so the bundle prefix of the install's bundle bucket has no other
+                // writer (its bucket policy denies the rest).
+                "Sid": "WriteThisInstallsSandboxBundles",
+                "Effect": "Allow",
+                "Action": "s3:PutObject",
+                "Resource": format!("arn:aws:s3:::{prefix}-sandbox-bundles/sandbox-bundle/*")
+            },
+            {
+                // The build itself: the verifier checks the request against the signed sandbox.
+                // Creation is authorized against no resource type, so the install's tags bound it.
+                "Sid": "CreateThisInstallsSandboxImages",
+                "Effect": "Allow",
+                "Action": "lambda:CreateMicrovmImage",
+                "Resource": "*",
+                "Condition": {
+                    "StringEquals": {
+                        "aws:RequestTag/deployment": prefix,
+                        "aws:RequestTag/managed-by": "runtime"
+                    }
+                }
+            },
+            {
+                "Sid": "TagThisInstallsSandboxImages",
+                "Effect": "Allow",
+                "Action": "lambda:TagResource",
+                "NotResource": "arn:*:lambda:*:*:*",
+                "Condition": {
+                    "StringEquals": {
+                        "aws:RequestTag/deployment": prefix,
+                        "aws:RequestTag/managed-by": "runtime"
+                    }
+                }
+            },
+            {
+                "Sid": "RollThisInstallsSandboxImages",
+                "Effect": "Allow",
+                "Action": "lambda:UpdateMicrovmImage",
+                "Resource": format!("arn:aws:lambda:{region}:{account}:microvm-image:{prefix}-*")
+            },
+            {
+                "Sid": "PassThisInstallsBuildRoles",
+                "Effect": "Allow",
+                "Action": "iam:PassRole",
+                "Resource": format!("arn:aws:iam::{account}:role/{prefix}-*-build"),
+                "Condition": {
+                    "StringEquals": { "iam:PassedToService": "lambda.amazonaws.com" }
+                }
+            },
+            {
                 // It creates the install's functions with the tags management's grants on
                 // runtime resources are scoped to.
                 "Sid": "TagThisInstallsFunctions",
@@ -689,7 +739,10 @@ mod tests {
             ("s3:PutBucketPolicy", "arn:aws:s3:::acme-uploads"),
             ("s3:PutBucketPublicAccessBlock", "arn:aws:s3:::acme-uploads"),
             ("s3:PutBucketNotification", "arn:aws:s3:::acme-uploads"),
-            ("sqs:CreateQueue", "arn:aws:sqs:us-east-1:111122223333:acme-jobs"),
+            (
+                "sqs:CreateQueue",
+                "arn:aws:sqs:us-east-1:111122223333:acme-jobs",
+            ),
             (
                 "sqs:SetQueueAttributes",
                 "arn:aws:sqs:us-east-1:111122223333:acme-jobs",

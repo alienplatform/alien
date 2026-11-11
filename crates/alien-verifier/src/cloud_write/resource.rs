@@ -166,6 +166,16 @@ pub enum ResourceWrite {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         registry_credentials: Option<RegistryCredentials>,
     },
+    /// Writes the bundle the signed sandbox's MicroVM image is built from, into the install's
+    /// bundle bucket. The verifier renders it from `image`, which must be the signed one.
+    #[serde(rename_all = "camelCase")]
+    PutSandboxBundle { image: String },
+    /// Lambda CreateMicrovmImage for the signed sandbox, as the client serialises it.
+    #[serde(rename_all = "camelCase")]
+    CreateMicrovmImage { request: Value },
+    /// Lambda UpdateMicrovmImage: a new version of the signed sandbox's image.
+    #[serde(rename_all = "camelCase")]
+    UpdateMicrovmImage { image: String, request: Value },
     /// Agent Platform create reasoning engine for the signed sandbox: the engine its templates
     /// and sessions live under. Only the display name is sent.
     #[serde(rename_all = "camelCase")]
@@ -202,6 +212,9 @@ impl ResourceWrite {
             ResourceWrite::CreateSandboxDiskImage { .. } => "CreateSandboxDiskImage",
             ResourceWrite::CreateSandboxEngine { .. } => "CreateSandboxEngine",
             ResourceWrite::CreateSandboxTemplate { .. } => "CreateSandboxTemplate",
+            ResourceWrite::PutSandboxBundle { .. } => "PutSandboxBundle",
+            ResourceWrite::CreateMicrovmImage { .. } => "CreateMicrovmImage",
+            ResourceWrite::UpdateMicrovmImage { .. } => "UpdateMicrovmImage",
         }
     }
 }
@@ -464,6 +477,31 @@ pub fn check_aws_write(
                     }
                 }
             }
+            Ok(())
+        }
+        ResourceWrite::PutSandboxBundle { image } => {
+            super::sandbox_image::check_bundle(&super::sandbox_image::Signed::of(facts)?, image)?;
+            Ok(())
+        }
+        ResourceWrite::CreateMicrovmImage { request } => {
+            let (account, region) = aws_account_and_region(facts)?;
+            super::sandbox_image::check_create(
+                &super::sandbox_image::Signed::of(facts)?,
+                &region,
+                &account,
+                request,
+            )?;
+            Ok(())
+        }
+        ResourceWrite::UpdateMicrovmImage { image, request } => {
+            let (account, region) = aws_account_and_region(facts)?;
+            super::sandbox_image::check_update(
+                &super::sandbox_image::Signed::of(facts)?,
+                &region,
+                &account,
+                image,
+                request,
+            )?;
             Ok(())
         }
         ResourceWrite::SetBucketIamPolicy { .. }
@@ -730,6 +768,8 @@ fn aws_account_and_region(facts: &ResourceFacts<'_>) -> Result<(String, String)>
 
 /// Send a checked AWS write unchanged, after confirming no newer release was accepted.
 pub async fn forward_aws_write(
+    facts: &ResourceFacts<'_>,
+    microvms: &dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi,
     lambda: &dyn alien_aws_clients::lambda::LambdaApi,
     s3: &dyn alien_aws_clients::s3::S3Api,
     sqs: &dyn alien_aws_clients::sqs::SqsApi,
@@ -823,6 +863,68 @@ pub async fn forward_aws_write(
                 operation: format!("sqs:SetQueueAttributes {queue_url}"),
             })?;
             Ok(json!({ "queueUrl": queue_url }))
+        }
+        ResourceWrite::PutSandboxBundle { image } => {
+            let bundle = super::sandbox_image::check_bundle(
+                &super::sandbox_image::Signed::of(facts)?,
+                image,
+            )?;
+            s3.put_object(&alien_aws_clients::s3::PutObjectRequest {
+                bucket: bundle.bucket.clone(),
+                key: bundle.key.clone(),
+                body: bundle.zip.clone(),
+                content_type: Some("application/zip".to_string()),
+                content_md5: None,
+                server_side_encryption: None,
+                storage_class: None,
+            })
+            .await
+            .context(crate::error::ErrorData::CloudCallFailed {
+                operation: format!("s3:PutObject {}", bundle.uri()),
+            })?;
+            Ok(json!({ "uri": bundle.uri() }))
+        }
+        ResourceWrite::CreateMicrovmImage { request } => {
+            let (account, region) = aws_account_and_region(facts)?;
+            let derived = super::sandbox_image::check_create(
+                &super::sandbox_image::Signed::of(facts)?,
+                &region,
+                &account,
+                request,
+            )?;
+            let created = microvms.create_microvm_image(derived).await.context(
+                crate::error::ErrorData::CloudCallFailed {
+                    operation: "lambda:CreateMicrovmImage".to_string(),
+                },
+            )?;
+            Ok(json!({
+                "imageArn": created.image_arn,
+                "imageVersion": created.image_version,
+                "name": created.name,
+                "state": created.state,
+            }))
+        }
+        ResourceWrite::UpdateMicrovmImage { image, request } => {
+            let (account, region) = aws_account_and_region(facts)?;
+            let derived = super::sandbox_image::check_update(
+                &super::sandbox_image::Signed::of(facts)?,
+                &region,
+                &account,
+                image,
+                request,
+            )?;
+            let rolled = microvms
+                .update_microvm_image(image, derived)
+                .await
+                .context(crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("lambda:UpdateMicrovmImage {image}"),
+                })?;
+            Ok(json!({
+                "imageArn": rolled.image_arn,
+                "imageVersion": rolled.image_version,
+                "name": rolled.name,
+                "state": rolled.state,
+            }))
         }
         ResourceWrite::SetBucketIamPolicy { .. }
         | ResourceWrite::SetPublicAccessPrevention { .. }
@@ -942,9 +1044,13 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
         ResourceWrite::CreateDatabaseInstance { body } => {
             check_database_instance(facts.place, facts.postgres()?, facts.resource_id, body)
         }
-        ResourceWrite::PatchDatabaseInstance { instance, body } => {
-            check_database_patch(facts.place, facts.postgres().map(|_| ())?, facts.resource_id, instance, body)
-        }
+        ResourceWrite::PatchDatabaseInstance { instance, body } => check_database_patch(
+            facts.place,
+            facts.postgres().map(|_| ())?,
+            facts.resource_id,
+            instance,
+            body,
+        ),
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             facts.queue()?;
             own_topic(facts, topic, write.operation())?;
@@ -997,17 +1103,20 @@ pub fn check_sandbox_template(
 ) -> Result<()> {
     use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
     // The engine id is assigned by the cloud: a bare segment is all that is known of it.
-    if engine.is_empty() || !engine.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if engine.is_empty()
+        || !engine
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
         return Err(refused(format!("'{engine}' is not an engine id")));
     }
     let signed_image = match &sandbox.code {
         alien_core::SandboxCode::Image { image, .. } => image,
         _ => return Err(refused("the signed sandbox has no built image")),
     };
-    let signed_egress = sandbox
-        .egress
-        .internet_access_switch()
-        .ok_or_else(|| refused("the signed sandbox's egress is not one Agent Platform expresses"))?;
+    let signed_egress = sandbox.egress.internet_access_switch().ok_or_else(|| {
+        refused("the signed sandbox's egress is not one Agent Platform expresses")
+    })?;
     let limits = sandbox.resolved_limits();
     let own_name = format!("{prefix}-{}", sandbox.id());
     let template: alien_gcp_clients::gcp::agent_platform::SandboxEnvironmentTemplate =
@@ -1017,9 +1126,14 @@ pub fn check_sandbox_template(
         return Err(refused("the template sets a field the controller does not"));
     }
     if template.display_name.as_deref() != Some(own_name.as_str()) {
-        return Err(refused(format!("the template's display name is not {own_name}")));
+        return Err(refused(format!(
+            "the template's display name is not {own_name}"
+        )));
     }
-    if template.egress_control_config.as_ref().map(|e| (e.internet_access, e.extra.is_empty()))
+    if template
+        .egress_control_config
+        .as_ref()
+        .map(|e| (e.internet_access, e.extra.is_empty()))
         != Some((Some(signed_egress), true))
     {
         return Err(refused(format!(
@@ -1030,13 +1144,17 @@ pub fn check_sandbox_template(
         .custom_container_environment
         .ok_or_else(|| refused("the template has no custom container environment"))?;
     if !environment.extra.is_empty() {
-        return Err(refused("the template's environment sets a field the controller does not"));
+        return Err(refused(
+            "the template's environment sets a field the controller does not",
+        ));
     }
     let spec = environment
         .custom_container_spec
         .ok_or_else(|| refused("the template names no image"))?;
     if !spec.extra.is_empty() {
-        return Err(refused("the template's container spec sets a field the controller does not"));
+        return Err(refused(
+            "the template's container spec sets a field the controller does not",
+        ));
     }
     if !sandbox_image_is_signed(signed_image, &spec.image_uri) {
         return Err(refused(format!(
@@ -1051,7 +1169,9 @@ pub fn check_sandbox_template(
         .map(|port| (port.port, port.protocol.clone()))
         .collect();
     if ports != expected_ports {
-        return Err(refused("the template's ports are not the agent's one TCP port"));
+        return Err(refused(
+            "the template's ports are not the agent's one TCP port",
+        ));
     }
     let resources = environment.resources.unwrap_or_default();
     let expected_limits = std::collections::HashMap::from([
@@ -1059,7 +1179,9 @@ pub fn check_sandbox_template(
         ("memory".to_string(), limits.memory),
     ]);
     if resources.requests.is_some() || resources.limits != Some(expected_limits) {
-        return Err(refused("the template's resources are not the signed limits"));
+        return Err(refused(
+            "the template's resources are not the signed limits",
+        ));
     }
     Ok(())
 }
@@ -1123,9 +1245,7 @@ fn check_database_instance(
         )));
     }
     if instance.database_version != postgres_database_version(&postgres.version) {
-        return Err(refused(
-            "the database version is not the signed stack's",
-        ));
+        return Err(refused("the database version is not the signed stack's"));
     }
     let private = IpConfiguration {
         ipv4_enabled: false,
@@ -1256,8 +1376,12 @@ fn check_command_subscription_of(
             return Err(refused("the subscription's name is not its own"));
         }
     }
-    if fields.get("retainAckedMessages").is_some_and(|v| v != &json!(false))
-        || fields.get("enableMessageOrdering").is_some_and(|v| v != &json!(false))
+    if fields
+        .get("retainAckedMessages")
+        .is_some_and(|v| v != &json!(false))
+        || fields
+            .get("enableMessageOrdering")
+            .is_some_and(|v| v != &json!(false))
         || fields.get("detached").is_some_and(|v| v != &json!(false))
     {
         return Err(refused(
@@ -1265,7 +1389,10 @@ fn check_command_subscription_of(
         ));
     }
     if let Some(ack) = fields.get("ackDeadlineSeconds") {
-        if !ack.as_i64().is_some_and(|seconds| (10..=600).contains(&seconds)) {
+        if !ack
+            .as_i64()
+            .is_some_and(|seconds| (10..=600).contains(&seconds))
+        {
             return Err(refused("ackDeadlineSeconds is not between 10 and 600"));
         }
     }
@@ -1306,7 +1433,9 @@ fn check_command_subscription_of(
         .ok_or_else(|| refused("pushConfig has no endpoint"))?;
     let audience = endpoint.trim_end_matches('/');
     if !endpoint.starts_with("https://") || !endpoint.ends_with('/') {
-        return Err(refused("the push endpoint is not an https URL ending in '/'"));
+        return Err(refused(
+            "the push endpoint is not an https URL ending in '/'",
+        ));
     }
     if let Some(uri) = service_uri {
         if audience != uri.trim_end_matches('/') {
@@ -1330,7 +1459,10 @@ fn check_command_subscription_of(
         let oidc = oidc
             .and_then(Value::as_object)
             .ok_or_else(|| refused("a private worker's subscription has no OIDC token"))?;
-        if oidc.keys().any(|key| !matches!(key.as_str(), "serviceAccountEmail" | "audience")) {
+        if oidc
+            .keys()
+            .any(|key| !matches!(key.as_str(), "serviceAccountEmail" | "audience"))
+        {
             return Err(refused("the OIDC token sets a field it should not"));
         }
         if oidc.get("serviceAccountEmail").and_then(Value::as_str) != Some(account.as_str()) {
@@ -1342,7 +1474,9 @@ fn check_command_subscription_of(
             return Err(refused("the OIDC audience is not the service URL"));
         }
     } else if oidc.is_some() {
-        return Err(refused("a public worker's subscription carries an OIDC token"));
+        return Err(refused(
+            "a public worker's subscription carries an OIDC token",
+        ));
     }
     Ok(())
 }
@@ -1749,9 +1883,9 @@ pub async fn forward_azure_write(
                 &alien_azure_clients::azure::sandbox_data_plane::CreateDiskImage {
                     base: base.clone(),
                     labels: labels.clone(),
-                    registry_credentials: registry_credentials
-                        .as_ref()
-                        .map(|credentials| (credentials.username.clone(), credentials.token.clone())),
+                    registry_credentials: registry_credentials.as_ref().map(|credentials| {
+                        (credentials.username.clone(), credentials.token.clone())
+                    }),
                 },
             );
             azure.create_disk_image(group, &body).await
@@ -2030,7 +2164,9 @@ mod command_subscription_tests {
             ),
             (
                 "another audience",
-                mutate(&|b| b["pushConfig"]["oidcToken"]["audience"] = json!("https://evil.example")),
+                mutate(&|b| {
+                    b["pushConfig"]["oidcToken"]["audience"] = json!("https://evil.example")
+                }),
                 Some(URI),
             ),
             (
@@ -2068,7 +2204,10 @@ mod command_subscription_tests {
         // A public worker takes no OIDC token.
         assert!(check(true, &signed, Some(URI)).is_err());
         let mut public = signed.clone();
-        public["pushConfig"].as_object_mut().unwrap().remove("oidcToken");
+        public["pushConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("oidcToken");
         check(true, &public, Some(URI)).expect("public worker without OIDC");
 
         // Another subscription name is refused.
@@ -2149,7 +2288,10 @@ mod database_instance_tests {
                 body
             };
             for (name, body) in [
-                ("a root password", mutate(&|b| b["rootPassword"] = json!("secret"))),
+                (
+                    "a root password",
+                    mutate(&|b| b["rootPassword"] = json!("secret")),
+                ),
                 (
                     "a public address",
                     mutate(&|b| b["settings"]["ipConfiguration"]["ipv4Enabled"] = json!(true)),
@@ -2171,14 +2313,24 @@ mod database_instance_tests {
                 (
                     "a private network",
                     mutate(&|b| {
-                        b["settings"]["ipConfiguration"]["privateNetwork"] = json!("projects/x/global/networks/y")
+                        b["settings"]["ipConfiguration"]["privateNetwork"] =
+                            json!("projects/x/global/networks/y")
                     }),
                 ),
                 ("another name", mutate(&|b| b["name"] = json!("other"))),
-                ("another version", mutate(&|b| b["databaseVersion"] = json!("POSTGRES_15"))),
-                ("an unknown field", mutate(&|b| b["replicaConfiguration"] = json!({}))),
+                (
+                    "another version",
+                    mutate(&|b| b["databaseVersion"] = json!("POSTGRES_15")),
+                ),
+                (
+                    "an unknown field",
+                    mutate(&|b| b["replicaConfiguration"] = json!({})),
+                ),
             ] {
-                assert!(check_database_instance(place, postgres, "db", &body).is_err(), "{name} must be refused");
+                assert!(
+                    check_database_instance(place, postgres, "db", &body).is_err(),
+                    "{name} must be refused"
+                );
             }
         });
     }
@@ -2200,8 +2352,16 @@ mod database_instance_tests {
                     "acme-db",
                     json!({"settings": {"ipConfiguration": {"ipv4Enabled": true}}}),
                 ),
-                ("a top-level field", "acme-db", json!({"settings": {}, "rootPassword": "x"})),
-                ("another instance", "other", json!({"settings": {"tier": "x"}})),
+                (
+                    "a top-level field",
+                    "acme-db",
+                    json!({"settings": {}, "rootPassword": "x"}),
+                ),
+                (
+                    "another instance",
+                    "other",
+                    json!({"settings": {"tier": "x"}}),
+                ),
             ] {
                 assert!(
                     check_database_patch(place, (), "db", instance, &body).is_err(),

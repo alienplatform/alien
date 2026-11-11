@@ -11,6 +11,7 @@ pub mod container_apps;
 pub mod env;
 pub mod lambda;
 pub mod resource;
+pub mod sandbox_image;
 
 use alien_signing::{ReleaseBody, SignedStatement, Workload};
 use serde::{Deserialize, Serialize};

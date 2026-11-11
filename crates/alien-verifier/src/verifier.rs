@@ -743,6 +743,9 @@ mod tests {
                 ResourceWrite::CreateSandboxEngine { display_name } => display_name.clone(),
                 ResourceWrite::CreateSandboxTemplate { body, .. } => body.to_string(),
                 ResourceWrite::CreateSandboxDiskImage { base, .. } => base.clone(),
+                ResourceWrite::PutSandboxBundle { image } => image.clone(),
+                ResourceWrite::CreateMicrovmImage { request }
+                | ResourceWrite::UpdateMicrovmImage { request, .. } => request.to_string(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -1429,11 +1432,29 @@ mod tests {
             check_sandbox_disk_image(&sandbox, PREFIX, &group, &base, &labels(&base))
                 .unwrap_or_else(|error| panic!("{base}: {}", crate::describe(&error)));
         }
-        let other_digest = format!("registry.example.com/vendor/sandbox@sha256:{}", "b".repeat(64));
+        let other_digest = format!(
+            "registry.example.com/vendor/sandbox@sha256:{}",
+            "b".repeat(64)
+        );
         let refused = [
-            ("another group", format!("{PREFIX}-other"), signed.clone(), labels(&signed)),
-            ("another digest", group.clone(), other_digest.clone(), labels(&other_digest)),
-            ("a catalog name", group.clone(), "ubuntu".to_string(), labels("ubuntu")),
+            (
+                "another group",
+                format!("{PREFIX}-other"),
+                signed.clone(),
+                labels(&signed),
+            ),
+            (
+                "another digest",
+                group.clone(),
+                other_digest.clone(),
+                labels(&other_digest),
+            ),
+            (
+                "a catalog name",
+                group.clone(),
+                "ubuntu".to_string(),
+                labels("ubuntu"),
+            ),
             (
                 "an unpinned tag",
                 group.clone(),
@@ -1445,7 +1466,12 @@ mod tests {
                 labels.insert("extra".to_string(), "x".to_string());
                 labels
             }),
-            ("a label for another image", group.clone(), signed.clone(), labels(&other_digest)),
+            (
+                "a label for another image",
+                group.clone(),
+                signed.clone(),
+                labels(&other_digest),
+            ),
         ];
         for (name, group, base, labels) in refused {
             assert!(
@@ -1488,9 +1514,8 @@ mod tests {
                 "egressControlConfig": {"internetAccess": false}
             })
         };
-        let check = |engine: &str, body: &Value| {
-            check_sandbox_template(&sandbox, PREFIX, engine, body)
-        };
+        let check =
+            |engine: &str, body: &Value| check_sandbox_template(&sandbox, PREFIX, engine, body);
         check("123", &template(signed)).expect("the signed template");
         check("123", &template(native)).expect("the signed image on the native host");
 
@@ -1507,8 +1532,16 @@ mod tests {
         let mut state = template(signed);
         state["state"] = json!("ACTIVE");
         for (what, engine, body) in [
-            ("an image of another registry", "123", template("evil.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent")),
-            ("another path on an Artifact Registry host", "123", template("us-central1-docker.pkg.dev/evil/repo/img:1")),
+            (
+                "an image of another registry",
+                "123",
+                template("evil.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent"),
+            ),
+            (
+                "another path on an Artifact Registry host",
+                "123",
+                template("us-central1-docker.pkg.dev/evil/repo/img:1"),
+            ),
             ("another display name", "123", other_name),
             ("open egress", "123", open_egress),
             ("other limits", "123", other_limits),
