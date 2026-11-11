@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{
     Capabilities, Container, EmptyDirVolumeSource, EnvVar, EnvVarSource, ObjectFieldSelector, Pod,
-    PodSecurityContext, PodSpec, ResourceRequirements, SecurityContext, Volume, VolumeMount,
+    PodSecurityContext, PodSpec, ResourceRequirements, SeccompProfile, SecurityContext, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -23,8 +24,10 @@ pub const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 /// Label carrying the session id within that sandbox.
 pub const LABEL_SESSION: &str = "alien.dev/sandbox-session";
 
-/// The uid sandboxed workloads run as.
-const SANDBOX_UID: i64 = 65534;
+/// The session root of the sandbox image contract (`$ALIEN_SANDBOX_ROOT`): where a session
+/// writes its work. Mounted over the image's read-only root as pod-local storage.
+const SESSION_ROOT_VOLUME: &str = "session-root";
+const SESSION_ROOT_PATH: &str = "/sandbox";
 
 /// The one writable directory in a session pod, whose root filesystem is read-only. An
 /// unprivileged agent writes the egress gateway's trust bundle here, and commands use it as
@@ -147,6 +150,7 @@ pub(crate) fn sandbox_pod_with_labels(
     labels.extend(deployment_labels);
 
     let declared = sandbox.resolved_limits();
+    let image_uid = sandbox.image_user.filter(|uid| *uid != 0).map(i64::from);
     let limits = BTreeMap::from([
         ("cpu".to_string(), Quantity(declared.cpu.clone())),
         ("memory".to_string(), Quantity(declared.memory.clone())),
@@ -175,33 +179,54 @@ pub(crate) fn sandbox_pod_with_labels(
             // created the session never comes back to terminate it.
             active_deadline_seconds: sandbox.lifecycle.max_lifetime_seconds.map(i64::from),
             enable_service_links: Some(false),
+            // The image's own USER runs the sandbox. `runAsNonRoot` makes the kubelet refuse an
+            // image that would start as root, so root stays refused without choosing a uid for
+            // the image. A uid is pinned only when the build recorded one.
             security_context: Some(PodSecurityContext {
                 run_as_non_root: Some(true),
-                run_as_user: Some(SANDBOX_UID),
-                run_as_group: Some(SANDBOX_UID),
-                fs_group: Some(SANDBOX_UID),
+                run_as_user: image_uid,
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    localhost_profile: None,
+                }),
                 ..Default::default()
             }),
-            volumes: Some(vec![Volume {
-                name: SCRATCH_VOLUME.to_string(),
-                empty_dir: Some(EmptyDirVolumeSource::default()),
-                ..Default::default()
-            }]),
+            // Both writable places are sized from `limits.disk`: a session cannot fill the
+            // node's disk through them, and the kubelet evicts the pod when it does.
+            volumes: Some(
+                [SCRATCH_VOLUME, SESSION_ROOT_VOLUME]
+                    .into_iter()
+                    .map(|name| Volume {
+                        name: name.to_string(),
+                        empty_dir: Some(EmptyDirVolumeSource {
+                            size_limit: Some(Quantity(declared.disk.clone())),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image),
                 env: capability_public_key.map(capability_environment),
-                volume_mounts: Some(vec![VolumeMount {
-                    name: SCRATCH_VOLUME.to_string(),
-                    mount_path: SCRATCH_PATH.to_string(),
-                    ..Default::default()
-                }]),
+                volume_mounts: Some(vec![
+                    VolumeMount {
+                        name: SCRATCH_VOLUME.to_string(),
+                        mount_path: SCRATCH_PATH.to_string(),
+                        ..Default::default()
+                    },
+                    VolumeMount {
+                        name: SESSION_ROOT_VOLUME.to_string(),
+                        mount_path: SESSION_ROOT_PATH.to_string(),
+                        ..Default::default()
+                    },
+                ]),
                 security_context: Some(SecurityContext {
                     allow_privilege_escalation: Some(false),
                     privileged: Some(false),
                     read_only_root_filesystem: Some(true),
                     run_as_non_root: Some(true),
-                    run_as_user: Some(SANDBOX_UID),
                     capabilities: Some(Capabilities {
                         drop: Some(vec!["ALL".to_string()]),
                         add: None,
@@ -448,7 +473,10 @@ mod tests {
         let security = container.security_context.expect("a security context");
 
         assert_eq!(security.run_as_non_root, Some(true));
-        assert_eq!(security.run_as_user, Some(SANDBOX_UID));
+        assert_eq!(
+            security.run_as_user, None,
+            "the image's own USER runs the sandbox; no uid is forced on it"
+        );
         assert_eq!(security.allow_privilege_escalation, Some(false));
         assert_eq!(security.privileged, Some(false));
         assert_eq!(security.read_only_root_filesystem, Some(true));
@@ -475,14 +503,66 @@ mod tests {
         .spec
         .expect("a spec");
         let mount = spec.containers.remove(0).volume_mounts.expect("mounts");
-        assert_eq!(mount.len(), 1);
-        assert_eq!(mount[0].mount_path, "/tmp");
-        assert_ne!(mount[0].read_only, Some(true));
         let volumes = spec.volumes.expect("volumes");
-        assert_eq!(volumes.len(), 1);
-        assert_eq!(volumes[0].name, mount[0].name);
-        assert!(volumes[0].empty_dir.is_some(), "pod-local storage only");
-        assert!(volumes[0].host_path.is_none());
+        assert_eq!(mount.len(), 2);
+        assert_eq!(volumes.len(), 2);
+        for (path, mount) in ["/tmp", "/sandbox"].iter().zip(mount.iter()) {
+            assert_eq!(&mount.mount_path, path);
+            assert_ne!(mount.read_only, Some(true));
+            let volume = volumes
+                .iter()
+                .find(|volume| volume.name == mount.name)
+                .expect("a volume for the mount");
+            let empty_dir = volume.empty_dir.as_ref().expect("pod-local storage only");
+            assert_eq!(
+                empty_dir.size_limit.as_ref().map(|limit| limit.0.as_str()),
+                Some(
+                    sandbox(SandboxEgress::Internet)
+                        .resolved_limits()
+                        .disk
+                        .as_str()
+                ),
+                "sized from limits.disk"
+            );
+            assert!(volume.host_path.is_none());
+        }
+    }
+
+    /// The image's non-root USER is honoured rather than replaced by a fixed uid, and the pod
+    /// still refuses root and carries the runtime's default seccomp profile.
+    #[test]
+    fn a_pod_runs_as_the_images_user_and_refuses_root() {
+        let mut declared = sandbox(SandboxEgress::None);
+        declared.image_user = Some(1001);
+        let pod_spec = sandbox_pod(&declared, "s1", "sbx", "gvisor", None, None)
+            .spec
+            .expect("a spec");
+        let security = pod_spec.security_context.expect("pod security context");
+        assert_eq!(security.run_as_user, Some(1001));
+        assert_eq!(security.run_as_non_root, Some(true));
+        assert_eq!(
+            security.seccomp_profile.expect("seccomp").type_,
+            "RuntimeDefault"
+        );
+
+        let unrecorded = sandbox_pod(
+            &sandbox(SandboxEgress::None),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        )
+        .spec
+        .expect("a spec")
+        .security_context
+        .expect("pod security context");
+        assert_eq!(unrecorded.run_as_user, None);
+        assert_eq!(
+            unrecorded.run_as_non_root,
+            Some(true),
+            "an image that would start as root is refused by the kubelet"
+        );
     }
 
     #[test]
