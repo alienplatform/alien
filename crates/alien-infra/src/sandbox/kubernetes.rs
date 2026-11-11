@@ -554,6 +554,14 @@ async fn replenish_warm_pool(
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
     );
     placement.apply(&mut pod);
+    if let Some(secret_name) = ensure_image_pull_secret(ctx, sandbox, namespace).await? {
+        pod.spec
+            .as_mut()
+            .expect("generated pod has a spec")
+            .image_pull_secrets = Some(vec![k8s_openapi::api::core::v1::LocalObjectReference {
+            name: secret_name,
+        }]);
+    }
     pod.spec
         .as_mut()
         .expect("generated pod has a spec")
@@ -621,6 +629,57 @@ async fn replenish_warm_pool(
         idle: waiting,
         created,
     })
+}
+
+/// Whether `image` is served by the manager's registry, whose pull needs the deployment's token.
+/// An image from any other registry is pulled with whatever access the cluster already has: the
+/// token is never offered to a registry that is not the manager's.
+fn image_is_from_manager(image: &str, manager_url: Option<&str>) -> bool {
+    let Some(manager_url) = manager_url else {
+        return false;
+    };
+    let manager_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
+    image.split('/').next() == Some(manager_host)
+}
+
+/// Creates or refreshes the pull Secret for an image `alien release` pushed to the manager's
+/// registry (a sandbox built from source), and returns its name. `None` for every other image.
+///
+/// The pod only references the Secret: the kubelet reads it, and the pod mounts no Secret and no
+/// ServiceAccount token, so the sandbox's code cannot.
+async fn ensure_image_pull_secret(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<Option<String>> {
+    let alien_core::SandboxCode::Image { image, .. } = &sandbox.code else {
+        return Ok(None);
+    };
+    if !image_is_from_manager(image, ctx.deployment_config.manager_url.as_deref()) {
+        return Ok(None);
+    }
+    let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: sandbox.id.clone(),
+            message: "deployment_token is required to pull the sandbox image from the manager's registry".to_string(),
+        })
+    })?;
+    let name = format!("alien-sbx-{}-registry", sandbox.id);
+    let secrets = ctx
+        .service_provider
+        .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
+        .await?;
+    crate::kubernetes_registry::ensure_registry_pull_secret(
+        &secrets,
+        namespace,
+        &name,
+        image,
+        token,
+        kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
+        false,
+    )
+    .await?;
+    Ok(Some(name))
 }
 
 /// Annotation holding the digest of the template an idle pool pod was built from.
@@ -783,6 +842,28 @@ mod tests {
 
     /// A release that changes a Live sandbox's image or limits changes the pod template, and the
     /// idle pods built from the old template are the ones replaced.
+    #[test]
+    fn the_deployment_token_is_offered_only_to_the_managers_registry() {
+        let manager = Some("https://manager.example.com");
+        assert!(image_is_from_manager(
+            "manager.example.com/app/sbx:1",
+            manager
+        ));
+        assert!(!image_is_from_manager(
+            "docker.io/library/ubuntu:24.04",
+            manager
+        ));
+        assert!(!image_is_from_manager("ubuntu:24.04", manager));
+        assert!(!image_is_from_manager(
+            "manager.example.com/app/sbx:1",
+            None
+        ));
+        assert!(
+            !image_is_from_manager("manager.example.com.evil.test/x:1", manager),
+            "a host that merely starts with the manager's is another registry"
+        );
+    }
+
     #[test]
     fn idle_pods_built_from_an_older_template_are_the_ones_replaced() {
         let mut fresh = 0;

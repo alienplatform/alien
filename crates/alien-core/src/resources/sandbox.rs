@@ -816,12 +816,15 @@ impl Sandbox {
             capabilities.domain_egress_rules = true;
         }
 
-        // `alien build` builds an AWS, Azure or GCP sandbox's base image, so source is a
+        // `alien build` builds an AWS, Azure, GCP or Kubernetes sandbox's base image, so source is a
         // declaration there and the emitters refuse it only if it reaches them unbuilt. Everywhere
         // else the image is pulled as declared, and an empty image string would schedule a pod
         // that can never run.
         if matches!(&self.code, SandboxCode::Source { .. })
-            && !matches!(platform, Platform::Aws | Platform::Azure | Platform::Gcp)
+            && !matches!(
+                platform,
+                Platform::Aws | Platform::Azure | Platform::Gcp | Platform::Kubernetes
+            )
         {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -2601,8 +2604,11 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Gcp)
             .expect("a GCP sandbox base image is built by `alien build`");
+        sandbox
+            .validate_for_platform(Platform::Kubernetes)
+            .expect("a Kubernetes sandbox base image is built by `alien build`");
 
-        for platform in [Platform::Kubernetes, Platform::Local] {
+        for platform in [Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no backend builds a sandbox image from source here");
