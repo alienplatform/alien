@@ -15,6 +15,7 @@ on:
       - 'crates/alien-helm/**'
       - 'crates/alien-infra/**'
       - 'crates/alien-operator/**'
+      - 'scripts/kind-restricted-pods.sh'
       - 'crates/alien-terraform/**'
       - '.github/workflows/kind-lifecycle.yml'
   workflow_dispatch:
@@ -95,6 +96,9 @@ jobs:
           kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
           cargo test --locked -p alien-operator --test dynamic_containers_kind -- \
             --ignored --nocapture --test-threads=1
+
+      - name: Restricted pods and one image mirror
+        run: scripts/kind-restricted-pods.sh
 
       - name: Sandbox chart RBAC on a real API server
         env:
