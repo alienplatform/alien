@@ -43,6 +43,9 @@ pub struct Azure {
     /// Resource id of the Container Apps environment the install's workloads run in, as setup
     /// names it. None when the install has none.
     pub environment: Option<String>,
+    /// The install's region, which names the sandbox data plane's host. None when the install
+    /// has no sandbox.
+    pub region: Option<String>,
 }
 
 impl Azure {
@@ -54,7 +57,13 @@ impl Azure {
             vault: vault.trim_end_matches('/').to_string(),
             client_id,
             environment: None,
+            region: None,
         }
+    }
+
+    /// The same client, reaching the sandbox data plane of `region`.
+    pub fn with_region(self, region: Option<String>) -> Self {
+        Self { region, ..self }
     }
 
     /// The same client, creating workloads in Container Apps environment `environment`.
@@ -331,6 +340,33 @@ impl Azure {
             .await?
             .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
         Ok(())
+    }
+
+    /// Start a disk image build in sandbox group `group` of this install's resource group, on the
+    /// region's sandbox data plane, with PUT.
+    pub async fn create_disk_image(&self, group: &str, body: &Value) -> Result<Value> {
+        use alien_azure_clients::azure::sandbox_data_plane::{ADC_SCOPE, API_VERSION};
+        let region = self
+            .region
+            .as_deref()
+            .ok_or_else(|| AlienError::new(failed("VERIFIER_AZURE_REGION is not set")))?;
+        let mut url = reqwest::Url::parse(&format!(
+            "https://management.{region}.azuredevcompute.io{}/sandboxGroups/{group}/diskimages",
+            self.resource_group
+        ))
+        .into_alien_error()
+        .context(failed("the sandbox data plane address"))?;
+        url.query_pairs_mut().append_pair("api-version", API_VERSION);
+        let what = format!("sandboxGroups.diskimages.write {group}");
+        self.call(
+            reqwest::Method::PUT,
+            url.as_str(),
+            ADC_SCOPE.trim_end_matches("/.default"),
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))
     }
 
     /// Read `url` until its provisioning state is Succeeded; Failed,

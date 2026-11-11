@@ -47,6 +47,23 @@ pub struct ApplyResourceWrite {
     pub writes: Vec<ResourceWrite>,
 }
 
+/// Basic credentials for a private registry. Never printed.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistryCredentials {
+    pub username: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for RegistryCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryCredentials")
+            .field("username", &self.username)
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
+
 /// One cloud write for a stack resource, as the cloud client sends it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -128,6 +145,16 @@ pub enum ResourceWrite {
         name: String,
         body: Value,
     },
+    /// Azure sandbox data plane: build a disk image from a registry image in the install's
+    /// sandbox group for the signed sandbox. The image must be the signed one.
+    #[serde(rename_all = "camelCase")]
+    CreateSandboxDiskImage {
+        group: String,
+        base: String,
+        labels: std::collections::BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registry_credentials: Option<RegistryCredentials>,
+    },
     /// Agent Platform create reasoning engine for the signed sandbox: the engine its templates
     /// and sessions live under. Only the display name is sent.
     #[serde(rename_all = "camelCase")]
@@ -158,6 +185,7 @@ impl ResourceWrite {
             ResourceWrite::CreateBlobContainer { .. } => "CreateBlobContainer",
             ResourceWrite::PutEventSubscription { .. } => "PutEventSubscription",
             ResourceWrite::UpdateBlobContainer { .. } => "UpdateBlobContainer",
+            ResourceWrite::CreateSandboxDiskImage { .. } => "CreateSandboxDiskImage",
             ResourceWrite::CreateSandboxEngine { .. } => "CreateSandboxEngine",
             ResourceWrite::CreateSandboxTemplate { .. } => "CreateSandboxTemplate",
         }
@@ -420,6 +448,7 @@ pub fn check_aws_write(
         | ResourceWrite::CreateBlobContainer { .. }
         | ResourceWrite::UpdateBlobContainer { .. }
         | ResourceWrite::PutEventSubscription { .. }
+        | ResourceWrite::CreateSandboxDiskImage { .. }
         | ResourceWrite::CreateSandboxEngine { .. }
         | ResourceWrite::CreateSandboxTemplate { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
@@ -774,6 +803,7 @@ pub async fn forward_aws_write(
         | ResourceWrite::CreateBlobContainer { .. }
         | ResourceWrite::UpdateBlobContainer { .. }
         | ResourceWrite::PutEventSubscription { .. }
+        | ResourceWrite::CreateSandboxDiskImage { .. }
         | ResourceWrite::CreateSandboxEngine { .. }
         | ResourceWrite::CreateSandboxTemplate { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
@@ -1136,6 +1166,20 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
             name,
             body,
         } => return check_event_subscription(facts, account, name, body),
+        ResourceWrite::CreateSandboxDiskImage {
+            group,
+            base,
+            labels,
+            ..
+        } => {
+            return check_sandbox_disk_image(
+                facts.sandbox()?,
+                &facts.place.prefix,
+                group,
+                base,
+                labels,
+            )
+        }
         other => {
             return Err(refused(format!(
                 "Azure takes no {} write",
@@ -1154,6 +1198,55 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
     }
     check_account_name(write, account)?;
     check_blob_container_body(body, storage.public_read).map_err(refused)
+}
+
+/// The sandbox group setup gives sandbox `id`: its Terraform name, `lower(<prefix>-<id>)` with
+/// underscores as hyphens.
+pub fn azure_sandbox_group_name(prefix: &str, id: &str) -> String {
+    format!("{prefix}-{id}").to_lowercase().replace('_', "-")
+}
+
+/// A disk image build must name the install's own sandbox group and a base image that is the
+/// signed sandbox's image: the same digest, wherever the carrying registry is. The only label is
+/// the one that finds the image again.
+pub fn check_sandbox_disk_image(
+    sandbox: &alien_core::Sandbox,
+    prefix: &str,
+    group: &str,
+    base: &str,
+    labels: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    use alien_core::{azure_disk_image_label, release_statement, AZURE_DISK_IMAGE_LABEL};
+    let id = sandbox.id();
+    let own = azure_sandbox_group_name(prefix, id);
+    if group != own {
+        return Err(refused(format!(
+            "CreateSandboxDiskImage names sandbox group {group}, not {own}, the group this \
+             install gives sandbox '{}'",
+            id
+        )));
+    }
+    let signed = release_statement::sandbox_pinned_image(id, sandbox)
+        .map_err(|error| refused(error.message))?;
+    let pinned = release_statement::image_digest(signed);
+    if pinned.is_none() || release_statement::image_digest(base) != pinned {
+        return Err(refused(format!(
+            "CreateSandboxDiskImage builds from {base}, which is not the image {signed} the \
+             release signed for sandbox '{}'",
+            id
+        )));
+    }
+    let expected = std::collections::BTreeMap::from([(
+        AZURE_DISK_IMAGE_LABEL.to_string(),
+        azure_disk_image_label(base),
+    )]);
+    if *labels != expected {
+        return Err(refused(
+            "CreateSandboxDiskImage carries labels other than the one that finds the image again"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn check_account_name(write: &ResourceWrite, account: &str) -> Result<()> {
@@ -1336,6 +1429,23 @@ pub async fn forward_azure_write(
         } => {
             azure.write_event_subscription(account, name, body).await?;
             Ok(json!({ "subscription": name }))
+        }
+        ResourceWrite::CreateSandboxDiskImage {
+            group,
+            base,
+            labels,
+            registry_credentials,
+        } => {
+            let body = alien_azure_clients::azure::sandbox_data_plane::disk_image_body(
+                &alien_azure_clients::azure::sandbox_data_plane::CreateDiskImage {
+                    base: base.clone(),
+                    labels: labels.clone(),
+                    registry_credentials: registry_credentials
+                        .as_ref()
+                        .map(|credentials| (credentials.username.clone(), credentials.token.clone())),
+                },
+            );
+            azure.create_disk_image(group, &body).await
         }
         other => Err(refused(format!(
             "Azure takes no {} write",

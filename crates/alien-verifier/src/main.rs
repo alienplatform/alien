@@ -215,7 +215,8 @@ fn azure_verifier() -> Result<Verifier> {
         env("VERIFIER_AZURE_VAULT")?,
         optional_env("VERIFIER_AZURE_CLIENT_ID")?,
     )
-    .with_environment(optional_env("VERIFIER_AZURE_ENVIRONMENT")?);
+    .with_environment(optional_env("VERIFIER_AZURE_ENVIRONMENT")?)
+    .with_region(optional_env("VERIFIER_AZURE_REGION")?);
     Ok(Verifier {
         own_name: env("CONTAINER_APP_NAME")?,
         install_id: Arc::new(move |_prefix: &str| InstallId::Azure {

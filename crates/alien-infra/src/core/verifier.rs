@@ -85,6 +85,44 @@ pub async fn gcp_sandbox_operation(
         })
 }
 
+/// On a protected Azure install, build the signed sandbox's disk image through the verifier and
+/// answer with the image it started. `None` on an unprotected install: the caller builds it
+/// itself.
+pub async fn azure_sandbox_disk_image(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    group: &str,
+    request: &alien_azure_clients::azure::sandbox_data_plane::CreateDiskImage,
+) -> Result<Option<alien_azure_clients::azure::sandbox_data_plane::DiskImage>> {
+    let Some(release) = protected_statements(ctx, sandbox_id)? else {
+        return Ok(None);
+    };
+    let written = apply_resource_write(
+        &azure_verifier(ctx).await?,
+        release,
+        ctx.deployment_config.signed_config.as_ref(),
+        sandbox_id,
+        vec![ResourceWrite::CreateSandboxDiskImage {
+            group: group.to_string(),
+            base: request.base.clone(),
+            labels: request.labels.clone(),
+            registry_credentials: request.registry_credentials.clone().map(
+                |(username, token)| RegistryCredentials { username, token },
+            ),
+        }],
+    )
+    .await?;
+    let answer = written.answers.into_iter().next().unwrap_or_default();
+    serde_json::from_value(answer)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "The verifier's answer to the disk image build is not a disk image"
+                .to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })
+        .map(Some)
+}
+
 /// Whether the install is protected: its Live functions are created, changed and deleted only
 /// by its verifier.
 pub fn is_protected(ctx: &ResourceControllerContext<'_>) -> bool {
@@ -508,6 +546,15 @@ pub enum ResourceWrite {
         name: String,
         body: serde_json::Value,
     },
+    /// Azure sandbox data plane: build a disk image in the install's sandbox group.
+    #[serde(rename_all = "camelCase")]
+    CreateSandboxDiskImage {
+        group: String,
+        base: String,
+        labels: std::collections::BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registry_credentials: Option<RegistryCredentials>,
+    },
     /// Agent Platform create of the reasoning engine a sandbox's templates live under.
     #[serde(rename_all = "camelCase")]
     CreateSandboxEngine { display_name: String },
@@ -517,6 +564,23 @@ pub enum ResourceWrite {
         engine: String,
         body: serde_json::Value,
     },
+}
+
+/// Basic credentials for a private registry. Never printed.
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryCredentials {
+    pub username: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for RegistryCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryCredentials")
+            .field("username", &self.username)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 /// What `applyResourceWrite` did.

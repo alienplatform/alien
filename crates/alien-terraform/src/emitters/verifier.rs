@@ -417,6 +417,7 @@ fn azure_verifier_blocks(
                                             .to_string(),
                                     ),
                                 ),
+                                env("VERIFIER_AZURE_REGION", expr::raw("var.azure_location")),
                                 env(
                                     "VERIFIER_AZURE_VAULT",
                                     expr::traversal(["azurerm_key_vault", &vault, "vault_uri"]),

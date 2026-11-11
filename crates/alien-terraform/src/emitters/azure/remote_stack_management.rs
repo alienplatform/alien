@@ -300,7 +300,11 @@ fn emit_protection(
             attr("tags", tags(ctx, "verifier")),
         ],
     ));
-    emit_verifier_grants(fragment, label, &verifier, resource_group)?;
+    let has_sandbox = ctx
+        .stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some());
+    emit_verifier_grants(fragment, label, &verifier, resource_group, has_sandbox)?;
     let group =
         |attribute: &str| expr::traversal(["azurerm_resource_group", resource_group, attribute]);
     let template = expr::object([
@@ -396,6 +400,12 @@ fn emit_protection(
     ));
     Ok(())
 }
+
+/// The sandbox data plane verbs the verifier holds when the stack has a sandbox.
+const AZURE_VERIFIER_DATA_ACTIONS: &[&str] = &[
+    "Microsoft.App/sandboxGroups/diskimages/read",
+    "Microsoft.App/sandboxGroups/diskimages/write",
+];
 
 /// What the verifier may do in the install's group (byoc review §1). No `runCommand` and no
 /// `runCommands/write`: those run a script on a machine outside what the release signed.
@@ -586,6 +596,7 @@ fn emit_verifier_grants(
     label: &str,
     verifier: &str,
     resource_group: &str,
+    has_sandbox: bool,
 ) -> Result<()> {
     let group_id = expr::traversal(["azurerm_resource_group", resource_group, "id"]);
     let principal = expr::traversal(["azurerm_user_assigned_identity", verifier, "principal_id"]);
@@ -624,7 +635,14 @@ fn emit_verifier_grants(
                 "permissions",
                 [attr("actions", string_array(
                     AZURE_VERIFIER_ACTIONS.iter().map(|action| action.to_string()).collect(),
-                ))],
+                ))]
+                .into_iter()
+                // The sandbox data plane's disk image verbs: the verifier builds the signed
+                // sandbox's disk image, so management holds no data action of the family.
+                .chain(has_sandbox.then(|| attr("data_actions", string_array(
+                    AZURE_VERIFIER_DATA_ACTIONS.iter().map(|action| action.to_string()).collect(),
+                ))))
+                .collect::<Vec<_>>(),
             )),
             attr("assignable_scopes", Expression::Array(vec![group_id.clone()])),
         ],

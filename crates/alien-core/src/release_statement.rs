@@ -660,10 +660,16 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
         });
         return Ok(Some(workload));
     }
-    if config.downcast_ref::<Sandbox>().is_some() {
-        return Err(statement_invalid(format!(
-            "resource '{id}' is a sandbox; signed releases don't carry sandboxes yet, because their image is assembled in the registry"
-        )));
+    if let Some(sandbox) = config.downcast_ref::<Sandbox>() {
+        let image = sandbox_pinned_image(id, sandbox)?;
+        let mut workload = base(WorkloadKind::Sandbox, image);
+        let limits = sandbox.resolved_limits();
+        workload.bounds = Bounds {
+            max_cpu: Some(limits.cpu.clone()),
+            max_memory: Some(limits.memory.clone()),
+            max_replicas: None,
+        };
+        return Ok(Some(workload));
     }
     let resource_type = config.resource_type();
     if RESOURCE_TYPES_WITHOUT_CODE.contains(&resource_type.as_ref()) {
@@ -686,6 +692,31 @@ fn container_image<'a>(id: &str, container: &'a Container) -> Result<&'a str> {
     match &container.code {
         ContainerCode::Image { image } => Ok(image),
         ContainerCode::Source { .. } => Err(source_code(id)),
+    }
+}
+
+/// The image a signed sandbox boots, pinned by digest. A registry image is its own pin. An AWS
+/// sandbox's `code.image` is an `s3://` bundle with no digest of its own, so the pin is the
+/// container image the bundle is built from (`bundled_from`); the bundle's key is a function of
+/// that image alone. An Azure catalog name or any unpinned reference is refused.
+pub fn sandbox_pinned_image<'a>(id: &str, sandbox: &'a Sandbox) -> Result<&'a str> {
+    match &sandbox.code {
+        SandboxCode::Image {
+            image,
+            bundled_from,
+        } => {
+            if image.starts_with("s3://") {
+                let built_from = bundled_from.as_deref().ok_or_else(|| {
+                    statement_invalid(format!(
+                        "resource '{id}' is a sandbox bundle with no pinned image it was built from"
+                    ))
+                })?;
+                pinned_image(id, built_from)
+            } else {
+                pinned_image(id, image)
+            }
+        }
+        SandboxCode::Source { .. } => Err(source_code(id)),
     }
 }
 
@@ -762,6 +793,30 @@ pub fn code_image_mut(resource: &mut Resource) -> Option<&mut String> {
 pub fn relocate_images(signed: &Stack, carried: &Stack) -> Stack {
     let mut relocated = signed.clone();
     for (id, entry) in relocated.resources_mut() {
+        // An AWS sandbox's pin is the image its bundle is built from, not `code.image`.
+        if let (Some(sandbox), Some(carried_sandbox)) = (
+            entry.config.downcast_mut::<Sandbox>(),
+            carried
+                .resources
+                .get(id)
+                .and_then(|carried| carried.config.downcast_ref::<Sandbox>()),
+        ) {
+            if let (
+                SandboxCode::Image {
+                    bundled_from: Some(image),
+                    ..
+                },
+                SandboxCode::Image {
+                    bundled_from: Some(location),
+                    ..
+                },
+            ) = (&mut sandbox.code, &carried_sandbox.code)
+            {
+                if image_digest(image).is_some() && image_digest(image) == image_digest(location) {
+                    *image = location.clone();
+                }
+            }
+        }
         let Some(location) = carried
             .resources
             .get(id)
@@ -842,6 +897,59 @@ mod tests {
         ReleaseOptions {
             channel: "production".to_string(),
             ..ReleaseOptions::default()
+        }
+    }
+
+    fn sandbox_stack(image: &str, bundled_from: Option<&str>) -> Stack {
+        let sandbox = Sandbox::new("agent".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+                bundled_from: bundled_from.map(str::to_string),
+            })
+            .egress(crate::SandboxEgress::None)
+            .lifecycle(crate::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        Stack::new("shop".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[test]
+    fn a_sandbox_is_signed_by_the_digest_of_its_image() {
+        let registry = format!("registry.example.com/shop/sandbox@{DIGEST}");
+        let bundle = "s3://bundles/sandbox-bundle/agent/abc/bundle.zip";
+        for (stack, pin) in [
+            (sandbox_stack(&registry, None), registry.as_str()),
+            (sandbox_stack(bundle, Some(&registry)), registry.as_str()),
+        ] {
+            let body = release_body(Platform::Aws, &stack, &production()).unwrap();
+            assert_eq!(body.workloads.len(), 1);
+            assert_eq!(body.workloads[0].kind, WorkloadKind::Sandbox);
+            assert_eq!(body.workloads[0].image, pin);
+        }
+    }
+
+    #[test]
+    fn a_sandbox_without_a_pinned_image_is_refused() {
+        let unpinned = "registry.example.com/shop/sandbox:latest";
+        let bundle = "s3://bundles/sandbox-bundle/agent/abc/bundle.zip";
+        for stack in [
+            sandbox_stack(unpinned, None),
+            // An Azure catalog name has no digest to pin.
+            sandbox_stack("ubuntu", None),
+            // A bundle whose source image is unknown or unpinned.
+            sandbox_stack(bundle, None),
+            sandbox_stack(bundle, Some(unpinned)),
+        ] {
+            let error = release_body(Platform::Aws, &stack, &production()).unwrap_err();
+            assert!(
+                error.message.contains("pinned") || error.message.contains("bundle"),
+                "{}",
+                error.message
+            );
         }
     }
 

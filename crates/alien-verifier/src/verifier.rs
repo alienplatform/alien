@@ -739,6 +739,7 @@ mod tests {
                 | ResourceWrite::PutEventSubscription { body, .. } => body.to_string(),
                 ResourceWrite::CreateSandboxEngine { display_name } => display_name.clone(),
                 ResourceWrite::CreateSandboxTemplate { body, .. } => body.to_string(),
+                ResourceWrite::CreateSandboxDiskImage { base, .. } => base.clone(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -1391,10 +1392,69 @@ mod tests {
         }
     }
 
+    /// A disk image build is accepted only in the install's own sandbox group, from the signed
+    /// image's digest, with the one label that finds it again.
+    #[test]
+    fn an_azure_sandbox_disk_image_is_checked_against_the_signed_sandbox() {
+        use crate::cloud_write::resource::check_sandbox_disk_image;
+        use alien_core::{azure_disk_image_label, AZURE_DISK_IMAGE_LABEL};
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let signed = format!("registry.example.com/vendor/sandbox@{digest}");
+        let sandbox = alien_core::Sandbox::new("agent".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: signed.clone(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let group = format!("{PREFIX}-agent");
+        let labels = |base: &str| {
+            std::collections::BTreeMap::from([(
+                AZURE_DISK_IMAGE_LABEL.to_string(),
+                azure_disk_image_label(base),
+            )])
+        };
+        // The signed image, and the same bytes through the manager's pull proxy.
+        for base in [
+            signed.clone(),
+            format!("manager.example.com/proxy/sandbox@{digest}"),
+        ] {
+            check_sandbox_disk_image(&sandbox, PREFIX, &group, &base, &labels(&base))
+                .unwrap_or_else(|error| panic!("{base}: {}", crate::describe(&error)));
+        }
+        let other_digest = format!("registry.example.com/vendor/sandbox@sha256:{}", "b".repeat(64));
+        let refused = [
+            ("another group", format!("{PREFIX}-other"), signed.clone(), labels(&signed)),
+            ("another digest", group.clone(), other_digest.clone(), labels(&other_digest)),
+            ("a catalog name", group.clone(), "ubuntu".to_string(), labels("ubuntu")),
+            (
+                "an unpinned tag",
+                group.clone(),
+                "registry.example.com/vendor/sandbox:latest".to_string(),
+                labels("registry.example.com/vendor/sandbox:latest"),
+            ),
+            ("another label", group.clone(), signed.clone(), {
+                let mut labels = labels(&signed);
+                labels.insert("extra".to_string(), "x".to_string());
+                labels
+            }),
+            ("a label for another image", group.clone(), signed.clone(), labels(&other_digest)),
+        ];
+        for (name, group, base, labels) in refused {
+            assert!(
+                check_sandbox_disk_image(&sandbox, PREFIX, &group, &base, &labels).is_err(),
+                "{name} was accepted"
+            );
+        }
+    }
+
     /// A sandbox template is accepted only as the signed sandbox declares it: its own name, its
     /// image (or the same path on an Artifact Registry host), its limits and egress, and no
-    /// other field. (Signed releases do not carry sandboxes yet, so the check is tested on its
-    /// own.)
+    /// other field. (Tested on its own: the check is pure.)
     #[test]
     fn a_gcp_sandbox_template_is_checked_against_the_signed_sandbox() {
         use crate::cloud_write::resource::check_sandbox_template;

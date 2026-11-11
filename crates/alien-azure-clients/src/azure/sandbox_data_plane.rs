@@ -29,7 +29,7 @@ pub const API_VERSION: &str = "2026-02-01-preview";
 /// It is neither ARM's scope nor the endpoint's own host: the sandbox data plane sits on the
 /// dynamic-sessions audience while answering at `azuredevcompute.io`. A token minted for either
 /// host fails here as a 401 that reads like a missing role assignment.
-const ADC_SCOPE: &str = "https://dynamicsessions.io/.default";
+pub const ADC_SCOPE: &str = "https://dynamicsessions.io/.default";
 
 /// Service key an endpoint override is looked up under, which is how a test points the client at
 /// a server it controls instead of a region's real data plane.
@@ -313,7 +313,7 @@ impl std::fmt::Debug for CreateDiskImage {
 }
 
 /// The disk image create body: `image.base`, the labels, and `registryCredentials` when set.
-fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
+pub fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
     let mut body = serde_json::json!({
         "image": { "base": request.base },
         "labels": request.labels,
