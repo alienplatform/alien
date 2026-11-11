@@ -3565,6 +3565,67 @@ from nodeAgent to podApi, the Operator checks both collector names and waits for
 their Pods to stop, including when the chart is rendered without cluster access.
 Use an Operator image built with this chart version for that transition.
 
+## GitOps
+
+Flux and Argo CD render this chart without access to the cluster. Set
+`gitops.enabled: true` and the render fails unless existing Secrets supply the
+management token (`management.existingSecret`) and the encryption key
+(`runtime.encryption.existingSecret`), and unless the log collector is
+`podApi` or `logCollector.token` is set. Without it a render generates a
+different key every time. `examples/gitops/flux.yaml` and
+`examples/gitops/argocd.yaml` show the full setup. A GitOps tool owns the
+Operator image, so they set `runtime.image.selfUpdate: false` and take Operator
+upgrades through chart versions. Keep one release per namespace. The chart
+declares `kubeVersion: ">=1.27.0-0"`; pass `--kube-version` to an offline
+`helm template` for an older default.
+
+## Permissions
+
+The Operator runs under one ServiceAccount with a Role in the release
+namespace and a ClusterRole for node health. The application's own
+ServiceAccounts get only the rules their permission profile needs.
+
+| Resource | Verbs | Why |
+| --- | --- | --- |
+| `configmaps`, `secrets`, `services`, `pods`, `persistentvolumeclaims` | all | Creates and updates what the application's containers, workers and daemons need |
+| `pods/log` | `get` | Reads Pod logs; only with `logCollector.mode: podApi` |
+| `serviceaccounts` | `get` | Reads the application ServiceAccounts the chart created |
+| `events` | `get`, `list`, `watch` | Reports why a workload can't start |
+| `deployments`, `statefulsets`, `daemonsets`, `replicasets` (`apps`) | all | Runs the application's workloads |
+| `pods` (`metrics.k8s.io`) | `get`, `list`, `watch` | Resource usage in health reports |
+| `jobs` (`batch`) | all | Build and one-off jobs |
+| `networkpolicies` | all | A container with network settings gets a NetworkPolicy |
+| `ingresses`; `gateways`, `httproutes` (Gateway API) | all | Public endpoints, for the exposure mode in `stackSettings.kubernetes.exposure` |
+| `healthcheckpolicies` (`networking.gke.io`, `alb.networking.azure.io`) | all | Load balancer health checks for public routes on GKE and AKS |
+| `nodes`; `nodes` (`metrics.k8s.io`) (ClusterRole) | `get`, `list`, `watch` | Node health; turn off with `heartbeat.collection.nodes.enabled: false` |
+
+## Upgrades and availability
+
+The Operator is one replica and its Deployment uses the `Recreate` strategy:
+during a chart upgrade the old Pod stops before the new one starts, so the
+Operator is unavailable for the time the new Pod takes to become ready. The
+application's own workloads keep running. Releases and health reports resume
+when the Operator is back.
+
+An upgrade that changes the Helm history can run a post-upgrade Job
+(`runtime-cleanup-history-prune`). It deletes Helm release revisions older
+than the first revision that is safe to roll back to, so a rollback can't
+restore a release without the runtime cleanup scope. It runs with a read-only
+root filesystem and a memory limit, and a failed run stays for a day for
+debugging. The pre-delete Job (`cleanup`) removes the Operator's runtime objects
+on `helm uninstall`, with the same limits.
+
+## Outbound connections
+
+The Operator connects to:
+
+- the management URL (`management.url`, https unless `management.allowInsecure`), for sync, deployment credentials and, when enabled, logs, metrics and telemetry;
+- the Kubernetes API server of its own cluster;
+- the registry of `runtime.image.repository` (the manager's registry when `runtime.image.pullWithManagementToken` is set), to pull the Operator image;
+- each service named in `infrastructure` (for example the object store, database or queue), and the cloud APIs the Pod's identity is allowed to call.
+
+The `nodeAgent` log collector reads logs on each node and sends them to the Operator in the cluster.
+
 === files/stack.json ===
 {
   "id": "data-chart",
