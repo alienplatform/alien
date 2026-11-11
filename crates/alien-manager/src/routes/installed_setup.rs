@@ -1186,6 +1186,7 @@ pub(super) mod tests {
             .arg(&archive)
             .args(["--namespace", "apps"])
             .args(["--set", "management.token=ax_dg_example"])
+            .args(["--set", "management.allowInsecure=true"])
             .args([
                 "--set",
                 "runtime.encryption.key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

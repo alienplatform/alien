@@ -385,8 +385,7 @@ pub(crate) fn render_terraform_module(
         // emitter registered for the type (an embedder may add one) always wins.
         if target.is_kubernetes()
             && options.registry.emitter(&resource_type, platform).is_none()
-            && alien_core::EXTERNAL_BINDING_TYPES
-                .contains(&resource_type.as_ref())
+            && alien_core::EXTERNAL_BINDING_TYPES.contains(&resource_type.as_ref())
         {
             installer_bindings.push((resource_id.clone(), resource_type.as_ref().to_string()));
             continue;

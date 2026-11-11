@@ -664,14 +664,35 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             resource_block(
                 "aws_eks_addon",
                 &format!("{label}_vpc_cni"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
-                    attr("addon_name", Expression::String("vpc-cni".to_string())),
-                ],
+                {
+                    let mut attrs = vec![
+                        attr(
+                            "count",
+                            expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        ),
+                        attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
+                        attr("addon_name", Expression::String("vpc-cni".to_string())),
+                    ];
+                    if stack_has_sandbox(ctx.stack) {
+                        // EKS Auto Mode does not enforce NetworkPolicy until the network policy
+                        // controller is on, so a sandbox's egress policy would be ignored.
+                        // `strict` holds a pod's traffic until its policy is applied.
+                        attrs.push(attr(
+                            "configuration_values",
+                            expr::jsonencode(expr::object([
+                                ("enableNetworkPolicy", Expression::String("true".to_string())),
+                                (
+                                    "env",
+                                    expr::object([(
+                                        "NETWORK_POLICY_ENFORCING_MODE",
+                                        Expression::String("strict".to_string()),
+                                    )]),
+                                ),
+                            ])),
+                        ));
+                    }
+                    attrs
+                },
             ),
             resource_block(
                 "aws_eks_addon",

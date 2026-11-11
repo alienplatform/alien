@@ -1172,17 +1172,26 @@ fn eks_module_leaves_out_resources_the_installer_binds() {
         StackSettings::default(),
     );
     let all = whole_module(&module);
-    assert!(!all.contains("aws_rds") && !all.contains("aws_rds_cluster"), "{all}");
+    assert!(
+        !all.contains("aws_rds") && !all.contains("aws_rds_cluster"),
+        "{all}"
+    );
     let outputs = module.get("outputs.tf").expect("outputs.tf");
     let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(compact.contains("output \"installer_supplied_bindings\""), "{outputs}");
+    assert!(
+        compact.contains("output \"installer_supplied_bindings\""),
+        "{outputs}"
+    );
     assert!(compact.contains("db = \"postgres\""), "{outputs}");
     assert!(compact.contains("cache = \"redis\""), "{outputs}");
     let readme = module.get("README.md").expect("README.md");
     assert!(readme.contains("## Bindings you supply"), "{readme}");
     assert!(readme.contains("`db` (postgres)") && readme.contains("`cache` (redis)"));
     // What the module does create is still bound as before.
-    assert!(compact.contains("output \"chart_infrastructure_json\""), "{outputs}");
+    assert!(
+        compact.contains("output \"chart_infrastructure_json\""),
+        "{outputs}"
+    );
     assert_terraform_valid(&module, "eks_installer_bindings");
 }
 
@@ -1264,6 +1273,74 @@ fn a_new_eks_cluster_starts_on_1_36_and_an_existing_one_is_not_upgraded() {
             .replace(' ', "")
             .contains("lifecycle{ignore_changes=[version]}"),
         "{cluster}"
+    );
+}
+
+/// EKS Auto Mode ignores NetworkPolicy until the network policy controller is on (checked on
+/// a real 1.36 Auto Mode cluster: a deny-all policy let traffic through). A stack with a
+/// sandbox needs enforcement; a stack without one keeps the addon exactly as before, so an
+/// existing install's plan does not change.
+#[test]
+fn eks_turns_on_network_policy_enforcement_only_when_the_stack_has_a_sandbox() {
+    use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+    let cluster = || {
+        KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build()
+    };
+    let vpc_cni = |stack: &Stack| {
+        let module = render(stack, TerraformTarget::Eks, StackSettings::default());
+        let rendered = whole_module(&module);
+        let block = rendered
+            .split("resource \"aws_eks_addon\" \"kubernetes_vpc_cni\"")
+            .nth(1)
+            .expect("vpc-cni addon")
+            .split("\nresource ")
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        block
+    };
+
+    let plain = Stack::new("eks-plain".to_string())
+        .add(cluster(), ResourceLifecycle::Frozen)
+        .build();
+    assert!(!vpc_cni(&plain).contains("configuration_values"));
+
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example.com/agent:latest".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let with_sandbox = Stack::new("eks-sandbox".to_string())
+        .add(cluster(), ResourceLifecycle::Frozen)
+        .add(sandbox, ResourceLifecycle::Live)
+        .build();
+    let block = vpc_cni(&with_sandbox);
+    assert!(block.contains("enableNetworkPolicy = \"true\""), "{block}");
+    assert!(
+        block.contains("NETWORK_POLICY_ENFORCING_MODE = \"strict\""),
+        "{block}"
+    );
+    assert_terraform_valid(
+        &render(
+            &with_sandbox,
+            TerraformTarget::Eks,
+            StackSettings::default(),
+        ),
+        "eks_network_policy_enforcement",
     );
 }
 
