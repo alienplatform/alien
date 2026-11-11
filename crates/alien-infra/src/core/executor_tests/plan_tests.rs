@@ -796,8 +796,14 @@ async fn test_plan_leaves_held_resources_alone() -> Result<()> {
     let api_v2 = test_function_with_image("api", "image-v2");
     let stack_v2 = Stack::new("held-plan-test".to_owned())
         .add(api_v2.clone(), ResourceLifecycle::Live)
-        .add(test_function_with_image("web", "image-v2"), ResourceLifecycle::Live)
-        .add(test_function_linked("jobs", &api_v2), ResourceLifecycle::Live)
+        .add(
+            test_function_with_image("web", "image-v2"),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            test_function_linked("jobs", &api_v2),
+            ResourceLifecycle::Live,
+        )
         .add(test_function("cache"), ResourceLifecycle::Live)
         .build();
 
@@ -809,5 +815,49 @@ async fn test_plan_leaves_held_resources_alone() -> Result<()> {
     assert!(held.creates.is_empty(), "held cache is not created");
     assert_eq!(held.updates.keys().collect::<Vec<_>>(), vec!["web"]);
     assert!(held.deletes.is_empty() && held.replaces.is_empty());
+    Ok(())
+}
+
+/// A resource that is already mid-update when its secret goes missing is paused, not finished:
+/// the deployment says it is waiting, so the workload must not keep changing underneath it.
+#[tokio::test]
+async fn test_held_resource_mid_update_is_not_stepped() -> Result<()> {
+    let stack_v1 = Stack::new("held-step-test".to_owned())
+        .add(
+            test_function_with_image("api", "image-v1"),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let installed = run_to_synced(&new_executor(&stack_v1)?, new_test_state()).await?;
+
+    let stack_v2 = Stack::new("held-step-test".to_owned())
+        .add(
+            test_function_with_image("api", "image-v2"),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let mut state = installed;
+    for _ in 0..5 {
+        state = new_executor(&stack_v2)?.step(state).await?.next_state;
+        if get_status(&state, "api") == Some(ResourceStatus::Updating) {
+            break;
+        }
+    }
+    assert_eq!(get_status(&state, "api"), Some(ResourceStatus::Updating));
+    let before = serde_json::to_value(&state.resources["api"]).unwrap();
+
+    // The secret goes missing now: `api` is held.
+    let held = executor_holding(&stack_v2, &["api"])?
+        .step(state.clone())
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&held.next_state.resources["api"]).unwrap(),
+        before,
+        "a held resource is not stepped"
+    );
+
+    // Released again, it finishes.
+    let finished = run_to_synced(&new_executor(&stack_v2)?, held.next_state).await?;
+    assert_eq!(get_status(&finished, "api"), Some(ResourceStatus::Running));
     Ok(())
 }

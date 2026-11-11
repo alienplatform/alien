@@ -2664,6 +2664,17 @@ impl StackExecutor {
                 }
             }
 
+            // A held resource that is mid-create or mid-update waits where it is. A running one
+            // still gets its health handler.
+            if self.held_resources.contains(resource_id)
+                && matches!(
+                    current_resource_view.status,
+                    ResourceStatus::Provisioning | ResourceStatus::Updating
+                )
+            {
+                continue;
+            }
+
             // Lifecycle filters define mutation scope. Already-running managed
             // resources can still run Ready handlers because their health and
             // management work may be required by in-scope dependents.
