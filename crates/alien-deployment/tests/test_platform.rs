@@ -4625,10 +4625,24 @@ async fn an_update_waiting_for_a_setup_grant_finishes_when_setup_reruns() {
         .await
         .expect("the idle step should succeed")
         .state;
-    assert_eq!(
-        serde_json::to_value(&idle).unwrap(),
-        serde_json::to_value(&state).unwrap()
-    );
+    // The failed update still observes its running resources, which counts a health check;
+    // nothing else changes.
+    fn without_health_checks(state: &DeploymentState) -> serde_json::Value {
+        fn strip(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    map.remove("readyChecks");
+                    map.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        let mut value = serde_json::to_value(state).unwrap();
+        strip(&mut value);
+        value
+    }
+    assert_eq!(without_health_checks(&idle), without_health_checks(&state));
 
     // An older setup that does not grant it: the runtime resumes the step once, which fails
     // the same way. The deployment keeps serving rel_v1 and is not provisioning-failed.
