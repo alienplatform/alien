@@ -1706,7 +1706,7 @@ mod tests {
     /// near-misses the cases separate: the key's first segment grants objects a rebuild never
     /// reads, and the object's own directory pins the version segment that moves.
     #[test]
-    fn a_grantable_prefix_stops_above_the_segment_that_moves() {
+    fn a_grantable_prefix_ends_above_the_segment_that_moves() {
         assert_eq!(
             stable_bundle_key_prefix("sandbox-bundle/f00dcafe/bundle.zip"),
             Some("sandbox-bundle")
