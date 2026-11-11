@@ -2534,6 +2534,85 @@ pub(in crate::routes) mod tests {
         assert_eq!(status, StatusCode::OK, "{issued}");
     }
 
+    /// Sets when the deployment's operator key expires. Keys last 24 hours, so
+    /// this also sets when it was last rotated.
+    async fn set_key_expiry(manager: &TokenEnrollment, deployment_id: &str, expires_at: i64) {
+        let conn = manager.db.conn().lock().await;
+        conn.execute(
+            "UPDATE runtime_daily_keys SET expires_at = ?1 WHERE deployment_id = ?2",
+            (expires_at, deployment_id.to_owned()),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A group credential can replace an operator key only when the key has
+    /// not been rotated within the live window, and never when the key time
+    /// cannot be read.
+    #[tokio::test]
+    async fn a_group_token_can_replace_only_a_key_that_is_not_live() {
+        let manager = TokenEnrollment::new().await;
+        let group = TOKEN_ENROLLMENT_GROUP_TOKEN;
+        let sibling = "dep_sibling";
+        let code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(manager.enroll(&code, "ax_day_v1_old").await, StatusCode::OK);
+
+        // Rotated within the window, even just before it ends: refused.
+        let now = Utc::now().timestamp();
+        let day = 24 * 3600;
+        for hours_ago in [0, 24] {
+            set_key_expiry(&manager, "dep_test", now + day - hours_ago * 3600).await;
+            let (status, refused) = manager.enrollment_code(group).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{hours_ago}h: {refused}");
+            assert_eq!(refused["code"], "ENROLLMENT_KEY_EXISTS");
+        }
+
+        // An unreadable key time counts as live.
+        set_key_expiry(&manager, "dep_test", i64::MAX).await;
+        let (status, refused) = manager.enrollment_code(group).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+        // Rotated more than 25 hours ago: the group credential gets a code
+        // that replaces the key.
+        set_key_expiry(&manager, "dep_test", now + day - 26 * 3600).await;
+        let (status, issued) = manager.enrollment_code(group).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+        assert_eq!(
+            manager
+                .enroll(issued["code"].as_str().expect("code"), "ax_day_v1_new")
+                .await,
+            StatusCode::OK
+        );
+        assert!(
+            manager
+                .key_is_current_for("dep_test", "ax_day_v1_new")
+                .await
+        );
+        assert!(
+            !manager
+                .key_is_current_for("dep_test", "ax_day_v1_old")
+                .await
+        );
+
+        // The sibling in the group never enrolled, and the group credential
+        // still gets its first code.
+        let (status, issued) = manager.enrollment_code_for(sibling, group).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+    }
+
+    /// An administrator gets a code whatever the key's age.
+    #[tokio::test]
+    async fn an_admin_token_gets_a_code_while_the_key_is_live() {
+        let manager = TokenEnrollment::new().await;
+        let code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(
+            manager.enroll(&code, "ax_day_v1_live").await,
+            StatusCode::OK
+        );
+        let (status, issued) = manager.enrollment_code(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+    }
+
     /// A token-made code that is still unused when the deployment has a key
     /// must not replace the key. (A new enrollment normally deletes the
     /// deployment's other unused codes; this is the state that must stay

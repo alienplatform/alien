@@ -168,6 +168,17 @@ pub trait RuntimeIdentityVerifier: Send + Sync {
     ) -> Result<(String, DateTime<Utc>), AlienError> {
         self.issue_enrollment_code(deployment).await
     }
+
+    /// Issue a code for a caller that holds a deployment group credential.
+    /// A verifier that tracks the operator key refuses with
+    /// `ENROLLMENT_KEY_EXISTS` while that key is live. By default this is
+    /// [`Self::issue_enrollment_code`].
+    async fn issue_enrollment_code_for_group_token(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<(String, DateTime<Utc>), AlienError> {
+        self.issue_enrollment_code(deployment).await
+    }
 }
 
 /// Mount the exchange with the same issuer used by the runtime auth validator.
@@ -311,18 +322,21 @@ pub async fn issue_enrollment_code(
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot issue an enrollment code").into_response();
     }
-    // A code made from a deployment token or a deployment group token is
-    // issued only while the deployment has no operator key. An administrator
-    // credential can always enroll again.
-    let issued = if matches!(
-        subject.role,
-        super::Role::DeploymentManager | super::Role::DeploymentGroupDeployer
-    ) {
-        verifier
-            .issue_enrollment_code_for_deployment_token(&deployment)
-            .await
-    } else {
-        verifier.issue_enrollment_code(&deployment).await
+    // A deployment token's code is issued only while the deployment has no
+    // operator key, and a deployment group credential's while that key is not
+    // live. An administrator credential can always enroll again.
+    let issued = match subject.role {
+        super::Role::DeploymentManager => {
+            verifier
+                .issue_enrollment_code_for_deployment_token(&deployment)
+                .await
+        }
+        super::Role::DeploymentGroupDeployer => {
+            verifier
+                .issue_enrollment_code_for_group_token(&deployment)
+                .await
+        }
+        _ => verifier.issue_enrollment_code(&deployment).await,
     };
     match issued {
         Ok((code, expires_at)) => (

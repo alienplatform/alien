@@ -378,6 +378,22 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
             })
     }
 
+    async fn issue_enrollment_code_for_group_token(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<(String, DateTime<Utc>), AlienError> {
+        self.store
+            .issue_group_enrollment_code(&deployment.id, self.now())
+            .await
+            .map_err(|_| unavailable())?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::EnrollmentKeyExists {
+                    deployment_id: deployment.id.clone(),
+                })
+                .into_generic()
+            })
+    }
+
     async fn enrollment_code_is_live(&self, code: &str) -> Result<bool, AlienError> {
         self.store
             .code_is_live(code, self.now())

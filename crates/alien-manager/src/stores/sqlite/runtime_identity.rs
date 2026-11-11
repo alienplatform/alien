@@ -14,7 +14,14 @@ use super::database::{RowParser, SqliteDatabase};
 use crate::ids::{generate_token, sha256_hash};
 
 const CODE_LIFETIME: Duration = Duration::hours(1);
+/// A key is installed, and rotated, for this long. The operator rotates it
+/// about once a day, so `expires_at - KEY_LIFETIME` is when it last rotated.
 const KEY_LIFETIME: Duration = Duration::hours(24);
+/// A deployment group credential can get an enrollment code for a deployment
+/// whose operator key was last rotated longer ago than this. It is the daily
+/// rotation period plus an hour of slack, so a healthy operator is never
+/// replaced. Only rotation time is stored; there is no last-used time.
+pub(crate) const LIVE_KEY_WINDOW: Duration = Duration::hours(25);
 /// After a manager outage, the latest key may still rotate for a week past its
 /// expiry. That week is the absolute deadline for any rotation.
 const ROTATION_GRACE: Duration = Duration::days(7);
@@ -124,6 +131,36 @@ impl SqliteRuntimeIdentityStore {
             )
             .await?;
         Ok((inserted == 1).then_some((code, expires_at)))
+    }
+
+    /// Issue a code for a deployment group credential. While the operator's
+    /// key is live the answer is `None`; with no key, or one not rotated within
+    /// [`LIVE_KEY_WINDOW`], a code is issued. An unreadable key time counts as
+    /// live.
+    pub async fn issue_group_enrollment_code(
+        &self,
+        deployment_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<(String, DateTime<Utc>)>, AlienError> {
+        let Some(row) = self
+            .row(
+                "SELECT expires_at FROM runtime_daily_keys WHERE deployment_id = ?1",
+                [deployment_id],
+            )
+            .await?
+        else {
+            return self.issue_token_enrollment_code(deployment_id, now).await;
+        };
+        let expires_at = RowParser::new(&row)
+            .i64(0, "expires_at")
+            .ok()
+            .and_then(|seconds| DateTime::from_timestamp(seconds, 0));
+        if operator_key_is_live(expires_at, now) {
+            return Ok(None);
+        }
+        self.issue_enrollment_code(deployment_id, now)
+            .await
+            .map(Some)
     }
 
     /// The deployment a still-unused, unexpired token-made `code` belongs to,
@@ -300,6 +337,15 @@ impl SqliteRuntimeIdentityStore {
     }
 }
 
+/// The one rule for whether an operator key is live: it was installed or
+/// rotated within [`LIVE_KEY_WINDOW`]. A missing time counts as live.
+pub(crate) fn operator_key_is_live(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    match expires_at {
+        Some(expires_at) => now - (expires_at - KEY_LIFETIME) < LIVE_KEY_WINDOW,
+        None => true,
+    }
+}
+
 fn timestamp(seconds: i64) -> Result<DateTime<Utc>, AlienError> {
     DateTime::from_timestamp(seconds, 0).ok_or_else(|| {
         AlienError::new(GenericError {
@@ -311,6 +357,23 @@ fn timestamp(seconds: i64) -> Result<DateTime<Utc>, AlienError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window is longer than the daily rotation, with slack for a late one.
+    #[test]
+    fn the_live_window_exceeds_the_rotation_period_plus_slack() {
+        assert!(LIVE_KEY_WINDOW >= KEY_LIFETIME + Duration::minutes(30));
+    }
+
+    #[test]
+    fn a_key_with_no_readable_time_is_live() {
+        let now = Utc::now();
+        assert!(operator_key_is_live(None, now));
+        assert!(operator_key_is_live(Some(now + KEY_LIFETIME), now));
+        assert!(!operator_key_is_live(
+            Some(now + KEY_LIFETIME - LIVE_KEY_WINDOW - Duration::seconds(1)),
+            now
+        ));
+    }
 
     async fn store() -> (SqliteRuntimeIdentityStore, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
