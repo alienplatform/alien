@@ -693,10 +693,28 @@ fn failed_state_for_step_failure(
     error: alien_error::AlienError,
 ) -> DeploymentState {
     let mut next = current.clone();
-    next.status = failed_status_for_deployment_error(current.status);
+    next.status = failed_status_for_deployment_state(current);
     next.error = Some(error);
     next.retry_requested = false;
     next
+}
+
+/// [`failed_status_for_deployment_error`] for a state the caller holds. A wait that stepped an
+/// update (a prepared target is pending, the rule `step` uses to choose a handler) fails as an
+/// update, not as a first install.
+pub fn failed_status_for_deployment_state(state: &DeploymentState) -> DeploymentStatus {
+    let updating = matches!(
+        state.status,
+        DeploymentStatus::WaitingForSecrets | DeploymentStatus::WaitingForMachines
+    ) && state
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
+    if updating {
+        DeploymentStatus::UpdateFailed
+    } else {
+        failed_status_for_deployment_error(state.status)
+    }
 }
 
 pub fn failed_status_for_deployment_error(status: DeploymentStatus) -> DeploymentStatus {

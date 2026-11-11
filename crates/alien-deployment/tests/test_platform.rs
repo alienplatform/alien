@@ -3677,6 +3677,7 @@ async fn imported_initial_deployment_resumes_after_waiting_for_secrets() {
         .set_secret("database-password", "customer-only-value")
         .await
         .unwrap();
+    age_secret_check(&mut blocked);
     let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
     let running = run_to_completion(checkpoint, config).await;
     assert_eq!(running.status, DeploymentStatus::Running);
@@ -3890,6 +3891,206 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
     );
 }
 
+/// Makes the last secret check old enough that the next step asks the store again.
+fn age_secret_check(state: &mut DeploymentState) {
+    if let Some(metadata) = state.runtime_metadata.as_mut() {
+        metadata.deployer_secrets_checked_at = None;
+    }
+}
+
+/// Steps until the deployment waits for secrets and `settled` holds, so resources that are
+/// not held have finished installing.
+async fn run_until_waiting_and(
+    mut state: DeploymentState,
+    config: DeploymentConfig,
+    settled: impl Fn(&DeploymentState) -> bool,
+) -> DeploymentState {
+    for _ in 0..MAX_STEPS {
+        if state.status == DeploymentStatus::WaitingForSecrets && settled(&state) {
+            return state;
+        }
+        assert!(
+            !matches!(
+                state.status,
+                DeploymentStatus::Running
+                    | DeploymentStatus::ProvisioningFailed
+                    | DeploymentStatus::UpdateFailed
+            ),
+            "reached {:?} instead of waiting for secrets",
+            state.status
+        );
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .expect("Step should not fail")
+            .state;
+    }
+    panic!("never settled while waiting; status {:?}", state.status);
+}
+
+fn resource_status(state: &DeploymentState, id: &str) -> Option<alien_core::ResourceStatus> {
+    state
+        .stack_state
+        .as_ref()
+        .and_then(|stack_state| stack_state.resources.get(id))
+        .map(|resource| resource.status)
+}
+
+fn waiting_for_secrets(state: &DeploymentState) -> Vec<String> {
+    state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .resources_waiting_for_secrets
+        .clone()
+}
+
+fn worker_entry(id: &str, depends_on: &[&str]) -> ResourceEntry {
+    let worker = Worker::new(id.to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+    ResourceEntry {
+        config: alien_core::Resource::new(worker),
+        lifecycle: ResourceLifecycle::Live,
+        dependencies: depends_on
+            .iter()
+            .map(|id| alien_core::ResourceRef::new(Worker::RESOURCE_TYPE, id.to_string()))
+            .collect(),
+        display_name: None,
+        description: None,
+        remote_access: false,
+        enabled_when: None,
+    }
+}
+
+/// A Live storage, Worker `api` that reads the secret, Worker `web` that does not, and Worker
+/// `jobs` that depends on `api` without reading it.
+fn secret_reader_stack(target_resources: Option<Vec<String>>) -> Stack {
+    let mut stack = create_test_stack("test-stack", "web");
+    let storage = Storage::new("data".to_string()).build();
+    stack.resources.insert(
+        "data".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(storage),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    stack
+        .resources
+        .insert("api".to_string(), worker_entry("api", &[]));
+    stack
+        .resources
+        .insert("jobs".to_string(), worker_entry("jobs", &["api"]));
+    let mut input = database_password_input();
+    input.env[0].target_resources = target_resources;
+    stack.inputs = vec![input];
+    stack
+}
+
+#[tokio::test]
+async fn missing_secret_holds_only_its_readers() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let stack = secret_reader_stack(Some(vec!["api".to_string()]));
+
+    let waiting = run_until_waiting_and(create_initial_state(stack), config.clone(), |state| {
+        resource_status(state, "web") == Some(alien_core::ResourceStatus::Running)
+            && resource_status(state, "data") == Some(alien_core::ResourceStatus::Running)
+    })
+    .await;
+
+    assert_eq!(waiting_for_secrets(&waiting), vec!["api", "jobs"]);
+    assert_eq!(resource_status(&waiting, "api"), None);
+    assert_eq!(resource_status(&waiting, "jobs"), None);
+    let error = waiting
+        .error
+        .as_ref()
+        .expect("the wait names what is missing");
+    assert!(
+        error.message.contains("missing: Database password"),
+        "{}",
+        error.message
+    );
+    let web_before = without_ready_checks(&waiting.stack_state.as_ref().unwrap().resources["web"]);
+
+    vault_env
+        .customer_vault()
+        .set_secret("database-password", "customer-only-value")
+        .await
+        .unwrap();
+    let (running, _) = run_to_running_after_secrets_written(waiting, config).await;
+
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(waiting_for_secrets(&running).is_empty());
+    for id in ["api", "jobs"] {
+        assert_eq!(
+            resource_status(&running, id),
+            Some(alien_core::ResourceStatus::Running)
+        );
+    }
+    assert_eq!(
+        without_ready_checks(&running.stack_state.as_ref().unwrap().resources["web"]),
+        web_before,
+        "web did not restart when the secret was written"
+    );
+}
+
+#[tokio::test]
+async fn untargeted_secret_holds_every_workload_but_not_infrastructure() {
+    let _vault_env = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let stack = secret_reader_stack(None);
+
+    let waiting = run_until_waiting_and(create_initial_state(stack), config, |state| {
+        resource_status(state, "data") == Some(alien_core::ResourceStatus::Running)
+    })
+    .await;
+
+    let mut held = waiting_for_secrets(&waiting);
+    held.sort();
+    assert_eq!(held, vec!["api", "jobs", "web"]);
+    for id in held {
+        assert_eq!(resource_status(&waiting, &id), None, "{id} is not created");
+    }
+}
+
+#[tokio::test]
+async fn unrelated_failure_during_the_wait_is_not_hidden_behind_it() {
+    let _vault_env = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut stack = secret_reader_stack(Some(vec!["api".to_string()]));
+    // The test platform fails a worker that simulates a persistent failure.
+    let mut failing = Worker::new("web".to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+    failing.environment.insert(
+        "SIMULATE_PERSISTENT_FAILURE".to_string(),
+        "true".to_string(),
+    );
+    stack.resources["web"].config = alien_core::Resource::new(failing);
+
+    let failed = run_until_status(
+        create_initial_state(stack),
+        config,
+        &[
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+    assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
+}
+
 /// Runs a deployment whose deployer secrets were just written to Running.
 /// Every step that is still provisioning or updating must carry no error:
 /// the wait for secrets is over, so its error no longer describes the
@@ -3899,6 +4100,8 @@ async fn run_to_running_after_secrets_written(
     config: DeploymentConfig,
 ) -> (DeploymentState, usize) {
     let mut in_progress_steps = 0;
+    // The customer wrote the secret some time ago: the engine asks the store again.
+    age_secret_check(&mut state);
     for _ in 0..MAX_STEPS {
         if state.status == DeploymentStatus::Running {
             return (state, in_progress_steps);
@@ -5402,5 +5605,150 @@ async fn reported_state_holds_no_secret_and_no_unkeyed_hash_of_one() {
     assert!(
         reported.contains("ALIEN_SECRETS") && reported.contains("ALIEN_RUNTIME_SECRETS"),
         "the workload settings that carry the keyed hashes are in the reported state"
+    );
+}
+
+/// `secret_reader_stack` as a release that a deployment is already running.
+/// Every release reads `databasePassword` (written before the first one runs); with
+/// `with_license` it also asks for a `licenseKey` that api reads. Setup owns the vault, so a
+/// release can add a secret only to a vault that already exists.
+fn secret_reader_release(release: &str, with_license: bool, web_version: &str) -> ReleaseInfo {
+    let mut stack = secret_reader_stack(Some(vec!["api".to_string()]));
+    if with_license {
+        let mut license = database_password_input();
+        license.id = "licenseKey".to_string();
+        license.label = "License key".to_string();
+        license.env[0].name = "LICENSE_KEY".to_string();
+        license.env[0].target_resources = Some(vec!["api".to_string()]);
+        stack.inputs.push(license);
+    }
+    let web = stack.resources["web"]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap()
+        .clone();
+    let mut web = web;
+    web.environment
+        .insert("WEB_VERSION".to_string(), web_version.to_string());
+    stack.resources["web"].config = alien_core::Resource::new(web);
+    release_of(release, stack)
+}
+
+async fn running_secret_reader_v1(
+    vault_env: &TestVaultEnv,
+    config: &DeploymentConfig,
+) -> DeploymentState {
+    vault_env
+        .customer_vault()
+        .set_secret("database-password", "customer-only-value")
+        .await
+        .unwrap();
+    let v1 = secret_reader_release("rel_v1", false, "1");
+    let mut state = create_initial_state(v1.stack.clone());
+    state.target_release = Some(v1);
+    run_until_status(state, config.clone(), &[DeploymentStatus::Running]).await
+}
+
+#[tokio::test]
+async fn update_moves_unrelated_resources_while_a_new_secret_is_missing() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = running_secret_reader_v1(&vault_env, &config).await;
+    let api_v1 = without_ready_checks(&state.stack_state.as_ref().unwrap().resources["api"]);
+
+    let v2 = secret_reader_release("rel_v2", true, "2");
+    start_update(&mut state, v2.clone());
+    let waiting = run_until_waiting_and(state, config.clone(), |state| {
+        worker_environment(state, "web")
+            .get("WEB_VERSION")
+            .map(String::as_str)
+            == Some("2")
+            && resource_status(state, "web") == Some(alien_core::ResourceStatus::Running)
+    })
+    .await;
+
+    assert_eq!(waiting_for_secrets(&waiting), vec!["api", "jobs"]);
+    assert_eq!(
+        without_ready_checks(&waiting.stack_state.as_ref().unwrap().resources["api"]),
+        api_v1,
+        "api keeps serving what it started with"
+    );
+    assert_eq!(
+        waiting
+            .current_release
+            .as_ref()
+            .and_then(|r| r.release_id.as_deref()),
+        Some("rel_v1")
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("license-key", "customer-only-value")
+        .await
+        .unwrap();
+    let (running, _) = run_to_running_after_secrets_written(waiting, config).await;
+    assert_eq!(running.current_release, Some(v2));
+    assert!(worker_environment(&running, "api").contains_key(alien_core::ENV_ALIEN_SECRETS));
+}
+
+#[tokio::test]
+async fn unrelated_failure_while_an_update_waits_fails_the_update() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = running_secret_reader_v1(&vault_env, &config).await;
+
+    let mut v2 = secret_reader_release("rel_v2", true, "2");
+    let mut web = v2.stack.resources["web"]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap()
+        .clone();
+    web.environment
+        .insert("SIMULATE_UPDATE_FAILURE".to_string(), "true".to_string());
+    v2.stack.resources["web"].config = alien_core::Resource::new(web);
+    start_update(&mut state, v2);
+    let failed = run_until_status(
+        state,
+        config,
+        &[DeploymentStatus::UpdateFailed, DeploymentStatus::Running],
+    )
+    .await;
+    assert_eq!(failed.status, DeploymentStatus::UpdateFailed);
+}
+
+#[tokio::test]
+async fn a_newer_release_is_taken_while_waiting_for_a_secret() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = running_secret_reader_v1(&vault_env, &config).await;
+    start_update(&mut state, secret_reader_release("rel_v2", true, "2"));
+    let mut waiting = run_until_waiting_and(state, config.clone(), |_| true).await;
+
+    // The vendor ships a release that no longer asks for the secret.
+    let v3 = secret_reader_release("rel_v3", false, "3");
+    waiting.target_release = Some(v3.clone());
+    let (running, _) = run_to_running_after_secrets_written(waiting, config).await;
+    assert_eq!(running.current_release, Some(v3));
+    assert!(waiting_for_secrets(&running).is_empty());
+}
+
+#[test]
+fn a_wait_that_stepped_an_update_fails_as_an_update() {
+    use alien_deployment::runner::failed_status_for_deployment_state;
+    let mut state = create_initial_state(secret_reader_stack(None));
+    state.status = DeploymentStatus::WaitingForSecrets;
+    state.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+    assert_eq!(
+        failed_status_for_deployment_state(&state),
+        DeploymentStatus::ProvisioningFailed
+    );
+    state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .pending_prepared_stack = Some(secret_reader_stack(None));
+    assert_eq!(
+        failed_status_for_deployment_state(&state),
+        DeploymentStatus::UpdateFailed
     );
 }

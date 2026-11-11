@@ -425,6 +425,32 @@ describe("Stack builder validation", () => {
     expect(daemon.config.stopGracePeriodSeconds).toBe(21_600)
   })
 
+  it("builds container and daemon priority levels", () => {
+    const container = new alien.Container("api")
+      .code({ type: "image", image: "nginx:latest" })
+      .cpu(0.25)
+      .memory("256Mi")
+      .permissions("execution")
+      .priority("critical")
+      .build()
+    expect(container.config.priority).toBe("critical")
+
+    const daemon = new alien.Daemon("log-forwarder")
+      .code({ type: "image", image: "registry.example.com/log-forwarder:latest" })
+      .permissions("execution")
+      .priority("low")
+      .build()
+    expect(daemon.config.priority).toBe("low")
+
+    const unset = new alien.Container("plain")
+      .code({ type: "image", image: "nginx:latest" })
+      .cpu(0.25)
+      .memory("256Mi")
+      .permissions("execution")
+      .build()
+    expect("priority" in unset.config).toBe(false)
+  })
+
   it("builds container and daemon wildcard public endpoint options", () => {
     const container = new alien.Container("router")
       .code({ type: "image", image: "nginx:latest" })

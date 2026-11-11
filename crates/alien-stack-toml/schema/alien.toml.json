@@ -24,11 +24,36 @@
             "frozen"
           ]
         },
+        "models": {
+          "description": "The models the app calls. A deployment checks that the cloud lets it use each one.\nOmitted from the serialized stack when empty, so existing stacks do not change.",
+          "items": {
+            "$ref": "#/definitions/AiModel"
+          },
+          "type": "array"
+        },
         "remote-access": {
           "type": "boolean"
         }
       },
       "required": [],
+      "type": "object"
+    },
+    "AiModel": {
+      "additionalProperties": false,
+      "description": "A model the app calls through an AI resource.",
+      "properties": {
+        "id": {
+          "description": "The model identifier as the app uses it, for example `claude-sonnet-4-6`.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether the app's main feature needs this model. A refused required model is reported\nas needing attention; it never blocks the deployment.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
       "type": "object"
     },
     "Architecture": {
@@ -1110,6 +1135,10 @@
           },
           "type": "array"
         },
+        "priority": {
+          "$ref": "#/definitions/WorkloadPriority",
+          "description": "Relative scheduling importance. On Kubernetes the cluster administrator maps each\nlevel to a PriorityClass at install time; unset leaves the pod without one. Other\nplatforms ignore it."
+        },
         "public-endpoints": {
           "additionalProperties": {
             "additionalProperties": false,
@@ -1614,6 +1643,10 @@
         },
         "pool": {
           "type": "string"
+        },
+        "priority": {
+          "$ref": "#/definitions/WorkloadPriority",
+          "description": "Relative scheduling importance. On Kubernetes the cluster administrator maps each\nlevel to a PriorityClass at install time; unset leaves the pod without one. Other\nplatforms ignore it."
         },
         "public-endpoints": {
           "additionalProperties": {
@@ -3625,6 +3658,16 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadPriority": {
+      "description": "Relative scheduling importance of a workload.\n\nOn Kubernetes the deployment's cluster administrator maps each level to a\nPriorityClass at install time. Other platforms ignore it.",
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low"
+      ],
+      "type": "string"
     }
   },
   "description": "An Alien stack written in TOML.",

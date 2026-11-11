@@ -262,6 +262,18 @@ pub struct RuntimeMetadata {
     /// reports it. Absent when no model is declared or the setup could not check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ai_access_checks: Vec<AiAccessCheck>,
+    /// When `deployer_secrets` was last read from the customer's secret store. While the
+    /// deployment waits for secrets the check is repeated at most every 30 seconds, because
+    /// the engine steps much faster than the store's rate limits allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployer_secrets_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Resources held back while a required deployer secret is missing: the ones that read
+    /// it and everything that depends on them. Everything else keeps installing. Empty once
+    /// no required secret is missing. An Operator that predates this field leaves it absent,
+    /// so readers must treat absence as unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources_waiting_for_secrets: Vec<String>,
 }
 
 /// The setup-time answer for one declared model.
