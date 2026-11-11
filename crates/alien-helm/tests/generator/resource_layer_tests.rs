@@ -584,11 +584,9 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         runner["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-probe-runner"],
         probe_name
     );
-    assert!(runner["spec"]["egress"][0]["ports"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .any(|port| port["port"] == 443));
+    // The runner may open any egress: no port list (the API server's translated port differs
+    // per cluster).
+    assert!(runner["spec"]["egress"][0].get("ports").is_none());
     let egress = serde_yaml::to_string(allow("egress")).unwrap();
     assert!(egress.contains("denied") && egress.contains("NotIn"), "{egress}");
     let listener = serde_yaml::to_string(allow("listener")).unwrap();
