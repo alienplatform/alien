@@ -1,7 +1,7 @@
 
 ## Retain Azure setup data during uninstall
 
-Setup-owned storage accounts, Blob containers, tables, container registries, Key Vaults and PostgreSQL Flexible Servers are protected against replacement and destroy, including empty resources. The recovery inventory includes encryption keys, the storage encryption identity and its key grant, database credentials and extensions. The resource group is retained because deleting it would cascade to retained children. Application and management identities and role assignments remain managed for removal.
+Setup-owned storage accounts, Blob containers, tables, container registries, Key Vaults, Managed Redis instances and PostgreSQL Flexible Servers are protected against replacement and destroy, including empty resources. The recovery inventory includes encryption keys, the storage encryption identity and its key grant, database credentials and extensions. The resource group is retained because deleting it would cascade to retained children. Application and management identities and role assignments remain managed for removal.
 
 Apply the current package to the existing installation before uninstalling. Stop deployment workloads first. Set each owned container's `publicRead` to `false` and apply; the helper refuses public containers. Set `azure_storage_lifecycle_enabled = false` in the installed Terraform variables and apply. Keep the disabled policy through detachment. Refresh state before detachment. The helper refuses applicable delete rules on detached accounts or containers, while allowing unrelated container rules and tiering-only actions; it cannot infer past expiry from an empty current policy. Review runtime-created containers and policies separately.
 

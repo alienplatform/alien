@@ -22,6 +22,10 @@ pub const ENV_ALIEN_SANDBOX_WARM_POOL_SIZE: &str = "ALIEN_SANDBOX_WARM_POOL_SIZE
 pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
 /// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
 pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";
+/// JSON object mapping workload priority levels (`critical`, `high`, `normal`, `low`) to
+/// Kubernetes PriorityClass names. The Helm chart sets it on the operator only when the
+/// cluster administrator mapped at least one level.
+pub const ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES: &str = "ALIEN_KUBERNETES_PRIORITY_CLASSES";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
