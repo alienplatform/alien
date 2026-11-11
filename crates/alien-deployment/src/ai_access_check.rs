@@ -7,7 +7,7 @@
 use alien_aws_clients::{BedrockRuntimeApi, BedrockRuntimeClient, InvokeCheck};
 use alien_core::{
     ai_catalog, Ai, AiAccessCheck, AiAccessCheckResult, AiAccessTest, AiHeartbeatData,
-    ClientConfig, Platform, ResourceHeartbeat, ResourceHeartbeatData, Stack,
+    ClientConfig, ExternalBindings, Platform, ResourceHeartbeat, ResourceHeartbeatData, Stack,
 };
 use chrono::Utc;
 use tracing::warn;
@@ -18,8 +18,9 @@ pub async fn check_declared_ai_models(
     stack: &Stack,
     platform: Platform,
     client_config: &ClientConfig,
+    external_bindings: &ExternalBindings,
 ) -> Vec<AiAccessCheck> {
-    let declared = declared_models(stack);
+    let declared = declared_models(stack, external_bindings);
     if declared.is_empty() || platform != Platform::Aws {
         return Vec::new();
     }
@@ -71,10 +72,12 @@ pub(crate) async fn check_within(
     }
 }
 
-/// `(resource id, model id)` for each model an AI resource declares.
-fn declared_models(stack: &Stack) -> Vec<(String, String)> {
+/// `(resource id, model id)` for each model an AI resource declares. An AI resource supplied
+/// through an external binding is not Bedrock in this account, so it is left out.
+fn declared_models(stack: &Stack, external_bindings: &ExternalBindings) -> Vec<(String, String)> {
     stack
         .resources()
+        .filter(|(id, _)| !external_bindings.has(id))
         .filter_map(|(id, entry)| entry.config.downcast_ref::<Ai>().map(|ai| (id, ai)))
         .flat_map(|(id, ai)| {
             ai.models
@@ -156,7 +159,8 @@ pub(crate) fn apply_checks(
         return;
     }
     let Some(stack) = stack else { return };
-    let declared = declared_models(stack);
+    // Checks exist only for resources the setup check covered, so external bindings never match.
+    let declared = declared_models(stack, &ExternalBindings::default());
     for heartbeat in heartbeats {
         let ResourceHeartbeatData::Ai(AiHeartbeatData::AwsBedrock(data)) = &mut heartbeat.data
         else {
@@ -219,6 +223,32 @@ mod tests {
         .await;
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].result, AiAccessCheckResult::NotChecked);
+    }
+
+    #[test]
+    fn an_externally_bound_ai_resource_is_not_checked() {
+        use alien_core::{AiModel, ResourceLifecycle, StackBuilder};
+        let model = || AiModel { id: "claude-sonnet-4-6".into(), required: true };
+        let stack = StackBuilder::new("t".to_string())
+            .add(
+                Ai::new("own".to_string()).models(vec![model()]).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Ai::new("ext".to_string()).models(vec![model()]).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut bindings = ExternalBindings::default();
+        bindings.insert(
+            "ext",
+            alien_core::ExternalBinding::Ai(alien_core::bindings::ExternalAiBinding {
+                provider: "openai".to_string(),
+                api_key: "sk-test".into(),
+            }),
+        );
+        let declared = declared_models(&stack, &bindings);
+        assert_eq!(declared, vec![("own".to_string(), "claude-sonnet-4-6".to_string())]);
     }
 
     #[tokio::test]

@@ -125,6 +125,47 @@ fn observation_incomplete(availability: &AiAvailabilityObservation) -> bool {
     })
 }
 
+/// Fill `quota_warnings` and `throttled_last_hour` for the declared models.
+async fn add_declared_model_signals(
+    observed: &mut AiAvailabilityObservation,
+    declared: &[alien_core::AiModel],
+    quotas: &dyn alien_aws_clients::service_quotas::ServiceQuotasApi,
+    cloudwatch: &dyn alien_aws_clients::cloudwatch::CloudWatchApi,
+) {
+    let models: Vec<&ai_catalog::CatalogModel> = declared
+        .iter()
+        .filter_map(|model| ai_catalog::resolve_for(&model.id, Platform::Aws))
+        .collect();
+    let public_ids: Vec<&str> = models.iter().map(|model| model.public_id).collect();
+    match super::aws_quotas::low_quotas_for(quotas, &public_ids).await {
+        Ok(mut low) => {
+            for model in observed.models.iter_mut() {
+                if let Some(warnings) = low.remove(&model.public_model_id) {
+                    model.quota_warnings = warnings;
+                }
+            }
+        }
+        Err(error) => warn!(%error, "Bedrock quota read failed; no quota warnings reported"),
+    }
+    let upstream_ids: Vec<&str> = models.iter().map(|model| model.upstream_id).collect();
+    match super::aws_traffic::throttles_for(cloudwatch, &upstream_ids).await {
+        Ok(totals) => {
+            for model in &models {
+                if let Some(total) = totals.get(model.upstream_id) {
+                    if let Some(entry) = observed
+                        .models
+                        .iter_mut()
+                        .find(|entry| entry.public_model_id == model.public_id)
+                    {
+                        entry.throttled_last_hour = Some(*total);
+                    }
+                }
+            }
+        }
+        Err(error) => warn!(%error, "Bedrock throttle read failed; throttles not reported"),
+    }
+}
+
 async fn observe_bedrock_availability(
     client: Arc<dyn BedrockApi>,
     region: &str,
@@ -293,7 +334,28 @@ impl AwsAiController {
                 .service_provider
                 .get_aws_bedrock_client(ctx.get_aws_config()?)
                 .await?;
-            self.availability = Some(observe_bedrock_availability(client, &region).await);
+            let mut observed = observe_bedrock_availability(client, &region).await;
+            // Quota and throttle reads cover only the models the app declares. They are
+            // best effort: a failed read leaves the fields empty, never a guess.
+            if !config.models.is_empty() {
+                let aws_config = ctx.get_aws_config()?;
+                let quotas = ctx
+                    .service_provider
+                    .get_aws_service_quotas_client(aws_config)
+                    .await?;
+                let cloudwatch = ctx
+                    .service_provider
+                    .get_aws_cloudwatch_client(aws_config)
+                    .await?;
+                add_declared_model_signals(
+                    &mut observed,
+                    &config.models,
+                    quotas.as_ref(),
+                    cloudwatch.as_ref(),
+                )
+                .await;
+            }
+            self.availability = Some(observed);
             self.availability_observed_at = Some(Utc::now());
         }
         let availability = self.availability.clone().unwrap_or_else(|| {
@@ -441,6 +503,96 @@ mod tests {
             authorization_status: authorization.map(str::to_string),
             region_availability: region.map(str::to_string),
         }
+    }
+
+    #[tokio::test]
+    async fn declared_models_get_quota_warnings_and_throttle_counts() {
+        use alien_aws_clients::cloudwatch::{
+            Dimension, GetMetricDataResponse, ListMetricsResponse, Metric, MetricDataResult,
+            MockCloudWatchApi,
+        };
+        use alien_aws_clients::service_quotas::{
+            ListServiceQuotasResponse, MockServiceQuotasApi, ServiceQuota,
+        };
+        let quota = |value: f64| ServiceQuota {
+            quota_code: Some("L-00FF3314".into()),
+            service_code: Some("bedrock".into()),
+            quota_name: Some(
+                "Cross-region model inference requests per minute for Anthropic Claude Sonnet 4.6"
+                    .into(),
+            ),
+            value: Some(value),
+        };
+        let mut quotas = MockServiceQuotasApi::new();
+        quotas.expect_list_service_quotas().returning(move |_, _| {
+            Ok(ListServiceQuotasResponse { quotas: vec![quota(10.0)], next_token: None })
+        });
+        quotas
+            .expect_list_aws_default_service_quotas()
+            .returning(move |_, _| {
+                Ok(ListServiceQuotasResponse { quotas: vec![quota(10_000.0)], next_token: None })
+            });
+        let mut cloudwatch = MockCloudWatchApi::new();
+        cloudwatch.expect_list_metrics().returning(|_| {
+            Ok(ListMetricsResponse {
+                metrics: vec![Metric::builder()
+                    .namespace("AWS/Bedrock".to_string())
+                    .metric_name("InvocationThrottles".to_string())
+                    .dimensions(vec![Dimension::builder()
+                        .name("ModelId".to_string())
+                        .value("us.anthropic.claude-sonnet-4-6".to_string())
+                        .build()])
+                    .build()],
+                next_token: None,
+                owning_accounts: vec![],
+            })
+        });
+        cloudwatch.expect_get_metric_data().returning(|_| {
+            Ok(GetMetricDataResponse {
+                metric_data_results: vec![MetricDataResult {
+                    id: "q0".into(),
+                    label: None,
+                    status_code: Some("Complete".into()),
+                    timestamps: vec![1],
+                    values: vec![7.0],
+                    messages: vec![],
+                }],
+                messages: vec![],
+                next_token: None,
+            })
+        });
+        let model = ai_catalog::resolve_for("claude-sonnet-4-6", Platform::Aws).unwrap();
+        let other = ai_catalog::models_for(Platform::Aws)
+            .into_iter()
+            .find(|m| m.public_id != model.public_id)
+            .unwrap();
+        let entry = |m: &ai_catalog::CatalogModel| {
+            classify_bedrock_availability(
+                m,
+                &response(Some("AVAILABLE"), Some("AVAILABLE"), Some("AUTHORIZED"), Some("AVAILABLE")),
+                Utc::now(),
+            )
+        };
+        let mut observed = AiAvailabilityObservation {
+            source: AiAvailabilitySource::AwsBedrock,
+            catalog_revision: ai_catalog::AI_CATALOG_REVISION.to_string(),
+            location: Some("us-west-2".into()),
+            models: vec![entry(model), entry(other)],
+        };
+        add_declared_model_signals(
+            &mut observed,
+            &[alien_core::AiModel { id: "claude-sonnet-4-6".into(), required: true }],
+            &quotas,
+            &cloudwatch,
+        )
+        .await;
+        let declared = &observed.models[0];
+        assert_eq!(declared.quota_warnings.len(), 1);
+        assert_eq!(declared.quota_warnings[0].applied, 10.0);
+        assert_eq!(declared.throttled_last_hour, Some(7));
+        // Models the app does not declare are not read.
+        assert!(observed.models[1].quota_warnings.is_empty());
+        assert_eq!(observed.models[1].throttled_last_hour, None);
     }
 
     #[test]
