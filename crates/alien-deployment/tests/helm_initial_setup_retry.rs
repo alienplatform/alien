@@ -125,3 +125,31 @@ async fn retry_refuses_a_pinned_release_that_changes_frozen_setup() {
     assert!(message.contains("DEPLOYMENT_SETUP_REQUIRED"), "{message}");
     assert!(message.contains("helm upgrade"), "{message}");
 }
+
+#[tokio::test]
+async fn the_step_after_a_retry_continues_the_pinned_release_through_the_imported_path() {
+    let state = failed_first_install(
+        stack(&[], &["broken"]),
+        stack(&[], &["fixed"]),
+    )
+    .await;
+    let retried = step(state, config(), ClientConfig::Test, None)
+        .await
+        .expect("retry is accepted")
+        .state;
+    assert_eq!(retried.status, DeploymentStatus::InitialSetup);
+
+    // The next step resumes setup with `continue_imported` against the pinned
+    // release's prepared stack; the failed release's resource is not referenced.
+    let continued = step(retried, config(), ClientConfig::Test, None)
+        .await
+        .expect("setup continues against the pinned release")
+        .state;
+    let metadata = continued.runtime_metadata.expect("metadata");
+    let prepared = metadata.prepared_stack.expect("prepared stack");
+    assert!(prepared.resources.contains_key("fixed"));
+    assert!(!prepared.resources.contains_key("broken"));
+    assert_ne!(continued.status, DeploymentStatus::InitialSetupFailed, "{:?}", continued.error);
+    let stack_state = continued.stack_state.expect("stack state");
+    assert!(!stack_state.resources.contains_key("broken"));
+}
