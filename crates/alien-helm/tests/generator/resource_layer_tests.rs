@@ -499,9 +499,11 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
                 .into_iter()
                 .flatten()
                 .any(|c| {
-                    c["env"].as_sequence().into_iter().flatten().any(|e| {
-                        e["name"] == "OPERATOR_SELF_UPDATE_DEPLOYMENT"
-                    })
+                    c["env"]
+                        .as_sequence()
+                        .into_iter()
+                        .flatten()
+                        .any(|e| e["name"] == "OPERATOR_SELF_UPDATE_DEPLOYMENT")
                 })
         })
     };
@@ -1015,7 +1017,9 @@ fn workload_priority_create_keeps_the_releases_own_class_when_mapped_to_its_name
     let mapped: serde_json::Value = serde_json::from_str(&mapped.unwrap()).unwrap();
     assert_eq!(mapped["critical"], own.as_str());
     assert_eq!(classes.len(), 4);
-    assert!(classes.iter().any(|c| c["metadata"]["name"] == own.as_str()));
+    assert!(classes
+        .iter()
+        .any(|c| c["metadata"]["name"] == own.as_str()));
 }
 
 #[test]

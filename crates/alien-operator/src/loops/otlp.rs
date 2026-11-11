@@ -343,8 +343,8 @@ mod tests {
             .route("/v1/logs", post(handle))
             .with_state(stub.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base_url = url::Url::parse(&format!("http://{}/", listener.local_addr().unwrap()))
-            .unwrap();
+        let base_url =
+            url::Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Harness {
             db,
@@ -371,7 +371,13 @@ mod tests {
         let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
             .await
             .unwrap();
-        assert_eq!(outcome, PushOutcome { pushed: 2, dropped: 1 });
+        assert_eq!(
+            outcome,
+            PushOutcome {
+                pushed: 2,
+                dropped: 1
+            }
+        );
         assert_eq!(pending_count(&h.db).await, 0);
 
         // A later pass must not send the dropped row again.
@@ -429,7 +435,13 @@ mod tests {
         let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
             .await
             .unwrap();
-        assert_eq!(outcome, PushOutcome { pushed: 1, dropped: 0 });
+        assert_eq!(
+            outcome,
+            PushOutcome {
+                pushed: 1,
+                dropped: 0
+            }
+        );
         assert_eq!(pending_count(&h.db).await, 0);
     }
 

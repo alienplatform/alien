@@ -1432,6 +1432,15 @@ pub(crate) fn set_archive_user_if_root(tarball_path: &Path, user: &str) -> Resul
     let current = config["config"]["User"].as_str().unwrap_or("").trim();
     let uid = current.split(':').next().unwrap_or("");
     if !(uid.is_empty() || uid == "0" || uid == "root") {
+        // Kubernetes cannot verify a named user against runAsNonRoot, so the pod would
+        // be refused at start. Fail the build instead, with the fix.
+        if uid.parse::<u32>().is_err() {
+            return Err(AlienError::new(docker_read_error(&format!(
+                "The Dockerfile sets `USER {current}`, a user name. Kubernetes cannot check a \
+                 named user against the restricted pod profile; use a numeric user \
+                 (for example `USER 1000`), or opt the workload out with `.security({{ profile: \"unrestricted\" }})`"
+            ))));
+        }
         return Ok(false);
     }
     config["config"]["User"] = json!(user);
@@ -1897,6 +1906,26 @@ mod tests {
 
         assert!(!set_archive_user_if_root(&path, "65532:65532").unwrap());
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn an_image_with_a_named_user_is_refused_with_the_fix() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        saved_image_with_layer_links(&path, &[]);
+        change_saved_entry(&path, "config.json", |_, bytes| {
+            let mut config: Value = serde_json::from_slice(bytes).unwrap();
+            config["config"]["User"] = json!("node");
+            *bytes = serde_json::to_vec(&config).unwrap();
+        });
+        DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap();
+
+        let error = set_archive_user_if_root(&path, "65532:65532").unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains("USER node") && text.contains("numeric") && text.contains("unrestricted"),
+            "{text}"
+        );
     }
 
     #[test]

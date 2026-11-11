@@ -1043,7 +1043,10 @@ mod tests {
             "tunnel": {"port": 8080}
         });
         let container: Container = serde_json::from_value(saved).expect("saved container loads");
-        assert!(serde_json::to_value(&container).unwrap().get("tunnel").is_none());
+        assert!(serde_json::to_value(&container)
+            .unwrap()
+            .get("tunnel")
+            .is_none());
     }
 
     #[test]

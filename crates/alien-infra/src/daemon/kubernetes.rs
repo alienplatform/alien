@@ -1214,11 +1214,10 @@ impl KubernetesDaemonController {
             ..Default::default()
         };
 
-        let image_pull_secrets = image_pull_secret_name.map(|name| {
-            vec![LocalObjectReference {
-                name: name.to_string(),
-            }]
-        });
+        let image_pull_secrets = crate::kubernetes_registry::workload_pull_secrets(
+            ctx.deployment_config,
+            image_pull_secret_name,
+        );
 
         let pool =
             alien_core::kubernetes_daemon_pool(ctx.desired_stack, config).map_err(|message| {

@@ -2918,11 +2918,10 @@ impl KubernetesContainerController {
             automount_service_account_token: gateway.then_some(false),
             security_context: security.pod,
             containers: vec![container],
-            image_pull_secrets: image_pull_secret_name.map(|name| {
-                vec![LocalObjectReference {
-                    name: name.to_string(),
-                }]
-            }),
+            image_pull_secrets: crate::kubernetes_registry::workload_pull_secrets(
+                ctx.deployment_config,
+                image_pull_secret_name,
+            ),
             volumes: if volumes.is_empty() {
                 None
             } else {

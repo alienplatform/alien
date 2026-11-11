@@ -203,6 +203,7 @@ mod tests {
     fn config() -> DeploymentConfig {
         DeploymentConfig {
             image_registry: None,
+            image_pull_secrets: Vec::new(),
             gcp_federation_scope: None,
             deployment_name: None,
             stack_settings: StackSettings::default(),

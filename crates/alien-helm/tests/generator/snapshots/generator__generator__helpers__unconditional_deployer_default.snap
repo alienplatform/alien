@@ -1343,6 +1343,17 @@ rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
 {{- end -}}
 {{- if .digest -}}{{ $repository }}@{{ .digest }}{{- else -}}{{ $repository }}:{{ .tag }}{{- end -}}
 {{- end -}}
+{{- /* The installation's image pull secret names: comma-separated, and as CEL string literals. */ -}}
+{{- define "deployment.pullSecretCsv" -}}
+{{- $names := list -}}
+{{- range .Values.runtime.imagePullSecrets -}}{{- $names = append $names .name -}}{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+{{- define "deployment.pullSecretNames" -}}
+{{- $names := list -}}
+{{- range .Values.runtime.imagePullSecrets -}}{{- $names = append $names (printf "'%s'" .name) -}}{{- end -}}
+{{- join ", " $names -}}
+{{- end -}}
 {{- /* An image reference written as one string (repository[:tag][@digest]). */ -}}
 {{- define "deployment.mirroredImage" -}}
 {{- $image := .image -}}

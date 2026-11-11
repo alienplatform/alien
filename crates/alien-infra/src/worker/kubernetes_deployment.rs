@@ -111,11 +111,10 @@ pub(super) async fn build_worker_deployment(
         ..Default::default()
     };
 
-    let image_pull_secrets = image_pull_secret_name.map(|name| {
-        vec![LocalObjectReference {
-            name: name.to_string(),
-        }]
-    });
+    let image_pull_secrets = crate::kubernetes_registry::workload_pull_secrets(
+        ctx.deployment_config,
+        image_pull_secret_name,
+    );
     let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
     // Source images share the stack build target. Workers do not select a

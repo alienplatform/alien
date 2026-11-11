@@ -3,8 +3,8 @@
 //! Ignored: needs KIND_CONTEXT (a kubeconfig context) and `kubectl` on PATH.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, KubernetesClientConfig,
-    Platform, ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackState,
+    ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, KubernetesClientConfig, Platform,
+    ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackState,
 };
 use alien_infra::StackExecutor;
 use std::process::Command;
@@ -15,7 +15,11 @@ fn kubectl(context: &str, args: &[&str]) {
         .args(args)
         .output()
         .expect("kubectl runs");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[tokio::test]
@@ -34,7 +38,16 @@ async fn a_missing_helm_service_account_surfaces_through_the_running_refresh() {
         )
         .build();
     let raw = Command::new("kubectl")
-        .args(["--context", &context, "config", "view", "--raw", "--minify", "-o", "json"])
+        .args([
+            "--context",
+            &context,
+            "config",
+            "view",
+            "--raw",
+            "--minify",
+            "-o",
+            "json",
+        ])
         .output()
         .expect("kubectl config view");
     let view: serde_json::Value = serde_json::from_slice(&raw.stdout).expect("kubeconfig json");
@@ -65,7 +78,10 @@ async fn a_missing_helm_service_account_surfaces_through_the_running_refresh() {
         .build();
     let mut state = StackState::new(Platform::Kubernetes);
     let name = format!("{}-b-sa", state.resource_prefix);
-    kubectl(&context, &["-n", namespace, "create", "serviceaccount", &name]);
+    kubectl(
+        &context,
+        &["-n", namespace, "create", "serviceaccount", &name],
+    );
 
     let executor = StackExecutor::builder(&stack, client_config.clone())
         .deployment_config(&config)
@@ -85,7 +101,10 @@ async fn a_missing_helm_service_account_surfaces_through_the_running_refresh() {
     );
 
     // The rollback removes the account.
-    kubectl(&context, &["-n", namespace, "delete", "serviceaccount", &name]);
+    kubectl(
+        &context,
+        &["-n", namespace, "delete", "serviceaccount", &name],
+    );
     for round in 1..=2 {
         let step = executor.refresh(state).await.expect("refresh");
         state = step.next_state;
@@ -99,7 +118,16 @@ async fn a_missing_helm_service_account_surfaces_through_the_running_refresh() {
             "refresh {round}: status={:?} retry_attempt={} error={}",
             resource.status,
             resource.retry_attempt,
-            resource.error.as_ref().map(|e| format!("{} retryable={} source={:?}", e.message, e.retryable, e.source.as_ref().map(|s| (s.code.clone(), s.retryable)))).unwrap_or("-".into())
+            resource
+                .error
+                .as_ref()
+                .map(|e| format!(
+                    "{} retryable={} source={:?}",
+                    e.message,
+                    e.retryable,
+                    e.source.as_ref().map(|s| (s.code.clone(), s.retryable))
+                ))
+                .unwrap_or("-".into())
         );
     }
     // One failed health check is enough; a missing account is not transient.
@@ -109,7 +137,10 @@ async fn a_missing_helm_service_account_surfaces_through_the_running_refresh() {
     );
 
     // A `helm upgrade` provides the account again: the health check recovers by itself.
-    kubectl(&context, &["-n", namespace, "create", "serviceaccount", &name]);
+    kubectl(
+        &context,
+        &["-n", namespace, "create", "serviceaccount", &name],
+    );
     state = executor.refresh(state).await.expect("refresh").next_state;
     assert_eq!(state.resources["b-sa"].status, ResourceStatus::Running);
 }

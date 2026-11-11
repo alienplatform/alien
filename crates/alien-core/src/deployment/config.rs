@@ -36,6 +36,12 @@ pub struct DeploymentConfig {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub image_registry: Option<String>,
+    /// Names of the installation's image pull Secrets (the chart's `runtime.imagePullSecrets`).
+    /// Set by the Operator; listed on every workload pod so a private mirror can be pulled from.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(default)]
+    pub image_pull_secrets: Vec<String>,
     /// Human-readable deployment name for cloud console metadata.
     ///
     /// This is separate from the physical resource prefix in StackState. It is

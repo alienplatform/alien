@@ -14,6 +14,7 @@ def main():
     namespace = os.environ["PROBE_NAMESPACE"]
     job = os.environ["PROBE_JOB"]
     image = os.environ["PROBE_IMAGE"]
+    pull_secrets = [{"name": n} for n in os.environ.get("PROBE_PULL_SECRETS", "").split(",") if n]
     credentials = pathlib.Path("/var/run/secrets/kubernetes.io/serviceaccount")
     context = ssl.create_default_context(cafile=str(credentials / "ca.crt"))
     # Bypass proxy environment: this is the authenticated in-cluster API endpoint.
@@ -95,6 +96,7 @@ def main():
                 "activeDeadlineSeconds": 240, "terminationGracePeriodSeconds": 1,
                 "securityContext": {"runAsNonRoot": True, "runAsUser": 65534,
                                     "seccompProfile": {"type": "RuntimeDefault"}},
+                **({"imagePullSecrets": pull_secrets} if pull_secrets else {}),
                 "containers": [{"name": "probe", "image": image,
                     "command": ["python3", "-B", "-c", code],
                     "terminationMessagePolicy": "FallbackToLogsOnError",

@@ -81,6 +81,8 @@ spec:
       message: probe pods run one container
     - expression: {{{{ printf "object.spec.containers.all(c, c.image == '%s' && (!has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false))" $probeImage | quote }}}}
       message: probe pods run the pinned probe image unprivileged
+    - expression: {{{{ printf "!has(object.spec.imagePullSecrets) || object.spec.imagePullSecrets.all(s, s.name in [%s])" (include "deployment.pullSecretNames" .) | quote }}}}
+      message: probe pods pull only with the installation's image pull secrets
     - expression: "(!has(object.spec.hostNetwork) || !object.spec.hostNetwork) && (!has(object.spec.hostPID) || !object.spec.hostPID) && (!has(object.spec.hostIPC) || !object.spec.hostIPC)"
       message: probe pods use no host namespaces
     - expression: "has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 65534 && has(object.spec.securityContext.seccompProfile) && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'"
@@ -229,6 +231,10 @@ spec:
     spec:
       serviceAccountName: {{{{ $name }}}}
       restartPolicy: Never
+      {{{{- with .Values.runtime.imagePullSecrets }}}}
+      imagePullSecrets:
+        {{{{- toYaml . | nindent 8 }}}}
+      {{{{- end }}}}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -258,6 +264,8 @@ spec:
               value: {{{{ $name | quote }}}}
             - name: PROBE_IMAGE
               value: {{{{ $probeImage | quote }}}}
+            - name: PROBE_PULL_SECRETS
+              value: {{{{ include "deployment.pullSecretCsv" . | quote }}}}
             - name: PROBE_RUNTIME_CLASS
               value: {runtime_class}
             - name: PROBE_ADMISSION_POLICY

@@ -938,6 +938,7 @@ mod tests {
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
             image_registry: None,
+            image_pull_secrets: Vec::new(),
             gcp_federation_scope: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
