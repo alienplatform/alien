@@ -23,7 +23,18 @@ use alien_error::AlienError;
 ///
 /// A plain pod shares the node kernel with everything on it, so an unrecognised handler is
 /// refused rather than accepted with a warning.
-const SANDBOXED_HANDLERS: &[&str] = &["gvisor", "runsc", "kata", "kata-containers", "kata-qemu"];
+///
+/// `isolated-sandbox` is the handler of EKS Auto Mode's `isolated-sandbox` RuntimeClass (AWS Nitro
+/// Sandboxes), read from a real cluster: handler `isolated-sandbox`, node selector
+/// `eks.amazonaws.com/nitro-sandbox=true`. AKS's `kata-vm-isolation` matches the `kata` prefix.
+const SANDBOXED_HANDLERS: &[&str] = &[
+    "gvisor",
+    "runsc",
+    "kata",
+    "kata-containers",
+    "kata-qemu",
+    "isolated-sandbox",
+];
 
 /// Confirms the cluster declares the requested RuntimeClass and that it is a sandboxed one.
 pub fn require_sandboxed_runtime_class(
@@ -172,6 +183,30 @@ mod live_cluster_shape {
     fn gvisor_on_a_real_cluster_is_accepted() {
         require_sandboxed_runtime_class("sbx", "gvisor", &autopilot_runtime_classes())
             .expect("gvisor is a sandboxed runtime and the cluster declares it");
+    }
+
+    /// EKS Auto Mode declares `isolated-sandbox` and `confidential-sandbox` (both with their own
+    /// handler of the same name), read from a real 1.36 cluster. The chart picks
+    /// `isolated-sandbox`, and `runc` is refused whatever the class is called.
+    #[test]
+    fn eks_auto_mode_isolated_sandbox_is_accepted_and_runc_is_not() {
+        let eks = |name, handler| {
+            let mut class = autopilot_runtime_classes().remove(0);
+            class.metadata.name = Some(name);
+            class.handler = handler;
+            class
+        };
+        let classes = vec![
+            eks(
+                "isolated-sandbox".to_string(),
+                "isolated-sandbox".to_string(),
+            ),
+            eks("plain".to_string(), "runc".to_string()),
+        ];
+        require_sandboxed_runtime_class("sbx", "isolated-sandbox", &classes)
+            .expect("Nitro Sandboxes is a sandboxed runtime");
+        require_sandboxed_runtime_class("sbx", "plain", &classes)
+            .expect_err("runc shares the node kernel");
     }
 
     /// The other two classes that cluster declares are *not* sandboxed runtimes. Naming one of

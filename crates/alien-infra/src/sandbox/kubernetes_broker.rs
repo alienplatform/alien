@@ -430,7 +430,17 @@ pub(crate) async fn reattach_session_for_deployment(
         Some((deployment_label_key, deployment_label_value)),
     )
     .await?;
-    let found = claimed_pods(pods, namespace, sandbox_id, Some(session_id), &key, &value).await?;
+    let mut found =
+        claimed_pods(pods, namespace, sandbox_id, Some(session_id), &key, &value).await?;
+    // Two processes creating one new id at the same moment can each end up with a pod. Every
+    // lookup answers with the same one (the earliest claim, then the name), so the callers
+    // converge on it and the other ends at its deadline or at terminate.
+    found.sort_by_key(|pod| {
+        (
+            recorded(pod, i64::MAX).0,
+            pod.metadata.name.clone().unwrap_or_default(),
+        )
+    });
     let Some(pod) = found.into_iter().next() else {
         return Ok(None);
     };
