@@ -1,9 +1,10 @@
 //! Sandbox emitter — the NetworkPolicy that bounds a session, and the cluster-scoped RBAC the
 //! operator needs to provision one and its broker needs to authenticate one.
 //!
-//! Both belong to Helm rather than to the operator: the operator does not create
-//! NetworkPolicies, and a `TokenReview` and the RuntimeClass listing the controller checks before
-//! provisioning are cluster-scoped while the operator is namespace-scoped with no cluster-admin.
+//! Both belong to Helm rather than to the operator: the operator creates NetworkPolicies for
+//! Containers, but the one that bounds a sandbox session comes with the chart, and a `TokenReview`
+//! and the RuntimeClass listing the controller checks before provisioning are cluster-scoped
+//! while the operator is namespace-scoped with no cluster-admin.
 //! Build has the same shape and is the precedent.
 //!
 //! No ServiceAccount is emitted, unlike Build's. A sandbox pod runs with
