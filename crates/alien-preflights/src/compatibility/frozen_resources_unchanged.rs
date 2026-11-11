@@ -198,15 +198,23 @@ fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resou
 }
 
 /// A Live Kubernetes sandbox's image, limits and lifecycle are applied by the Operator at runtime,
-/// but its egress mode is the NetworkPolicy the chart installed. Changing the mode without a
-/// chart upgrade would run the new declaration under the old policy, so it waits for setup.
+/// but its egress mode is the NetworkPolicy the chart installed. Changing the mode, or adding a
+/// sandbox, without a chart upgrade would run it under the old policy (or none), so it waits
+/// for setup.
 fn kubernetes_live_sandbox_chart_changes(old_stack: &Stack, new_stack: &Stack) -> Vec<String> {
     new_stack
         .resources()
         .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Live)
         .filter_map(|(id, entry)| {
             let new = entry.config.downcast_ref::<Sandbox>()?;
-            let old_entry = old_stack.resources.get(id)?;
+            let Some(old_entry) = old_stack.resources.get(id) else {
+                // A new sandbox has no NetworkPolicy yet: the chart installs it, so on a
+                // cluster that allows traffic by default it would run unrestricted.
+                return Some(format!(
+                    "Live sandbox '{id}' is new, and its NetworkPolicy is installed by the \
+                     chart. Rerun setup with the updated stack (helm upgrade)."
+                ));
+            };
             if old_entry.lifecycle != ResourceLifecycle::Live {
                 return None;
             }
@@ -1538,6 +1546,29 @@ mod tests {
             egress.errors[0].contains("egress mode"),
             "{:?}",
             egress.errors
+        );
+    }
+
+    /// A sandbox added by a release has no chart NetworkPolicy yet, so it waits for setup.
+    #[tokio::test]
+    async fn a_new_live_kubernetes_sandbox_needs_setup() {
+        use alien_core::SandboxEgress;
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Kubernetes,
+        };
+        let old = Stack::new("stack".to_string()).build();
+        let result = check
+            .check(
+                &old,
+                &live_sandbox_stack("app:1", "2Gi", SandboxEgress::None),
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result.errors.iter().any(|e| e.contains("is new")),
+            "{:?}",
+            result.errors
         );
     }
 

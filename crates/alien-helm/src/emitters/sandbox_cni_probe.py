@@ -96,7 +96,8 @@ def main():
         spec = pod_spec(role, code)
         # Clients run in the sandbox runtime class, as sessions do.
         if role != "listener":
-            spec["spec"]["runtimeClassName"] = runtime_class
+            if runtime_class:
+                spec["spec"]["runtimeClassName"] = runtime_class
             if node_selector:
                 spec["spec"]["nodeSelector"] = node_selector
             if tolerations:

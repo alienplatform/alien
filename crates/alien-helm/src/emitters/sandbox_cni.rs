@@ -25,7 +25,15 @@ const PROBE_ROLES: &[&str] = &[
     "admission-check",
 ];
 
-pub(crate) fn template() -> String {
+/// `sandbox_class_helper` is true when the chart also carries the sandbox RuntimeClass helper. A
+/// chart with only a container that has egress has no sandbox, so the probe runs in the default
+/// runtime class (the value is empty) instead of requiring a helper that chart does not emit.
+pub(crate) fn template(sandbox_class_helper: bool) -> String {
+    let runtime_class = if sandbox_class_helper {
+        r#"{{ include "deployment.sandboxRuntimeClassName" . | quote }}"#
+    } else {
+        r#""""#
+    };
     let script = include_str!("sandbox_cni_probe.py")
         .lines()
         .map(|line| format!("              {line}\n"))
@@ -348,11 +356,11 @@ spec:
             - name: PROBE_IMAGE
               value: {image}
             - name: PROBE_RUNTIME_CLASS
-              value: {{{{ include "deployment.sandboxRuntimeClassName" . | quote }}}}
+              value: {runtime_class}
             - name: PROBE_NODE_SELECTOR
-              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}
+              value: {{{{ toJson (dig "nodeSelector" dict (default dict .Values.sandbox)) | quote }}}}
             - name: PROBE_TOLERATIONS
-              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}
+              value: {{{{ toJson (dig "tolerations" list (default dict .Values.sandbox)) | quote }}}}
             - name: PROBE_ADMISSION_POLICY
               value: {{{{ $cluster | quote }}}}
           command:

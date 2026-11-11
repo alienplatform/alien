@@ -103,6 +103,10 @@ pub fn annotate_claim(
         (None, max) => max,
     };
     let annotations = pod.metadata.annotations.get_or_insert_with(BTreeMap::new);
+    // A pod returned to the pool after a failed claim may still carry that claim's tenant and
+    // deadline; this claim owns these annotations, so it starts from none.
+    annotations.remove(ANNOTATION_SESSION_DEADLINE);
+    annotations.remove(ANNOTATION_SESSION_TENANT);
     if let Some(seconds) = lifetime {
         annotations.insert(
             ANNOTATION_SESSION_DEADLINE.to_string(),

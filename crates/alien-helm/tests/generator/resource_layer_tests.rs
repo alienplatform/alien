@@ -1412,3 +1412,36 @@ fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
     );
     assert!(format!("{bad:?}").contains("clusterDNS"), "{bad:?}");
 }
+
+/// A chart whose only egress user is a Container has no sandbox, so no sandbox RuntimeClass
+/// helper. The network-policy probe it carries must not refer to that helper.
+#[test]
+fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
+    use alien_core::{Container, ContainerCode, ContainerEgress, ResourceSpec};
+    let container = Container::new("app".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/app:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.1".to_string(),
+            desired: "0.1".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "128Mi".to_string(),
+            desired: "128Mi".to_string(),
+        })
+        .permissions("app".to_string())
+        .egress(ContainerEgress::Internet)
+        .build();
+    let stack = Stack::new("container-egress-chart".to_string())
+        .add(container, ResourceLifecycle::Frozen)
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    assert!(
+        chart.files.contains_key("templates/sandbox-cni-probe.yaml"),
+        "{:?}",
+        chart.files.keys().collect::<Vec<_>>()
+    );
+    assert!(!chart.files.contains_key("templates/_sandbox.tpl"));
+    assert_helm_valid(&chart, "container_egress_no_sandbox");
+}

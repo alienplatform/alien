@@ -218,6 +218,33 @@ pub async fn forward(
             .expect("a valid upgrade response");
     }
 
+    // Only an upgrade request is sent as HTTP/1.1, so only a refused upgrade can come back
+    // chunked. The chunk framing is decoded here: `Transfer-Encoding` is not forwarded, so the
+    // client would otherwise read the chunk markers as body bytes.
+    let chunked = headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("transfer-encoding")
+            && String::from_utf8_lossy(value)
+                .to_ascii_lowercase()
+                .contains("chunked")
+    });
+    if chunked {
+        return match read_chunked(&mut upstream, leftover).await {
+            Some(decoded) => response
+                .header(header::CONTENT_LENGTH, decoded.len())
+                .body(Body::from(decoded))
+                .unwrap_or_else(|_| {
+                    fail(
+                        StatusCode::BAD_GATEWAY,
+                        "the sandbox's server sent a bad response",
+                    )
+                }),
+            None => fail(
+                StatusCode::BAD_GATEWAY,
+                "the sandbox's server sent a bad response",
+            ),
+        };
+    }
+
     let first = futures::stream::iter(
         (!leftover.is_empty()).then(|| Ok::<_, std::io::Error>(bytes::Bytes::from(leftover))),
     );
@@ -241,9 +268,78 @@ pub async fn forward(
         })
 }
 
+/// Largest chunked response body the agent decodes (a refused upgrade is a short error page).
+const MAX_CHUNKED_BODY: usize = 1024 * 1024;
+
+/// Reads a chunked body from `source`, starting with the bytes already read (`pending`), and
+/// returns it decoded. `None` when the framing is invalid, the body is too large, or the stream
+/// ends first.
+async fn read_chunked<R: tokio::io::AsyncRead + Unpin>(
+    source: &mut R,
+    pending: Vec<u8>,
+) -> Option<Vec<u8>> {
+    let mut buffer = pending;
+    let mut decoded = Vec::new();
+    loop {
+        // Chunk size line.
+        let line_end = loop {
+            if let Some(at) = buffer.windows(2).position(|pair| pair == b"\r\n") {
+                break at;
+            }
+            if buffer.len() > 1024 {
+                return None;
+            }
+            fill(source, &mut buffer).await?;
+        };
+        let size_text = std::str::from_utf8(&buffer[..line_end]).ok()?;
+        let size_text = size_text.split(';').next()?.trim();
+        let size = usize::from_str_radix(size_text, 16).ok()?;
+        buffer.drain(..line_end + 2);
+        if size == 0 {
+            return Some(decoded);
+        }
+        if decoded.len() + size > MAX_CHUNKED_BODY {
+            return None;
+        }
+        while buffer.len() < size + 2 {
+            fill(source, &mut buffer).await?;
+        }
+        if &buffer[size..size + 2] != b"\r\n" {
+            return None;
+        }
+        decoded.extend_from_slice(&buffer[..size]);
+        buffer.drain(..size + 2);
+    }
+}
+
+async fn fill<R: tokio::io::AsyncRead + Unpin>(source: &mut R, buffer: &mut Vec<u8>) -> Option<()> {
+    let mut chunk = [0u8; 8192];
+    match tokio::time::timeout(HEAD_TIMEOUT, source.read(&mut chunk)).await {
+        Ok(Ok(read)) if read > 0 => {
+            buffer.extend_from_slice(&chunk[..read]);
+            Some(())
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_chunked_error_body_is_decoded_before_it_is_returned() {
+        // The first chunk already arrived with the head; the rest comes from the stream.
+        let mut rest: &[u8] = b"lo wor\r\n3\r\nld!\r\n0\r\n\r\n";
+        let decoded = read_chunked(&mut rest, b"5\r\nhel".to_vec()).await;
+        assert!(
+            decoded.is_none(),
+            "5 bytes were announced, only 3 + rest arrive in order"
+        );
+        let mut stream: &[u8] = b"\r\n6\r\n world\r\n0\r\n\r\n";
+        let decoded = read_chunked(&mut stream, b"5\r\nhello".to_vec()).await;
+        assert_eq!(decoded.as_deref(), Some(&b"hello world"[..]));
+    }
 
     #[test]
     fn the_agents_own_port_and_undeclared_ports_are_never_previewable() {

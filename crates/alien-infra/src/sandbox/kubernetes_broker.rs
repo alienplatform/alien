@@ -1511,6 +1511,17 @@ mod tests {
         assert!(!crate::sandbox::session_deadline_passed(&by_default, 4_599));
     }
 
+    /// A pod a failed claim returned to the pool keeps that claim's tenant; the next claim, which
+    /// names none, must not inherit it.
+    #[test]
+    fn a_claim_without_a_tenant_drops_the_tenant_of_an_earlier_claim() {
+        let mut pod = idle_pod("pool-0", "10.1.2.3");
+        crate::sandbox::annotate_claim(&mut pod, 1_000, Some("old"), None).unwrap();
+        crate::sandbox::annotate_claim(&mut pod, 2_000, None, None).unwrap();
+        let annotations = pod.metadata.annotations.as_ref().unwrap();
+        assert_eq!(annotations.get(crate::sandbox::ANNOTATION_SESSION_TENANT), None);
+    }
+
     /// The pod is the only record of a session: its creation time, generation and tenant come
     /// from annotations the claim wrote, so a process that did not create it reads the same.
     #[tokio::test]

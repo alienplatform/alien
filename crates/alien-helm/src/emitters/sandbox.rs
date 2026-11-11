@@ -91,7 +91,7 @@ impl HelmEmitter for SandboxEmitter {
         if network_policy_is_the_only_bound(&sandbox.egress) {
             fragment.extra_templates.insert(
                 "sandbox-cni-probe.yaml".to_string(),
-                super::sandbox_cni::template(),
+                super::sandbox_cni::template(true),
             );
         }
         Ok(fragment)
