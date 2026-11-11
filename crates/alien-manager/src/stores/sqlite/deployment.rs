@@ -1936,6 +1936,21 @@ impl DeploymentStore for SqliteDeploymentStore {
             )
             .into_generic());
         }
+        // The Operator's version comes from the sync request, not from its
+        // reported state, so the manager records it with the state it keeps. A
+        // report without one keeps the version recorded before.
+        let operator_version = data.operator_version.clone().or_else(|| {
+            installed_record
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.operator_version.clone())
+        });
+        if let Some(operator_version) = operator_version {
+            data.state
+                .runtime_metadata
+                .get_or_insert_default()
+                .operator_version = Some(operator_version);
+        }
         // A late retention checkpoint cannot complete a newer erase request,
         // including after an expired setup lease reopens delete-pending.
         if matches!(

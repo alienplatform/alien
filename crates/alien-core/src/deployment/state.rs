@@ -132,6 +132,12 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airgapped_report: Option<AirgappedReportMetadata>,
 
+    /// Version of the Operator binary that last reported this deployment, set
+    /// by the manager from the sync request. Missing until an Operator that
+    /// reports its version has synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+
     /// Bounded credential retry state shared by all deployment drivers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_retry: Option<CredentialRetry>,

@@ -112,6 +112,15 @@ impl ChartSettings {
         )
     }
 
+    /// Whether an Operator at `reported` (`v3.3.40` or `3.3.40`) is older than
+    /// the Operator image this manager's charts install. `None` when either
+    /// isn't a release version (`dev`, `latest`), which can't be compared.
+    pub fn operator_behind_target(&self, reported: &str) -> Option<bool> {
+        let reported = operator_number(reported);
+        let target = operator_number(self.operator_tag());
+        (reported != 0 && target != 0).then_some(reported < target)
+    }
+
     /// Tag of the Operator image charts install.
     fn operator_tag(&self) -> &str {
         match &self.operator_upstream {
