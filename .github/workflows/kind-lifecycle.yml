@@ -165,6 +165,7 @@ jobs:
         env:
           ALIEN_BROKER_KIND_CONTEXT: kind-alien-product-lifecycle
           ALIEN_BROKER_KIND_NAMESPACE: alien-broker-kind-ci
+          ALIEN_AGENT_BINARY: ${{ github.workspace }}/target/debug/alien-sandbox-agent
         run: |
           kubectl create namespace "$ALIEN_BROKER_KIND_NAMESPACE"
           trap 'kubectl delete namespace "$ALIEN_BROKER_KIND_NAMESPACE" --ignore-not-found; kubectl delete runtimeclass alien-kind-runc --ignore-not-found' EXIT
@@ -178,6 +179,8 @@ jobs:
           EOF
           docker pull alpine:3.20
           kind load docker-image alpine:3.20 --name alien-product-lifecycle
+          # The preview check runs the real agent in a pod.
+          cargo build --locked -p alien-sandbox-agent
           cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind -- \
             --ignored --nocapture --test-threads=1
 

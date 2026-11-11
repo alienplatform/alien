@@ -477,3 +477,240 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
     }
     let _ = secrets.delete_secret(&namespace, &secret_name).await;
 }
+
+fn kubectl(arguments: &[&str]) -> String {
+    let output = std::process::Command::new("kubectl")
+        .args(arguments)
+        .output()
+        .expect("run kubectl");
+    assert!(
+        output.status.success(),
+        "kubectl {arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+/// The real agent in a real pod serves a preview capability for its declared port, and for nothing
+/// else. The capability is signed the way the broker signs one; the pod gets the environment the
+/// controller gives a sandbox pod, and a second pod stands in for a workload that links it.
+///
+/// Needs the agent binary (`cargo build -p alien-sandbox-agent`) at `ALIEN_AGENT_BINARY` and a
+/// Debian-based image the cluster can pull. `kubectl` must point at the Kind cluster.
+#[tokio::test]
+#[ignore = "needs a Kind cluster and the agent binary; see the module docs"]
+async fn kubernetes_broker_kind_preview_reaches_only_a_declared_port() {
+    use alien_core::sandbox_capability::{SandboxCapabilityClaims, SandboxOperationClass};
+    use base64::Engine as _;
+
+    let namespace = env("ALIEN_BROKER_KIND_NAMESPACE");
+    let binary = env("ALIEN_AGENT_BINARY");
+    let keys = ed25519_compact::KeyPair::generate();
+    let public_key = base64::engine::general_purpose::STANDARD.encode(keys.pk.as_ref());
+    let image = "python:3.12-slim";
+    for name in ["preview-agent", "preview-client"] {
+        let _ = std::process::Command::new("kubectl")
+            .args([
+                "--namespace",
+                &namespace,
+                "delete",
+                "pod",
+                name,
+                "--ignore-not-found",
+                "--wait=true",
+            ])
+            .output();
+    }
+    let pod = |name: &str, command: &str, environment: &str| {
+        format!(
+            r#"apiVersion: v1
+kind: Pod
+metadata: {{name: {name}, namespace: {namespace}}}
+spec:
+  securityContext: {{runAsUser: 1001, runAsGroup: 1001, runAsNonRoot: true}}
+  containers:
+    - name: p
+      image: {image}
+      command: ["sh", "-c", "{command}"]
+      env: [{environment}]
+"#
+        )
+    };
+    let apply = |manifest: String| {
+        use std::io::Write;
+        let mut child = std::process::Command::new("kubectl")
+            .args(["apply", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("kubectl apply");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(manifest.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success(), "apply failed:\n{manifest}");
+    };
+    // The same names and values the controller puts on a sandbox pod, with a preview port.
+    let agent_env = format!(
+        "{{name: ALIEN_SANDBOX_AUTHORIZATION, value: capability}}, \
+         {{name: ALIEN_SANDBOX_PUBLIC_KEY, value: \"{public_key}\"}}, \
+         {{name: ALIEN_SANDBOX_SESSION_ID, valueFrom: {{fieldRef: {{fieldPath: metadata.uid}}}}}}, \
+         {{name: ALIEN_SANDBOX_GENERATION, value: \"1\"}}, \
+         {{name: ALIEN_SANDBOX_PREVIEW_PORTS, value: \"8080\"}}, \
+         {{name: ALIEN_SANDBOX_PORT, value: \"8971\"}}, \
+         {{name: ALIEN_SANDBOX_ISOLATION, value: platform}}, \
+         {{name: ALIEN_SANDBOX_EXEC_UID, value: \"1001\"}}, \
+         {{name: ALIEN_SANDBOX_EXEC_GID, value: \"1001\"}}, \
+         {{name: ALIEN_SANDBOX_ROOT, value: /tmp/sbx}}"
+    );
+    apply(pod(
+        "preview-agent",
+        "mkdir -p /tmp/sbx; echo hello-from-the-sandbox > /tmp/index.html; cd /tmp; python3 -m http.server 8080 --bind 127.0.0.1 & python3 -m http.server 9090 --bind 127.0.0.1 & sleep 3600",
+        &agent_env,
+    ));
+    apply(pod("preview-client", "sleep 3600", ""));
+    for name in ["preview-agent", "preview-client"] {
+        kubectl(&[
+            "--namespace",
+            &namespace,
+            "wait",
+            "--for=condition=Ready",
+            &format!("pod/{name}"),
+            "--timeout=240s",
+        ]);
+    }
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "cp",
+        &binary,
+        "preview-agent:/tmp/agent",
+    ]);
+    kubectl(&[
+        "--namespace",
+        &namespace,
+        "exec",
+        "preview-agent",
+        "--",
+        "sh",
+        "-c",
+        "chmod +x /tmp/agent; (/tmp/agent >/tmp/agent.log 2>&1 &); sleep 2",
+    ]);
+    let uid = kubectl(&[
+        "--namespace",
+        &namespace,
+        "get",
+        "pod",
+        "preview-agent",
+        "-o",
+        "jsonpath={.metadata.uid}",
+    ]);
+    let ip = kubectl(&[
+        "--namespace",
+        &namespace,
+        "get",
+        "pod",
+        "preview-agent",
+        "-o",
+        "jsonpath={.status.podIP}",
+    ]);
+
+    let token =
+        |session: &str, class: SandboxOperationClass, port: Option<u16>, expires_in: i64| {
+            alien_core::sandbox_capability_token::mint(
+                &SandboxCapabilityClaims {
+                    session_id: session.to_string(),
+                    operation: class,
+                    generation: 1,
+                    expires_at: chrono::Utc::now().timestamp() + expires_in,
+                    key_id: "kind".to_string(),
+                    port,
+                },
+                &keys.sk,
+            )
+            .unwrap()
+        };
+    // What a linking workload does: call the agent's address with the capability.
+    let call = |path: &str, token: &str| -> String {
+        kubectl(&[
+            "--namespace", &namespace, "exec", "preview-client", "--", "python3", "-c",
+            &format!(
+                "import urllib.request,urllib.error\n\
+                 r=urllib.request.Request('http://{ip}:8971{path}',headers={{'Authorization':'Bearer {token}'}})\n\
+                 try:\n  x=urllib.request.urlopen(r,timeout=10); print(x.status, x.read().decode().strip())\n\
+                 except urllib.error.HTTPError as e: print(e.code)"
+            ),
+        ])
+        .trim()
+        .to_string()
+    };
+    let preview = SandboxOperationClass::Preview;
+    let good = token(&uid, preview, Some(8080), 600);
+    assert_eq!(
+        call("/v1/preview/8080/index.html", &good),
+        "200 hello-from-the-sandbox"
+    );
+    // A capability for another pod, for an undeclared port (a server really listens on 9090), for
+    // the agent's own port, as a shell capability, and an expired one.
+    for (label, refused) in [
+        (
+            "another pod's token",
+            call(
+                "/v1/preview/8080/",
+                &token("another-pod", preview, Some(8080), 600),
+            ),
+        ),
+        (
+            "a port the sandbox did not declare",
+            call("/v1/preview/9090/", &token(&uid, preview, Some(9090), 600)),
+        ),
+        (
+            "the agent's own port",
+            call("/v1/preview/8971/", &token(&uid, preview, Some(8971), 600)),
+        ),
+        (
+            "a token for another port",
+            call("/v1/preview/8080/", &token(&uid, preview, Some(9090), 600)),
+        ),
+        (
+            "an execute token",
+            call(
+                "/v1/preview/8080/",
+                &token(&uid, SandboxOperationClass::Execute, None, 600),
+            ),
+        ),
+        (
+            "an expired token",
+            call("/v1/preview/8080/", &token(&uid, preview, Some(8080), -5)),
+        ),
+        ("no token", call("/v1/preview/8080/", "")),
+    ] {
+        assert!(
+            ["401", "403"].contains(&refused.as_str()),
+            "{label} must be refused: {refused}"
+        );
+    }
+    let _ = good;
+    // Clean up.
+    for name in ["preview-agent"] {
+        kubectl(&[
+            "--namespace",
+            &namespace,
+            "delete",
+            "pod",
+            name,
+            "--wait=false",
+        ]);
+    }
+    for name in ["preview-client"] {
+        kubectl(&[
+            "--namespace",
+            &namespace,
+            "delete",
+            "pod",
+            name,
+            "--wait=false",
+        ]);
+    }
+}
