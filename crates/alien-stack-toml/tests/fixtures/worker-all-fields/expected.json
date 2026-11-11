@@ -88,6 +88,9 @@
           "method": "GET",
           "path": "/ready"
         },
+        "security": {
+          "profile": "restricted"
+        },
         "timeoutSeconds": 600,
         "triggers": [
           {
@@ -115,10 +118,7 @@
             "cron": "0 */6 * * *",
             "type": "schedule"
           }
-        ],
-        "security": {
-          "profile": "restricted"
-        }
+        ]
       },
       "dependencies": [],
       "lifecycle": "live"

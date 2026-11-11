@@ -129,10 +129,10 @@
           "privileged": true,
           "user": "0"
         },
-        "stopGracePeriodSeconds": 120,
         "security": {
           "profile": "unrestricted"
-        }
+        },
+        "stopGracePeriodSeconds": 120
       },
       "dependencies": [],
       "lifecycle": "live"
