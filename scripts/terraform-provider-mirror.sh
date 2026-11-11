@@ -28,7 +28,7 @@ terraform {
     tls         = { source = "hashicorp/tls", version = ">= 4.0" }
     google      = { source = "hashicorp/google", version = ">= 7.37" }
     google-beta = { source = "hashicorp/google-beta", version = ">= 6.0" }
-    azurerm     = { source = "hashicorp/azurerm", version = ">= 4.75, < 5.0" }
+    azurerm     = { source = "hashicorp/azurerm", version = ">= 4.78, < 5.0" }
     azapi       = { source = "Azure/azapi", version = ">= 2.6, < 3.0" }
     time        = { source = "hashicorp/time", version = ">= 0.9" }
     kubernetes  = { source = "hashicorp/kubernetes", version = ">= 2.30" }
