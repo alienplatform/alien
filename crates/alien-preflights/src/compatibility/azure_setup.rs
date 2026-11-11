@@ -58,6 +58,8 @@ pub(crate) fn require_unchanged_setup(installed: &Stack, desired: &Stack) -> Res
         != desired_roles.management_predefined_role_ids
         || installed_roles.workload_predefined_role_ids
             != desired_roles.workload_predefined_role_ids
+        || installed_roles.remote_bindings_predefined_role_ids
+            != desired_roles.remote_bindings_predefined_role_ids
         || installed_roles.custom_roles.len() != desired_roles.custom_roles.len()
         || desired_roles
             .custom_roles

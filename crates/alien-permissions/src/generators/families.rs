@@ -11,7 +11,6 @@
 //! when it can match a family action, so a wildcard is refused unless every action it matches is
 //! outside every family.
 
-
 /// The family an action belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
@@ -211,7 +210,8 @@ const AWS_READ_VERBS: &[&str] = &["get", "list", "describe", "batchget", "simula
 
 /// The services a role may be passed to without it running code. Every other service, or a
 /// `PassRole` without a service condition, is IDENTITY.
-const AWS_PASS_ROLE_NON_CODE_SERVICES: &[&str] = &["dlm.amazonaws.com", "vpc-flow-logs.amazonaws.com"];
+const AWS_PASS_ROLE_NON_CODE_SERVICES: &[&str] =
+    &["dlm.amazonaws.com", "vpc-flow-logs.amazonaws.com"];
 
 fn is_read_verb_pattern(verb: &str) -> bool {
     let verb = verb.to_ascii_lowercase();
@@ -647,20 +647,47 @@ mod tests {
         for (action, family) in [
             ("Microsoft.App/containerApps/write", Family::Run),
             ("Microsoft.App/jobs/start/action", Family::Run),
-            ("Microsoft.Compute/virtualMachines/runCommand/action", Family::Run),
+            (
+                "Microsoft.Compute/virtualMachines/runCommand/action",
+                Family::Run,
+            ),
             ("Microsoft.Compute/*", Family::Run),
             ("Microsoft.Resources/deployments/write", Family::Run),
             ("Microsoft.Resources/tags/write", Family::Run),
-            ("Microsoft.ManagedIdentity/userAssignedIdentities/assign/action", Family::Identity),
-            ("Microsoft.Authorization/roleAssignments/write", Family::Identity),
+            (
+                "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+                Family::Identity,
+            ),
+            (
+                "Microsoft.Authorization/roleAssignments/write",
+                Family::Identity,
+            ),
             ("Microsoft.Authorization/locks/delete", Family::Identity),
-            ("Microsoft.Storage/storageAccounts/listKeys/action", Family::Reach),
-            ("Microsoft.Storage/storageAccounts/regenerateKey/action", Family::Reach),
+            (
+                "Microsoft.Storage/storageAccounts/listKeys/action",
+                Family::Reach,
+            ),
+            (
+                "Microsoft.Storage/storageAccounts/regenerateKey/action",
+                Family::Reach,
+            ),
             ("Microsoft.Storage/storageAccounts/write", Family::Reach),
-            ("Microsoft.ServiceBus/namespaces/authorizationRules/write", Family::Reach),
-            ("Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write", Family::Reach),
-            ("Microsoft.Network/networkSecurityGroups/securityRules/write", Family::Reach),
-            ("Microsoft.KeyVault/vaults/accessPolicies/write", Family::Reach),
+            (
+                "Microsoft.ServiceBus/namespaces/authorizationRules/write",
+                Family::Reach,
+            ),
+            (
+                "Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write",
+                Family::Reach,
+            ),
+            (
+                "Microsoft.Network/networkSecurityGroups/securityRules/write",
+                Family::Reach,
+            ),
+            (
+                "Microsoft.KeyVault/vaults/accessPolicies/write",
+                Family::Reach,
+            ),
             ("*", Family::Run),
             ("*/write", Family::Run),
         ] {

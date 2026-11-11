@@ -24,9 +24,8 @@ use crate::{
 /// name the data actions they may hold.
 pub fn require_azure_data_action(permission_set_id: &str, requested: &str) -> Result<()> {
     static LIST: OnceLock<AllowList> = OnceLock::new();
-    let list = LIST.get_or_init(|| {
-        AllowList::parse(include_str!("../../protected-management/azure.allow"))
-    });
+    let list = LIST
+        .get_or_init(|| AllowList::parse(include_str!("../../protected-management/azure.allow")));
     if list.covers(requested) {
         return Ok(());
     }

@@ -15,12 +15,14 @@
 
 use crate::{
     error::{ErrorData, Result},
-    mutations::{management_permission_profile::generate_auto_management_profile, runs_on_platform_or_base},
+    mutations::{
+        management_permission_profile::generate_auto_management_profile, runs_on_platform_or_base,
+    },
     StackMutation,
 };
 use alien_core::{
-    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform, SetupManagement,
-    Stack, StackState,
+    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform,
+    SetupManagement, Stack, StackState,
 };
 use alien_error::AlienError;
 use alien_permissions::generators::{aws_family, aws_passed_to_services, azure_family, gcp_family};
@@ -230,13 +232,9 @@ mod tests {
     async fn automatic_setup_is_refused_on_a_protected_cloud_install() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             let stack = Stack::new("shop".to_string()).build();
-            let error = prepared(
-                stack,
-                platform,
-                config(true, SetupManagement::Automatic),
-            )
-            .await
-            .expect_err(&format!("{platform:?}: automatic setup is refused"));
+            let error = prepared(stack, platform, config(true, SetupManagement::Automatic))
+                .await
+                .expect_err(&format!("{platform:?}: automatic setup is refused"));
             assert!(error.contains("automatic setup"), "{platform:?}: {error}");
         }
     }
@@ -244,9 +242,13 @@ mod tests {
     #[tokio::test]
     async fn manual_setup_and_unprotected_installs_are_unaffected() {
         let stack = || Stack::new("shop".to_string()).build();
-        prepared(stack(), Platform::Aws, config(true, SetupManagement::Manual))
-            .await
-            .expect("a protected install with manual setup is accepted");
+        prepared(
+            stack(),
+            Platform::Aws,
+            config(true, SetupManagement::Manual),
+        )
+        .await
+        .expect("a protected install with manual setup is accepted");
         prepared(
             stack(),
             Platform::Aws,
@@ -292,9 +294,13 @@ mod tests {
     #[tokio::test]
     async fn an_extend_may_name_built_in_sets_but_not_define_one() {
         let protected = || config(true, SetupManagement::Manual);
-        let error = prepared(extending(inline("orders/extra")), Platform::Aws, protected())
-            .await
-            .expect_err("an inline set is refused");
+        let error = prepared(
+            extending(inline("orders/extra")),
+            Platform::Aws,
+            protected(),
+        )
+        .await
+        .expect_err("an inline set is refused");
         assert!(error.contains("orders/extra"), "{error}");
         assert!(error.contains("inline"), "{error}");
 
@@ -307,7 +313,9 @@ mod tests {
 
         // A built-in set that would lose an action to the family filter is refused by name.
         let error = prepared(
-            extending(PermissionSetReference::Name("service-account/provision".to_string())),
+            extending(PermissionSetReference::Name(
+                "service-account/provision".to_string(),
+            )),
             Platform::Aws,
             protected(),
         )

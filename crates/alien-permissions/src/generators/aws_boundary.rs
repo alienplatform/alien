@@ -28,7 +28,6 @@ use super::{
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
 
-
 /// Render the boundary including inline and ARN-selected application grants.
 ///
 /// The resolver receives the profile name and scope (`"*"` or a resource id). It must

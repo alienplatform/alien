@@ -1,11 +1,9 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        protected_allowlist::{
-            is_built_in_unchanged,
-        },
         families::gcp_family,
+        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        protected_allowlist::is_built_in_unchanged,
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -392,7 +390,8 @@ impl GcpRuntimePermissionsGenerator {
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
                     if context.signing_protected {
-                        if let Some(permissions) = gcp_role_without_family_permissions(predefined_role)
+                        if let Some(permissions) =
+                            gcp_role_without_family_permissions(predefined_role)
                         {
                             replaced_role_permissions
                                 .extend(permissions.iter().map(|p| p.to_string()));
@@ -529,57 +528,106 @@ pub const GCP_BUILT_IN_ROLES: &[&str] = &[
     "roles/storage.objectViewer",
 ];
 
-/// Predefined roles that carry a family permission, with what the management identity gets
-/// instead: the role's permissions minus the family ones, as a custom role setup creates.
-const GCP_ROLES_WITHOUT_FAMILY_PERMISSIONS: &[(&str, &[&str])] = &[
-    // Minus `storage.objects.setIamPolicy`.
+/// Predefined roles that carry a family permission, with each role's complete permission list.
+/// A protected install's management identity gets a custom role setup creates from this list minus
+/// the family permissions ([`gcp_role_without_family_permissions`]).
+///
+/// Taken from the public IAM dataset and checked against the cloud provider's role reference:
+/// a predefined role can change, so the snapshot is pinned here and a test fails when a
+/// replacement would hold a family permission.
+const GCP_ROLES_WITH_FAMILY_PERMISSIONS: &[(&str, &[&str])] = &[
     (
         "roles/storage.objectAdmin",
         &[
-            "storage.objects.create",
-            "storage.objects.delete",
-            "storage.objects.get",
-            "storage.objects.getIamPolicy",
-            "storage.objects.list",
-            "storage.objects.update",
+            "monitoring.timeSeries.create",
+            "orgpolicy.policy.get",
+            "resourcemanager.projects.get",
+            "resourcemanager.projects.list",
+            "storage.folders.create",
+            "storage.folders.delete",
+            "storage.folders.get",
+            "storage.folders.list",
+            "storage.folders.rename",
+            "storage.managedFolders.create",
+            "storage.managedFolders.delete",
+            "storage.managedFolders.get",
+            "storage.managedFolders.list",
+            "storage.managedFolders.update",
             "storage.multipartUploads.abort",
             "storage.multipartUploads.create",
             "storage.multipartUploads.list",
             "storage.multipartUploads.listParts",
+            "storage.objects.create",
+            "storage.objects.createContext",
+            "storage.objects.delete",
+            "storage.objects.deleteContext",
+            "storage.objects.get",
+            "storage.objects.getIamPolicy",
+            "storage.objects.list",
+            "storage.objects.move",
+            "storage.objects.overrideUnlockedRetention",
+            "storage.objects.restore",
+            "storage.objects.setIamPolicy",
+            "storage.objects.setRetention",
+            "storage.objects.update",
+            "storage.objects.updateContext",
         ],
     ),
-    // Minus `pubsub.topics.attachSubscription`.
     (
         "roles/pubsub.subscriber",
         &[
-            "pubsub.snapshots.get",
-            "pubsub.snapshots.list",
+            "pubsub.snapshots.seek",
             "pubsub.subscriptions.consume",
-            "pubsub.subscriptions.get",
-            "pubsub.subscriptions.list",
+            "pubsub.topics.attachSubscription",
         ],
     ),
-    // The API-enabling permissions only; the predefined admin role also carries quota and
-    // consumer-settings writes.
     (
         "roles/serviceusage.serviceUsageAdmin",
         &[
+            "cloudquotas.quotas.get",
+            "cloudquotas.quotas.update",
+            "monitoring.timeSeries.list",
+            "serviceusage.catalogs.listMembers",
+            "serviceusage.consumerpolicy.analyze",
+            "serviceusage.consumerpolicy.get",
+            "serviceusage.consumerpolicy.update",
+            "serviceusage.contentsecuritypolicy.get",
+            "serviceusage.contentsecuritypolicy.update",
+            "serviceusage.effectivemcppolicy.get",
+            "serviceusage.effectivepolicy.get",
+            "serviceusage.groups.list",
+            "serviceusage.groups.listExpandedMembers",
+            "serviceusage.groups.listMembers",
+            "serviceusage.mcppolicy.get",
+            "serviceusage.mcppolicy.update",
             "serviceusage.operations.get",
-            "serviceusage.operations.list",
+            "serviceusage.quotas.get",
+            "serviceusage.quotas.update",
             "serviceusage.services.disable",
             "serviceusage.services.enable",
             "serviceusage.services.get",
             "serviceusage.services.list",
+            "serviceusage.services.listApis",
+            "serviceusage.services.listDependentServices",
+            "serviceusage.services.use",
+            "serviceusage.values.test",
         ],
     ),
 ];
 
-/// The custom-role permissions that replace `role` on a protected install, if it has any.
-pub fn gcp_role_without_family_permissions(role: &str) -> Option<&'static [&'static str]> {
-    GCP_ROLES_WITHOUT_FAMILY_PERMISSIONS
+/// The custom-role permissions that replace `role` on a protected install: the role's permissions
+/// without the family ones. `None` for a role with no family permission to take out.
+pub fn gcp_role_without_family_permissions(role: &str) -> Option<Vec<&'static str>> {
+    GCP_ROLES_WITH_FAMILY_PERMISSIONS
         .iter()
         .find(|(name, _)| *name == role)
-        .map(|(_, permissions)| *permissions)
+        .map(|(_, permissions)| {
+            permissions
+                .iter()
+                .copied()
+                .filter(|permission| gcp_family(permission).is_none())
+                .collect()
+        })
 }
 
 /// What a protected install's management identity gets instead of the predefined roles in `grant`
@@ -593,7 +641,7 @@ fn replaced_role_permissions(grant: &PermissionGrant, context: &PermissionContex
         .iter()
         .flatten()
         .filter_map(|role| gcp_role_without_family_permissions(role))
-        .flat_map(|permissions| permissions.iter().map(|p| p.to_string()))
+        .flat_map(|permissions| permissions.into_iter().map(|p| p.to_string()))
         .collect()
 }
 

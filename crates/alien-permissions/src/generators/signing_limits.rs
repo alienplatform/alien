@@ -734,7 +734,10 @@ mod tests {
                 other => panic!("unexpected action {other}"),
             })
             .collect();
-        for owned in AWS_VERIFIER_OWNED.iter().filter(|owned| aws_family(owned, None).is_some()) {
+        for owned in AWS_VERIFIER_OWNED
+            .iter()
+            .filter(|owned| aws_family(owned, None).is_some())
+        {
             assert!(denied.iter().any(|action| action == owned), "{owned}");
         }
         for action in AWS_MACHINE_COMMANDS

@@ -8210,8 +8210,8 @@ mod tests {
             apps.expect_update_container_app()
                 .times(1)
                 .withf(move |_, _, app| {
-                    let binding: serde_json::Value =
-                        serde_json::from_str(&main_env(app)[&own]).expect("the own binding is JSON");
+                    let binding: serde_json::Value = serde_json::from_str(&main_env(app)[&own])
+                        .expect("the own binding is JSON");
                     binding["privateUrl"] == ADDRESS
                         && binding["publicUrl"] == "https://api.acme.example"
                 })
@@ -8513,8 +8513,9 @@ mod tests {
         let mut shown = Vec::new();
         for protected in [false, true] {
             let mut apps = MockContainerAppsApi::new();
-            apps.expect_get_container_app()
-                .returning(move |_, _| Ok(create_successful_container_app_response(app_name, true)));
+            apps.expect_get_container_app().returning(move |_, _| {
+                Ok(create_successful_container_app_response(app_name, true))
+            });
             let mut executor = SingleControllerExecutor::builder()
                 .resource(worker.clone())
                 .controller(AzureWorkerController {
@@ -8785,13 +8786,8 @@ mod tests {
             container_app_url: None,
             ..AzureWorkerController::mock_ready(PROTECTED_APP)
         };
-        let (result, requests, _) = protected_update_from(
-            controller,
-            axum::http::StatusCode::OK,
-            written(2),
-            &[],
-        )
-        .await;
+        let (result, requests, _) =
+            protected_update_from(controller, axum::http::StatusCode::OK, written(2), &[]).await;
         result.expect("the update completes through the verifier");
         assert_eq!(checked_writes(&requests).await.len(), 1);
     }

@@ -283,7 +283,9 @@ fn setups_identity_sets_render_for_management_without_their_family_actions() {
         let unprotected =
             render_aws(set, false).unwrap_or_else(|error| panic!("{id} unprotected: {error}"));
         assert!(
-            unprotected.iter().any(|action| aws_family(action, None).is_some()),
+            unprotected
+                .iter()
+                .any(|action| aws_family(action, None).is_some()),
             "{id} should hold family actions when unprotected"
         );
     }
@@ -303,7 +305,11 @@ fn a_set_id_does_not_exempt_a_changed_copy() {
         .push("iam:CreateRole".to_string());
     let error = render_aws(&copy, true).expect_err("a changed copy is checked");
     assert_eq!(error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION");
-    assert!(error.message.contains("'storage/provision'"), "{}", error.message);
+    assert!(
+        error.message.contains("'storage/provision'"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -549,7 +555,11 @@ fn an_azure_predefined_role_outside_the_built_in_list_is_refused() {
             .generate_grant_plan(&set, BindingTarget::Stack, &azure_context(true))
             .expect_err(&format!("{role} must be refused on a protected install"));
         assert_eq!(error.code, "GENERATOR_ERROR", "{role}: {}", error.message);
-        assert!(error.message.contains(&format!("'{role}'")), "{}", error.message);
+        assert!(
+            error.message.contains(&format!("'{role}'")),
+            "{}",
+            error.message
+        );
     }
     let set = azure_role_set(&["Reader"]);
     let plan = AzureRuntimePermissionsGenerator::new()
@@ -634,7 +644,10 @@ fn a_gcp_stack_permission_in_a_family_is_refused() {
     ] {
         let set = gcp_set(json!({ "permissions": ["storage.objects.get", permission] }));
         let error = render_gcp(&set, true).expect_err(&format!("{permission} must be refused"));
-        assert_eq!(error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION", "{permission}");
+        assert_eq!(
+            error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION",
+            "{permission}"
+        );
         assert!(
             error.message.contains(&format!("'{permission}'")),
             "{permission}: {}",
@@ -717,7 +730,11 @@ fn every_predefined_role_the_catalog_grants_is_allowed_or_deliberately_refused()
 
 #[test]
 fn gcp_os_login_and_os_config_writes_are_refused_for_a_stack_set_on_a_protected_install() {
-    let reads = ["storage.objects.get", "osconfig.patchJobs.get", "osconfig.guestPolicies.list"];
+    let reads = [
+        "storage.objects.get",
+        "osconfig.patchJobs.get",
+        "osconfig.guestPolicies.list",
+    ];
     let (_, permissions) =
         render_gcp(&gcp_set(json!({ "permissions": reads })), true).expect("reads render");
     assert_eq!(
@@ -1046,12 +1063,18 @@ fn every_azure_built_in_management_role_is_a_registry_role_without_family_action
         }
     }
     for role in AZURE_BUILT_IN_ROLES {
-        assert!(bound.contains(*role), "{role} is listed but no built-in set binds it");
+        assert!(
+            bound.contains(*role),
+            "{role} is listed but no built-in set binds it"
+        );
     }
     // The Azure roles in the list are read or data-plane roles; none writes the control plane.
     for role in AZURE_BUILT_IN_ROLES {
         assert!(
-            role.contains("Data") || role.contains("Reader") || role.contains("Pull") || role.contains("User"),
+            role.contains("Data")
+                || role.contains("Reader")
+                || role.contains("Pull")
+                || role.contains("User"),
             "{role} looks like a role that can write the control plane"
         );
     }

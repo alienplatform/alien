@@ -229,7 +229,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn azure_patterns_that_reach_what_runs_are_dropped() {
         for action in [

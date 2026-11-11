@@ -7,7 +7,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_permissions::{
-    generators::{gcp_role_without_family_permissions, GcpBindingTargetScope, GcpGrantPlan, GcpRuntimePermissionsGenerator},
+    generators::{
+        gcp_role_without_family_permissions, GcpBindingTargetScope, GcpGrantPlan,
+        GcpRuntimePermissionsGenerator,
+    },
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 
@@ -154,7 +157,6 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
                 .into_iter()
                 .filter_map(gcp_role_without_family_permissions)
                 .flatten()
-                .copied()
                 .collect();
                 assert!(
                     permissions.iter().all(|p| replacement.contains(p.as_str())),
@@ -283,7 +285,9 @@ fn protected_management_is_never_bound_to_an_impersonation_role() {
         .expect_err("a token creator binding lets management act as any service account");
     assert_eq!(error.code, "GENERATOR_ERROR");
     assert!(
-        error.message.contains("roles/iam.serviceAccountTokenCreator"),
+        error
+            .message
+            .contains("roles/iam.serviceAccountTokenCreator"),
         "{error}"
     );
     assert!(GcpRuntimePermissionsGenerator::new()
@@ -536,9 +540,43 @@ fn every_predefined_role_in_the_registry_is_accounted_for() {
             }
         }
     }
-    for role in ["roles/storage.objectAdmin", "roles/pubsub.subscriber", "roles/serviceusage.serviceUsageAdmin"] {
-        for permission in gcp_role_without_family_permissions(role).expect("replaced") {
+    for role in [
+        "roles/storage.objectAdmin",
+        "roles/pubsub.subscriber",
+        "roles/serviceusage.serviceUsageAdmin",
+    ] {
+        let kept = gcp_role_without_family_permissions(role).expect("replaced");
+        assert!(!kept.is_empty(), "{role} keeps nothing");
+        for permission in kept {
             assert_eq!(gcp_family(permission), None, "{role}: {permission}");
         }
     }
+}
+
+/// The replacement is the role's published permissions minus exactly the family ones: what the
+/// built-in sets use the role for (object writes, pulling messages) stays, and the one
+/// permission that opens the resource to others goes.
+#[test]
+fn replaced_roles_lose_only_their_family_permissions() {
+    let kept = |role: &str| gcp_role_without_family_permissions(role).expect("replaced");
+
+    let objects = kept("roles/storage.objectAdmin");
+    for needed in [
+        "storage.objects.create",
+        "storage.objects.get",
+        "storage.objects.list",
+        "storage.objects.delete",
+    ] {
+        assert!(objects.contains(&needed), "{needed}");
+    }
+    assert!(!objects.contains(&"storage.objects.setIamPolicy"));
+
+    assert_eq!(
+        kept("roles/pubsub.subscriber"),
+        vec!["pubsub.snapshots.seek", "pubsub.subscriptions.consume"]
+    );
+
+    let services = kept("roles/serviceusage.serviceUsageAdmin");
+    assert!(services.contains(&"serviceusage.services.enable"));
+    assert!(services.contains(&"serviceusage.services.disable"));
 }

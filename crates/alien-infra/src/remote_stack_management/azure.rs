@@ -32,7 +32,7 @@ use alien_permissions::{
         dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementScopeKind,
         AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator, AzureRuntimeRoles,
-        AzureScopedCustomRole,
+        AzureScopedCustomRole, AzureWorkloadPrincipals,
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
@@ -2487,13 +2487,14 @@ fn role_assignment_conditions(
     ctx: &ResourceControllerContext<'_>,
     runtime_roles: &AzureRuntimeRoles,
     management_principal_id: &str,
-    workload_principal_ids: &BTreeSet<String>,
+    workload_principals: &AzureWorkloadPrincipals,
 ) -> Vec<String> {
     azure_role_assignment_allowlist_conditions(
         management_principal_id,
-        workload_principal_ids,
+        workload_principals,
         &runtime_roles.management_role_ids(ctx.resource_prefix),
         &runtime_roles.workload_role_ids(ctx.resource_prefix),
+        &runtime_roles.remote_bindings_role_ids(ctx.resource_prefix),
     )
 }
 
@@ -2504,10 +2505,11 @@ fn role_assignment_conditions(
 /// one would change this Frozen resource's entry on every existing installation, and the runtime
 /// would then run its update with credentials that may not rebuild management's own roles. So the
 /// steps that need them wait for them instead ([`principals_ready`]).
-fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<BTreeSet<String>> {
-    let mut principals = BTreeSet::new();
+fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<AzureWorkloadPrincipals> {
+    let mut principals = AzureWorkloadPrincipals::default();
     for (resource_id, entry) in &ctx.desired_stack.resources {
         let resource_type = entry.config.resource_type();
+        let is_remote_bindings = resource_type == alien_core::RemoteBindings::RESOURCE_TYPE;
         let principal = if resource_type == alien_core::ServiceAccount::RESOURCE_TYPE {
             ctx.require_dependency::<crate::service_account::AzureServiceAccountController>(
                 &(&entry.config).into(),
@@ -2527,13 +2529,20 @@ fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<BTreeSe
                 dependency_id: resource_id.clone(),
             })
         })?;
-        principals.insert(principal.to_ascii_lowercase());
+        let principal = principal.to_ascii_lowercase();
+        if is_remote_bindings {
+            principals.remote_bindings.insert(principal);
+        } else {
+            principals.service.insert(principal);
+        }
     }
     Ok(principals)
 }
 
 /// The application's principal ids, or `None` while an identity setup is creating is not ready.
-fn principals_ready(ctx: &ResourceControllerContext<'_>) -> Result<Option<BTreeSet<String>>> {
+fn principals_ready(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<AzureWorkloadPrincipals>> {
     match workload_principal_ids(ctx) {
         Ok(principals) => Ok(Some(principals)),
         Err(error)
@@ -2561,7 +2570,7 @@ fn principal_wait() -> AzureRemoteStackManagementHandlerAction {
 fn runtime_roles_revision(
     ctx: &ResourceControllerContext<'_>,
     runtime_roles: &AzureRuntimeRoles,
-    workload_principal_ids: &BTreeSet<String>,
+    workload_principal_ids: &AzureWorkloadPrincipals,
 ) -> Result<String> {
     let mut entries: Vec<_> = runtime_roles
         .custom_roles
@@ -2582,7 +2591,9 @@ fn runtime_roles_revision(
         "custom": entries,
         "management": runtime_roles.management_predefined_role_ids,
         "workload": runtime_roles.workload_predefined_role_ids,
-        "principals": workload_principal_ids,
+        "remoteBindings": runtime_roles.remote_bindings_predefined_role_ids,
+        "principals": workload_principal_ids.service,
+        "remoteBindingsPrincipals": workload_principal_ids.remote_bindings,
     }))
     .into_alien_error()
     .context(ErrorData::InfrastructureError {

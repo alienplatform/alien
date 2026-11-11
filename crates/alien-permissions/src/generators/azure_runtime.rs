@@ -1,8 +1,8 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
         families::{azure_family, azure_reach_exclusions, Family},
+        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
         protected_allowlist::{is_built_in_unchanged, require_azure_data_action},
         verifier_owned::{
             azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
@@ -877,7 +877,10 @@ pub const AZURE_BUILT_IN_ROLES: &[&str] = &[
 ];
 
 fn require_built_in_azure_role(permission_set_id: &str, role: &str) -> Result<()> {
-    if AZURE_BUILT_IN_ROLES.iter().any(|built_in| built_in.eq_ignore_ascii_case(role)) {
+    if AZURE_BUILT_IN_ROLES
+        .iter()
+        .any(|built_in| built_in.eq_ignore_ascii_case(role))
+    {
         return Ok(());
     }
     Err(alien_error::AlienError::new(ErrorData::GeneratorError {

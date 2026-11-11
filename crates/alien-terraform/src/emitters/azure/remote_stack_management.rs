@@ -30,7 +30,7 @@ use alien_permissions::{
         azure_write_or_delete, dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementRoles,
         AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
-        AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole,
+        AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole, AzureWorkloadPrincipals,
         AZURE_REMOTE_BINDINGS_PROFILE,
     },
     BindingTarget,
@@ -889,6 +889,7 @@ fn runtime_role_conditions(
     let mut ids = Vec::new();
     let mut management_ids = BTreeSet::new();
     let mut workload_ids = BTreeSet::new();
+    let mut remote_bindings_ids = BTreeSet::new();
     for role in &runtime_roles.custom_roles {
         let seed = role.holder.role_definition_seed(
             "${local.resource_prefix}",
@@ -901,12 +902,20 @@ fn runtime_role_conditions(
         ids.push((key, expr::raw(format!("uuidv5(\"oid\", \"{seed}\")"))));
         if role.holder == AzureRuntimeRoleHolder::Management {
             management_ids.insert(stand_in);
+        } else if role.holder.is_remote_bindings() {
+            remote_bindings_ids.insert(stand_in);
         } else {
             workload_ids.insert(stand_in);
         }
     }
     management_ids.extend(runtime_roles.management_predefined_role_ids.iter().cloned());
     workload_ids.extend(runtime_roles.workload_predefined_role_ids.iter().cloned());
+    remote_bindings_ids.extend(
+        runtime_roles
+            .remote_bindings_predefined_role_ids
+            .iter()
+            .cloned(),
+    );
     if !ids.is_empty() {
         fragment.locals.insert(
             local_name,
@@ -925,7 +934,7 @@ fn runtime_role_conditions(
     // The application's identities: every service account's and the remote-bindings identity,
     // each an `azurerm_user_assigned_identity` under its resource's label. The condition names
     // their principals, so setup must create every one of them.
-    let mut workload_principals = BTreeSet::new();
+    let mut workload_principals = AzureWorkloadPrincipals::default();
     for (resource_id, entry) in ctx.stack.resources() {
         let kind = entry.config.resource_type();
         if kind != alien_core::ServiceAccount::RESOURCE_TYPE
@@ -955,13 +964,18 @@ fn runtime_role_conditions(
             stand_in.clone(),
             format!("${{azurerm_user_assigned_identity.{identity_label}.principal_id}}"),
         ));
-        workload_principals.insert(stand_in);
+        if kind == alien_core::RemoteBindings::RESOURCE_TYPE {
+            workload_principals.remote_bindings.insert(stand_in);
+        } else {
+            workload_principals.service.insert(stand_in);
+        }
     }
     Ok(azure_role_assignment_allowlist_conditions(
         &principal,
         &workload_principals,
         &management_ids,
         &workload_ids,
+        &remote_bindings_ids,
     )
     .into_iter()
     .map(|condition| {
