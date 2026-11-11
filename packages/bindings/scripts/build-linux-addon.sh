@@ -4,7 +4,8 @@
 #
 #   build-linux-addon.sh <rust-target> [cargo args...]
 #
-# Needs zig and cargo-zigbuild (the setup-zigbuild action). Writes
+# Run from the repository root (the checkout being built; the script itself may come
+# from a different checkout). Needs zig and cargo-zigbuild (the setup-zigbuild action). Writes
 # crates/alien-bindings-node/alien-bindings-node.<npm-triple>.node, the file
 # `napi build --platform` would produce; the crate has no generated index.js.
 set -euo pipefail
@@ -17,8 +18,6 @@ case "$target" in
 esac
 shift
 
-root="$(cd "$(dirname "$0")/../../.." && pwd)"
-cd "$root"
-cargo zigbuild --release --locked -p alien-bindings-node --lib --target "$target.2.28" "$@"
+cargo zigbuild --release -p alien-bindings-node --lib --target "$target.2.28" "$@"
 cp "${CARGO_TARGET_DIR:-target}/$target/release/libalien_bindings_node.so" \
   "crates/alien-bindings-node/alien-bindings-node.$triple.node"

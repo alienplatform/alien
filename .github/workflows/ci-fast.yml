@@ -113,7 +113,7 @@ jobs:
               - 'client-sdks/platform/rust/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-            # Inputs of the release-mode Node addon build whose glibc floor is checked.
+            # Build inputs of the Node addon (Rust changes trigger the job through `rust`).
             node_addon:
               - 'crates/alien-bindings-node/**'
               - 'crates/alien-bindings/**'
@@ -122,6 +122,8 @@ jobs:
               - 'rust-toolchain.toml'
               - 'packages/bindings/package.json'
               - 'packages/bindings/scripts/verify-addon-portability.sh'
+              - 'packages/bindings/scripts/build-linux-addon.sh'
+              - '.github/actions/setup-zigbuild/**'
               - '.github/workflows/ci-fast.yml'
             # JavaScript inputs of the Worker integration job; Rust changes trigger it through `rust`.
             worker_integration:
@@ -824,6 +826,7 @@ jobs:
     needs: [pr-conventions, changes]
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
       needs.changes.outputs.node_addon == 'true'
     strategy:
       fail-fast: false

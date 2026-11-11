@@ -1171,7 +1171,7 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           if [[ "${{ matrix.os }}" == linux ]]; then
-            packages/bindings/scripts/build-linux-addon.sh ${{ matrix.target }}
+            .ci-tool-versions/packages/bindings/scripts/build-linux-addon.sh ${{ matrix.target }}
           else
             pnpm --filter @alienplatform/bindings exec napi build \
               --platform --release --target ${{ matrix.target }} \
@@ -1182,7 +1182,7 @@ jobs:
       # Amazon Linux 2023 and RHEL 9; this fails the leg if that regresses.
       - name: Verify addon glibc floor and load on older base images
         if: matrix.os == 'linux'
-        run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
+        run: .ci-tool-versions/packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
       - name: Stage addon into platform package
         run: |
