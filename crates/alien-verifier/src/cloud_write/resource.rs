@@ -735,13 +735,35 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
 }
 
 /// Check a GCP write against `current`, the IAM policy the bucket holds now: a new policy may
-/// grant only what the bucket already holds or the public read the signed stack declares.
-pub fn check_gcp_state(facts: &ResourceFacts<'_>, write: &ResourceWrite, current: &Value) -> Result<()> {
-    let ResourceWrite::SetBucketIamPolicy { policy, .. } = write else {
+/// grant only what the bucket already holds, what the signed stack grants this bucket (derived
+/// from the stack and this install alone) or the public read the stack declares.
+pub fn check_gcp_state(
+    facts: &ResourceFacts<'_>,
+    write: &ResourceWrite,
+    current: &Value,
+    region: &str,
+) -> Result<()> {
+    let ResourceWrite::SetBucketIamPolicy { bucket, policy } = write else {
         return Ok(());
     };
     let storage = facts.storage()?;
-    check_bucket_iam(policy, current, storage.public_read).map_err(refused)
+    let alien_signing::InstallId::Gcp { project, .. } = &facts.place.install else {
+        return Err(refused("this install is not a GCP install"));
+    };
+    let derived = alien_permissions::gcp_resource_grants::gcp_resource_scoped_bindings(
+        &facts.stack,
+        &alien_permissions::gcp_resource_grants::GcpInstall {
+            prefix: &facts.place.prefix,
+            project_id: project,
+            project_number: None,
+            region,
+        },
+        facts.resource_id,
+        "storage",
+        bucket,
+    )
+    .map_err(|error| refused(format!("the signed stack's grants do not derive: {error}")))?;
+    check_bucket_iam(policy, current, &derived, storage.public_read).map_err(refused)
 }
 
 /// Send a checked GCP write unchanged.

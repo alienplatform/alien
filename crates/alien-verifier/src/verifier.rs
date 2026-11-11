@@ -696,7 +696,7 @@ mod tests {
             write: &ResourceWrite,
         ) -> Result<()> {
             if let Some(current) = self.gcp_bucket_policy.lock().unwrap().clone() {
-                return crate::cloud_write::resource::check_gcp_state(facts, write, &current);
+                return crate::cloud_write::resource::check_gcp_state(facts, write, &current, REGION);
             }
             let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write else {
                 return Ok(());
@@ -742,14 +742,27 @@ mod tests {
     }
 
     fn storage_release(public_read: bool) -> alien_signing::SignedStatement {
+        storage_release_for(alien_core::Platform::Aws, public_read)
+    }
+
+    /// A release of a stack with one storage, `assets`, which the profile `execution` may write.
+    fn storage_release_for(
+        platform: alien_core::Platform,
+        public_read: bool,
+    ) -> alien_signing::SignedStatement {
         let assets = alien_core::Storage::new("assets".to_string())
             .public_read(public_read)
             .build();
         let stack = alien_core::Stack::new("shop".to_string())
             .add(assets, alien_core::ResourceLifecycle::Frozen)
+            .permission(
+                "execution",
+                alien_core::permissions::PermissionProfile::new()
+                    .resource("assets", ["storage/data-write"]),
+            )
             .build();
         let body = alien_core::release_statement::release_body(
-            alien_core::Platform::Aws,
+            platform,
             &stack,
             &alien_core::release_statement::ReleaseOptions {
                 channel: CHANNEL.to_string(),
@@ -941,9 +954,21 @@ mod tests {
         }
     }
 
+    /// The verifier of a GCP install, whose backend applies the GCP rules to a bucket holding
+    /// `current`.
+    fn gcp_resource_verifier(current: &Value) -> (Verifier, Arc<ResourceForwards>) {
+        let (mut verifier, backend) = resource_verifier();
+        *backend.gcp_bucket_policy.lock().unwrap() = Some(current.clone());
+        verifier.install_id = Arc::new(|prefix| alien_signing::InstallId::Gcp {
+            project: "acme-project".to_string(),
+            prefix: prefix.to_string(),
+        });
+        (verifier, backend)
+    }
+
     fn gcp_bucket_request(public_read: bool, write: Value) -> Value {
         json!({"applyResourceWrite": {
-            "release": storage_release(public_read),
+            "release": storage_release_for(alien_core::Platform::Gcp, public_read),
             "signerLists": [signer_list()],
             "resource": "assets",
             "writes": [write],
@@ -976,13 +1001,85 @@ mod tests {
             (false, prevention("enforced"), "enforced".to_string()),
             (true, prevention("inherited"), "inherited".to_string()),
         ] {
-            let (verifier, backend) = resource_verifier();
-            *backend.gcp_bucket_policy.lock().unwrap() = Some(held.clone());
+            let (verifier, backend) = gcp_resource_verifier(&held);
             verifier
                 .handle(gcp_bucket_request(declared, write.clone()))
                 .await
                 .unwrap_or_else(|error| panic!("{write}: {error:?}"));
             assert_eq!(*backend.forwarded.lock().unwrap(), vec![sent], "{write}");
+        }
+
+        // The grants the signed stack derives for the bucket are accepted unchanged; the same
+        // roles bound to anyone else, or to the management, verifier or setup accounts, are not.
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(
+                alien_core::Storage::new("assets".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "execution",
+                alien_core::permissions::PermissionProfile::new()
+                    .resource("assets", ["storage/data-write"]),
+            )
+            .build();
+        let derived = alien_permissions::gcp_resource_grants::gcp_resource_scoped_bindings(
+            &stack,
+            &alien_permissions::gcp_resource_grants::GcpInstall {
+                prefix: PREFIX,
+                project_id: "acme-project",
+                project_number: None,
+                region: "us-central1",
+            },
+            "assets",
+            "storage",
+            &bucket,
+        )
+        .unwrap();
+        assert!(!derived.is_empty());
+        let as_policy = |members: Option<&str>| {
+            let bindings: Vec<Value> = derived
+                .iter()
+                .map(|grant| {
+                    let mut binding = json!({"role": grant.role, "members": grant.members});
+                    if let Some(condition) = &grant.condition {
+                        binding["condition"] = json!({
+                            "title": condition.title, "description": condition.description,
+                            "expression": condition.expression});
+                    }
+                    if let Some(member) = members {
+                        binding["members"] = json!([member]);
+                    }
+                    binding
+                })
+                .collect();
+            json!({"etag": "a", "version": 3, "bindings": bindings})
+        };
+        let (verifier, backend) = gcp_resource_verifier(&json!({}));
+        verifier
+            .handle(gcp_bucket_request(false, set_policy(&bucket, &as_policy(None))))
+            .await
+            .expect("the derived grants are accepted");
+        assert_eq!(
+            *backend.forwarded.lock().unwrap(),
+            vec![as_policy(None).to_string()],
+            "sent unchanged"
+        );
+        for member in [
+            "serviceAccount:acme-prod-management@acme-project.iam.gserviceaccount.com",
+            "serviceAccount:acme-prod-verifier@acme-project.iam.gserviceaccount.com",
+            "user:attacker@example.com",
+        ] {
+            let (verifier, backend) = gcp_resource_verifier(&json!({}));
+            let reason = refusal(
+                verifier
+                    .handle(gcp_bucket_request(
+                        false,
+                        set_policy(&bucket, &as_policy(Some(member))),
+                    ))
+                    .await,
+            );
+            assert!(reason.contains(member), "{member}: {reason}");
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{member}: sent");
         }
 
         // Refused, and nothing is sent.
@@ -992,8 +1089,7 @@ mod tests {
             ("another bucket", false, set_policy("someone-elses-bucket", &held)),
             ("inherited prevention not declared", false, prevention("inherited")),
         ] {
-            let (verifier, backend) = resource_verifier();
-            *backend.gcp_bucket_policy.lock().unwrap() = Some(held.clone());
+            let (verifier, backend) = gcp_resource_verifier(&held);
             refusal(verifier.handle(gcp_bucket_request(declared, write)).await);
             assert!(backend.forwarded.lock().unwrap().is_empty(), "{name}: sent");
         }

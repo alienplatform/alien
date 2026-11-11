@@ -1,11 +1,14 @@
 //! What a Cloud Storage bucket's IAM policy may grant, derived from the stack: the one rule the
 //! controller that writes it and the verifier that checks it share.
 //!
-//! A new policy may keep or remove any grant the bucket holds now. It may add exactly one thing,
-//! and only when the stack declares it: anonymous reads of the bucket's objects for a storage that
-//! is `public_read`. Every other principal's access comes from the grants setup renders.
+//! A new policy may keep or remove any grant the bucket holds now. It may add only what the signed
+//! stack grants this bucket (see [`crate::gcp_resource_grants`]: its permission profiles' service
+//! accounts and Remote Bindings) and anonymous reads of the bucket's objects for a storage that is
+//! `public_read`. Nothing else: not management, the verifier or the setup identity.
 
 use serde_json::{json, Value};
+
+use crate::generators::gcp_runtime::GcpIamBinding;
 
 /// The role that lets anyone read the bucket's objects.
 pub const PUBLIC_VIEWER_ROLE: &str = "roles/storage.objectViewer";
@@ -13,9 +16,14 @@ pub const PUBLIC_VIEWER_ROLE: &str = "roles/storage.objectViewer";
 pub const PUBLIC_MEMBER: &str = "allUsers";
 
 /// Why `new`, the policy a controller wants to set, is not one the stack allows given `current`,
-/// the policy the bucket holds, or `Ok` when every grant in it is already held or is the public
-/// read the stack declares.
-pub fn check_bucket_iam(new: &Value, current: &Value, public_read: bool) -> Result<(), String> {
+/// the policy the bucket holds, or `Ok` when every grant in it is already held, is one of
+/// `derived` (what the signed stack grants this bucket) or is the public read the stack declares.
+pub fn check_bucket_iam(
+    new: &Value,
+    current: &Value,
+    derived: &[GcpIamBinding],
+    public_read: bool,
+) -> Result<(), String> {
     let new = new
         .as_object()
         .ok_or("the bucket IAM policy is not a JSON object")?;
@@ -34,19 +42,38 @@ pub fn check_bucket_iam(new: &Value, current: &Value, public_read: bool) -> Resu
             let already_held = held.iter().any(|(held_role, held_condition, held_members)| {
                 *held_role == role && *held_condition == condition && held_members.contains(&member)
             });
+            let derived_grant = derived.iter().any(|grant| {
+                grant.role == role
+                    && grant.members.contains(&member)
+                    && same_condition(&condition, grant)
+            });
             let declared_public = public_read
                 && role == PUBLIC_VIEWER_ROLE
                 && member == PUBLIC_MEMBER
                 && condition.is_null();
-            if !already_held && !declared_public {
+            if !already_held && !derived_grant && !declared_public {
                 return Err(format!(
                     "the bucket IAM policy grants {role} to {member}, which the bucket does not \
-                     hold and the signed stack does not declare"
+                     hold and the signed stack does not grant it"
                 ));
             }
         }
     }
     Ok(())
+}
+
+/// Whether the condition of a policy binding (`Null` for none) is the one `grant` carries: the
+/// same title and expression.
+fn same_condition(condition: &Value, grant: &GcpIamBinding) -> bool {
+    match (&grant.condition, condition) {
+        (None, Value::Null) => true,
+        (Some(grant), Value::Object(condition)) => {
+            condition.get("title").and_then(Value::as_str) == Some(grant.title.as_str())
+                && condition.get("expression").and_then(Value::as_str)
+                    == Some(grant.expression.as_str())
+        }
+        _ => false,
+    }
 }
 
 /// `(role, condition, members)` of each binding of `policy`.
@@ -119,15 +146,15 @@ mod tests {
 
     #[test]
     fn the_policy_the_bucket_holds_is_accepted_unchanged() {
-        check_bucket_iam(&current(), &current(), false).expect("unchanged");
+        check_bucket_iam(&current(), &current(), &[], false).expect("unchanged");
     }
 
     #[test]
     fn removing_grants_is_free() {
         let new = json!({"bindings": [
             {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:app@p.iam"]}]});
-        check_bucket_iam(&new, &current(), false).expect("removal");
-        check_bucket_iam(&json!({}), &current(), false).expect("empty");
+        check_bucket_iam(&new, &current(), &[], false).expect("removal");
+        check_bucket_iam(&json!({}), &current(), &[], false).expect("empty");
     }
 
     #[test]
@@ -137,8 +164,8 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(public_viewer_binding());
-        check_bucket_iam(&new, &current(), true).expect("declared");
-        let error = check_bucket_iam(&new, &current(), false).expect_err("not declared");
+        check_bucket_iam(&new, &current(), &[], true).expect("declared");
+        let error = check_bucket_iam(&new, &current(), &[], false).expect_err("not declared");
         assert!(error.contains("allUsers"), "{error}");
     }
 
@@ -157,16 +184,16 @@ mod tests {
         ] {
             let mut new = current();
             new["bindings"].as_array_mut().unwrap().push(binding.clone());
-            check_bucket_iam(&new, &current(), true).expect_err(&binding.to_string());
+            check_bucket_iam(&new, &current(), &[], true).expect_err(&binding.to_string());
         }
     }
 
     #[test]
     fn an_unknown_field_or_malformed_binding_is_refused() {
-        check_bucket_iam(&json!({"auditConfigs": []}), &current(), false).expect_err("field");
-        check_bucket_iam(&json!({"bindings": [{"members": []}]}), &current(), false)
+        check_bucket_iam(&json!({"auditConfigs": []}), &current(), &[], false).expect_err("field");
+        check_bucket_iam(&json!({"bindings": [{"members": []}]}), &current(), &[], false)
             .expect_err("no role");
-        check_bucket_iam(&json!("x"), &current(), false).expect_err("not an object");
+        check_bucket_iam(&json!("x"), &current(), &[], false).expect_err("not an object");
     }
 
     #[test]
@@ -175,5 +202,71 @@ mod tests {
         check_public_access_prevention("inherited", true).expect("declared");
         check_public_access_prevention("inherited", false).expect_err("not declared");
         check_public_access_prevention("unspecified", true).expect_err("unknown");
+    }
+}
+
+#[cfg(test)]
+mod derived_tests {
+    use super::*;
+    use crate::generators::gcp_runtime::GcpBindingTargetScope;
+
+    fn grant(role: &str, member: &str) -> GcpIamBinding {
+        GcpIamBinding {
+            role: role.to_string(),
+            members: vec![member.to_string()],
+            target: GcpBindingTargetScope::CurrentResource,
+            target_resource_name: None,
+            resource_kind: None,
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn a_grant_the_stack_derives_is_accepted_and_nothing_else_is() {
+        let derived = [grant("projects/p/roles/app_storage_data_write", "serviceAccount:app@p.iam")];
+        let held = json!({});
+        let new = json!({"bindings": [{"role": "projects/p/roles/app_storage_data_write",
+            "members": ["serviceAccount:app@p.iam"]}]});
+        check_bucket_iam(&new, &held, &derived, false).expect("derived grant");
+        for (name, binding) in [
+            ("a foreign member", json!({"role": "projects/p/roles/app_storage_data_write",
+                "members": ["user:attacker@x.y"]})),
+            // The derived role bound to the member of another resource (management, the verifier,
+            // the setup identity or another profile's account).
+            ("another account", json!({"role": "projects/p/roles/app_storage_data_write",
+                "members": ["serviceAccount:other@p.iam"]})),
+            ("another role", json!({"role": "roles/storage.admin",
+                "members": ["serviceAccount:app@p.iam"]})),
+            ("a condition the stack does not know", json!({
+                "role": "projects/p/roles/app_storage_data_write",
+                "members": ["serviceAccount:app@p.iam"],
+                "condition": {"title": "t", "expression": "true"}})),
+        ] {
+            check_bucket_iam(&json!({"bindings": [binding.clone()]}), &held, &derived, true)
+                .expect_err(name);
+        }
+    }
+
+    #[test]
+    fn a_derived_condition_must_match_by_title_and_expression() {
+        let mut conditioned = grant("projects/p/roles/r", "serviceAccount:app@p.iam");
+        conditioned.condition = Some(crate::generators::gcp_runtime::GcpIamCondition {
+            title: "t".to_string(),
+            description: "d".to_string(),
+            expression: "resource.name.startsWith('x')".to_string(),
+        });
+        let held = json!({});
+        let with = |expression: &str| {
+            json!({"bindings": [{"role": "projects/p/roles/r", "members": ["serviceAccount:app@p.iam"],
+                "condition": {"title": "t", "description": "d", "expression": expression}}]})
+        };
+        check_bucket_iam(&with("resource.name.startsWith('x')"), &held, &[conditioned.clone()], false)
+            .expect("same condition");
+        check_bucket_iam(&with("true"), &held, &[conditioned.clone()], false)
+            .expect_err("other expression");
+        // The unconditioned grant is not the conditioned one.
+        let plain = json!({"bindings": [{"role": "projects/p/roles/r",
+            "members": ["serviceAccount:app@p.iam"]}]});
+        check_bucket_iam(&plain, &held, &[conditioned], false).expect_err("dropped condition");
     }
 }

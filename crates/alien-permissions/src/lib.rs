@@ -23,6 +23,8 @@ pub mod aws_resource_policies;
 #[cfg(feature = "infrastructure")]
 pub mod gcp_bucket_iam;
 #[cfg(feature = "infrastructure")]
+pub mod gcp_resource_grants;
+#[cfg(feature = "infrastructure")]
 pub mod generators;
 #[cfg(feature = "infrastructure")]
 mod infrastructure;

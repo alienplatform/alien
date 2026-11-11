@@ -781,7 +781,7 @@ impl Backend for GcpBackend {
             return Ok(());
         };
         let current = self.0.bucket_iam_policy(bucket).await?;
-        crate::cloud_write::resource::check_gcp_state(facts, write, &current)
+        crate::cloud_write::resource::check_gcp_state(facts, write, &current, &self.0.region)
     }
 
     async fn forward_resource_write(

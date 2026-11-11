@@ -1120,16 +1120,43 @@ impl GcpStorageController {
 
         let config = ctx.desired_resource_config::<Storage>()?;
 
-        // Collect resource-scoped custom-role bindings.
+        // Collect resource-scoped custom-role bindings. On a protected install they are what the
+        // signed stack grants the bucket, derived from the stack and the install alone, the same
+        // way the verifier derives them to check the request.
+        let protected = crate::core::verifier::protected_statements(ctx, &config.id)?;
         let mut all_bindings = Vec::new();
-        ResourcePermissionsHelper::collect_gcp_resource_scoped_bindings(
-            ctx,
-            &config.id,
-            bucket_name,
-            "storage",
-            &mut all_bindings,
-        )
-        .await?;
+        if protected.is_some() {
+            let gcp_config = ctx.get_gcp_config()?;
+            all_bindings.extend(
+                alien_permissions::gcp_resource_grants::gcp_resource_scoped_bindings(
+                    ctx.desired_stack,
+                    &alien_permissions::gcp_resource_grants::GcpInstall {
+                        prefix: ctx.resource_prefix,
+                        project_id: &gcp_config.project_id,
+                        project_number: None,
+                        region: &gcp_config.region,
+                    },
+                    &config.id,
+                    "storage",
+                    bucket_name,
+                )
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to derive the grants of bucket '{bucket_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })?
+                .into_iter()
+                .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding),
+            );
+        } else {
+            ResourcePermissionsHelper::collect_gcp_resource_scoped_bindings(
+                ctx,
+                &config.id,
+                bucket_name,
+                "storage",
+                &mut all_bindings,
+            )
+            .await?;
+        }
 
         // This identity is wholly Alien-owned. Remove its previous bucket grants before adding
         // the desired ones so direct setup updates can revoke `remoteAccess` without leaving
@@ -1175,6 +1202,27 @@ impl GcpStorageController {
 
             // GCP requires version 3 when any binding has a condition
             existing_policy.version = Some(3);
+
+            if let Some(release) = protected {
+                let policy = serde_json::to_value(&existing_policy)
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "The bucket IAM policy does not serialize".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                crate::core::verifier::apply_resource_write(
+                    &crate::core::verifier::gcp_verifier(ctx)?,
+                    release,
+                    ctx.deployment_config.signed_config.as_ref(),
+                    &config.id,
+                    vec![crate::core::verifier::ResourceWrite::SetBucketIamPolicy {
+                        bucket: bucket_name.to_string(),
+                        policy,
+                    }],
+                )
+                .await?;
+                return Ok(());
+            }
 
             // Apply the updated IAM policy
             client
@@ -1786,9 +1834,9 @@ mod tests {
         let ResourceWrite::SetBucketIamPolicy { policy: sent, .. } = &writes[1] else {
             panic!("second write is the policy: {writes:?}")
         };
-        alien_permissions::gcp_bucket_iam::check_bucket_iam(sent, &held, true)
+        alien_permissions::gcp_bucket_iam::check_bucket_iam(sent, &held, &[], true)
             .expect("accepted for a declared public storage");
-        alien_permissions::gcp_bucket_iam::check_bucket_iam(sent, &held, false)
+        alien_permissions::gcp_bucket_iam::check_bucket_iam(sent, &held, &[], false)
             .expect_err("refused for a storage that is not declared public");
 
         // Becoming private: the grant goes first, then the prevention is enforced.
