@@ -1203,6 +1203,54 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
     );
 }
 
+/// The probe's client pods run where sessions run: they get `sandbox.nodeSelector` and
+/// `sandbox.tolerations`, or the probe would test whichever node the scheduler preferred.
+#[test]
+fn the_cni_probe_runs_its_clients_on_the_nodes_sessions_use() {
+    let stack = Stack::new("sandbox-probe-placement".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  runtimeClassName: gvisor\n  clusterDNS:\n    - 10.100.0.10\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+    );
+    rendered.assert_ok("probe placement");
+    let probe = rendered_documents(&rendered)
+        .into_iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("the NetworkPolicy probe");
+    let env = |name: &str| {
+        probe["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("{name} missing from the probe"))
+    };
+    assert_eq!(env("PROBE_NODE_SELECTOR"), r#"{"pool":"sandboxes"}"#);
+    assert!(env("PROBE_TOLERATIONS").contains("\"key\":\"sandbox\""));
+}
+
 fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<String> {
     rendered_documents(rendered)
         .iter()

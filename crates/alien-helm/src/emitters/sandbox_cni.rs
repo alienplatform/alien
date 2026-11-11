@@ -349,6 +349,10 @@ spec:
               value: {image}
             - name: PROBE_RUNTIME_CLASS
               value: {{{{ include "deployment.sandboxRuntimeClassName" . | quote }}}}
+            - name: PROBE_NODE_SELECTOR
+              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}
+            - name: PROBE_TOLERATIONS
+              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}
             - name: PROBE_ADMISSION_POLICY
               value: {{{{ $cluster | quote }}}}
           command:
