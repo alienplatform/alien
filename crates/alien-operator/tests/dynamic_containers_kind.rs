@@ -254,7 +254,8 @@ async fn two_independent_containers_update_and_delete() {
     // `helm uninstall` removes what the release's runtime scope label selects, so every
     // Deployment, Service and Secret a dynamic container made must carry it.
     let dynamic = format!("alien.dev/dynamic-deployment={deployment_id}");
-    let scope = format!("{SCOPE_KEY}={SCOPE_VALUE}");
+    // The chart's pre-delete cleanup selector, verbatim.
+    let scope = format!("managed-by=runtime,{SCOPE_KEY}={SCOPE_VALUE}");
     let in_scope = |label: String| {
         let client = &client;
         let namespace = &namespace;
@@ -296,7 +297,7 @@ async fn two_independent_containers_update_and_delete() {
     assert_eq!(
         in_scope(format!("{dynamic},{scope}")).await,
         dynamic_objects,
-        "every dynamic container object must carry the release's runtime scope label"
+        "every dynamic container object must carry the selector `helm uninstall` cleans up by"
     );
 
     let owned = client

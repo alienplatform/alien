@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const OWNER_LABEL: &str = "alien.dev/dynamic-deployment";
 const NAME_LABEL: &str = "alien.dev/dynamic-container";
+const MANAGED_BY_LABEL: &str = "managed-by";
 
 fn backend_name(deployment_id: &str, name: &str) -> String {
     let digest = Sha256::digest(format!("{deployment_id}:{name}").as_bytes());
@@ -49,17 +50,22 @@ fn object_labels(deployment_id: &str, name: &str) -> BTreeMap<String, String> {
     let mut object_labels = labels(deployment_id, name);
     if let Some((key, value)) = runtime_scope() {
         object_labels.insert(key, value);
+        object_labels.insert(MANAGED_BY_LABEL.to_string(), "runtime".to_string());
     }
     object_labels
 }
 
-/// Whether `meta` carries the runtime scope label, or there is none to carry.
+/// Whether `meta` carries the runtime scope label and `managed-by=runtime` (the pair the
+/// chart's cleanup selects on), or there is no scope to carry.
 fn has_runtime_scope(meta: &ObjectMeta) -> bool {
     runtime_scope().is_none_or(|(key, value)| {
-        meta.labels
-            .as_ref()
+        let labels = meta.labels.as_ref();
+        labels
             .and_then(|labels| labels.get(&key))
             .is_some_and(|stored| *stored == value)
+            && labels
+                .and_then(|labels| labels.get(MANAGED_BY_LABEL))
+                .is_some_and(|stored| stored == "runtime")
     })
 }
 
@@ -540,6 +546,11 @@ mod runtime_scope_tests {
                         .get("alien.dev/dynamic-deployment")
                         .map(String::as_str),
                     Some("dep_1")
+                );
+                assert_eq!(
+                    object.get("managed-by").map(String::as_str),
+                    Some("runtime"),
+                    "the chart's cleanup selects on managed-by=runtime and the scope label"
                 );
                 // Selectors and ownership checks stay what they were: a Deployment's
                 // selector can't change, and objects created before this label existed
