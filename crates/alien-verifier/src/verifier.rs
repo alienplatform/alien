@@ -696,7 +696,13 @@ mod tests {
             write: &ResourceWrite,
         ) -> Result<()> {
             if let Some(current) = self.gcp_bucket_policy.lock().unwrap().clone() {
-                return crate::cloud_write::resource::check_gcp_state(facts, write, &current, REGION);
+                return crate::cloud_write::resource::check_gcp_state(
+                    facts,
+                    write,
+                    &current,
+                    REGION,
+                    Some(STORAGE_AGENT),
+                );
             }
             let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write else {
                 return Ok(());
@@ -735,6 +741,10 @@ mod tests {
                 }
                 ResourceWrite::SetBucketIamPolicy { policy, .. } => policy.to_string(),
                 ResourceWrite::SetPublicAccessPrevention { value, .. } => value.clone(),
+                ResourceWrite::CreateTopic { body, .. }
+                | ResourceWrite::CreateSubscription { body, .. } => body.to_string(),
+                ResourceWrite::SetTopicIamPolicy { policy, .. }
+                | ResourceWrite::SetSubscriptionIamPolicy { policy, .. } => policy.to_string(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -1091,6 +1101,114 @@ mod tests {
         ] {
             let (verifier, backend) = gcp_resource_verifier(&held);
             refusal(verifier.handle(gcp_bucket_request(declared, write)).await);
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{name}: sent");
+        }
+    }
+
+    const STORAGE_AGENT: &str = "service-1@gs-project-accounts.iam.gserviceaccount.com";
+
+    fn gcp_queue_release(notified_by_storage: bool) -> alien_signing::SignedStatement {
+        let mut assets = alien_core::Storage::new("assets".to_string()).build();
+        if notified_by_storage {
+            assets.notifications = vec![alien_core::StorageNotification::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "jobs".to_string(),
+                ))
+                .build()];
+        }
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(assets, alien_core::ResourceLifecycle::Frozen)
+            .add(
+                alien_core::Queue::new("jobs".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "execution",
+                alien_core::permissions::PermissionProfile::new()
+                    .resource("jobs", ["queue/data-read"]),
+            )
+            .build();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Gcp,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    /// A queue's topic and subscription are created as the controller builds them, and their IAM
+    /// policies may grant only what the signed stack derives, plus the Cloud Storage service agent
+    /// on a topic a storage of the stack notifies.
+    #[tokio::test]
+    async fn gcp_queue_writes_are_checked_against_the_signed_stack_and_sent_unchanged() {
+        let topic = format!("{PREFIX}-jobs");
+        let subscription = format!("{topic}-sub");
+        let request = |notified: bool, write: Value| {
+            json!({"applyResourceWrite": {
+                "release": gcp_queue_release(notified),
+                "signerLists": [signer_list()],
+                "resource": "jobs",
+                "writes": [write],
+            }})
+        };
+        let agent_policy = json!({"bindings": [{
+            "role": "roles/pubsub.publisher",
+            "members": [format!("serviceAccount:{STORAGE_AGENT}")]}]});
+        let attacker_policy = json!({"bindings": [{
+            "role": "roles/pubsub.publisher", "members": ["user:attacker@example.com"]}]});
+        let own_topic = format!("projects/acme-project/topics/{topic}");
+
+        for (name, notified, write, sent) in [
+            ("topic", false, json!({"createTopic": {"topic": topic, "body": {}}}), "{}".to_string()),
+            (
+                "subscription",
+                false,
+                json!({"createSubscription": {"subscription": subscription, "body": {"topic": own_topic}}}),
+                json!({"topic": own_topic}).to_string(),
+            ),
+            (
+                "storage agent publishing to a notified topic",
+                true,
+                json!({"setTopicIamPolicy": {"topic": topic, "policy": agent_policy}}),
+                agent_policy.to_string(),
+            ),
+        ] {
+            let (verifier, backend) = gcp_resource_verifier(&json!({}));
+            verifier
+                .handle(request(notified, write))
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            assert_eq!(*backend.forwarded.lock().unwrap(), vec![sent], "{name}");
+        }
+
+        for (name, notified, write) in [
+            ("a topic with a label", false, json!({"createTopic": {"topic": topic, "body": {"labels": {"a": "b"}}}})),
+            ("another topic", false, json!({"createTopic": {"topic": "other", "body": {}}})),
+            (
+                "a push subscription",
+                false,
+                json!({"createSubscription": {"subscription": subscription, "body": {
+                    "topic": own_topic, "pushConfig": {"pushEndpoint": "https://evil.example"}}}}),
+            ),
+            (
+                "a subscription on another topic",
+                false,
+                json!({"createSubscription": {"subscription": subscription, "body": {
+                    "topic": "projects/acme-project/topics/other"}}}),
+            ),
+            ("an outside publisher", true, json!({"setTopicIamPolicy": {"topic": topic, "policy": attacker_policy}})),
+            ("the storage agent on a topic nothing notifies", false, json!({"setTopicIamPolicy": {"topic": topic, "policy": agent_policy}})),
+            ("an outside subscriber", false, json!({"setSubscriptionIamPolicy": {"subscription": subscription, "policy": attacker_policy}})),
+            ("another subscription", false, json!({"setSubscriptionIamPolicy": {"subscription": "other-sub", "policy": {}}})),
+        ] {
+            let (verifier, backend) = gcp_resource_verifier(&json!({}));
+            let reason = refusal(verifier.handle(request(notified, write)).await);
+            assert!(reason.starts_with("Refused: "), "{name}: {reason}");
             assert!(backend.forwarded.lock().unwrap().is_empty(), "{name}: sent");
         }
     }

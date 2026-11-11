@@ -622,6 +622,19 @@ const GCP_VERIFIER_BUCKET_PERMISSIONS: &[&str] = &[
     "storage.buckets.update",
 ];
 
+/// What the GCP verifier may do with the install's Pub/Sub topics and subscriptions: create them
+/// and set who may reach them. Bound under a condition on their names; the verifier checks every
+/// request against the signed stack before it sends it.
+const GCP_VERIFIER_QUEUE_PERMISSIONS: &[&str] = &[
+    "pubsub.topics.create",
+    "pubsub.topics.getIamPolicy",
+    "pubsub.topics.setIamPolicy",
+    "pubsub.topics.attachSubscription",
+    "pubsub.subscriptions.create",
+    "pubsub.subscriptions.getIamPolicy",
+    "pubsub.subscriptions.setIamPolicy",
+];
+
 /// What the GCP verifier uses that the install doesn't name: the network its machines join, the
 /// images they boot, the template list (it picks the next template number) and the operations
 /// it waits on.
@@ -739,6 +752,12 @@ fn gcp_verifier_blocks(
             GCP_VERIFIER_BUCKET_PERMISSIONS,
         ),
         custom_role(
+            "signing_verifier_queues",
+            "verifier_queues",
+            "verifier: the install's queues",
+            GCP_VERIFIER_QUEUE_PERMISSIONS,
+        ),
+        custom_role(
             "signing_verifier_shared",
             "verifier_shared",
             "verifier: network and images",
@@ -801,6 +820,34 @@ fn gcp_verifier_blocks(
                             "expression",
                             escaped_template(
                                 r#"resource.type == "storage.googleapis.com/Bucket" && resource.name.startsWith("projects/_/buckets/${local.resource_prefix}-")"#,
+                            ),
+                        ),
+                    ],
+                )),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_queues",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_queues",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+                nested(block(
+                    "condition",
+                    [
+                        attr("title", Expression::String("The install's own queues".to_string())),
+                        attr(
+                            "expression",
+                            escaped_template(
+                                r#"resource.name.startsWith("projects/${var.gcp_project}/topics/${local.resource_prefix}-") || resource.name.startsWith("projects/${var.gcp_project}/subscriptions/${local.resource_prefix}-")"#,
                             ),
                         ),
                     ],

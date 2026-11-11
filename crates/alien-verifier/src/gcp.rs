@@ -183,6 +183,84 @@ impl Gcp {
         Ok(())
     }
 
+    /// A Pub/Sub topic's or subscription's IAM policy as it is now. `collection` is `topics` or
+    /// `subscriptions`.
+    pub async fn pubsub_iam_policy(&self, collection: &str, name: &str) -> Result<Value> {
+        let url = format!(
+            "https://pubsub.googleapis.com/v1/projects/{}/{collection}/{name}:getIamPolicy?options.requestedPolicyVersion=3",
+            self.project
+        );
+        self.call(
+            reqwest::Method::GET,
+            &url,
+            None,
+            &format!("pubsub.{collection}.getIamPolicy {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{collection} {name} does not exist"))))
+    }
+
+    /// Replace a Pub/Sub topic's or subscription's IAM policy, as the controller built it.
+    pub async fn set_pubsub_iam_policy(
+        &self,
+        collection: &str,
+        name: &str,
+        policy: &Value,
+    ) -> Result<()> {
+        let url = format!(
+            "https://pubsub.googleapis.com/v1/projects/{}/{collection}/{name}:setIamPolicy",
+            self.project
+        );
+        let body = json!({ "policy": policy });
+        self.call(
+            reqwest::Method::POST,
+            &url,
+            Some(&body),
+            &format!("pubsub.{collection}.setIamPolicy {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{collection} {name} does not exist"))))?;
+        Ok(())
+    }
+
+    /// Create a Pub/Sub topic or subscription (`collection` is `topics` or `subscriptions`) with
+    /// the body the controller built.
+    pub async fn create_pubsub(&self, collection: &str, name: &str, body: &Value) -> Result<()> {
+        let url = format!(
+            "https://pubsub.googleapis.com/v1/projects/{}/{collection}/{name}",
+            self.project
+        );
+        self.call(
+            reqwest::Method::PUT,
+            &url,
+            Some(body),
+            &format!("pubsub.{collection}.create {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{collection} {name} was not created"))))?;
+        Ok(())
+    }
+
+    /// The email of the project's Cloud Storage service agent, the one identity that publishes a
+    /// bucket's notifications.
+    pub async fn storage_service_agent(&self) -> Result<String> {
+        let url = format!(
+            "https://storage.googleapis.com/storage/v1/projects/{}/serviceAccount",
+            self.project
+        );
+        let response = self
+            .call(reqwest::Method::GET, &url, None, "storage.projects.serviceAccount")
+            .await?
+            .ok_or_else(|| AlienError::new(failed("the project has no Cloud Storage service agent")))?;
+        response["email_address"]
+            .as_str()
+            .or_else(|| response["emailAddress"].as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                AlienError::new(failed("the Cloud Storage service agent has no email address"))
+            })
+    }
+
     fn service_url(&self, name: &str) -> String {
         format!(
             "https://run.googleapis.com/v2/projects/{}/locations/{}/services/{name}",
@@ -776,12 +854,33 @@ impl Backend for GcpBackend {
         facts: &crate::cloud_write::resource::ResourceFacts<'_>,
         write: &crate::cloud_write::resource::ResourceWrite,
     ) -> Result<()> {
-        let crate::cloud_write::resource::ResourceWrite::SetBucketIamPolicy { bucket, .. } = write
-        else {
-            return Ok(());
+        use crate::cloud_write::resource::{check_gcp_state, ResourceWrite};
+        let current = match write {
+            ResourceWrite::SetBucketIamPolicy { bucket, .. } => {
+                self.0.bucket_iam_policy(bucket).await?
+            }
+            ResourceWrite::SetTopicIamPolicy { topic, .. } => {
+                self.0.pubsub_iam_policy("topics", topic).await?
+            }
+            ResourceWrite::SetSubscriptionIamPolicy { subscription, .. } => {
+                self.0.pubsub_iam_policy("subscriptions", subscription).await?
+            }
+            _ => return Ok(()),
         };
-        let current = self.0.bucket_iam_policy(bucket).await?;
-        crate::cloud_write::resource::check_gcp_state(facts, write, &current, &self.0.region)
+        // Only a topic that takes storage notifications may grant the Cloud Storage service
+        // agent, so the lookup is made only for it.
+        let agent = match write {
+            ResourceWrite::SetTopicIamPolicy { .. }
+                if alien_core::storage_notifications::queue_receives_storage_notifications(
+                    &facts.stack,
+                    facts.resource_id,
+                ) =>
+            {
+                Some(self.0.storage_service_agent().await?)
+            }
+            _ => None,
+        };
+        check_gcp_state(facts, write, &current, &self.0.region, agent.as_deref())
     }
 
     async fn forward_resource_write(

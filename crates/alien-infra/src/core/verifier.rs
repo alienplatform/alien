@@ -428,6 +428,30 @@ pub enum ResourceWrite {
     /// Cloud Storage patch of a bucket's public access prevention.
     #[serde(rename_all = "camelCase")]
     SetPublicAccessPrevention { bucket: String, value: String },
+    /// Pub/Sub create topic: the topic as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateTopic {
+        topic: String,
+        body: serde_json::Value,
+    },
+    /// Pub/Sub create subscription: the subscription as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    CreateSubscription {
+        subscription: String,
+        body: serde_json::Value,
+    },
+    /// Pub/Sub setIamPolicy of a topic: its whole policy.
+    #[serde(rename_all = "camelCase")]
+    SetTopicIamPolicy {
+        topic: String,
+        policy: serde_json::Value,
+    },
+    /// Pub/Sub setIamPolicy of a subscription: its whole policy.
+    #[serde(rename_all = "camelCase")]
+    SetSubscriptionIamPolicy {
+        subscription: String,
+        policy: serde_json::Value,
+    },
 }
 
 /// What `applyResourceWrite` did.

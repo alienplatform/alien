@@ -388,3 +388,51 @@ fn the_verifier_holds_its_bucket_permissions_only_on_the_installs_own_buckets() 
         "the condition names the install's bucket prefix"
     );
 }
+
+/// The verifier creates the install's topics and subscriptions and sets who may reach them, only
+/// on resources named with the install's prefix, and no other verifier role holds those
+/// permissions.
+#[test]
+fn the_verifier_holds_its_pubsub_permissions_only_on_the_installs_own_queues() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .expect("stack");
+    let settings = StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let text = module_text(&render(&stack, TerraformTarget::Gcp, settings));
+    let (roles, bindings) = verifier_custom_roles(&text);
+    for permission in [
+        "pubsub.topics.create",
+        "pubsub.topics.setIamPolicy",
+        "pubsub.subscriptions.create",
+        "pubsub.subscriptions.setIamPolicy",
+    ] {
+        let holders: Vec<&String> = roles
+            .iter()
+            .filter(|(_, permissions)| permissions.iter().any(|held| held == permission))
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(holders, ["signing_verifier_queues"], "{permission}");
+    }
+    assert!(
+        bindings.contains(&("signing_verifier_queues".to_string(), true)),
+        "the queue role is bound without a name condition: {bindings:?}"
+    );
+    assert!(
+        text.contains(r#"resource.name.startsWith(\"projects/${var.gcp_project}/topics/${local.resource_prefix}-\")"#),
+        "the condition names the install's topic prefix"
+    );
+}

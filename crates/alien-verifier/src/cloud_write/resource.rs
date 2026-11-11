@@ -94,6 +94,18 @@ pub enum ResourceWrite {
     /// Cloud Storage patch of a bucket's public access prevention (`enforced` or `inherited`).
     #[serde(rename_all = "camelCase")]
     SetPublicAccessPrevention { bucket: String, value: String },
+    /// Pub/Sub create topic, with the topic as the client sends it (no fields).
+    #[serde(rename_all = "camelCase")]
+    CreateTopic { topic: String, body: Value },
+    /// Pub/Sub create subscription, with the subscription as the client sends it (its topic only).
+    #[serde(rename_all = "camelCase")]
+    CreateSubscription { subscription: String, body: Value },
+    /// Pub/Sub setIamPolicy of a topic: its whole policy.
+    #[serde(rename_all = "camelCase")]
+    SetTopicIamPolicy { topic: String, policy: Value },
+    /// Pub/Sub setIamPolicy of a subscription: its whole policy.
+    #[serde(rename_all = "camelCase")]
+    SetSubscriptionIamPolicy { subscription: String, policy: Value },
 }
 
 impl ResourceWrite {
@@ -109,6 +121,10 @@ impl ResourceWrite {
             ResourceWrite::SetQueueAttributes { .. } => "SetQueueAttributes",
             ResourceWrite::SetBucketIamPolicy { .. } => "SetBucketIamPolicy",
             ResourceWrite::SetPublicAccessPrevention { .. } => "SetPublicAccessPrevention",
+            ResourceWrite::CreateTopic { .. } => "CreateTopic",
+            ResourceWrite::CreateSubscription { .. } => "CreateSubscription",
+            ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
+            ResourceWrite::SetSubscriptionIamPolicy { .. } => "SetSubscriptionIamPolicy",
         }
     }
 }
@@ -347,7 +363,12 @@ pub fn check_aws_write(
             }
             Ok(())
         }
-        ResourceWrite::SetBucketIamPolicy { .. } | ResourceWrite::SetPublicAccessPrevention { .. } => {
+        ResourceWrite::SetBucketIamPolicy { .. }
+        | ResourceWrite::SetPublicAccessPrevention { .. }
+        | ResourceWrite::CreateTopic { .. }
+        | ResourceWrite::CreateSubscription { .. }
+        | ResourceWrite::SetTopicIamPolicy { .. }
+        | ResourceWrite::SetSubscriptionIamPolicy { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -690,7 +711,12 @@ pub async fn forward_aws_write(
             })?;
             Ok(json!({ "queueUrl": queue_url }))
         }
-        ResourceWrite::SetBucketIamPolicy { .. } | ResourceWrite::SetPublicAccessPrevention { .. } => {
+        ResourceWrite::SetBucketIamPolicy { .. }
+        | ResourceWrite::SetPublicAccessPrevention { .. }
+        | ResourceWrite::CreateTopic { .. }
+        | ResourceWrite::CreateSubscription { .. }
+        | ResourceWrite::SetTopicIamPolicy { .. }
+        | ResourceWrite::SetSubscriptionIamPolicy { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -730,8 +756,97 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
             let storage = own_bucket(bucket)?;
             check_public_access_prevention(value, storage.public_read).map_err(refused)
         }
+        ResourceWrite::CreateTopic { topic, body } => {
+            facts.queue()?;
+            own_topic(facts, topic, write.operation())?;
+            if !body.as_object().is_some_and(|fields| fields.is_empty()) {
+                return Err(refused(
+                    "CreateTopic sets a field: a topic is created with none",
+                ));
+            }
+            Ok(())
+        }
+        ResourceWrite::CreateSubscription { subscription, body } => {
+            facts.queue()?;
+            let topic = gcp_topic_name(facts);
+            if *subscription != gcp_subscription_name(facts) {
+                return Err(refused(format!(
+                    "CreateSubscription names {subscription}, not {}",
+                    gcp_subscription_name(facts)
+                )));
+            }
+            let project = gcp_project(facts)?;
+            let fields = body
+                .as_object()
+                .ok_or_else(|| refused("the subscription is not a JSON object"))?;
+            if let Some(field) = fields.keys().find(|key| !matches!(key.as_str(), "name" | "topic")) {
+                return Err(refused(format!(
+                    "CreateSubscription sets '{field}': a pull subscription has only its topic"
+                )));
+            }
+            if fields.get("topic").and_then(Value::as_str)
+                != Some(format!("projects/{project}/topics/{topic}").as_str())
+            {
+                return Err(refused(format!("the subscription's topic is not {topic}")));
+            }
+            if let Some(name) = fields.get("name") {
+                if name.as_str() != Some(format!("projects/{project}/subscriptions/{subscription}").as_str()) {
+                    return Err(refused("the subscription's name is not its own"));
+                }
+            }
+            Ok(())
+        }
+        ResourceWrite::SetTopicIamPolicy { topic, policy } => {
+            facts.queue()?;
+            own_topic(facts, topic, write.operation())?;
+            if !policy.is_object() {
+                return Err(refused("the topic IAM policy is not a JSON object"));
+            }
+            Ok(())
+        }
+        ResourceWrite::SetSubscriptionIamPolicy { subscription, policy } => {
+            facts.queue()?;
+            if *subscription != gcp_subscription_name(facts) {
+                return Err(refused(format!(
+                    "SetSubscriptionIamPolicy names {subscription}, not {}",
+                    gcp_subscription_name(facts)
+                )));
+            }
+            if !policy.is_object() {
+                return Err(refused("the subscription IAM policy is not a JSON object"));
+            }
+            Ok(())
+        }
         other => Err(refused(format!("GCP takes no {} write", other.operation()))),
     }
+}
+
+/// The topic this install gives queue `facts.resource_id` on GCP.
+pub fn gcp_topic_name(facts: &ResourceFacts<'_>) -> String {
+    format!("{}-{}", facts.place.prefix, facts.resource_id)
+}
+
+/// The pull subscription this install gives the queue.
+pub fn gcp_subscription_name(facts: &ResourceFacts<'_>) -> String {
+    format!("{}-sub", gcp_topic_name(facts))
+}
+
+fn gcp_project<'a>(facts: &'a ResourceFacts<'_>) -> Result<&'a str> {
+    match &facts.place.install {
+        alien_signing::InstallId::Gcp { project, .. } => Ok(project),
+        _ => Err(refused("this install is not a GCP install")),
+    }
+}
+
+fn own_topic(facts: &ResourceFacts<'_>, topic: &str, operation: &str) -> Result<()> {
+    let own = gcp_topic_name(facts);
+    if topic != own {
+        return Err(refused(format!(
+            "{operation} names topic {topic}, not {own}, the name this install gives queue '{}'",
+            facts.resource_id
+        )));
+    }
+    Ok(())
 }
 
 /// Check a GCP write against `current`, the IAM policy the bucket holds now: a new policy may
@@ -742,28 +857,68 @@ pub fn check_gcp_state(
     write: &ResourceWrite,
     current: &Value,
     region: &str,
+    storage_agent: Option<&str>,
 ) -> Result<()> {
-    let ResourceWrite::SetBucketIamPolicy { bucket, policy } = write else {
-        return Ok(());
+    use alien_permissions::generators::gcp_runtime::{GcpBindingResourceKind, GcpBindingTargetScope, GcpIamBinding};
+    let project = gcp_project(facts)?;
+    let install = alien_permissions::gcp_resource_grants::GcpInstall {
+        prefix: &facts.place.prefix,
+        project_id: project,
+        project_number: None,
+        region,
     };
-    let storage = facts.storage()?;
-    let alien_signing::InstallId::Gcp { project, .. } = &facts.place.install else {
-        return Err(refused("this install is not a GCP install"));
+    let derive = |resource_type: &str, name: &str| {
+        alien_permissions::gcp_resource_grants::gcp_resource_scoped_bindings(
+            &facts.stack,
+            &install,
+            facts.resource_id,
+            resource_type,
+            name,
+        )
+        .map_err(|error| refused(format!("the signed stack's grants do not derive: {error}")))
     };
-    let derived = alien_permissions::gcp_resource_grants::gcp_resource_scoped_bindings(
-        &facts.stack,
-        &alien_permissions::gcp_resource_grants::GcpInstall {
-            prefix: &facts.place.prefix,
-            project_id: project,
-            project_number: None,
-            region,
-        },
-        facts.resource_id,
-        "storage",
-        bucket,
-    )
-    .map_err(|error| refused(format!("the signed stack's grants do not derive: {error}")))?;
-    check_bucket_iam(policy, current, &derived, storage.public_read).map_err(refused)
+    match write {
+        ResourceWrite::SetBucketIamPolicy { bucket, policy } => {
+            let storage = facts.storage()?;
+            let derived = derive("storage", bucket)?;
+            check_bucket_iam(policy, current, &derived, storage.public_read).map_err(refused)
+        }
+        ResourceWrite::SetTopicIamPolicy { topic, policy } => {
+            let mut derived: Vec<GcpIamBinding> = derive("queue", topic)?
+                .into_iter()
+                .filter(|binding| binding.resource_kind == Some(GcpBindingResourceKind::PubsubTopic))
+                .collect();
+            // The one outside publisher a topic may have is the Cloud Storage service agent, and
+            // only when a storage of the signed stack notifies this queue.
+            if alien_core::storage_notifications::queue_receives_storage_notifications(
+                &facts.stack,
+                facts.resource_id,
+            ) {
+                if let Some(agent) = storage_agent {
+                    derived.push(GcpIamBinding {
+                        role: "roles/pubsub.publisher".to_string(),
+                        members: vec![format!("serviceAccount:{agent}")],
+                        target: GcpBindingTargetScope::CurrentResource,
+                        target_resource_name: None,
+                        resource_kind: Some(GcpBindingResourceKind::PubsubTopic),
+                        condition: None,
+                    });
+                }
+            }
+            check_bucket_iam(policy, current, &derived, false).map_err(refused)
+        }
+        ResourceWrite::SetSubscriptionIamPolicy { subscription, policy } => {
+            let derived: Vec<GcpIamBinding> = derive("queue", &gcp_topic_name(facts))?
+                .into_iter()
+                .filter(|binding| {
+                    binding.resource_kind == Some(GcpBindingResourceKind::PubsubSubscription)
+                })
+                .collect();
+            let _ = subscription;
+            check_bucket_iam(policy, current, &derived, false).map_err(refused)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Send a checked GCP write unchanged.
@@ -781,6 +936,22 @@ pub async fn forward_gcp_write(
         ResourceWrite::SetPublicAccessPrevention { bucket, value } => {
             gcp.set_public_access_prevention(bucket, value).await?;
             Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::CreateTopic { topic, body } => {
+            gcp.create_pubsub("topics", topic, body).await?;
+            Ok(json!({ "topic": topic }))
+        }
+        ResourceWrite::CreateSubscription { subscription, body } => {
+            gcp.create_pubsub("subscriptions", subscription, body).await?;
+            Ok(json!({ "subscription": subscription }))
+        }
+        ResourceWrite::SetTopicIamPolicy { topic, policy } => {
+            gcp.set_pubsub_iam_policy("topics", topic, policy).await?;
+            Ok(json!({ "topic": topic }))
+        }
+        ResourceWrite::SetSubscriptionIamPolicy { subscription, policy } => {
+            gcp.set_pubsub_iam_policy("subscriptions", subscription, policy).await?;
+            Ok(json!({ "subscription": subscription }))
         }
         other => Err(refused(format!("GCP takes no {} write", other.operation()))),
     }
