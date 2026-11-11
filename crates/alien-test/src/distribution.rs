@@ -2540,6 +2540,8 @@ async fn write_manager_fetch_values_from_base(
             "token": deployment.token.clone(),
             "name": deployment.name.clone(),
             "url": prepared.manager.public_url.clone(),
+            // Local test managers serve plain HTTP; the chart refuses that otherwise.
+            "allowInsecure": prepared.manager.public_url.starts_with("http://"),
             "deploymentId": deployment.id.clone(),
             "updates": "auto",
             "telemetry": "auto",

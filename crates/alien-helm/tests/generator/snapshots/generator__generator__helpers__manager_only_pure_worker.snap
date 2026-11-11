@@ -21,6 +21,9 @@ management:
   defaultUrl: ""
   # Override the captured or installed endpoint when routing changes.
   url: ""
+  # The Operator sends its deployment token to this endpoint, so the chart refuses a
+  # URL that isn't https. Set true only for a local or test manager over plain HTTP.
+  allowInsecure: false
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
   setupItem: deployment
@@ -309,6 +312,7 @@ postgres: {}
         "name": { "type": "string" },
         "url": { "type": "string" },
         "defaultUrl": { "type": "string" },
+        "allowInsecure": { "type": "boolean", "description": "Accept a management URL that isn't https. For a local or test manager only." },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
@@ -1014,7 +1018,11 @@ different namespaces of one cluster from colliding. */ -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
-{{- default $endpoint .Values.management.url -}}
+{{- $url := default $endpoint .Values.management.url -}}
+{{- if and $url (not (hasPrefix "https://" $url)) (not .Values.management.allowInsecure) -}}
+  {{- fail (printf "The management URL %q isn't https. The Operator sends its deployment token to it. Fix management.url (or management.defaultUrl), or set management.allowInsecure=true for a local or test manager." $url) -}}
+{{- end -}}
+{{- $url -}}
 {{- end -}}
 
 {{- define "deployment.runtimeEncryptionKey" -}}

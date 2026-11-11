@@ -46,7 +46,11 @@
     {{- end -}}
   {{- end -}}
 {{- end -}}
-{{- default $endpoint .Values.management.url -}}
+{{- $url := default $endpoint .Values.management.url -}}
+{{- if and $url (not (hasPrefix "https://" $url)) (not .Values.management.allowInsecure) -}}
+  {{- fail (printf "The management URL %q isn't https. The Operator sends its deployment token to it. Fix management.url (or management.defaultUrl), or set management.allowInsecure=true for a local or test manager." $url) -}}
+{{- end -}}
+{{- $url -}}
 {{- end -}}
 
 {{- define "deployment.runtimeEncryptionKey" -}}

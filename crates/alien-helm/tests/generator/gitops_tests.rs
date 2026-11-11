@@ -130,3 +130,19 @@ fn the_argo_example_installs_with_its_own_values() {
     assert!(values["runtime"]["imagePullSecrets"][0]["name"].is_string());
     test_utils::helm_template(&chart, Some(&to_yaml(values))).assert_ok("argo example values");
 }
+
+#[test]
+fn a_management_url_that_is_not_https_is_refused_unless_allowed() {
+    let chart = chart_files();
+    let credentials = "management:\n  token: test-credential\n";
+    let http = format!("{credentials}  url: http://manager.example.test\n");
+    let refused = test_utils::helm_template(&chart, Some(&http));
+    assert!(!refused.is_ok(), "{}", refused.stdout);
+    assert!(refused.stderr.contains("isn't https"), "{}", refused.stderr);
+
+    let allowed = format!("{http}  allowInsecure: true\n");
+    test_utils::helm_template(&chart, Some(&allowed)).assert_ok("http with allowInsecure");
+
+    let https = format!("{credentials}  url: https://manager.example.test\n");
+    test_utils::helm_template(&chart, Some(&https)).assert_ok("https url");
+}

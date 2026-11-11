@@ -4018,6 +4018,9 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   defaultUrl: ""
   # Override the captured or installed endpoint when routing changes.
   url: ""
+  # The Operator sends its deployment token to this endpoint, so the chart refuses a
+  # URL that isn't https. Set true only for a local or test manager over plain HTTP.
+  allowInsecure: false
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
   setupItem: deployment
@@ -4746,6 +4749,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "name": { "type": "string" },
         "url": { "type": "string" },
         "defaultUrl": { "type": "string" },
+        "allowInsecure": { "type": "boolean", "description": "Accept a management URL that isn't https. For a local or test manager only." },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },

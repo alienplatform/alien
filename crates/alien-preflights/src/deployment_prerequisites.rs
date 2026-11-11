@@ -737,9 +737,10 @@ impl DeploymentPrerequisiteCheck for ControllerAvailableCheck {
             }
             result.add_error(format!(
                 "Resource '{id}' is a {kind}, which a {platform} deployment without a cloud \
-                 behind the cluster can't create: nothing there manages it, and it has no \
-                 external binding. Remove it from the stack, or install on a cluster of a \
-                 cloud that supports {kind}.",
+                 behind the cluster can't create: nothing here manages it. Install through \
+                 your cloud's Terraform module for a managed cluster (EKS, GKE or AKS), which \
+                 creates it, or remove '{id}' from the stack. A resource type that accepts an \
+                 external binding can instead be pointed at existing infrastructure with one.",
                 platform = stack_state.platform
             ));
         }
