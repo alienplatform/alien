@@ -14,7 +14,7 @@ use alien_aws_clients::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_permissions::{
-    aws_key_policy::{aws_key_policy_for_stack, AwsKeyPrincipals},
+    aws_key_policy::{aws_key_policy_for_stack, LiteralAwsPrincipals},
     key_access::{aws_key_grants, key_access_plan},
 };
 use alien_macros::controller;
@@ -474,44 +474,14 @@ struct RoleGrant {
     document: String,
 }
 
-/// Roles are named as the identity controllers name them (`<prefix>-<id>`), so the policy and
-/// grants can be written before the roles' ARNs are read back.
-struct ControllerPrincipals<'a> {
-    partition: &'static str,
-    account_id: &'a str,
-    prefix: &'a str,
-}
-
-impl ControllerPrincipals<'_> {
-    fn role_arn(&self, name: &str) -> serde_json::Value {
-        serde_json::json!(format!(
-            "arn:{}:iam::{}:role/{}",
-            self.partition, self.account_id, name
-        ))
-    }
-}
-
-impl AwsKeyPrincipals for ControllerPrincipals<'_> {
-    fn account_root(&self) -> serde_json::Value {
-        serde_json::json!(format!("arn:{}:iam::{}:root", self.partition, self.account_id))
-    }
-
-    fn management_role(&self) -> Option<serde_json::Value> {
-        Some(self.role_arn(&crate::remote_stack_management::aws_management_role_name(
-            self.prefix,
-        )))
-    }
-
-    fn stack_role_pattern(&self) -> serde_json::Value {
-        self.role_arn(&format!("{}-*", self.prefix))
-    }
-
-    fn service_account_role(&self, id: &str) -> serde_json::Value {
-        self.role_arn(&format!("{}-{id}", self.prefix))
-    }
-
-    fn remote_bindings_role(&self) -> Option<serde_json::Value> {
-        Some(self.role_arn(&format!("{}-access", self.prefix)))
+fn principals<'a>(
+    ctx: &'a ResourceControllerContext<'_>,
+    aws: &'a alien_core::AwsClientConfig,
+) -> LiteralAwsPrincipals<'a> {
+    LiteralAwsPrincipals {
+        partition: crate::sandbox::aws_partition(&aws.region),
+        account_id: &aws.account_id,
+        prefix: ctx.resource_prefix,
     }
 }
 
@@ -523,11 +493,7 @@ fn desired_policy(ctx: &ResourceControllerContext<'_>, key_id: &str) -> Result<s
     })?;
     Ok(aws_key_policy_for_stack(
         &plan,
-        &ControllerPrincipals {
-            partition: crate::sandbox::aws_partition(&aws.region),
-            account_id: &aws.account_id,
-            prefix: ctx.resource_prefix,
-        },
+        &principals(ctx, aws),
     ))
 }
 

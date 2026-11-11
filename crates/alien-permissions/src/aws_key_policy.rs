@@ -204,6 +204,58 @@ pub trait AwsKeyPrincipals {
     fn remote_bindings_role(&self) -> Option<Value>;
 }
 
+/// Names roles by the convention the identity controllers follow when Alien creates the roles
+/// itself: `<prefix>-management`, `<prefix>-access` (Remote Bindings) and `<prefix>-<service
+/// account id>`. All of them are known before the roles exist.
+pub struct LiteralAwsPrincipals<'a> {
+    pub partition: &'a str,
+    pub account_id: &'a str,
+    pub prefix: &'a str,
+}
+
+impl LiteralAwsPrincipals<'_> {
+    fn role_arn(&self, name: &str) -> Value {
+        json!(format!(
+            "arn:{}:iam::{}:role/{}",
+            self.partition, self.account_id, name
+        ))
+    }
+
+    pub fn management_role_name(&self) -> String {
+        format!("{}-management", self.prefix)
+    }
+
+    pub fn access_role_name(&self) -> String {
+        format!("{}-access", self.prefix)
+    }
+
+    pub fn service_account_role_name(&self, id: &str) -> String {
+        format!("{}-{id}", self.prefix)
+    }
+}
+
+impl AwsKeyPrincipals for LiteralAwsPrincipals<'_> {
+    fn account_root(&self) -> Value {
+        json!(format!("arn:{}:iam::{}:root", self.partition, self.account_id))
+    }
+
+    fn management_role(&self) -> Option<Value> {
+        Some(self.role_arn(&self.management_role_name()))
+    }
+
+    fn stack_role_pattern(&self) -> Value {
+        self.role_arn(&format!("{}-*", self.prefix))
+    }
+
+    fn service_account_role(&self, id: &str) -> Value {
+        self.role_arn(&self.service_account_role_name(id))
+    }
+
+    fn remote_bindings_role(&self) -> Option<Value> {
+        Some(self.role_arn(&self.access_role_name()))
+    }
+}
+
 /// The key policy for the key an access plan describes.
 pub fn aws_key_policy_for_stack(
     plan: &crate::key_access::KeyAccessPlan,
