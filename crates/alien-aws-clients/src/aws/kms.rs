@@ -42,12 +42,11 @@ impl KmsClient {
         }
     }
 
-    async fn send<T: DeserializeOwned + Send + 'static>(
+    async fn request(
         &self,
         target: &str,
         body: String,
-        key_id: &str,
-    ) -> Result<T> {
+    ) -> Result<(reqwest::RequestBuilder, AwsSignConfig)> {
         self.credentials.ensure_fresh().await?;
         let region = self.credentials.region();
         let endpoint = self
@@ -64,19 +63,38 @@ impl KmsClient {
             .header("Content-Type", "application/x-amz-json-1.1")
             .content_sha256(&body)
             .body(body);
-        crate::aws::aws_request_utils::sign_send_json(
-            request,
-            &AwsSignConfig {
-                service_name: "kms".to_string(),
-                region: region.to_string(),
-                credentials: self.credentials.get_credentials(),
-                signing_region: None,
-            },
-        )
-        .await
-        .context(alien_client_core::ErrorData::GenericError {
-            message: format!("AWS KMS {target} failed for key '{key_id}'"),
-        })
+        let config = AwsSignConfig {
+            service_name: "kms".to_string(),
+            region: region.to_string(),
+            credentials: self.credentials.get_credentials(),
+            signing_region: None,
+        };
+        Ok((request, config))
+    }
+
+    async fn send<T: DeserializeOwned + Send + 'static>(
+        &self,
+        target: &str,
+        body: String,
+        key_id: &str,
+    ) -> Result<T> {
+        let (request, config) = self.request(target, body).await?;
+        crate::aws::aws_request_utils::sign_send_json(request, &config)
+            .await
+            .context(alien_client_core::ErrorData::GenericError {
+                message: format!("AWS KMS {target} failed for key '{key_id}'"),
+            })
+    }
+
+    /// For operations such as `EnableKeyRotation` and `PutKeyPolicy`, which answer 200 with an
+    /// empty body.
+    async fn send_no_response(&self, target: &str, body: String, key_id: &str) -> Result<()> {
+        let (request, config) = self.request(target, body).await?;
+        crate::aws::aws_request_utils::sign_send_no_response(request, &config)
+            .await
+            .context(alien_client_core::ErrorData::GenericError {
+                message: format!("AWS KMS {target} failed for key '{key_id}'"),
+            })
     }
 }
 
@@ -123,9 +141,7 @@ impl KmsApi for KmsClient {
 
     async fn enable_key_rotation(&self, key_id: &str) -> Result<()> {
         let body = key_id_body("EnableKeyRotation", key_id)?;
-        self.send::<serde_json::Value>("EnableKeyRotation", body, key_id)
-            .await
-            .map(|_| ())
+        self.send_no_response("EnableKeyRotation", body, key_id).await
     }
 
     async fn get_key_rotation_status(&self, key_id: &str) -> Result<bool> {
@@ -145,9 +161,7 @@ impl KmsApi for KmsClient {
         .context(alien_client_core::ErrorData::SerializationError {
             message: "Failed to serialize AWS KMS PutKeyPolicy request".to_string(),
         })?;
-        self.send::<serde_json::Value>("PutKeyPolicy", body, key_id)
-            .await
-            .map(|_| ())
+        self.send_no_response("PutKeyPolicy", body, key_id).await
     }
 
     async fn get_key_policy(&self, key_id: &str) -> Result<String> {
