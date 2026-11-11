@@ -132,6 +132,10 @@ impl Aws {
                 credentials.clone(),
             ))),
             backend: Arc::new(AwsBackend {
+                s3: Box::new(alien_aws_clients::s3::S3Client::new(
+                    http.clone(),
+                    credentials.clone(),
+                )),
                 lambda: LambdaClient::new(http.clone(), credentials.clone()),
                 machines: AwsMachines {
                     ec2: Ec2Client::new(http.clone(), credentials.clone()),

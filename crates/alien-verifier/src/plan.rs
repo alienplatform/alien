@@ -26,6 +26,9 @@ pub const SECRETS_ENV: &str = "WORKLOAD_SECRETS";
 pub enum Request {
     /// Check a cloud write a controller built for one signed workload, then send it unchanged.
     ApplyWrite(crate::cloud_write::ApplyWrite),
+    /// Check a cloud write a controller built for a resource of the signed stack, then send it
+    /// unchanged.
+    ApplyResourceWrite(crate::cloud_write::resource::ApplyResourceWrite),
     /// Roll a machine cluster to the release's launch template (AWS).
     RollMachines(crate::machines::RollMachines),
     /// Resize a machine cluster within its signed bounds (GCP, Azure).

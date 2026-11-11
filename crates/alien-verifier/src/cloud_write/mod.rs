@@ -10,6 +10,7 @@ pub mod cloud_run;
 pub mod container_apps;
 pub mod env;
 pub mod lambda;
+pub mod resource;
 
 use alien_signing::{ReleaseBody, SignedStatement, Workload};
 use serde::{Deserialize, Serialize};

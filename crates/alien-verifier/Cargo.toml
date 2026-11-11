@@ -16,6 +16,7 @@ alien-azure-clients = { workspace = true }
 alien-client-core = { workspace = true }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
+alien-permissions = { workspace = true, features = ["infrastructure"] }
 alien-signing = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
@@ -34,5 +35,4 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
-alien-permissions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }

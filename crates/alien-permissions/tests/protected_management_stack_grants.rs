@@ -498,7 +498,8 @@ fn the_built_in_vault_secret_write_renders_for_the_management_identity() {
         assert!(
             data_actions
                 .iter()
-                .any(|action| action.as_str() == "Microsoft.KeyVault/vaults/secrets/setSecret/action"),
+                .any(|action| action.as_str()
+                    == "Microsoft.KeyVault/vaults/secrets/setSecret/action"),
             "{data_actions:?}"
         );
     }

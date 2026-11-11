@@ -6,7 +6,6 @@ use crate::{
         protected_allowlist::is_built_in_unchanged,
         verifier_owned::{
             azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
-            
         },
     },
     variables::VariableInterpolator,

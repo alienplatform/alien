@@ -221,6 +221,8 @@ pub async fn read_bindings(
 
 /// Lambda functions and machines on AWS.
 pub struct AwsBackend<L, M> {
+    /// S3, for the bucket policies of the stack's storages.
+    pub s3: Box<dyn alien_aws_clients::s3::S3Api>,
     /// Lambda.
     pub lambda: L,
     /// EC2 and Auto Scaling.
@@ -243,6 +245,23 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
         crate::cloud_write::lambda::check_write(facts, write)
+    }
+
+    fn check_resource_write(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        crate::cloud_write::resource::check_aws_write(facts, write, &self.region)
+    }
+
+    async fn forward_resource_write(
+        &self,
+        _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+        newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        crate::cloud_write::resource::forward_aws_write(self.s3.as_ref(), write, newest).await
     }
 
     async fn check_state(&self, facts: &Facts<'_>, writes: &[CloudWrite]) -> Result<()> {

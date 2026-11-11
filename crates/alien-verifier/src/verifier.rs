@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use tracing::info;
 
+use crate::cloud_write::resource::{ApplyResourceWrite, ResourceFacts, ResourceWrite};
 use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::{Accepting, StillNewest};
@@ -31,6 +32,29 @@ pub trait Backend: Send + Sync {
     /// checking the workload's own binding. Nothing while the resource doesn't exist.
     async fn own_resource(&self, _place: &Place, _own_name: &str) -> Result<OwnResource> {
         Ok(OwnResource::default())
+    }
+    /// Check every field of `write`, for a resource of the signed stack, against this cloud's table.
+    fn check_resource_write(
+        &self,
+        _facts: &ResourceFacts<'_>,
+        write: &ResourceWrite,
+    ) -> Result<()> {
+        Err(refused(format!(
+            "this cloud takes no {} write",
+            write.operation()
+        )))
+    }
+    /// Send `write`, already checked, to the cloud unchanged.
+    async fn forward_resource_write(
+        &self,
+        _facts: &ResourceFacts<'_>,
+        write: &ResourceWrite,
+        _newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        Err(refused(format!(
+            "this cloud takes no {} write",
+            write.operation()
+        )))
     }
     /// Check every field of `write` against this cloud's table.
     fn check_write(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
@@ -157,6 +181,7 @@ impl Verifier {
         })?;
         match request {
             Request::ApplyWrite(request) => self.write(&request).await,
+            Request::ApplyResourceWrite(request) => self.resource_write(&request).await,
             Request::RollMachines(request) => self.roll(&request).await,
             Request::Scale(request) => self.scale(&request).await,
             Request::RemoveMachines(request) => self.remove(&request).await,
@@ -198,6 +223,67 @@ impl Verifier {
         let existed = self.backend.delete_workload(&name).await?;
         info!(name = %name, existed, "deleted a Live workload");
         Ok(json!({"deleted": name, "existed": existed}))
+    }
+
+    /// Apply the writes a controller built for a resource of the signed stack, after checking
+    /// every one of them against the signed stack.
+    async fn resource_write(&self, request: &ApplyResourceWrite) -> Result<Value> {
+        let (install, place) = self.install().await?;
+        let accepted = accept(
+            &install,
+            &request.signer_lists,
+            &request.release,
+            request.config.as_ref(),
+            place.platform(),
+            Utc::now(),
+        )?;
+        let stack = crate::cloud_write::resource::signed_stack(&accepted, &place)?;
+        let facts = ResourceFacts {
+            place: &place,
+            accepted: &accepted,
+            stack,
+            resource_id: &request.resource,
+        };
+        facts.entry()?;
+        if request.writes.is_empty() {
+            return Err(refused(format!(
+                "the request for resource '{}' carries no write",
+                request.resource
+            )));
+        }
+        for (index, write) in request.writes.iter().enumerate() {
+            self.backend
+                .check_resource_write(&facts, write)
+                .context(ErrorData::Refused {
+                    reason: format!(
+                        "write {} of {} ({}) was refused, so none was applied",
+                        index + 1,
+                        request.writes.len(),
+                        write.operation()
+                    ),
+                })?;
+        }
+        let acceptance = Acceptance::new(self.store.as_ref(), &place.prefix, &accepted);
+        acceptance.accept().await?;
+        let mut answers = Vec::with_capacity(request.writes.len());
+        for write in &request.writes {
+            answers.push(
+                self.backend
+                    .forward_resource_write(&facts, write, &acceptance)
+                    .await?,
+            );
+            info!(
+                resource = %request.resource,
+                operation = write.operation(),
+                "applied the controller's checked write"
+            );
+        }
+        Ok(json!({
+            "release": accepted.release.sequence,
+            "resource": request.resource,
+            "operations": request.writes.iter().map(ResourceWrite::operation).collect::<Vec<_>>(),
+            "answers": answers,
+        }))
     }
 
     async fn write(&self, request: &ApplyWrite) -> Result<Value> {
@@ -562,6 +648,178 @@ mod tests {
                 .push((write.operation().to_string(), recorded));
             Ok(json!({"operation": write.operation()}))
         }
+    }
+
+    /// An AWS backend that checks resource writes with the real rules and records what it
+    /// forwards.
+    struct ResourceForwards {
+        forwarded: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl Backend for ResourceForwards {
+        async fn binding_reads(
+            &self,
+            _place: &Place,
+            _workload: &Workload,
+        ) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
+        }
+        fn check_resource_write(
+            &self,
+            facts: &ResourceFacts<'_>,
+            write: &ResourceWrite,
+        ) -> Result<()> {
+            crate::cloud_write::resource::check_aws_write(facts, write, REGION)
+        }
+        async fn forward_resource_write(
+            &self,
+            _facts: &ResourceFacts<'_>,
+            write: &ResourceWrite,
+            newest: &dyn StillNewest,
+        ) -> Result<Value> {
+            newest.check().await?;
+            let ResourceWrite::PutBucketPolicy { policy, .. } = write;
+            self.forwarded.lock().unwrap().push(policy.clone());
+            Ok(json!({"operation": write.operation()}))
+        }
+    }
+
+    fn storage_release(public_read: bool) -> alien_signing::SignedStatement {
+        let assets = alien_core::Storage::new("assets".to_string())
+            .public_read(public_read)
+            .build();
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(assets, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Aws,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    fn bucket_policy_request(public_read: bool, bucket: &str, statements: Vec<Value>) -> Value {
+        json!({"applyResourceWrite": {
+            "release": storage_release(public_read),
+            "signerLists": [signer_list()],
+            "resource": "assets",
+            "writes": [{"putBucketPolicy": {
+                "bucket": bucket,
+                "policy": json!({"Version": "2012-10-17", "Statement": statements}).to_string(),
+            }}],
+        }})
+    }
+
+    fn resource_verifier() -> (Verifier, Arc<ResourceForwards>) {
+        let store = Arc::new(MemoryStore::protected(&settings()));
+        let backend = Arc::new(ResourceForwards {
+            forwarded: Mutex::new(Vec::new()),
+        });
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store,
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        (verifier, backend)
+    }
+
+    /// The bucket policy the controller builds is accepted unchanged, public read only when the
+    /// signed stack declares the storage public. Anything that would let another principal in is
+    /// refused, and nothing goes out.
+    #[tokio::test]
+    async fn a_bucket_policy_is_checked_against_the_signed_stack_and_sent_unchanged() {
+        let bucket = format!("{PREFIX}-assets");
+        let arn = format!("arn:aws:s3:::{bucket}");
+        let deny = json!({
+            "Sid": "DenyInsecureTransport", "Effect": "Deny", "Principal": "*",
+            "Action": "s3:*", "Resource": [arn, format!("{arn}/*")],
+            "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+        });
+        let public = alien_permissions::aws_bucket_policy::public_read_statement(&arn);
+
+        let (verifier, backend) = resource_verifier();
+        verifier
+            .handle(bucket_policy_request(false, &bucket, vec![deny.clone()]))
+            .await
+            .expect("the private policy is accepted");
+        assert_eq!(backend.forwarded.lock().unwrap().len(), 1);
+        let sent: Value = serde_json::from_str(&backend.forwarded.lock().unwrap()[0]).unwrap();
+        assert_eq!(sent["Statement"], json!([deny.clone()]), "sent unchanged");
+
+        let (verifier, backend) = resource_verifier();
+        verifier
+            .handle(bucket_policy_request(
+                true,
+                &bucket,
+                vec![deny.clone(), public.clone()],
+            ))
+            .await
+            .expect("public read is accepted for a storage the stack declares public");
+        assert_eq!(backend.forwarded.lock().unwrap().len(), 1);
+
+        let foreign = json!({
+            "Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::999988887777:root"},
+            "Action": "s3:*", "Resource": [arn, format!("{arn}/*")]
+        });
+        let management = json!({
+            "Effect": "Allow",
+            "Principal": {"AWS": format!("arn:aws:iam::{ACCOUNT}:role/{PREFIX}-management")},
+            "Action": "s3:PutObject", "Resource": format!("{arn}/*")
+        });
+        let service = json!({
+            "Effect": "Allow", "Principal": {"Service": "sns.amazonaws.com"},
+            "Action": "s3:PutObject", "Resource": format!("{arn}/*")
+        });
+        for (name, statements, declared_public) in [
+            ("a foreign account", vec![deny.clone(), foreign], true),
+            ("the management role", vec![deny.clone(), management], true),
+            (
+                "a service principal without a source",
+                vec![deny.clone(), service],
+                true,
+            ),
+            (
+                "a wildcard the stack does not declare",
+                vec![deny.clone(), public.clone()],
+                false,
+            ),
+        ] {
+            let (verifier, backend) = resource_verifier();
+            let reason = refusal(
+                verifier
+                    .handle(bucket_policy_request(declared_public, &bucket, statements))
+                    .await,
+            );
+            assert!(reason.contains("PutBucketPolicy"), "{name}: {reason}");
+            assert!(backend.forwarded.lock().unwrap().is_empty(), "{name}: sent");
+        }
+
+        // Another bucket, or a resource the stack does not have, is refused too.
+        let (verifier, backend) = resource_verifier();
+        let reason = refusal(
+            verifier
+                .handle(bucket_policy_request(
+                    false,
+                    "someone-elses-bucket",
+                    vec![deny.clone()],
+                ))
+                .await,
+        );
+        assert!(reason.contains("not acme-prod-assets"), "{reason}");
+        let mut unknown = bucket_policy_request(false, &bucket, vec![deny]);
+        unknown["applyResourceWrite"]["resource"] = json!("ledger");
+        let reason = refusal(verifier.handle(unknown).await);
+        assert!(reason.contains("is not in the signed stack"), "{reason}");
+        assert!(backend.forwarded.lock().unwrap().is_empty());
     }
 
     /// The release the install's ledger records, if any.
