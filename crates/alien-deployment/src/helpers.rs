@@ -2715,6 +2715,68 @@ mod tests {
         assert!(!func.environment.contains_key(ENV_ALIEN_SECRETS));
     }
 
+    /// The held set is exactly what delivery gives the missing secret: the Workers whose
+    /// environment carries it, plus what depends on them. A Worker the secret does not target
+    /// neither holds nor reads it.
+    #[test]
+    fn held_set_matches_delivery() {
+        let mut stack = make_single_function_stack("reader");
+        for id in ["bystander", "dependent"] {
+            let entry = make_single_function_stack(id).resources.shift_remove(id).unwrap();
+            stack.resources.insert(id.to_string(), entry);
+        }
+        stack.resources.get_mut("dependent").unwrap().dependencies =
+            vec![alien_core::ResourceRef::new(Worker::RESOURCE_TYPE, "reader")];
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "API key", "description": "",
+            "env": [{"name": "API_KEY", "targetResources": ["reader"]}]
+        }))
+        .unwrap()];
+        let config = make_config(make_snapshot(&[], &[]));
+        let missing = DeployerSecretReport {
+            input_id: "apiKey".to_string(),
+            label: "API key".to_string(),
+            required: true,
+            status: DeployerSecretStatus::Missing,
+            message: None,
+            version: None,
+            location: alien_core::DeployerSecretLocation {
+                commands: None,
+                store: alien_core::DeployerSecretStore::LocalVault,
+                name: "input-api-key".to_string(),
+                vault_name: None,
+                console_url: None,
+                cli_command: String::new(),
+                delete_command: None,
+            },
+        };
+
+        let injected = inject_environment_variables(
+            &mut stack,
+            &config,
+            Platform::Aws,
+            std::slice::from_ref(&missing),
+        )
+        .unwrap();
+        let held = resources_held_for_missing_secrets(&stack, &injected, &[&missing]);
+
+        let carries_secret = |id: &str| {
+            let worker = stack.resources[id].config.downcast_ref::<Worker>().unwrap();
+            worker
+                .environment
+                .values()
+                .any(|value| value.contains("input-api-key"))
+        };
+        assert!(carries_secret("reader"), "delivery reaches the targeted Worker");
+        assert!(!carries_secret("bystander"));
+        assert_eq!(
+            held,
+            BTreeSet::from(["reader".to_string(), "dependent".to_string()])
+        );
+        assert!(!held.contains("bystander"));
+    }
+
     /// Adds an internet-egress sandbox and the egress gateway container Alien installs for it.
     fn with_managed_gateway(mut stack: Stack) -> Stack {
         let sandbox = alien_core::Sandbox::new("subject".to_string())
