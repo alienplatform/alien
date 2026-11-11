@@ -1402,7 +1402,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_stops_local_daemon_processes() {
+    async fn cancellation_ends_local_daemon_processes() {
         let temp = tempfile::tempdir().expect("create test directory");
         let daemon_dir = temp.path().join("daemons").join("test-daemon");
         std::fs::create_dir_all(&daemon_dir).expect("create daemon directory");
