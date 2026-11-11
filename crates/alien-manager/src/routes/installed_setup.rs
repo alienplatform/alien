@@ -562,6 +562,9 @@ async fn write(
         return Ok(false);
     };
     let lane_known = deployment.setup_target.is_some();
+    // A refused chart's fingerprint is not stored as the deployment's: the next
+    // report would match it and clear the refusal while the chart still differs.
+    let chart_accepted = runtime_metadata.setup_report_refusal.is_none();
     let result = state
         .deployment_store
         .update_imported_stack_state(
@@ -579,7 +582,7 @@ async fn write(
                 } else {
                     report.setup_target.clone()
                 },
-                setup_fingerprint: if schedule_reconciliation || !lane_known {
+                setup_fingerprint: if schedule_reconciliation || (!lane_known && chart_accepted) {
                     report.setup_fingerprint.clone()
                 } else {
                     deployment.setup_fingerprint.clone().unwrap_or_default()
@@ -1000,6 +1003,8 @@ pub(super) mod tests {
         installed_release: String,
         waiting_release: String,
         written: std::sync::Arc<std::sync::Mutex<Vec<alien_core::RuntimeMetadata>>>,
+        /// The (lane, fingerprint) each write would store on the deployment.
+        stored_setup: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
         db: std::sync::Arc<crate::stores::sqlite::SqliteDatabase>,
         _temp: tempfile::TempDir,
     }
@@ -1072,11 +1077,17 @@ pub(super) mod tests {
             .prepared_stack = Some(prepared);
 
         let written = Arc::new(Mutex::new(Vec::new()));
+        let stored_setup = Arc::new(Mutex::new(Vec::new()));
         let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
         let sink = written.clone();
+        let setup_sink = stored_setup.clone();
         store
             .expect_update_imported_stack_state()
             .returning(move |_, _, params| {
+                setup_sink
+                    .lock()
+                    .expect("log")
+                    .push((params.setup_target, params.setup_fingerprint));
                 sink.lock().expect("log").push(params.runtime_metadata);
                 Err(if conflict {
                     AlienError::new(crate::error::ErrorData::DeploymentChangedConcurrently {
@@ -1113,6 +1124,7 @@ pub(super) mod tests {
             installed_release,
             waiting_release,
             written,
+            stored_setup,
             db,
             _temp: temp,
         }
@@ -1163,6 +1175,23 @@ pub(super) mod tests {
             refusal.reason.contains(&f.installed_release),
             "{}",
             refusal.reason
+        );
+        drop(written);
+
+        // The next sync sees the record that write produced, on a deployment
+        // whose lane was not known before. The refused chart's fingerprint is
+        // not what the deployment holds, so the report is judged again and the
+        // refusal stays.
+        let (target, fingerprint) = f.stored_setup.lock().expect("log")[0].clone();
+        f.record.setup_target = Some(target);
+        f.record.setup_fingerprint = Some(fingerprint);
+        f.record.setup_fingerprint_version = Some(rolled_back.setup_fingerprint_version);
+        f.record.runtime_metadata = Some(f.written.lock().expect("log")[0].clone());
+        handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
+        let written = f.written.lock().expect("log");
+        assert!(
+            written.iter().all(|m| m.setup_report_refusal.is_some()),
+            "a later sync must not clear the refusal"
         );
     }
 
