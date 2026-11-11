@@ -9,6 +9,11 @@ use serde_json::json;
 
 const GATE: &str = "keyEnabled";
 
+/// Injection hashes each resource's variables with the process key.
+fn digest_key() {
+    alien_deployment::set_secrets_digest_key_if_unset([9; 32]);
+}
+
 fn client() -> ClientConfig {
     ClientConfig::Local {
         state_directory: "/unused".into(),
@@ -123,6 +128,7 @@ async fn unanswered_deployment(gated_keys: &[&str]) -> DeploymentState {
 }
 
 async fn update(state: DeploymentState, input: Option<bool>) -> DeploymentState {
+    digest_key();
     alien_deployment::step(state, config(input), client(), None)
         .await
         .expect("update step")
