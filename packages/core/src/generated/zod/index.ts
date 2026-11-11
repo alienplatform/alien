@@ -10,6 +10,7 @@ export type { AiModelAvailabilityObservation } from "./ai-model-availability-obs
 export type { AiModelAvailability } from "./ai-model-availability-schema.js";
 export type { AiModel } from "./ai-model-schema.js";
 export type { AiOutputs } from "./ai-outputs-schema.js";
+export type { AiQuotaWarning } from "./ai-quota-warning-schema.js";
 export type { Ai } from "./ai-schema.js";
 export type { AlienError } from "./alien-error-schema.js";
 export type { AlienEvent } from "./alien-event-schema.js";
@@ -561,6 +562,7 @@ export { AiModelAvailabilityObservationSchema } from "./ai-model-availability-ob
 export { AiModelAvailabilitySchema } from "./ai-model-availability-schema.js";
 export { AiModelSchema } from "./ai-model-schema.js";
 export { AiOutputsSchema } from "./ai-outputs-schema.js";
+export { AiQuotaWarningSchema } from "./ai-quota-warning-schema.js";
 export { AiSchema } from "./ai-schema.js";
 export { AlienErrorSchema } from "./alien-error-schema.js";
 export { AlienEventSchema } from "./alien-event-schema.js";

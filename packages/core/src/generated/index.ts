@@ -10,6 +10,7 @@ export type { AiModelAvailabilityObservation } from "./zod/ai-model-availability
 export type { AiModelAvailability } from "./zod/ai-model-availability-schema.js";
 export type { AiModel } from "./zod/ai-model-schema.js";
 export type { AiOutputs } from "./zod/ai-outputs-schema.js";
+export type { AiQuotaWarning } from "./zod/ai-quota-warning-schema.js";
 export type { Ai } from "./zod/ai-schema.js";
 export type { AlienError } from "./zod/alien-error-schema.js";
 export type { AlienEvent } from "./zod/alien-event-schema.js";
@@ -561,6 +562,7 @@ export { AiModelAvailabilityObservationSchema } from "./zod/ai-model-availabilit
 export { AiModelAvailabilitySchema } from "./zod/ai-model-availability-schema.js";
 export { AiModelSchema } from "./zod/ai-model-schema.js";
 export { AiOutputsSchema } from "./zod/ai-outputs-schema.js";
+export { AiQuotaWarningSchema } from "./zod/ai-quota-warning-schema.js";
 export { AiSchema } from "./zod/ai-schema.js";
 export { AlienErrorSchema } from "./zod/alien-error-schema.js";
 export { AlienEventSchema } from "./zod/alien-event-schema.js";
