@@ -148,13 +148,6 @@ const AWS_PARAMETER_WRITES: &[&str] = &[
     "ssm:UnlabelParameterVersion",
 ];
 
-/// Reading the value of an SSM parameter, current or past.
-const AWS_PARAMETER_READS: &[&str] = &[
-    "ssm:GetParameter",
-    "ssm:GetParameters",
-    "ssm:GetParameterHistory",
-];
-
 /// The keys of the `secrets` vault the deployment sync writes or removes: the telemetry auth
 /// headers and the command token. Each `?????` stands for the five-letter product prefix of
 /// the key, which setup artifacts don't spell out.
@@ -253,27 +246,6 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
                     "arn:aws:iam::{account}:policy/{}",
                     aws_management_limits_name(prefix)
                 )
-            },
-            {
-                // Inputs the vendor signed or the customer set are secrets the app reads, and
-                // the state is the verifier's ledger. Any install's, so a stack that grants
-                // `ssm:GetParameter*` on `*` doesn't reach them. `DescribeParameters` has no
-                // resource scope and returns names, not values.
-                "Sid": "NoReadingSigningInputsOrState",
-                "Effect": "Deny",
-                "Action": AWS_PARAMETER_READS,
-                "Resource": [
-                    format!("arn:aws:ssm:{region}:{account}:parameter/signed/*/inputs/*"),
-                    format!("arn:aws:ssm:{region}:{account}:parameter/signed/*/state*")
-                ]
-            },
-            {
-                // The path read is authorised on the path, not on each parameter under it,
-                // so a grant on `*` would return the inputs. Nothing in management uses it.
-                "Sid": "NoReadingParametersByPath",
-                "Effect": "Deny",
-                "Action": "ssm:GetParametersByPath",
-                "Resource": "*"
             },
             {
                 "Sid": "CallTheVerifier",
