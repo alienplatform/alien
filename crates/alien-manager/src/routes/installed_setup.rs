@@ -66,6 +66,7 @@ pub(super) fn decide(
     deployment: &DeploymentRecord,
     report: &InstalledSetup,
     target: &Stack,
+    current_chart_version: Option<&str>,
 ) -> ReportDecision {
     let Some(metadata) = deployment.runtime_metadata.as_ref() else {
         return ReportDecision::NoOp;
@@ -83,11 +84,25 @@ pub(super) fn decide(
     }
 
     // Only the release the deployment is waiting for can complete its update.
-    // With no release waiting there is no update to authorize: a chart that
-    // differs then is an older chart (after a rollback) or a newer one the
-    // deployment has not been pointed at yet.
+    // With no release waiting there is no update to authorize. A chart that
+    // differs then is a rollback to an older chart, which the Operator now
+    // runs while the deployment's resources belong to the current release: the
+    // owner must upgrade back to the current release's chart. A newer chart the
+    // deployment has not been pointed at yet differs too, and the same
+    // instruction applies until the deployment is pointed at it.
     let Some(waiting) = deployment.desired_release_id.as_deref() else {
-        return ReportDecision::NoOp;
+        return match deployment.current_release_id.as_deref() {
+            Some(current) if current != report.release_id => {
+                let chart = current_chart_version
+                    .map(|version| format!("chart version {version}"))
+                    .unwrap_or_else(|| "the chart".to_string());
+                ReportDecision::Refuse(format!(
+                    "The installed chart (release {}) has a different setup than release {current}, which this deployment runs. Upgrade to {chart} for release {current}.",
+                    report.release_id
+                ))
+            }
+            _ => ReportDecision::NoOp,
+        };
     };
     if waiting != report.release_id {
         return ReportDecision::Refuse(format!(
@@ -209,7 +224,8 @@ async fn apply_report(
     // With no release waiting there is no update to authorize, so nothing in
     // the release is needed: an idle sync only records the Helm release name.
     let Some(waiting) = deployment.desired_release_id.as_deref() else {
-        return record_match(state, subject, deployment, report, true).await;
+        return record_without_waiting(state, subject, deployment, report, settings, stack_state)
+            .await;
     };
 
     // Whether a chart can carry the waiting release depends on the release,
@@ -256,7 +272,7 @@ async fn apply_report(
         Err(reason) => return record_refusal(state, subject, deployment, report, reason).await,
     };
 
-    match decide(deployment, report, &target) {
+    match decide(deployment, report, &target, None) {
         ReportDecision::NoOp => record_match(state, subject, deployment, report, false).await,
         ReportDecision::Refuse(reason) => {
             record_refusal(state, subject, deployment, report, reason).await
@@ -283,6 +299,63 @@ async fn apply_report(
             write(state, subject, deployment, report, metadata, true).await
         }
     }
+}
+
+/// A report with no release waiting. It matches unless the installed chart's
+/// setup differs from the current release's, as after `helm rollback` to an
+/// older chart: then the refusal names the chart to upgrade back to.
+async fn record_without_waiting(
+    state: &AppState,
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+    report: &InstalledSetup,
+    settings: &alien_core::StackSettings,
+    stack_state: &alien_core::StackState,
+) -> Result<bool, AlienError> {
+    // A report for the current release, or one with the fingerprint the
+    // deployment already holds, is the idle case: it needs no release read.
+    let may_differ = deployment
+        .current_release_id
+        .as_deref()
+        .is_some_and(|current| current != report.release_id)
+        && deployment.setup_fingerprint.as_deref() != Some(report.setup_fingerprint.as_str());
+    if may_differ {
+        // A reported release that is unknown or cannot be prepared says
+        // nothing about the setup, so it is treated as a match.
+        if let Ok(target) = target_of_release(
+            state,
+            subject,
+            deployment,
+            settings,
+            stack_state,
+            &report.release_id,
+        )
+        .await?
+        {
+            let current_chart = current_chart_version(state, subject, deployment).await;
+            if let ReportDecision::Refuse(reason) =
+                decide(deployment, report, &target, current_chart.as_deref())
+            {
+                return record_refusal(state, subject, deployment, report, reason).await;
+            }
+        }
+    }
+    record_match(state, subject, deployment, report, true).await
+}
+
+/// The chart version this manager serves for the deployment's current release.
+async fn current_chart_version(
+    state: &AppState,
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+) -> Option<String> {
+    let current = deployment.current_release_id.as_deref()?;
+    let release = state
+        .release_store
+        .get_release(subject, current)
+        .await
+        .ok()??;
+    super::charts::served_chart_version(state, subject, &release).await
 }
 
 /// The stack `release_id` prepares to for this deployment, or the reason it
@@ -712,7 +785,12 @@ pub(super) mod tests {
     fn a_chart_that_adds_a_chart_rendered_resource_mints_for_exactly_that_change() {
         let installed = baseline();
         let target = with_service_account(&installed);
-        let decision = decide(&deployment(installed.clone()), &report("rel_2"), &target);
+        let decision = decide(
+            &deployment(installed.clone()),
+            &report("rel_2"),
+            &target,
+            None,
+        );
 
         let ReportDecision::Mint(authorization) = decision else {
             panic!("expected a mint, got {decision:?}");
@@ -736,7 +814,7 @@ pub(super) mod tests {
             let mut record = deployment(installed.clone());
             record.status = status.to_string();
             assert_eq!(
-                decide(&record, &report("rel_2"), &installed),
+                decide(&record, &report("rel_2"), &installed, None),
                 ReportDecision::NoOp,
                 "status {status}"
             );
@@ -744,14 +822,34 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_chart_that_differs_while_no_release_waits_mints_nothing() {
+    fn a_chart_for_an_older_release_after_a_rollback_is_refused_with_the_current_chart() {
+        // The deployment runs rel_1 with nothing waiting; the Operator was
+        // rolled back to a chart whose setup differs from rel_1's.
+        let installed = baseline();
+        let rolled_back = with_service_account(&installed);
+        let mut record = deployment(installed);
+        record.desired_release_id = None;
+        record.status = "running".to_string();
+        let ReportDecision::Refuse(reason) =
+            decide(&record, &report("rel_0"), &rolled_back, Some("1.0.3"))
+        else {
+            panic!("a rollback across a setup change must be recorded, not ignored");
+        };
+        assert!(
+            reason.contains("1.0.3") && reason.contains("rel_1") && reason.contains("rel_0"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_chart_for_the_current_release_while_no_release_waits_mints_nothing() {
         let installed = baseline();
         let target = with_service_account(&installed);
         let mut record = deployment(installed);
         record.desired_release_id = None;
         record.status = "running".to_string();
         assert_eq!(
-            decide(&record, &report("rel_1"), &target),
+            decide(&record, &report("rel_1"), &target, None),
             ReportDecision::NoOp
         );
     }
@@ -761,7 +859,7 @@ pub(super) mod tests {
         let installed = baseline();
         let target = with_service_account(&installed);
         let ReportDecision::Refuse(reason) =
-            decide(&deployment(installed), &report("rel_0"), &target)
+            decide(&deployment(installed), &report("rel_0"), &target, None)
         else {
             panic!("expected a refusal");
         };
@@ -776,7 +874,7 @@ pub(super) mod tests {
         let installed = baseline();
         let target = with_storage(&installed);
         let ReportDecision::Refuse(reason) =
-            decide(&deployment(installed), &report("rel_2"), &target)
+            decide(&deployment(installed), &report("rel_2"), &target, None)
         else {
             panic!("expected a refusal");
         };
@@ -793,7 +891,8 @@ pub(super) mod tests {
         let target = with_service_account(&installed);
         let mut on_cloud = deployment(installed);
         on_cloud.base_platform = Some(Platform::Aws);
-        let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), &target) else {
+        let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), &target, None)
+        else {
             panic!("expected a refusal");
         };
         assert!(reason.contains("reader-sa"), "{reason}");
@@ -808,12 +907,12 @@ pub(super) mod tests {
         record.setup_target = Some("cloudformation".to_string());
         record.setup_fingerprint_version = Some(1);
         assert!(matches!(
-            decide(&record, &report("rel_2"), &target),
+            decide(&record, &report("rel_2"), &target, None),
             ReportDecision::Refuse(_)
         ));
         record.setup_target = Some("helm".to_string());
         assert!(matches!(
-            decide(&record, &report("rel_2"), &target),
+            decide(&record, &report("rel_2"), &target, None),
             ReportDecision::Mint(_)
         ));
     }
@@ -1038,6 +1137,33 @@ pub(super) mod tests {
             .expect("the verdict is recorded");
         assert_eq!(required.release_id, f.waiting_release);
         assert!(required.reason.contains("archive"), "{}", required.reason);
+    }
+
+    /// After `helm rollback` to a chart with another setup, nothing waits: the
+    /// refusal is stored for the owner instead of the report being ignored.
+    #[tokio::test]
+    async fn a_rollback_across_a_setup_change_is_stored_as_a_refusal() {
+        let mut f = waiting_fixture().await;
+        f.record.desired_release_id = None;
+        f.record.status = "running".to_string();
+        f.record.current_release_id = Some(f.installed_release.clone());
+        // The Operator runs a chart whose setup differs from the current release's.
+        let mut rolled_back = report(&f.waiting_release);
+        rolled_back.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
+
+        let written = f.written.lock().expect("log");
+        assert_eq!(written.len(), 1);
+        let refusal = written[0]
+            .setup_report_refusal
+            .as_ref()
+            .expect("the refusal is recorded");
+        assert_eq!(refusal.reported_release_id, f.waiting_release);
+        assert!(
+            refusal.reason.contains(&f.installed_release),
+            "{}",
+            refusal.reason
+        );
     }
 
     /// The verdict is recorded; the installed chart keeps reporting what runs.
