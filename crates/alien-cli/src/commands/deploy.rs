@@ -1355,6 +1355,11 @@ pub(crate) fn deployment_manager_http_client(
     }
 }
 
+/// What this CLI's direct setup can do, sent with every setup request. `create-keys`: it creates
+/// the stack's encryption keys (AWS KMS, Cloud KMS, Key Vault) with the admin's own credentials.
+/// A platform that does not know the field refuses a stack with keys instead.
+pub(super) const SETUP_CAPABILITIES: [&str; 1] = ["create-keys"];
+
 fn deployment_create_request_body(
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
@@ -1369,6 +1374,7 @@ fn deployment_create_request_body(
         "inputValues": {},
         "releaseChannel": args.channel,
         "setupMethod": "cli",
+        "setupCapabilities": SETUP_CAPABILITIES,
     });
 
     if let Some(setup_item) = args.setup_item {
@@ -1864,7 +1870,7 @@ async fn parse_api_response<T: for<'de> Deserialize<'de>>(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("{message} (HTTP {status}): {body}"),
+            message: format!("{message} (HTTP {status}): {body}{}", old_platform_hint(&body)),
         }));
     }
 
@@ -1875,6 +1881,21 @@ async fn parse_api_response<T: for<'de> Deserialize<'de>>(
         .context(ErrorData::ConfigurationError {
             message: format!("{message}: failed to parse response"),
         })
+}
+
+/// The platform's answer to a stack with encryption keys before it could ask the CLI to create
+/// them. This CLI always says it can, so only an older platform answers this way.
+const OLD_PLATFORM_KEY_REFUSAL: &str = "enter a deployment through stack import";
+
+/// Explains a refusal that comes from a platform older than this CLI.
+fn old_platform_hint(body: &str) -> &'static str {
+    if body.contains("SETUP_METHOD_CANNOT_INSTALL_RESOURCES")
+        && body.contains(OLD_PLATFORM_KEY_REFUSAL)
+    {
+        "\nThis platform cannot yet create encryption keys during a CLI setup. Use the CloudFormation or Terraform setup for this stack, or ask the platform's administrator to update it."
+    } else {
+        ""
+    }
 }
 
 async fn parse_empty_api_response(response: reqwest::Response, message: &str) -> Result<()> {
