@@ -4240,6 +4240,9 @@ sandbox:
   # Extra scheduling for sandbox pods, applied on top of what the RuntimeClass itself sets.
   nodeSelector: {}
   tolerations: []
+  # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is
+  # empty: it starts a pod on demand, which takes as long as the node and image pull need.
+  warmPoolSize: 2
 "#,
         );
     }
@@ -4737,7 +4740,8 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "properties": {
             "runtimeClassName": { "type": "string" },
             "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
-            "tolerations": { "type": "array" }
+            "tolerations": { "type": "array" },
+            "warmPoolSize": { "type": "integer", "minimum": 0 }
         }
     });
     serde_json::to_string_pretty(&schema)
@@ -6649,10 +6653,11 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         alien_core::ENV_ALIEN_SANDBOX_BROKER_URL
     );
     let placement = format!(
-        "            - name: {}\n              value: {{{{ include \"deployment.sandboxRuntimeClassName\" . | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}\n",
+        "            - name: {}\n              value: {{{{ include \"deployment.sandboxRuntimeClassName\" . | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}\n            - name: {}\n              value: {{{{ ternary 2 .Values.sandbox.warmPoolSize (kindIs \"invalid\" .Values.sandbox.warmPoolSize) | int | toString | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS,
         alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR,
-        alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS
+        alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS,
+        alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE
     );
     let broker = format!("{broker}{placement}");
     assert!(

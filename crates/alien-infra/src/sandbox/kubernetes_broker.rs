@@ -173,15 +173,128 @@ async fn claim_session_with_scope(
         });
     }
 
-    // Retryable on purpose: the pool refills on the controller's health tick, so a caller that
-    // waits gets a pod rather than a permanent failure.
-    Err(AlienError::new(ErrorData::CloudPlatformError {
-        message: format!(
-            "no idle sandbox pod is available for '{sandbox_id}'; the warm pool refills on the \
-             next health tick"
-        ),
-        resource_id: Some(sandbox_id.to_string()),
-    }))
+    // The pool is a speed-up, not a limit: with no idle pod the broker builds one from the
+    // template the controller published and waits for it to start.
+    let template = pod_template(secrets, namespace, secret_name).await?;
+    cold_create(
+        pods,
+        &signing_key,
+        namespace,
+        sandbox_id,
+        session_id,
+        secret_name,
+        now_unix,
+        template,
+    )
+    .await
+}
+
+/// How long a cold create waits for the pod to start and receive an address.
+///
+/// Image pull on a node that has to be provisioned first is the slow part: 79 s measured on a
+/// scaled-to-zero Autopilot pool, and a multi-gigabyte image adds its pull time.
+const COLD_CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const COLD_CREATE_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+async fn pod_template(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<Pod> {
+    let secret = secrets.get_secret(namespace, secret_name).await.context(
+        ErrorData::CloudPlatformError {
+            message: "the sandbox pod template is unreadable".to_string(),
+            resource_id: None,
+        },
+    )?;
+    let bytes = secret
+        .data
+        .as_ref()
+        .and_then(|data| data.get(crate::sandbox::POD_TEMPLATE_SECRET_KEY))
+        .map(|value| value.0.clone())
+        .ok_or_else(|| {
+            // Only before the controller's first health tick has published it.
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "the sandbox has no pod template yet; it is published on the first \
+                          health tick"
+                    .to_string(),
+                resource_id: None,
+            })
+        })?;
+    let pod = serde_json::from_slice::<Pod>(&bytes).map_err(|error| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("the sandbox pod template is unusable: {error}"),
+            resource_id: None,
+        })
+    })?;
+    Ok(pod)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cold_create(
+    pods: &Arc<dyn PodApi>,
+    signing_key: &ed25519_compact::SecretKey,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+    secret_name: &str,
+    now_unix: i64,
+    mut pod: Pod,
+) -> Result<ClaimedSession> {
+    // Born claimed: it never appears in the idle selector, so no one else can take it.
+    if !claim_idle_pod(&mut pod, session_id) {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: "the sandbox pod template is not an idle pool pod".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
+    }
+    let created =
+        pods.create_pod(namespace, &pod)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "failed to create a sandbox pod".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
+    let name = created.metadata.name.clone().unwrap_or_default();
+    let agent_session_id = created.metadata.uid.clone().unwrap_or_default();
+
+    let started = std::time::Instant::now();
+    loop {
+        let current = pods.get_pod(namespace, &name).await.ok();
+        if let Some(address) = current
+            .as_ref()
+            .and_then(|pod| pod.status.as_ref())
+            .filter(|status| status.phase.as_deref() == Some("Running"))
+            .and_then(|status| status.pod_ip.clone())
+        {
+            let (capability, expires_at) = mint_capability(
+                signing_key,
+                &agent_session_id,
+                secret_name,
+                sandbox_id,
+                now_unix + started.elapsed().as_secs() as i64,
+            )?;
+            return Ok(ClaimedSession {
+                agent_session_id,
+                session_id: session_id.to_string(),
+                endpoint: format!("http://{address}:{AGENT_PORT}"),
+                capability,
+                expires_at,
+            });
+        }
+        if started.elapsed() >= COLD_CREATE_TIMEOUT {
+            // Nobody holds this session yet, so leaving the pod would leak it.
+            let _ = pods.delete_pod(namespace, &name).await;
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "a new sandbox pod for '{sandbox_id}' did not start within {} seconds",
+                    COLD_CREATE_TIMEOUT.as_secs()
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            }));
+        }
+        tokio::time::sleep(COLD_CREATE_POLL).await;
+    }
 }
 
 /// Mints a capability for one pod's agent, valid for [`CAPABILITY_LIFETIME_SECONDS`].
@@ -758,10 +871,91 @@ mod tests {
         assert_eq!(claimed.endpoint, "http://10.1.2.4:8971");
     }
 
-    /// An empty pool is a wait, not a permanent failure: the controller refills it on its next
-    /// tick, and the message says so rather than leaving a caller guessing.
+    fn secret_with_template(template: &Pod) -> Secret {
+        let mut secret = key_secret();
+        secret.data.as_mut().unwrap().insert(
+            crate::sandbox::POD_TEMPLATE_SECRET_KEY.to_string(),
+            k8s_openapi::ByteString(serde_json::to_vec(template).unwrap()),
+        );
+        secret
+    }
+
+    /// A create never fails because the pool is empty: the broker builds the pod from the
+    /// published template, already claimed, and returns once it has an address.
+    #[tokio::test(start_paused = true)]
+    async fn an_empty_pool_creates_a_pod_cold() {
+        let mut template = idle_pod("ignored", "0.0.0.0");
+        template.metadata.name = None;
+        template.metadata.uid = None;
+        template.status = None;
+        template.metadata.labels = Some(BTreeMap::from([
+            (crate::sandbox::LABEL_SANDBOX.to_string(), "sbx".to_string()),
+            (
+                crate::sandbox::LABEL_POOL_STATE.to_string(),
+                crate::sandbox::POOL_STATE_IDLE.to_string(),
+            ),
+            (
+                DEPLOYMENT_LABEL_KEY.to_string(),
+                DEPLOYMENT_LABEL_VALUE.to_string(),
+            ),
+        ]));
+        let mut pods = pods_returning(Vec::new());
+        pods.expect_create_pod().times(1).returning(|_, pod| {
+            let labels = pod.metadata.labels.clone().unwrap();
+            assert_eq!(
+                labels
+                    .get(crate::sandbox::LABEL_POOL_STATE)
+                    .map(String::as_str),
+                Some(crate::sandbox::POOL_STATE_CLAIMED),
+                "a cold pod is born claimed so no other caller can take it"
+            );
+            assert_eq!(
+                labels
+                    .get(crate::sandbox::LABEL_SESSION)
+                    .map(String::as_str),
+                Some("s1")
+            );
+            let mut created = pod.clone();
+            created.metadata.name = Some("cold-0".to_string());
+            created.metadata.uid = Some("uid-cold-0".to_string());
+            Ok(created)
+        });
+        let mut polls = 0;
+        pods.expect_get_pod().returning(move |_, _| {
+            polls += 1;
+            let mut pod = idle_pod("cold-0", "10.9.9.9");
+            pod.status = Some(PodStatus {
+                phase: Some(if polls < 3 { "Pending" } else { "Running" }.to_string()),
+                pod_ip: (polls >= 3).then(|| "10.9.9.9".to_string()),
+                ..Default::default()
+            });
+            Ok(pod)
+        });
+        let mut secrets = MockSecretsApi::new();
+        let secret = secret_with_template(&template);
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+
+        let session = claim_session(
+            &(Arc::new(pods) as Arc<dyn PodApi>),
+            &(Arc::new(secrets) as Arc<dyn SecretsApi>),
+            "sbx",
+            "ns",
+            "s1",
+            "k",
+            1_000,
+        )
+        .await
+        .expect("an empty pool still yields a session");
+
+        assert_eq!(session.endpoint, format!("http://10.9.9.9:{AGENT_PORT}"));
+        assert_eq!(session.agent_session_id, "uid-cold-0");
+    }
+
+    /// Before the controller's first tick there is no template; the caller is told to retry.
     #[tokio::test]
-    async fn an_empty_pool_says_it_refills() {
+    async fn an_empty_pool_without_a_template_asks_to_retry() {
         let pods = pods_returning(Vec::new());
         let mut secrets = MockSecretsApi::new();
         secrets
@@ -778,7 +972,7 @@ mod tests {
             1_000,
         )
         .await
-        .expect_err("no idle pod means no session");
+        .expect_err("no template means no pod to build");
 
         assert!(format!("{error:?}").contains("health tick"));
     }

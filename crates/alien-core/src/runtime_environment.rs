@@ -12,6 +12,8 @@ pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
 /// RuntimeClass the chart chose for sandbox pods (`sandbox.runtimeClassName`, or the cluster's
 /// vendor class when unset). The Operator only checks it; it never picks one.
 pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";
+/// Idle sandbox pods the Operator keeps ready (`sandbox.warmPoolSize`).
+pub const ENV_ALIEN_SANDBOX_WARM_POOL_SIZE: &str = "ALIEN_SANDBOX_WARM_POOL_SIZE";
 /// JSON object of node labels sandbox pods must match (`sandbox.nodeSelector`).
 pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
 /// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).

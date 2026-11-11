@@ -877,7 +877,7 @@ fn sandbox_node_placement_values_reach_the_operator() {
     let chart = render(&sandbox_with_linked_app(), StackSettings::default());
     let rendered = super::test_utils::helm_template_for_kube_version(
         &chart.files,
-        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n  warmPoolSize: 0\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
         "acme",
         None,
     );
@@ -901,4 +901,9 @@ fn sandbox_node_placement_values_reach_the_operator() {
         r#"{"pool":"sandboxes"}"#
     );
     assert!(env(alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS).contains("\"key\":\"sandbox\""));
+    assert_eq!(
+        env(alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE),
+        "0",
+        "an explicit zero turns the pool off; every create is cold"
+    );
 }

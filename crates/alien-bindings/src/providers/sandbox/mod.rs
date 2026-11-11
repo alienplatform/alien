@@ -12,7 +12,7 @@
 ))]
 pub mod agent_protocol;
 
-#[cfg(any(feature = "aws", feature = "local"))]
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", feature = "local"))]
 pub mod interactive;
 
 #[cfg(feature = "aws")]

@@ -38,6 +38,13 @@ fn chart_runtime_class() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Idle pods the chart asks for (`sandbox.warmPoolSize`); `None` for a chart that predates it.
+fn chart_warm_pool_size() -> Option<usize> {
+    std::env::var(alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+}
+
 /// Kubernetes Sandbox controller.
 #[controller]
 pub struct KubernetesSandboxController {
@@ -200,7 +207,9 @@ impl KubernetesSandboxController {
             self.runtime_class
                 .as_deref()
                 .unwrap_or(LEGACY_RUNTIME_CLASS),
-            self.warm_pool_size.unwrap_or(DEFAULT_WARM_POOL_SIZE),
+            self.warm_pool_size
+                .or_else(chart_warm_pool_size)
+                .unwrap_or(DEFAULT_WARM_POOL_SIZE),
             self.capability_public_key.as_deref(),
         )
         .await?;
@@ -529,12 +538,6 @@ async fn replenish_warm_pool(
     let waiting = idle.items.len();
     let deficit = pool_deficit(target, waiting);
     let mut created = 0;
-    if deficit == 0 {
-        return Ok(WarmPool {
-            idle: waiting,
-            created,
-        });
-    }
     let Some(egress_environment) =
         super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
     else {
@@ -544,25 +547,31 @@ async fn replenish_warm_pool(
         });
     };
 
+    let mut pod = idle_pool_pod_with_labels(
+        sandbox,
+        namespace,
+        runtime_class,
+        None,
+        capability_public_key,
+        kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
+    );
+    placement.apply(&mut pod);
+    pod.spec
+        .as_mut()
+        .expect("generated pod has a spec")
+        .containers[0]
+        .env
+        .get_or_insert_default()
+        .extend(egress_environment);
+
+    // The broker builds a pod from this when a create finds the pool empty, so a create never
+    // fails for want of an idle pod. It is rewritten every tick and so follows chart upgrades.
+    // Best effort: without it a create still claims from the pool, it just cannot go cold.
+    if let Err(error) = publish_pod_template(ctx, &sandbox.id, namespace, &pod).await {
+        warn!(sandbox_id = %sandbox.id, %namespace, error = %error, "Failed to publish the sandbox pod template");
+    }
+
     for _ in 0..deficit {
-        let mut pod = idle_pool_pod_with_labels(
-            sandbox,
-            namespace,
-            runtime_class,
-            None,
-            capability_public_key,
-            kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
-        );
-        placement.apply(&mut pod);
-
-        pod.spec
-            .as_mut()
-            .expect("generated pod has a spec")
-            .containers[0]
-            .env
-            .get_or_insert_default()
-            .extend(egress_environment.clone());
-
         // Best effort per pod: a pool that is one short is slower, not broken, and failing the
         // health tick over it would take a working sandbox out of Running. The reason is logged
         // rather than swallowed, because a pool that is always empty is a bug and silence makes
@@ -579,6 +588,54 @@ async fn replenish_warm_pool(
         idle: waiting,
         created,
     })
+}
+
+/// Stores the idle pod the controller would create in the capability Secret, for the broker's
+/// cold create. Holds no secret: the environment carries only the public key and gateway address.
+async fn publish_pod_template(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    namespace: &str,
+    pod: &k8s_openapi::api::core::v1::Pod,
+) -> Result<()> {
+    let client = ctx
+        .service_provider
+        .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let name = capability_secret_name(sandbox_id);
+    let mut secret =
+        client
+            .get_secret(namespace, &name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("failed to read capability Secret '{name}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
+    let template = serde_json::to_vec(pod).map_err(|error| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("failed to serialize the pod template: {error}"),
+            resource_id: Some(sandbox_id.to_string()),
+        })
+    })?;
+    let data = secret.data.get_or_insert_default();
+    if data
+        .get(POD_TEMPLATE_SECRET_KEY)
+        .is_some_and(|existing| existing.0 == template)
+    {
+        return Ok(());
+    }
+    data.insert(
+        POD_TEMPLATE_SECRET_KEY.to_string(),
+        k8s_openapi::ByteString(template),
+    );
+    client
+        .update_secret(namespace, &name, &secret)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("failed to store the pod template in '{name}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    Ok(())
 }
 
 /// The deployment's namespace, which is where a sandbox's pods go.
@@ -838,6 +895,9 @@ pub fn capability_secret_name(sandbox_id: &str) -> String {
 
 /// Key within that Secret.
 const CAPABILITY_SECRET_KEY: &str = "signingKey";
+
+/// Key holding the idle pod the broker creates when no warm pod is free.
+pub(crate) const POD_TEMPLATE_SECRET_KEY: &str = "podTemplate";
 
 #[cfg(feature = "kubernetes")]
 fn capability_secret_labels_match_deployment(
