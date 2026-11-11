@@ -1428,6 +1428,149 @@ pub(super) mod tests {
             .expect("deployment exists")
     }
 
+    /// `helm rollback` to the chart for release 1 while the deployment runs
+    /// release 3, which adds a service account. Nothing waits. The charts are
+    /// pulled from the manager and rendered with helm, the deployment is
+    /// stored in SQLite, and two syncs report the rolled-back chart: the
+    /// refusal naming the current release's chart is stored and survives.
+    #[tokio::test]
+    async fn a_helm_rollback_across_a_setup_change_stays_refused_in_the_store() {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let deployments = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let publish = |stack: Stack| {
+            let releases = releases.clone();
+            async move {
+                releases
+                    .create_release(
+                        &Subject::system(),
+                        CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: std::collections::HashMap::from([(
+                                Platform::Kubernetes,
+                                stack,
+                            )]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                        },
+                    )
+                    .await
+                    .expect("release")
+            }
+        };
+        let old = publish(baseline()).await;
+        let current = publish(with_service_account(&baseline())).await;
+
+        let group = deployments
+            .create_deployment_group(
+                &Subject::system(),
+                CreateDeploymentGroupParams {
+                    name: "customers".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .expect("deployment group");
+        let template = deployment(baseline());
+        let prepared = prepare_target(
+            &current,
+            &template,
+            template.stack_settings.as_ref().expect("settings"),
+            template.stack_state.as_ref().expect("stack state"),
+        )
+        .await
+        .expect("prepared current release");
+        let created = deployments
+            .create_with_state(
+                &Subject::system(),
+                CreateImportedDeploymentParams {
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    name: template.name.clone(),
+                    deployment_group_id: group.id,
+                    platform: Platform::Kubernetes,
+                    base_platform: None,
+                    stack_settings: Default::default(),
+                    stack_state: StackState::new(Platform::Kubernetes),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata {
+                        prepared_stack: Some(prepared),
+                        ..RuntimeMetadata::default()
+                    },
+                    status: "running".to_string(),
+                    current_release_id: Some(current.id.clone()),
+                    desired_release_id: None,
+                    import_source: None,
+                    setup_metadata: None,
+                    setup_target: String::new(),
+                    setup_fingerprint: String::new(),
+                    setup_fingerprint_version: 0,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .expect("deployment");
+        db.execute(
+            "UPDATE deployments SET setup_target = NULL, setup_fingerprint = NULL, setup_fingerprint_version = NULL",
+        )
+        .await
+        .expect("clear the setup lane");
+
+        let mut state = crate::routes::sync::tests::test_app_state(
+            temp.path(),
+            deployments.clone(),
+            releases.clone(),
+            Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    temp.path().to_path_buf(),
+                ),
+            ),
+            db.clone(),
+        )
+        .await;
+        state.charts = Some(Arc::new(ChartSettings::new(
+            Some("alien-operator:test".to_string()),
+            false,
+        )));
+        let operator = Subject {
+            scope: Scope::Deployment {
+                project_id: created.project_id.clone(),
+                deployment_id: created.id.clone(),
+            },
+            ..Subject::system()
+        };
+
+        let rolled_back = report_from_served_chart(&state, "app", &old.id).await;
+        let current_chart = report_from_served_chart(&state, "app", &current.id).await;
+        assert_ne!(rolled_back.setup_fingerprint, current_chart.setup_fingerprint);
+        for sync in 1..=2 {
+            handle_installed_setup(
+                &state,
+                &operator,
+                &stored(&deployments, &created.id).await,
+                &rolled_back,
+            )
+            .await;
+            let record = stored(&deployments, &created.id).await;
+            assert_eq!(record.status, "running");
+            let refusal = record
+                .runtime_metadata
+                .expect("metadata")
+                .setup_report_refusal
+                .unwrap_or_else(|| panic!("sync {sync}: the rollback must stay refused"));
+            assert_eq!(refusal.reported_release_id, old.id);
+            assert!(refusal.reason.contains(&current.id), "{}", refusal.reason);
+        }
+    }
+
     /// A Helm install of the standalone manager's own chart, paused on a
     /// release that adds a frozen service account. Upgrading to the chart the
     /// manager serves for that release completes the update; the chart for the
