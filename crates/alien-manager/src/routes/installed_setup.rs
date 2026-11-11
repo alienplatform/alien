@@ -1328,16 +1328,14 @@ pub(super) mod tests {
         body
     }
 
-    /// What the Operator installed from the chart this manager serves for
-    /// `release_id` would report: the chart is pulled over the registry
-    /// routes, rendered with `helm template`, and the report is read from the
-    /// Operator container's environment and the chart's ConfigMap, the way the
-    /// Operator reads them.
-    async fn report_from_served_chart(
+    /// The chart archive this manager serves for `release_id`, pulled over the
+    /// registry routes as Helm does.
+    async fn served_chart_archive(
         state: &AppState,
         chart_name: &str,
         release_id: &str,
-    ) -> InstalledSetup {
+        directory: &std::path::Path,
+    ) -> std::path::PathBuf {
         let tags: serde_json::Value = serde_json::from_slice(
             &pull_chart_path(state, &format!("charts/{chart_name}/tags/list")).await,
         )
@@ -1357,10 +1355,21 @@ pub(super) mod tests {
             }
         }
         let chart = chart.unwrap_or_else(|| panic!("no chart is served for {release_id}"));
-
-        let directory = tempfile::tempdir().expect("chart directory");
-        let archive = directory.path().join("chart.tgz");
+        let archive = directory.join(format!("{release_id}.tgz"));
         std::fs::write(&archive, chart).expect("write chart");
+        archive
+    }
+
+    /// What the Operator installed from the chart this manager serves for
+    /// `release_id` would report: the chart is rendered with `helm template`
+    /// and the report is read the way the Operator reads it.
+    async fn report_from_served_chart(
+        state: &AppState,
+        chart_name: &str,
+        release_id: &str,
+    ) -> InstalledSetup {
+        let directory = tempfile::tempdir().expect("chart directory");
+        let archive = served_chart_archive(state, chart_name, release_id, directory.path()).await;
         let output = std::process::Command::new("helm")
             .arg("template")
             .arg("shop")
@@ -1379,9 +1388,13 @@ pub(super) mod tests {
             "helm template failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        report_from_manifests(&rendered, release_id)
+    }
 
-        // `- name: X` followed by `value: "..."`, as the chart renders env
-        // entries; the ConfigMap holds the release in `setup-release-id`.
+    /// The report the Operator makes from manifests: `- name: X` followed by
+    /// `value: "..."` for env entries; the ConfigMap holds the release in
+    /// `setup-release-id`. Works on `helm template` and `kubectl get -o yaml`.
+    fn report_from_manifests(rendered: &str, release_id: &str) -> InstalledSetup {
         let unquote = |value: &str| value.trim().trim_matches('"').to_string();
         let mut env = BTreeMap::new();
         let mut release_file = None;
@@ -1428,13 +1441,27 @@ pub(super) mod tests {
             .expect("deployment exists")
     }
 
-    /// `helm rollback` to the chart for release 1 while the deployment runs
-    /// release 3, which adds a service account. Nothing waits. The charts are
-    /// pulled from the manager and rendered with helm, the deployment is
-    /// stored in SQLite, and two syncs report the rolled-back chart: the
-    /// refusal naming the current release's chart is stored and survives.
-    #[tokio::test]
-    async fn a_helm_rollback_across_a_setup_change_stays_refused_in_the_store() {
+    /// A manager with two published releases and one Helm-installed deployment
+    /// (no setup lane yet) in the SQLite store. The deployment's prepared
+    /// stack is `first`'s when `on_second` is false, else `second`'s; it waits
+    /// for `second` when `waits_for_second` is set.
+    struct World {
+        state: AppState,
+        deployments: Arc<SqliteDeploymentStore>,
+        operator: Subject,
+        deployment_id: String,
+        first: String,
+        second: String,
+        _temp: tempfile::TempDir,
+    }
+
+    async fn store_world(
+        first: Stack,
+        second: Stack,
+        status: &str,
+        on_second: bool,
+        waits_for_second: bool,
+    ) -> World {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1464,9 +1491,8 @@ pub(super) mod tests {
                     .expect("release")
             }
         };
-        let old = publish(baseline()).await;
-        let current = publish(with_service_account(&baseline())).await;
-
+        let first = publish(first).await;
+        let second = publish(second).await;
         let group = deployments
             .create_deployment_group(
                 &Subject::system(),
@@ -1479,14 +1505,15 @@ pub(super) mod tests {
             .await
             .expect("deployment group");
         let template = deployment(baseline());
+        let installed = if on_second { &second } else { &first };
         let prepared = prepare_target(
-            &current,
+            installed,
             &template,
             template.stack_settings.as_ref().expect("settings"),
             template.stack_state.as_ref().expect("stack state"),
         )
         .await
-        .expect("prepared current release");
+        .expect("prepared installed release");
         let created = deployments
             .create_with_state(
                 &Subject::system(),
@@ -1503,9 +1530,9 @@ pub(super) mod tests {
                         prepared_stack: Some(prepared),
                         ..RuntimeMetadata::default()
                     },
-                    status: "running".to_string(),
-                    current_release_id: Some(current.id.clone()),
-                    desired_release_id: None,
+                    status: status.to_string(),
+                    current_release_id: Some(installed.id.clone()),
+                    desired_release_id: waits_for_second.then(|| second.id.clone()),
                     import_source: None,
                     setup_metadata: None,
                     setup_target: String::new(),
@@ -1518,12 +1545,13 @@ pub(super) mod tests {
             )
             .await
             .expect("deployment");
+        // A Helm install registers without a setup lane; its first report
+        // records one.
         db.execute(
             "UPDATE deployments SET setup_target = NULL, setup_fingerprint = NULL, setup_fingerprint_version = NULL",
         )
         .await
         .expect("clear the setup lane");
-
         let mut state = crate::routes::sync::tests::test_app_state(
             temp.path(),
             deployments.clone(),
@@ -1547,28 +1575,225 @@ pub(super) mod tests {
             },
             ..Subject::system()
         };
+        World {
+            state,
+            deployments,
+            operator,
+            deployment_id: created.id,
+            first: first.id,
+            second: second.id,
+            _temp: temp,
+        }
+    }
 
-        let rolled_back = report_from_served_chart(&state, "app", &old.id).await;
-        let current_chart = report_from_served_chart(&state, "app", &current.id).await;
-        assert_ne!(rolled_back.setup_fingerprint, current_chart.setup_fingerprint);
-        for sync in 1..=2 {
+    impl World {
+        async fn sync(&self, report: &InstalledSetup) -> DeploymentRecord {
             handle_installed_setup(
-                &state,
-                &operator,
-                &stored(&deployments, &created.id).await,
-                &rolled_back,
+                &self.state,
+                &self.operator,
+                &stored(&self.deployments, &self.deployment_id).await,
+                report,
             )
             .await;
-            let record = stored(&deployments, &created.id).await;
+            stored(&self.deployments, &self.deployment_id).await
+        }
+    }
+
+    /// `helm rollback` to the chart for release 1 while the deployment runs
+    /// release 3, which adds a service account. Nothing waits. The charts are
+    /// pulled from the manager and rendered with helm, the deployment is
+    /// stored in SQLite, and two syncs report the rolled-back chart: the
+    /// refusal naming the current release's chart is stored and survives.
+    #[tokio::test]
+    async fn a_helm_rollback_across_a_setup_change_stays_refused_in_the_store() {
+        let world = store_world(
+            baseline(),
+            with_service_account(&baseline()),
+            "running",
+            true,
+            false,
+        )
+        .await;
+        let rolled_back = report_from_served_chart(&world.state, "app", &world.first).await;
+        let current_chart = report_from_served_chart(&world.state, "app", &world.second).await;
+        assert_ne!(
+            rolled_back.setup_fingerprint,
+            current_chart.setup_fingerprint
+        );
+        assert_rollback_stays_refused(&world, &rolled_back).await;
+    }
+
+    async fn assert_rollback_stays_refused(world: &World, rolled_back: &InstalledSetup) {
+        for sync in 1..=2 {
+            let record = world.sync(rolled_back).await;
             assert_eq!(record.status, "running");
             let refusal = record
                 .runtime_metadata
                 .expect("metadata")
                 .setup_report_refusal
                 .unwrap_or_else(|| panic!("sync {sync}: the rollback must stay refused"));
-            assert_eq!(refusal.reported_release_id, old.id);
-            assert!(refusal.reason.contains(&current.id), "{}", refusal.reason);
+            assert_eq!(refusal.reported_release_id, world.first);
+            assert!(refusal.reason.contains(&world.second), "{}", refusal.reason);
         }
+    }
+
+    fn helm(args: &[&str]) -> String {
+        let output = std::process::Command::new("helm")
+            .args(args)
+            .output()
+            .expect("run helm");
+        assert!(
+            output.status.success(),
+            "helm {args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// What the Operator would report from the chart installed in the cluster:
+    /// the Deployment's environment and the setup ConfigMap, read with kubectl.
+    fn report_from_cluster(namespace: &str, release_id: &str) -> InstalledSetup {
+        let output = std::process::Command::new("kubectl")
+            .args([
+                "-n",
+                namespace,
+                "get",
+                "deployments,configmaps",
+                "-o",
+                "yaml",
+            ])
+            .output()
+            .expect("run kubectl");
+        assert!(output.status.success(), "kubectl get failed");
+        report_from_manifests(&String::from_utf8_lossy(&output.stdout), release_id)
+    }
+
+    const KIND_INSTALL_ARGS: [&str; 4] = [
+        "--set",
+        "management.token=ax_dg_example",
+        "--set",
+        "runtime.encryption.key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ];
+
+    /// Real `helm install`, `helm upgrade` and `helm rollback` on a Kind
+    /// cluster with the charts this manager serves. The rolled-back chart's
+    /// setup is read from the cluster, and the manager keeps the deployment
+    /// running with the refusal stored. Run with `kubectl` pointed at a
+    /// disposable cluster:
+    /// `cargo test -p alien-manager --lib kind_ -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "needs a disposable Kind cluster, helm and kubectl"]
+    async fn kind_a_real_helm_rollback_across_a_setup_change_is_refused() {
+        const NAMESPACE: &str = "alien-setup-rollback";
+        const RELEASE: &str = "shop";
+        let world = store_world(
+            baseline(),
+            with_service_account(&baseline()),
+            "running",
+            true,
+            false,
+        )
+        .await;
+        let charts = tempfile::tempdir().expect("chart directory");
+        let r1 = served_chart_archive(&world.state, "app", &world.first, charts.path()).await;
+        let r3 = served_chart_archive(&world.state, "app", &world.second, charts.path()).await;
+        let (r1, r3) = (
+            r1.to_string_lossy().into_owned(),
+            r3.to_string_lossy().into_owned(),
+        );
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
+        let mut install = vec![
+            "install",
+            RELEASE,
+            r1.as_str(),
+            "-n",
+            NAMESPACE,
+            "--create-namespace",
+        ];
+        install.extend(KIND_INSTALL_ARGS);
+        helm(&install);
+        let mut upgrade = vec!["upgrade", RELEASE, r3.as_str(), "-n", NAMESPACE];
+        upgrade.extend(KIND_INSTALL_ARGS);
+        helm(&upgrade);
+        let upgraded = report_from_cluster(NAMESPACE, &world.second);
+        println!("after helm upgrade the cluster reports {upgraded:?}");
+        assert_eq!(upgraded.release_id, world.second);
+
+        helm(&["rollback", RELEASE, "1", "-n", NAMESPACE]);
+        let rolled_back = report_from_cluster(NAMESPACE, &world.first);
+        println!("after helm rollback the cluster reports {rolled_back:?}");
+        assert_eq!(rolled_back.release_id, world.first);
+        assert_ne!(rolled_back.setup_fingerprint, upgraded.setup_fingerprint);
+        assert_rollback_stays_refused(&world, &rolled_back).await;
+        let record = stored(&world.deployments, &world.deployment_id).await;
+        println!(
+            "the manager keeps status {} and stores {:?}",
+            record.status,
+            record.runtime_metadata.and_then(|m| m.setup_report_refusal)
+        );
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
+    }
+
+    /// A first install whose release 1 includes a frozen service account fails
+    /// setup; release 2 drops it and is pinned. Pin and retry cannot change the
+    /// installed chart's setup, so the way out is `helm upgrade` to release 2's
+    /// chart, whose report the manager must accept in initial-setup-failed.
+    /// Real helm install and upgrade on a Kind cluster.
+    #[tokio::test]
+    #[ignore = "needs a disposable Kind cluster, helm and kubectl"]
+    async fn kind_helm_upgrade_moves_a_failed_first_install_to_the_pinned_release() {
+        const NAMESPACE: &str = "alien-setup-first-install";
+        const RELEASE: &str = "shop";
+        let world = store_world(
+            with_service_account(&baseline()),
+            baseline(),
+            "initial-setup-failed",
+            false,
+            true,
+        )
+        .await;
+        let charts = tempfile::tempdir().expect("chart directory");
+        let r1 = served_chart_archive(&world.state, "app", &world.first, charts.path()).await;
+        let r2 = served_chart_archive(&world.state, "app", &world.second, charts.path()).await;
+        let (r1, r2) = (
+            r1.to_string_lossy().into_owned(),
+            r2.to_string_lossy().into_owned(),
+        );
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
+        let mut install = vec![
+            "install",
+            RELEASE,
+            r1.as_str(),
+            "-n",
+            NAMESPACE,
+            "--create-namespace",
+        ];
+        install.extend(KIND_INSTALL_ARGS);
+        helm(&install);
+        let installed = report_from_cluster(NAMESPACE, &world.first);
+        println!("release 1's chart reports {installed:?}");
+        let record = world.sync(&installed).await;
+        println!("status after release 1's report: {}", record.status);
+
+        let mut upgrade = vec!["upgrade", RELEASE, r2.as_str(), "-n", NAMESPACE];
+        upgrade.extend(KIND_INSTALL_ARGS);
+        helm(&upgrade);
+        let upgraded = report_from_cluster(NAMESPACE, &world.second);
+        println!("release 2's chart reports {upgraded:?}");
+        assert_eq!(upgraded.release_id, world.second);
+        let record = world.sync(&upgraded).await;
+        let metadata = record.runtime_metadata.expect("metadata");
+        println!(
+            "status {}; authorization {:?}; refusal {:?}",
+            record.status, metadata.setup_update_authorization, metadata.setup_report_refusal
+        );
+        let authorization = metadata
+            .setup_update_authorization
+            .expect("the upgrade to the pinned release's chart is accepted");
+        assert_eq!(authorization.release_id, world.second);
+        assert!(metadata.setup_report_refusal.is_none());
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
     }
 
     /// A Helm install of the standalone manager's own chart, paused on a
