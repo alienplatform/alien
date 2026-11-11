@@ -4236,7 +4236,7 @@ sandbox:
   # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
   # these addresses and nothing else on private ranges. Find it with:
   #   kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf
-  # (EKS Auto Mode has no kube-dns Service; it uses 10.100.0.10 on the default service range.)
+  # (The .10 address of the cluster's service range, e.g. 10.100.0.10 or 172.20.0.10; EKS Auto Mode has no kube-dns Service.)
   clusterDNS: []
 "#,
         );
