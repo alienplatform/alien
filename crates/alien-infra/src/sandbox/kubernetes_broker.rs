@@ -432,6 +432,7 @@ async fn claimed_pods(
     pods: &Arc<dyn PodApi>,
     namespace: &str,
     sandbox_id: &str,
+    now_unix: i64,
     session_id: Option<&str>,
     deployment_label_key: &str,
     deployment_label_value: &str,
@@ -455,8 +456,20 @@ async fn claimed_pods(
     Ok(found
         .items
         .into_iter()
-        .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .filter(|pod| session_is_live(pod, now_unix))
         .collect())
+}
+
+/// Whether a claimed pod can still be a session: not being deleted, not finished (a pod keeps its
+/// address after it succeeded or failed) and not past its deadline (the Operator ends it on its
+/// next tick, but until then it must not be handed out).
+fn session_is_live(pod: &Pod, now_unix: i64) -> bool {
+    pod.metadata.deletion_timestamp.is_none()
+        && !matches!(
+            pod.status.as_ref().and_then(|status| status.phase.as_deref()),
+            Some("Succeeded" | "Failed")
+        )
+        && !crate::sandbox::session_deadline_passed(pod, now_unix)
 }
 
 /// Returns a session the caller already holds, with a fresh capability, or `None` when no pod
@@ -487,7 +500,7 @@ pub(crate) async fn reattach_session_for_deployment(
     )
     .await?;
     let mut found =
-        claimed_pods(pods, namespace, sandbox_id, Some(session_id), &key, &value).await?;
+        claimed_pods(pods, namespace, sandbox_id, now_unix, Some(session_id), &key, &value).await?;
     // Two processes creating one new id at the same moment can each end up with a pod. Every
     // lookup answers with the same one (the earliest claim, then the name), so the callers
     // converge on it and the other ends at its deadline or at terminate.
@@ -611,7 +624,7 @@ pub(crate) async fn preview_session_for_deployment(
     )
     .await
     .map_err(unavailable)?;
-    let mut found = claimed_pods(pods, namespace, sandbox_id, Some(session_id), &key, &value)
+    let mut found = claimed_pods(pods, namespace, sandbox_id, now_unix, Some(session_id), &key, &value)
         .await
         .map_err(unavailable)?;
     found.sort_by_key(|pod| {
@@ -705,12 +718,124 @@ impl SessionRequestError {
     }
 }
 
+/// An existing session is answered only to the tenant key it was created with. A request that
+/// names another key, none for a keyed session, or a key for an unkeyed one is a mismatch: it is
+/// refused, never answered with the session.
+fn require_same_tenant(
+    found: ClaimedSession,
+    requested: Option<&str>,
+) -> std::result::Result<ClaimedSession, SessionRequestError> {
+    if found.tenant_key.as_deref() == requested {
+        Ok(found)
+    } else {
+        Err(SessionRequestError::TenantMismatch)
+    }
+}
+
+/// How long a creator's reservation holds the id before another creator may take it over: a cold
+/// create's wait plus a margin. Only a creator that died mid-claim leaves one this old.
+const RESERVATION_TTL_SECONDS: i64 = COLD_CREATE_TIMEOUT.as_secs() as i64 + 60;
+/// How often a caller that lost the reservation looks for the session the winner is creating.
+#[cfg(not(test))]
+const RESERVATION_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(test)]
+const RESERVATION_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+const ANNOTATION_RESERVED_AT: &str = "alien.dev/reserved-at";
+
+/// Name of the object that serializes creation of one session id.
+fn reservation_name(sandbox_id: &str, session_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{sandbox_id}\0{session_id}"));
+    let hex: String = digest.iter().take(12).map(|byte| format!("{byte:02x}")).collect();
+    format!("alien-session-claim-{hex}")
+}
+
+/// What `reserve` found.
+enum Reservation {
+    /// This caller holds the id and is the only one creating its session.
+    Held,
+    /// Another creator holds it, since this unix second.
+    Taken { reserved_at: i64 },
+}
+
+/// Creates the per-id reservation if no one holds it. Kubernetes refuses a second create of the
+/// same name, so exactly one of any number of concurrent creators holds it.
+async fn reserve(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+    now_unix: i64,
+) -> Result<Reservation> {
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    let name = reservation_name(sandbox_id, session_id);
+    let reservation = Secret {
+        metadata: ObjectMeta {
+            name: Some(name.clone()),
+            namespace: Some(namespace.to_string()),
+            labels: Some(std::collections::BTreeMap::from([(
+                crate::sandbox::LABEL_SANDBOX.to_string(),
+                sandbox_id.to_string(),
+            )])),
+            annotations: Some(std::collections::BTreeMap::from([(
+                ANNOTATION_RESERVED_AT.to_string(),
+                now_unix.to_string(),
+            )])),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    match secrets.create_secret(namespace, &reservation).await {
+        Ok(_) => Ok(Reservation::Held),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+            ) =>
+        {
+            let held = secrets.get_secret_metadata(namespace, &name).await;
+            let reserved_at = match held {
+                Ok(meta) => meta
+                    .annotations
+                    .and_then(|annotations| annotations.get(ANNOTATION_RESERVED_AT).cloned())
+                    .and_then(|value| value.parse::<i64>().ok())
+                    // A reservation nobody can date is as old as it can be.
+                    .unwrap_or(0),
+                // Released between the two calls: the next attempt decides again.
+                Err(_) => now_unix,
+            };
+            Ok(Reservation::Taken { reserved_at })
+        }
+        Err(error) => Err(Err::<(), _>(error)
+            .context(ErrorData::CloudPlatformError {
+                message: format!("could not reserve session '{session_id}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+            .unwrap_err()),
+    }
+}
+
+/// Lets go of the reservation. Best effort: one that is left behind expires on its own.
+async fn release_reservation(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+) {
+    let _ = secrets
+        .delete_secret(namespace, &reservation_name(sandbox_id, session_id))
+        .await;
+}
+
 /// Finds the session `session_id`, or creates it. Any process of the deployment may call this
 /// with the same id: the pod's labels decide which call created it.
 ///
-/// Two processes racing to create the same id each claim a pod. The pod that was claimed first
-/// (earliest recorded time, then name) is the session; the other releases its pod and answers
-/// with the winner, so one id never resolves to two pods.
+/// Creation of one id is serialized by a reservation that Kubernetes creates at most once, so two
+/// processes racing on the same new id cannot each claim a pod. The one that holds the
+/// reservation looks once more for the session (a holder that just finished has labelled its
+/// pod before letting go), claims, and lets go; the others wait for that session to appear and
+/// answer with it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn find_or_create_session_for_deployment(
     pods: &Arc<dyn PodApi>,
@@ -726,92 +851,75 @@ pub(crate) async fn find_or_create_session_for_deployment(
     timeout_seconds: Option<u64>,
 ) -> std::result::Result<ClaimedSession, SessionRequestError> {
     let unavailable = SessionRequestError::Unavailable;
-    let existing = reattach_session_for_deployment(
-        pods,
-        secrets,
-        sandbox_id,
-        namespace,
-        session_id,
-        secret_name,
-        now_unix,
-        deployment_label_key,
-        deployment_label_value,
-    )
-    .await
-    .map_err(unavailable)?;
-    if let Some(found) = existing {
-        return if tenant_key.is_some_and(|tenant| found.tenant_key.as_deref() != Some(tenant)) {
-            Err(SessionRequestError::TenantMismatch)
-        } else {
-            Ok(found)
-        };
-    }
+    let started = std::time::Instant::now();
+    let reattach = || {
+        reattach_session_for_deployment(
+            pods,
+            secrets,
+            sandbox_id,
+            namespace,
+            session_id,
+            secret_name,
+            now_unix,
+            deployment_label_key,
+            deployment_label_value,
+        )
+    };
 
-    let mut claimed = claim_session_for_deployment(
-        pods,
-        secrets,
-        sandbox_id,
-        namespace,
-        session_id,
-        secret_name,
-        now_unix,
-        deployment_label_key,
-        deployment_label_value,
-        tenant_key,
-        timeout_seconds,
-    )
-    .await?;
-
-    let mut contenders = claimed_pods(
-        pods,
-        namespace,
-        sandbox_id,
-        Some(session_id),
-        deployment_label_key,
-        deployment_label_value,
-    )
-    .await
-    .map_err(SessionRequestError::Unavailable)?;
-    if contenders.len() > 1 {
-        let rank = |pod: &Pod| {
-            (
-                recorded(pod, i64::MAX).0,
-                pod.metadata.name.clone().unwrap_or_default(),
-            )
-        };
-        contenders.sort_by_key(rank);
-        let winner = &contenders[0];
-        if winner.metadata.uid.as_deref() != Some(claimed.agent_session_id.as_str()) {
-            // Ours lost: free it and answer with the session that won.
-            for pod in contenders.iter().filter(|pod| {
-                pod.metadata.uid.as_deref() == Some(claimed.agent_session_id.as_str())
-            }) {
-                if let Some(name) = pod.metadata.name.as_deref() {
-                    let _ = pods.delete_pod(namespace, name).await;
+    loop {
+        if let Some(found) = reattach().await.map_err(unavailable)? {
+            return require_same_tenant(found, tenant_key);
+        }
+        let elapsed = started.elapsed().as_secs() as i64;
+        match reserve(secrets, namespace, sandbox_id, session_id, now_unix + elapsed)
+            .await
+            .map_err(unavailable)?
+        {
+            Reservation::Held => {
+                // The previous holder labels its pod before it lets go, so a session that was
+                // created while this call was between its lookup and its reservation is visible now.
+                let outcome = match reattach().await {
+                    Ok(Some(found)) => require_same_tenant(found, tenant_key),
+                    Ok(None) => {
+                        claim_session_for_deployment(
+                            pods,
+                            secrets,
+                            sandbox_id,
+                            namespace,
+                            session_id,
+                            secret_name,
+                            now_unix,
+                            deployment_label_key,
+                            deployment_label_value,
+                            tenant_key,
+                            timeout_seconds,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(SessionRequestError::Unavailable(error)),
+                };
+                release_reservation(secrets, namespace, sandbox_id, session_id).await;
+                return outcome;
+            }
+            Reservation::Taken { reserved_at } => {
+                if now_unix + elapsed - reserved_at > RESERVATION_TTL_SECONDS {
+                    // Its creator died before it could let go.
+                    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+                } else if started.elapsed() >= COLD_CREATE_TIMEOUT {
+                    return Err(SessionRequestError::Unavailable(AlienError::new(
+                        ErrorData::CloudPlatformError {
+                            message: format!(
+                                "session '{session_id}' is still being created by another caller"
+                            ),
+                            resource_id: Some(sandbox_id.to_string()),
+                        },
+                    )));
+                } else {
+                    tokio::time::sleep(RESERVATION_POLL).await;
                 }
             }
-            claimed = reattach_session_for_deployment(
-                pods,
-                secrets,
-                sandbox_id,
-                namespace,
-                session_id,
-                secret_name,
-                now_unix,
-                deployment_label_key,
-                deployment_label_value,
-            )
-            .await
-            .map_err(SessionRequestError::Unavailable)?
-            .ok_or_else(|| {
-                SessionRequestError::Unavailable(AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!("session '{session_id}' vanished while two creates raced"),
-                    resource_id: Some(sandbox_id.to_string()),
-                }))
-            })?;
         }
     }
-    Ok(claimed)
 }
 
 /// Ids of the claimed sessions of a sandbox that belong to this deployment.
@@ -821,6 +929,7 @@ pub(crate) async fn list_sessions_for_deployment(
     sandbox_id: &str,
     namespace: &str,
     secret_name: &str,
+    now_unix: i64,
     deployment_label_key: &str,
     deployment_label_value: &str,
 ) -> Result<Vec<String>> {
@@ -832,7 +941,7 @@ pub(crate) async fn list_sessions_for_deployment(
         Some((deployment_label_key, deployment_label_value)),
     )
     .await?;
-    let found = claimed_pods(pods, namespace, sandbox_id, None, &key, &value).await?;
+    let found = claimed_pods(pods, namespace, sandbox_id, now_unix, None, &key, &value).await?;
     Ok(found.iter().filter_map(session_name).collect())
 }
 
@@ -1514,6 +1623,335 @@ mod tests {
                 && selector.contains(&format!("{DEPLOYMENT_LABEL_KEY}={DEPLOYMENT_LABEL_VALUE}")),
             "the lookup is scoped to the session and the deployment: {selector}"
         );
+    }
+
+    /// A cluster in memory that behaves like the API server where it matters here: a second create
+    /// of a name is a conflict, and a write that carries an old resourceVersion is a conflict.
+    /// Every call yields, so concurrent callers interleave.
+    #[derive(Debug, Default)]
+    struct FakeCluster {
+        pods: std::sync::Mutex<Vec<Pod>>,
+        secrets: std::sync::Mutex<BTreeMap<String, Secret>>,
+        versions: std::sync::Mutex<u64>,
+    }
+
+    fn conflict(name: &str) -> alien_error::AlienError<alien_client_core::ErrorData> {
+        alien_error::AlienError::new(alien_client_core::ErrorData::RemoteResourceConflict {
+            resource_type: "object".to_string(),
+            resource_name: name.to_string(),
+            message: "already exists or changed".to_string(),
+        })
+    }
+
+    #[async_trait::async_trait]
+    impl PodApi for FakeCluster {
+        async fn create_pod(&self, _: &str, pod: &Pod) -> alien_client_core::Result<Pod> {
+            tokio::task::yield_now().await;
+            self.pods.lock().unwrap().push(pod.clone());
+            Ok(pod.clone())
+        }
+        async fn get_pod(&self, _: &str, name: &str) -> alien_client_core::Result<Pod> {
+            tokio::task::yield_now().await;
+            self.pods
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|pod| pod.metadata.name.as_deref() == Some(name))
+                .cloned()
+                .ok_or_else(|| conflict(name))
+        }
+        async fn list_pods(
+            &self,
+            _: &str,
+            selector: Option<String>,
+            _: Option<String>,
+        ) -> alien_client_core::Result<List<Pod>> {
+            tokio::task::yield_now().await;
+            let wanted: Vec<(String, Option<String>)> = selector
+                .unwrap_or_default()
+                .split(',')
+                .filter(|term| !term.is_empty())
+                .map(|term| match term.split_once('=') {
+                    Some((key, value)) => (key.to_string(), Some(value.to_string())),
+                    None => (term.to_string(), None),
+                })
+                .collect();
+            let items = self
+                .pods
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|pod| {
+                    let labels = pod.metadata.labels.clone().unwrap_or_default();
+                    wanted.iter().all(|(key, value)| match value {
+                        Some(value) => labels.get(key) == Some(value),
+                        None => labels.contains_key(key),
+                    })
+                })
+                .cloned()
+                .collect();
+            Ok(List {
+                items,
+                ..Default::default()
+            })
+        }
+        async fn update_pod(&self, _: &str, name: &str, pod: &Pod) -> alien_client_core::Result<Pod> {
+            tokio::task::yield_now().await;
+            let mut pods = self.pods.lock().unwrap();
+            let current = pods
+                .iter_mut()
+                .find(|current| current.metadata.name.as_deref() == Some(name))
+                .ok_or_else(|| conflict(name))?;
+            if current.metadata.resource_version != pod.metadata.resource_version {
+                return Err(conflict(name));
+            }
+            let mut next = pod.clone();
+            let mut version = self.versions.lock().unwrap();
+            *version += 1;
+            next.metadata.resource_version = Some(version.to_string());
+            *current = next.clone();
+            Ok(next)
+        }
+        async fn delete_pod(&self, _: &str, name: &str) -> alien_client_core::Result<()> {
+            self.pods
+                .lock()
+                .unwrap()
+                .retain(|pod| pod.metadata.name.as_deref() != Some(name));
+            Ok(())
+        }
+        async fn delete_pod_if_uid(
+            &self,
+            namespace: &str,
+            name: &str,
+            _: &str,
+        ) -> alien_client_core::Result<()> {
+            self.delete_pod(namespace, name).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SecretsApi for FakeCluster {
+        async fn create_secret(&self, _: &str, secret: &Secret) -> alien_client_core::Result<Secret> {
+            tokio::task::yield_now().await;
+            let name = secret.metadata.name.clone().unwrap_or_default();
+            let mut secrets = self.secrets.lock().unwrap();
+            if secrets.contains_key(&name) {
+                return Err(conflict(&name));
+            }
+            secrets.insert(name, secret.clone());
+            Ok(secret.clone())
+        }
+        async fn get_secret(&self, _: &str, name: &str) -> alien_client_core::Result<Secret> {
+            tokio::task::yield_now().await;
+            if name == "key" {
+                return Ok(key_secret());
+            }
+            self.secrets
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .ok_or_else(|| conflict(name))
+        }
+        async fn get_secret_metadata(&self, _: &str, name: &str) -> alien_client_core::Result<ObjectMeta> {
+            tokio::task::yield_now().await;
+            self.secrets
+                .lock()
+                .unwrap()
+                .get(name)
+                .map(|secret| secret.metadata.clone())
+                .ok_or_else(|| conflict(name))
+        }
+        async fn list_secrets(
+            &self,
+            _: &str,
+            _: Option<String>,
+            _: Option<String>,
+        ) -> alien_client_core::Result<List<Secret>> {
+            Ok(List::default())
+        }
+        async fn update_secret(&self, _: &str, _: &str, secret: &Secret) -> alien_client_core::Result<Secret> {
+            Ok(secret.clone())
+        }
+        async fn delete_secret(&self, _: &str, name: &str) -> alien_client_core::Result<()> {
+            tokio::task::yield_now().await;
+            self.secrets.lock().unwrap().remove(name);
+            Ok(())
+        }
+    }
+
+    /// Several processes asking for one new id at the same moment all get one pod: the id is
+    /// created once, by one of them, and the rest find it.
+    #[tokio::test]
+    async fn concurrent_creates_of_one_id_resolve_to_one_pod() {
+        let cluster = Arc::new(FakeCluster::default());
+        for index in 0..4 {
+            let mut pod = idle_pod(&format!("pool-{index}"), &format!("10.0.0.{index}"));
+            pod.metadata.resource_version = Some("1".to_string());
+            cluster.pods.lock().unwrap().push(pod);
+        }
+        let pods: Arc<dyn PodApi> = cluster.clone();
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+
+        let create = || {
+            let (pods, secrets) = (pods.clone(), secrets.clone());
+            async move {
+                find_or_create_session_for_deployment(
+                    &pods,
+                    &secrets,
+                    "sbx",
+                    "alien",
+                    "same-id",
+                    "key",
+                    1_000,
+                    DEPLOYMENT_LABEL_KEY,
+                    DEPLOYMENT_LABEL_VALUE,
+                    None,
+                    None,
+                )
+                .await
+                .expect("create or find")
+            }
+        };
+        let results = futures::future::join_all((0..4).map(|_| create())).await;
+
+        let uids: std::collections::BTreeSet<_> = results
+            .iter()
+            .map(|session| session.agent_session_id.clone())
+            .collect();
+        assert_eq!(uids.len(), 1, "one id, one pod: {uids:?}");
+        assert_eq!(
+            results.iter().filter(|session| session.created).count(),
+            1,
+            "exactly one caller created it"
+        );
+        let held = cluster
+            .pods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|pod| {
+                pod.metadata
+                    .labels
+                    .as_ref()
+                    .is_some_and(|labels| labels.get(crate::sandbox::LABEL_SESSION).is_some())
+            })
+            .count();
+        assert_eq!(held, 1, "no second pod was claimed for the id");
+        assert!(
+            cluster.secrets.lock().unwrap().is_empty(),
+            "the reservation is let go once the pod carries the session"
+        );
+    }
+
+    /// An existing session answers only to the tenant key it was created with, including when
+    /// the caller lost the create race.
+    #[tokio::test]
+    async fn a_session_with_another_tenant_key_is_refused_by_the_broker() {
+        let cluster = Arc::new(FakeCluster::default());
+        let mut pod = idle_pod("pool-0", "10.0.0.1");
+        pod.metadata.resource_version = Some("1".to_string());
+        cluster.pods.lock().unwrap().push(pod);
+        let pods: Arc<dyn PodApi> = cluster.clone();
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        let call = |tenant: Option<&'static str>| {
+            let (pods, secrets) = (pods.clone(), secrets.clone());
+            async move {
+                find_or_create_session_for_deployment(
+                    &pods,
+                    &secrets,
+                    "sbx",
+                    "alien",
+                    "s1",
+                    "key",
+                    1_000,
+                    DEPLOYMENT_LABEL_KEY,
+                    DEPLOYMENT_LABEL_VALUE,
+                    tenant,
+                    None,
+                )
+                .await
+            }
+        };
+
+        assert!(call(Some("a")).await.expect("creates").created);
+        assert!(call(Some("a")).await.is_ok());
+        for other in [Some("b"), None] {
+            assert!(
+                matches!(call(other).await, Err(SessionRequestError::TenantMismatch)),
+                "{other:?} must be refused"
+            );
+        }
+    }
+
+    /// A pod that finished keeps its address, and one past its deadline is only ended on the
+    /// Operator's next tick; neither is a session a caller can be handed.
+    #[tokio::test]
+    async fn a_finished_or_expired_pod_is_not_a_session() {
+        let claimed = |name: &str| {
+            let mut pod = idle_pod(name, "10.0.0.7");
+            pod.metadata
+                .labels
+                .as_mut()
+                .unwrap()
+                .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
+            crate::sandbox::annotate_claim(&mut pod, 100, None, Some(600)).unwrap();
+            pod
+        };
+        let mut succeeded = claimed("done");
+        succeeded.status.as_mut().unwrap().phase = Some("Succeeded".to_string());
+        let mut failed = claimed("failed");
+        failed.status.as_mut().unwrap().phase = Some("Failed".to_string());
+        let expired = claimed("expired"); // deadline 700
+        let mut running = claimed("alive");
+        running.status.as_mut().unwrap().phase = Some("Running".to_string());
+
+        let lookup = |items: Vec<Pod>, now: i64| async move {
+            let mut mock = MockPodApi::new();
+            mock.expect_list_pods().returning(move |_, _, _| {
+                Ok(k8s_openapi::List {
+                    items: items.clone(),
+                    ..Default::default()
+                })
+            });
+            let pods: Arc<dyn PodApi> = Arc::new(mock);
+            let mut secrets = MockSecretsApi::new();
+            let secret = key_secret();
+            secrets
+                .expect_get_secret()
+                .returning(move |_, _| Ok(secret.clone()));
+            let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+            let reattached = reattach_session_for_deployment(
+                &pods,
+                &secrets,
+                "sbx",
+                "alien",
+                "s1",
+                "key",
+                now,
+                DEPLOYMENT_LABEL_KEY,
+                DEPLOYMENT_LABEL_VALUE,
+            )
+            .await
+            .expect("lookup works");
+            let listed = list_sessions_for_deployment(
+                &pods,
+                &secrets,
+                "sbx",
+                "alien",
+                "key",
+                now,
+                DEPLOYMENT_LABEL_KEY,
+                DEPLOYMENT_LABEL_VALUE,
+            )
+            .await
+            .expect("list works");
+            (reattached.is_some(), listed.len())
+        };
+
+        assert_eq!(lookup(vec![succeeded, failed], 200).await, (false, 0));
+        assert_eq!(lookup(vec![expired], 800).await, (false, 0));
+        assert_eq!(lookup(vec![running], 200).await, (true, 1));
     }
 
     #[tokio::test]

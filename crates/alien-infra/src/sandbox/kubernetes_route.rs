@@ -376,6 +376,7 @@ async fn list(
         &sandbox_id,
         &state.broker.namespace,
         &capability_secret_name(&sandbox_id),
+        chrono::Utc::now().timestamp(),
         &authorization.deployment_label_key,
         &authorization.deployment_label_value,
     )

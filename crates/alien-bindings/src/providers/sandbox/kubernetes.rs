@@ -57,6 +57,9 @@ struct ClaimResponse {
     /// created.
     #[serde(default = "yes")]
     created: bool,
+    /// The tenant key the session was created with.
+    #[serde(default)]
+    tenant_key: Option<String>,
 }
 
 fn yes() -> bool {
@@ -386,6 +389,7 @@ impl KubernetesSandbox {
         // Another process created this id between the caller's lookup and this claim; the broker
         // answered with its session, which already carries its own policy.
         if !claim.created {
+            self.require_same_tenant(&claim, request.tenant_key.as_deref())?;
             return Ok(ResolvedSandbox::found(SandboxInstance {
                 sandbox_id: claim.session_id,
                 state: SandboxState::Running,
@@ -419,6 +423,25 @@ impl KubernetesSandbox {
             state: SandboxState::Running,
             generation: claim.generation,
         }))
+    }
+
+    /// An existing session answers only to the tenant key it was created with. A request with a
+    /// different key, or with none for a keyed session (or the reverse), is refused.
+    fn require_same_tenant(
+        &self,
+        claim: &ClaimResponse,
+        requested: Option<&str>,
+    ) -> Result<()> {
+        if claim.tenant_key.as_deref() == requested {
+            return Ok(());
+        }
+        Err(self.failed(
+            "sandbox.getOrCreate",
+            &format!(
+                "sandbox '{}' exists with a different tenant key than the request names",
+                claim.session_id
+            ),
+        ))
     }
 
     fn failed(&self, operation: &str, reason: &str) -> AlienError<ErrorData> {
@@ -497,11 +520,18 @@ impl Sandbox for KubernetesSandbox {
         // `timeout_ms` applies when this call creates the session. A session that already exists
         // keeps the deadline it was created with.
         if let Some(id) = request.sandbox_id.as_deref() {
-            if let Some(existing) = self.get(id).await? {
+            if let Some(claim) = self.claimed(id).await? {
+                // The id names one session; a caller with a different tenant key does not get it,
+                // and does not get to change its egress policy either.
+                self.require_same_tenant(&claim, request.tenant_key.as_deref())?;
                 if let Some(policy) = request.egress.clone() {
                     self.update_egress(id, policy).await?;
                 }
-                return Ok(ResolvedSandbox::found(existing));
+                return Ok(ResolvedSandbox::found(SandboxInstance {
+                    sandbox_id: claim.session_id,
+                    state: SandboxState::Running,
+                    generation: claim.generation,
+                }));
             }
         }
 
@@ -1050,6 +1080,85 @@ mod tests {
         assert!(!raced.created, "losing the create race is a find");
     }
 
+    /// An id names one session. A request carrying another tenant key (or none for a keyed
+    /// session, or one for an unkeyed session) is refused on every path that returns an existing
+    /// session: the lookup, and the answer to a create that lost a race.
+    #[tokio::test]
+    async fn get_or_create_refuses_an_existing_session_with_another_tenant_key() {
+        use axum::routing::{get, post};
+        let expires = chrono::Utc::now().timestamp() + 900;
+        let session = move |id: &str, key: Option<&str>, created: bool| {
+            let mut body = serde_json::json!({
+                "agentSessionId": "uid-1", "sessionId": id,
+                "endpoint": "http://10.0.0.1:8080", "capability": "c",
+                "expiresAt": expires, "generation": 1, "created": created,
+            });
+            if let Some(key) = key {
+                body["tenantKey"] = serde_json::json!(key);
+            }
+            body
+        };
+        let broker = serve(
+            Router::new()
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    get(move |Path((_, id)): Path<(String, String)>| async move {
+                        match id.as_str() {
+                            "keyed" => Ok(Json(session("keyed", Some("a"), false))),
+                            "open" => Ok(Json(session("open", None, false))),
+                            _ => Err(StatusCode::NOT_FOUND),
+                        }
+                    }),
+                )
+                .route(
+                    "/v1/sandbox/sessions",
+                    // "raced" was created for tenant "a" by another process during this call.
+                    post(move |Json(body): Json<serde_json::Value>| async move {
+                        let id = body["sessionId"].as_str().unwrap().to_string();
+                        Json(session(&id, Some("a"), false))
+                    }),
+                ),
+        )
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        std::fs::write(token.path(), "service-account-token").unwrap();
+        let sandbox = sandbox_over(broker, &token);
+        let request = |id: &str, tenant: Option<&str>| CreateSandboxRequest {
+            sandbox_id: Some(id.to_string()),
+            tenant_key: tenant.map(str::to_string),
+            ..Default::default()
+        };
+
+        for (id, tenant) in [
+            ("keyed", Some("b")),
+            ("keyed", None),
+            ("open", Some("b")),
+            ("raced", Some("b")),
+            ("raced", None),
+        ] {
+            let error = sandbox
+                .get_or_create(request(id, tenant))
+                .await
+                .expect_err(&format!("{id} with {tenant:?} must be refused"));
+            assert!(
+                error.to_string().contains("different tenant key"),
+                "{error}"
+            );
+        }
+        assert!(sandbox
+            .get_or_create(request("keyed", Some("a")))
+            .await
+            .is_ok());
+        assert!(sandbox
+            .get_or_create(request("open", None))
+            .await
+            .is_ok());
+        assert!(sandbox
+            .get_or_create(request("raced", Some("a")))
+            .await
+            .is_ok());
+    }
+
     /// A command's input is many short requests over hours, so the agent handle replaces its
     /// capability before it expires instead of letting a request reach the pod with a dead one.
     #[tokio::test]
@@ -1078,6 +1187,7 @@ mod tests {
             expires_at: chrono::Utc::now().timestamp() + 20,
             generation: 1,
             created: false,
+            tenant_key: None,
         };
         let agent = SessionAgent {
             client: reqwest::Client::new(),

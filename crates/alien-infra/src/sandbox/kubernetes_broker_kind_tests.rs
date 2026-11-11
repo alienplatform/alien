@@ -292,6 +292,7 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
         SANDBOX,
         &namespace,
         &secret_name,
+        chrono::Utc::now().timestamp(),
         SCOPE_KEY,
         SCOPE_VALUE,
     )
