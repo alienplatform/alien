@@ -73,8 +73,6 @@ fn bool_from_bool_or_string<E: serde::de::Error>(value: serde_json::Value) -> Re
     }
 }
 
-/// Same reason as the boolean helper: CloudFormation stringifies the leaves of a custom
-/// resource's properties, so a declared port list arrives as `["3000"]` rather than `[3000]`.
 /// A single port from a JSON number or a numeric string (CloudFormation stringifies every leaf
 /// of a custom resource's properties).
 pub(crate) fn deserialize_u16_from_number_or_string<'de, D>(
@@ -97,6 +95,8 @@ where
     }
 }
 
+/// Same reason as the boolean helper: CloudFormation stringifies the leaves of a custom
+/// resource's properties, so a declared port list arrives as `["3000"]` rather than `[3000]`.
 pub(crate) fn deserialize_u16_vec_from_numbers_or_strings<'de, D>(
     deserializer: D,
 ) -> Result<Vec<u16>, D::Error>
@@ -286,6 +286,24 @@ mod tests {
         .expect("redis import data should parse CloudFormation's stringified leaves");
         assert_eq!(redis.port, 6379);
         assert!(!redis.high_availability);
+    }
+
+    #[test]
+    fn aws_postgres_import_data_accepts_cloudformation_stringified_leaves() {
+        let postgres: AwsPostgresImportData = serde_json::from_value(json!({
+            "clusterIdentifier": "db",
+            "instanceIdentifier": "db-1",
+            "subnetGroupName": "subnets",
+            "securityGroupId": "sg-123",
+            "passwordSecretArn": "arn:aws:secretsmanager:us-east-2:123456789012:secret:pw",
+            "managedPassword": "true",
+            "clusterEndpoint": "db.cluster.rds.amazonaws.com",
+            "database": "app",
+            "username": "app",
+            "engineVersion": "16.4",
+        }))
+        .expect("postgres import data should parse CloudFormation's stringified leaves");
+        assert!(postgres.managed_password);
     }
 
     #[test]
