@@ -258,6 +258,32 @@ impl CatalogModel {
     }
 }
 
+/// The cross-region inference-profile geo prefix for a Bedrock region. Claude on
+/// Bedrock is invocable only through a geo profile (e.g. `us.anthropic.…`).
+///
+/// us / us-gov regions keep their own geo. Every other commercial region routes via
+/// the region-agnostic `global` profile: current-generation Claude models publish a
+/// `global.` inference profile invocable from any commercial region (verified against
+/// live Bedrock), and do NOT publish `eu.`/`apac.` profiles, so a per-continent
+/// prefix would build a non-existent id. (An older model that publishes only a `us.`
+/// profile, e.g. opus-4.1, stays us-region-only either way.)
+pub fn bedrock_geo(region: &str) -> &'static str {
+    if region.starts_with("us-gov-") {
+        "us-gov"
+    } else if region.starts_with("us-") {
+        "us"
+    } else {
+        "global"
+    }
+}
+
+/// The Bedrock model id an app invokes `upstream_id` with from `region`: the geo
+/// inference profile (e.g. `us.anthropic.claude-haiku-4-5-20251001-v1:0`). The gateway
+/// builds its Claude requests with it, and availability is checked against the same id.
+pub fn bedrock_inference_profile_id(region: &str, upstream_id: &str) -> String {
+    format!("{}.{}", bedrock_geo(region), upstream_id)
+}
+
 static CATALOG: &[CatalogModel] = &[
     // AWS Bedrock over `/openai/v1` chat completions. The plain Bedrock model id,
     // not the `us.*` cross-region inference profile — that endpoint rejects it.
@@ -1247,6 +1273,30 @@ pub fn azure_deployments() -> Vec<(&'static str, &'static str, &'static str)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bedrock_geo_routes_non_us_regions_via_global() {
+        assert_eq!(bedrock_geo("us-east-2"), "us");
+        assert_eq!(bedrock_geo("us-west-2"), "us");
+        assert_eq!(bedrock_geo("us-gov-west-1"), "us-gov");
+        assert_eq!(bedrock_geo("eu-west-1"), "global");
+        assert_eq!(bedrock_geo("ap-southeast-2"), "global");
+        assert_eq!(bedrock_geo("ca-central-1"), "global");
+        assert_eq!(bedrock_geo("sa-east-1"), "global");
+        assert_eq!(bedrock_geo("mx-central-1"), "global");
+    }
+
+    #[test]
+    fn inference_profile_id_prefixes_the_regions_geo() {
+        assert_eq!(
+            bedrock_inference_profile_id("us-west-2", "anthropic.claude-sonnet-5"),
+            "us.anthropic.claude-sonnet-5"
+        );
+        assert_eq!(
+            bedrock_inference_profile_id("eu-west-1", "anthropic.claude-sonnet-5"),
+            "global.anthropic.claude-sonnet-5"
+        );
+    }
+
     /// A public id may serve on more than one cloud (Claude does), but must appear at
     /// most once per cloud — a duplicate within a cloud would make `resolve_for`
     /// silently pick whichever entry comes first.

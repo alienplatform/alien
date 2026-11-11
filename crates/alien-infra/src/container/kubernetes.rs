@@ -832,19 +832,10 @@ impl KubernetesContainerController {
             // Gateway configuration is read from the vault, so its changes are detected
             // here rather than by the synchronous deployment-snapshot check.
             if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
-                let secrets = self.additional_environment_secrets(config, ctx).await?;
-                self.env_secret.adopt_unkeyed(
-                    &config.id,
-                    workload_name,
-                    &ctx.deployment_config.environment_variables.variables,
-                    &secrets,
-                )?;
-                if self.env_secret.drifted_with_additional_secrets(
-                    &config.id,
-                    workload_name,
-                    &ctx.deployment_config.environment_variables.variables,
-                    &secrets,
-                )? {
+                if self
+                    .gateway_environment_drifted(config, workload_name, ctx)
+                    .await?
+                {
                     return Ok(HandlerAction::Continue {
                         state: UpdateStart,
                         suggested_delay: None,
@@ -2377,6 +2368,26 @@ impl KubernetesContainerController {
         Ok(secrets)
     }
 
+    /// Whether the gateway's environment Secret would now hold different values than the pods
+    /// started with.
+    async fn gateway_environment_drifted(
+        &mut self,
+        config: &Container,
+        workload_name: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<bool> {
+        let secrets = self.additional_environment_secrets(config, ctx).await?;
+        let variables = &ctx.environment_variables_for(&config.id);
+        self.env_secret
+            .adopt_unkeyed(&config.id, workload_name, variables, &secrets)?;
+        Ok(self.env_secret.drifted_with_additional_secrets(
+            &config.id,
+            workload_name,
+            variables,
+            &secrets,
+        )?)
+    }
+
     async fn reconcile_environment_secret(
         &self,
         config: &Container,
@@ -3731,6 +3742,146 @@ mod tests {
             image: image.to_string(),
         };
         gateway
+    }
+
+    /// A `--secret` with no target is for the stack's own workloads. The gateway Alien adds does
+    /// not get it in its environment Secret, so it does not count as drift there: drift
+    /// restarts the gateway pods.
+    #[tokio::test]
+    async fn an_untargeted_secret_does_not_reach_the_managed_gateway() {
+        use crate::core::kubernetes_manifest_test_support::secret_env_var;
+        use httpmock::Method::POST;
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
+        let server = httpmock::MockServer::start_async().await;
+        fn secret_named(
+            request: &httpmock::prelude::HttpMockRequest,
+            name: &str,
+        ) -> Option<serde_json::Value> {
+            let secret: serde_json::Value =
+                serde_json::from_slice(request.body.as_deref()?).ok()?;
+            (secret["metadata"]["name"] == name).then_some(secret)
+        }
+        let replica_secret = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/namespaces/test-ns/secrets")
+                    .matches(|request| {
+                        secret_named(request, "test-secrets-sandbox-egress-replica-secret")
+                            .is_some()
+                    });
+                then.status(201).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"Secret","metadata":{"name":"test-secrets-sandbox-egress-replica-secret"}
+                }));
+            })
+            .await;
+        // The stack's own secret must not be written to the gateway's environment Secret.
+        let leaked = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/namespaces/test-ns/secrets")
+                    .matches(|request| {
+                        secret_named(request, "gateway-env")
+                            .is_some_and(|secret| secret["data"]["FOR_STACK"].is_string())
+                    });
+                then.status(201).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"Secret","metadata":{"name":"gateway-env"}
+                }));
+            })
+            .await;
+        // Only the targeted secret and the restart settings may be written.
+        let environment_secret = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/namespaces/test-ns/secrets")
+                    .matches(|request| {
+                        secret_named(request, "gateway-env").is_some_and(|secret| {
+                            let mut keys: Vec<_> = secret["data"]
+                                .as_object()
+                                .map(|data| data.keys().cloned().collect())
+                                .unwrap_or_default();
+                            keys.sort();
+                            keys == ["ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS", "FOR_GATEWAY"]
+                        })
+                    });
+                then.status(201).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"Secret","metadata":{"name":"gateway-env"}
+                }));
+            })
+            .await;
+
+        let gateway = gateway_container(
+            "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        );
+        let variables = |stack_secret: &str| {
+            vec![
+                secret_env_var("FOR_STACK", stack_secret, None),
+                secret_env_var(
+                    "FOR_GATEWAY",
+                    "gateway-value",
+                    Some(vec!["sandbox-egress-gateway"]),
+                ),
+            ]
+        };
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), variables("before"));
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme/agents/bundle.zip".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = alien_core::Stack::new("test-stack".to_string())
+            .add(sandbox, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let state = secrets_vault_state();
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        point_at(&mut ctx, &server);
+        let mut controller = manifest_test_controller();
+        controller.workload_name = Some("gateway".to_string());
+        assert!(alien_core::sandbox_egress::is_managed_gateway(
+            ctx.desired_stack,
+            &gateway.id
+        ));
+
+        let plan = controller
+            .reconcile_environment_secret(&gateway, "gateway", "test-ns", false, &ctx)
+            .await
+            .expect("the environment Secret holds the targeted secret and the settings")
+            .expect("a plan");
+        assert_eq!(
+            leaked.hits_async().await,
+            0,
+            "an untargeted secret reached the gateway's environment Secret"
+        );
+        assert_eq!(environment_secret.hits_async().await, 1);
+        assert!(replica_secret.hits_async().await >= 1);
+        controller.env_secret.record(Some(&plan));
+
+        // Rotating the stack's secret leaves the gateway alone.
+        let mut rotated = harness.ctx();
+        rotated.state = &state;
+        rotated.desired_stack = &stack;
+        point_at(&mut rotated, &server);
+        let rotated_variables = variables("after");
+        let mut config = rotated.deployment_config.clone();
+        config.environment_variables.variables = rotated_variables;
+        rotated.deployment_config = &config;
+        assert!(!controller
+            .gateway_environment_drifted(&gateway, "gateway", &rotated)
+            .await
+            .expect("drift check"));
     }
 
     /// A gateway on an image that reads mounted files gets the vault's configuration Secret and

@@ -336,7 +336,7 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
     legacy_owner_proven: bool,
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<Option<KubernetesEnvSecretPlan>> {
-    let variables = &ctx.deployment_config.environment_variables.variables;
+    let variables = &ctx.environment_variables_for(resource_id);
     let Some(plan) = environment_secret_plan_with_additional_secrets(
         resource_id,
         workload_name,

@@ -532,10 +532,24 @@ async fn sync_with_manager(
             // Platform claims maintenance on the operation whose apply this
             // Operator completed last (its applied operation). Any other
             // claim is new work: an update, a corrective target or a retry.
+            // A manager that issues no claims sends no target when nothing
+            // changed; the stored target is replayed as maintenance, so a
+            // settled deployment runs its Ready handlers. A target in the
+            // response is always new work, and so is a replayed one that is
+            // not the target this Operator last applied (stored, then
+            // interrupted before it was accepted).
             let maintenance = match sync_response.execution_claim.as_ref() {
                 Some(claim) => {
                     state.db.get_applied_operation_id().await?.as_deref()
                         == Some(claim.operation_id.as_str())
+                }
+                None if sync_response.target.is_none() => {
+                    let replayed = crate::db::approved_target_hash(
+                        Some(&target_deployment.release_info),
+                        &target_deployment.config,
+                    )?;
+                    state.db.get_installed_target_hash().await?.as_deref()
+                        == Some(replayed.as_str())
                 }
                 None => false,
             };
@@ -1966,6 +1980,189 @@ mod tests {
                 .as_deref(),
             Some("duop_config")
         );
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
+    }
+
+    /// Consume a sync request left by earlier steps, if any.
+    async fn drain_sync_request(state: &OperatorState) {
+        let _ = tokio::time::timeout(std::time::Duration::ZERO, state.db.wait_for_sync()).await;
+    }
+
+    /// A manager that issues no execution claims (the OSS SQLite manager) sends
+    /// `{}` once the release is installed. The Operator used to replay the stored
+    /// install target as a new update on every sync, so the deployment never
+    /// stayed Running long enough for the maintenance refresh to run Ready.
+    #[tokio::test]
+    async fn a_claimless_manager_refreshes_instead_of_reapplying() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Response>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_claimless").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_installed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("claimless".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+        };
+        let config = |allow_frozen_changes: bool| {
+            alien_core::DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(allow_frozen_changes)
+                .external_bindings(Default::default())
+                .build()
+        };
+
+        // The first sync delivers the install target without a claim.
+        *response.lock().unwrap() =
+            json!({ "target": { "releaseInfo": release, "config": config(false) } });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        run_deployment_until_idle(&state).await;
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(installed.status, DeploymentStatus::Running);
+        let ready_before = storage_ready_checks(&installed);
+
+        // Nothing changed: the manager sends `{}`. The Operator stays Running
+        // and runs every Ready handler instead of re-applying the release.
+        *response.lock().unwrap() = json!({});
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let accepted = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            accepted.status,
+            DeploymentStatus::Running,
+            "an empty sync must not turn into an update"
+        );
+        drain_sync_request(&state).await;
+        run_deployment_until_idle(&state).await;
+        let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refreshed.status, DeploymentStatus::Running);
+        assert!(
+            storage_ready_checks(&refreshed) > ready_before,
+            "an empty sync must run Ready on the Running storage ({} -> {})",
+            ready_before,
+            storage_ready_checks(&refreshed)
+        );
+        // No claim waits for this refresh's result. An immediate sync would
+        // replay the stored target and start the next refresh at once, so the
+        // Operator would refresh and sync in a tight loop.
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                state.db.wait_for_sync()
+            )
+            .await
+            .is_err(),
+            "a claimless refresh must wait for the sync interval, not request a sync"
+        );
+
+        // A fresh claimless target for the same release with changed
+        // configuration is still applied as an update.
+        *response.lock().unwrap() =
+            json!({ "target": { "releaseInfo": release, "config": config(true) } });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let update = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(update.status, DeploymentStatus::UpdatePending);
+        run_deployment_until_idle(&state).await;
+        let updated = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(updated.status, DeploymentStatus::Running);
+
+        // The Operator stored a claimless target that changes the approved
+        // configuration, then stopped before accepting it. When it comes back
+        // the manager sends `{}`. Replaying that target is new work: running it
+        // as a refresh would put an unapproved configuration in place.
+        let mut changed = config(true);
+        changed
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "MODE".to_string(),
+                value: "changed".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+        let session = state
+            .db
+            .get_sync_execution()
+            .await
+            .unwrap()
+            .expect("the sync loop stored its session")
+            .session;
+        state
+            .db
+            .set_sync_execution(
+                &session,
+                None,
+                Some(&alien_core::sync::TargetDeployment {
+                    release_info: release.clone(),
+                    config: changed,
+                }),
+            )
+            .await
+            .unwrap();
+        *response.lock().unwrap() = json!({});
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let replayed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            replayed.status,
+            DeploymentStatus::UpdatePending,
+            "a replayed target that changes the approved configuration must apply as an update"
+        );
+        run_deployment_until_idle(&state).await;
+        let reapplied = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(reapplied.status, DeploymentStatus::Running);
 
         server.abort();
         std::env::remove_var("TEST_VAULT_DATA_DIR");

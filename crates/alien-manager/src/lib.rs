@@ -41,6 +41,7 @@ pub mod error;
 pub(crate) mod generated_inputs;
 pub(crate) mod ids;
 pub mod registry;
+pub mod release_targeting;
 pub mod standalone_config;
 pub mod traits;
 

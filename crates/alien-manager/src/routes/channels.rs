@@ -25,9 +25,7 @@ use super::{auth, AppState};
 use crate::{
     auth::Subject,
     error::ErrorData,
-    traits::{
-        DeploymentRecord, DeploymentRouting, ReleaseChannelStore, ReleaseRecord, DEFAULT_CHANNEL,
-    },
+    traits::{DeploymentRecord, ReleaseChannelStore, ReleaseRecord, DEFAULT_CHANNEL},
 };
 
 pub fn router() -> Router<AppState> {
@@ -116,43 +114,25 @@ pub struct DeploymentRoutingResponse {
     pub release_id: Option<String>,
 }
 
-/// The release a deployment should run: its pin, else its channel's release.
-/// A channel with no release yet sends nothing, so a deployment never runs a
-/// release published to another channel; only the default channel falls back
-/// to the latest release (a manager that had releases before it had
-/// channels). Without channels, the release the manager already chose for
-/// it, else the latest release. `deployment` is `None` for one being
-/// created, which follows the default channel.
+/// The release a deployment should run; see
+/// [`release_id_for_deployment`](crate::release_targeting::release_id_for_deployment)
+/// for the rule.
 pub(crate) async fn release_for_deployment(
     state: &AppState,
     subject: &Subject,
     deployment: Option<&DeploymentRecord>,
 ) -> Result<Option<ReleaseRecord>, alien_error::AlienError> {
-    if let Some(channels) = &state.release_channels {
-        let routing = match deployment {
-            Some(deployment) => channels.deployment_routing(&deployment.id).await?,
-            None => DeploymentRouting {
-                channel: DEFAULT_CHANNEL.to_string(),
-                pinned_release_id: None,
-            },
-        };
-        let release_id = match routing.pinned_release_id {
-            Some(pinned) => Some(pinned),
-            None => channels
-                .get_channel(&routing.channel)
-                .await?
-                .and_then(|channel| channel.current_release_id),
-        };
-        if let Some(release_id) = release_id {
-            return state.release_store.get_release(subject, &release_id).await;
-        }
-        if routing.channel != DEFAULT_CHANNEL {
-            return Ok(None);
-        }
-    } else if let Some(release_id) = deployment.and_then(|d| d.desired_release_id.as_deref()) {
-        return state.release_store.get_release(subject, release_id).await;
+    let release_id = crate::release_targeting::release_id_for_deployment(
+        state.release_channels.as_deref(),
+        state.release_store.as_ref(),
+        subject,
+        deployment,
+    )
+    .await?;
+    match release_id {
+        Some(id) => state.release_store.get_release(subject, &id).await,
+        None => Ok(None),
     }
-    state.release_store.get_latest_release(subject).await
 }
 
 /// Send a newly created release through its channel (or to every deployment
