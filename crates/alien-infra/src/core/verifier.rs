@@ -466,6 +466,14 @@ pub enum ResourceWrite {
         container: String,
         body: serde_json::Value,
     },
+    /// Azure create or update (PUT) of an Event Grid subscription on the install's storage
+    /// account, as the client sends it.
+    #[serde(rename_all = "camelCase")]
+    PutEventSubscription {
+        account: String,
+        name: String,
+        body: serde_json::Value,
+    },
 }
 
 /// What `applyResourceWrite` did.

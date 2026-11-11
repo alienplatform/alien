@@ -751,7 +751,8 @@ mod tests {
                 ResourceWrite::SetTopicIamPolicy { policy, .. }
                 | ResourceWrite::SetSubscriptionIamPolicy { policy, .. } => policy.to_string(),
                 ResourceWrite::CreateBlobContainer { body, .. }
-                | ResourceWrite::UpdateBlobContainer { body, .. } => body.to_string(),
+                | ResourceWrite::UpdateBlobContainer { body, .. }
+                | ResourceWrite::PutEventSubscription { body, .. } => body.to_string(),
             };
             self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
@@ -1414,6 +1415,148 @@ mod tests {
             .handle(request(true, &bucket, open))
             .await
             .expect("a declared public storage may open its block");
+    }
+
+    /// An Azure release whose stack has the queues `jobs` and `other` and the storage `uploads`,
+    /// which notifies `jobs` for `in/*.json` only.
+    fn azure_notification_release() -> alien_signing::SignedStatement {
+        let uploads = alien_core::Storage::new("uploads".to_string())
+            .notifications(vec![alien_core::StorageNotification::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "jobs",
+                ))
+                .prefix("in/".to_string())
+                .suffix(".json".to_string())
+                .build()])
+            .build();
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(
+                alien_core::Queue::new("jobs".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Queue::new("other".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .add(uploads, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Azure,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    /// An Event Grid subscription is accepted only as the signed storage's notification rule:
+    /// its name, filter and queue, in this install's Service Bus, and nothing else.
+    #[tokio::test]
+    async fn azure_event_subscriptions_are_checked_against_the_signed_stack() {
+        let fresh = || {
+            let (mut verifier, backend) = resource_verifier();
+            *backend.azure.lock().unwrap() = true;
+            verifier.install_id = Arc::new(|_| alien_signing::InstallId::Azure {
+                subscription: "11111111-2222-3333-4444-555555555555".to_string(),
+                resource_group: PREFIX.to_string(),
+            });
+            (verifier, backend)
+        };
+        let container = format!("{PREFIX}-uploads");
+        let rule = alien_core::StorageNotification::builder()
+            .queue(alien_core::ResourceRef::new(
+                alien_core::Queue::RESOURCE_TYPE,
+                "jobs",
+            ))
+            .prefix("in/".to_string())
+            .suffix(".json".to_string())
+            .build();
+        let name = alien_core::storage_notifications::azure_subscription_name(&container, &rule);
+        let queue_id = |namespace: &str, group: &str, queue: &str| {
+            format!(
+                "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/{group}/providers/Microsoft.ServiceBus/namespaces/{namespace}/queues/{queue}"
+            )
+        };
+        let signed = |destination: String| {
+            json!({"properties": {
+                "destination": {"endpointType": "ServiceBusQueue", "properties": {"resourceId": destination}},
+                "filter": {
+                    "includedEventTypes": ["Microsoft.Storage.BlobCreated"],
+                    "subjectBeginsWith": format!("/blobServices/default/containers/{container}/blobs/in/"),
+                    "subjectEndsWith": ".json",
+                    "isSubjectCaseSensitive": true,
+                },
+                "eventDeliverySchema": "CloudEventSchemaV1_0",
+            }})
+        };
+        let own_queue = queue_id("bus", PREFIX, &format!("{PREFIX}-jobs"));
+        let request = |account: &str, name: &str, body: Value| {
+            json!({"applyResourceWrite": {
+                "release": azure_notification_release(),
+                "signerLists": [signer_list()],
+                "resource": "uploads",
+                "writes": [{"putEventSubscription": {"account": account, "name": name, "body": body}}],
+            }})
+        };
+
+        let (verifier, backend) = fresh();
+        let body = signed(own_queue.clone());
+        verifier
+            .handle(request("acmestore", &name, body.clone()))
+            .await
+            .unwrap_or_else(|error| panic!("the signed rule: {}", crate::describe(&error)));
+        assert_eq!(
+            *backend.forwarded.lock().unwrap(),
+            vec![body.to_string()],
+            "the signed subscription is sent unchanged"
+        );
+
+        let mut other_filter = signed(own_queue.clone());
+        other_filter["properties"]["filter"]["subjectBeginsWith"] =
+            json!(format!("/blobServices/default/containers/{PREFIX}-secrets/blobs/in/"));
+        let mut other_types = signed(own_queue.clone());
+        other_types["properties"]["filter"]["includedEventTypes"] =
+            json!(["Microsoft.Storage.BlobCreated", "Microsoft.Storage.BlobDeleted"]);
+        let mut webhook = signed(own_queue.clone());
+        webhook["properties"]["destination"] = json!({
+            "endpointType": "WebHook",
+            "properties": {"endpointUrl": "https://attacker.example/events"},
+        });
+        let mut extra = signed(own_queue.clone());
+        extra["properties"]["deadLetterDestination"] = json!({"endpointType": "StorageBlob"});
+        let mut no_suffix = signed(own_queue.clone());
+        no_suffix["properties"]["filter"]
+            .as_object_mut()
+            .unwrap()
+            .remove("subjectEndsWith");
+        let mut advanced = signed(own_queue.clone());
+        advanced["properties"]["filter"]["advancedFilters"] = json!([]);
+        for (what, account, subscription, body) in [
+            ("another queue of the stack", "acmestore", name.as_str(), signed(queue_id("bus", PREFIX, &format!("{PREFIX}-other")))),
+            ("a queue in another group", "acmestore", name.as_str(), signed(queue_id("bus", "elsewhere", &format!("{PREFIX}-jobs")))),
+            ("a queue outside the stack", "acmestore", name.as_str(), signed(queue_id("bus", PREFIX, "rogue"))),
+            ("a nested destination", "acmestore", name.as_str(), signed(format!("{own_queue}/x"))),
+            ("another container", "acmestore", name.as_str(), other_filter),
+            ("more event types", "acmestore", name.as_str(), other_types),
+            ("a webhook", "acmestore", name.as_str(), webhook),
+            ("another field", "acmestore", name.as_str(), extra),
+            ("a rule without its suffix", "acmestore", name.as_str(), no_suffix),
+            ("advanced filters", "acmestore", name.as_str(), advanced),
+            ("a name that is not a rule", "acmestore", "attacker-subscription", signed(own_queue.clone())),
+            ("an odd account", "../x", name.as_str(), signed(own_queue.clone())),
+        ] {
+            let (verifier, backend) = fresh();
+            let result = verifier.handle(request(account, subscription, body)).await;
+            assert!(result.is_err(), "{what} must be refused");
+            assert!(
+                backend.forwarded.lock().unwrap().is_empty(),
+                "{what}: a refusal sends nothing"
+            );
+        }
     }
 
     /// A release whose stack has the queue `jobs` and the storage `uploads`, which notifies it.

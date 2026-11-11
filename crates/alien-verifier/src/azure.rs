@@ -304,6 +304,36 @@ impl Azure {
         Ok(())
     }
 
+    /// Send an Event Grid subscription of the install's storage account `account`, in this
+    /// install's resource group, with PUT.
+    pub async fn write_event_subscription(
+        &self,
+        account: &str,
+        name: &str,
+        body: &Value,
+    ) -> Result<()> {
+        let mut url = crate::machines::segments_url(
+            &format!("{ARM}{}", self.resource_group),
+            &[
+                "providers",
+                "Microsoft.Storage",
+                "storageAccounts",
+                account,
+                "providers",
+                "Microsoft.EventGrid",
+                "eventSubscriptions",
+                name,
+            ],
+        )?;
+        url.query_pairs_mut()
+            .append_pair("api-version", "2025-02-15");
+        let what = format!("eventGrid.eventSubscriptions.write {account}/{name}");
+        self.call(reqwest::Method::PUT, url.as_str(), ARM, Some(body), &what)
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        Ok(())
+    }
+
     /// Read `url` until its provisioning state is Succeeded; Failed,
     /// Canceled or ten minutes without it are errors.
     async fn provisioned(&self, url: &str, what: &str) -> Result<Value> {

@@ -436,6 +436,10 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
     // it checks against the signed stack.
     "Microsoft.Storage/storageAccounts/blobServices/containers/read",
     "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+    // It sets the Event Grid subscriptions that deliver the signed storages' blob events to
+    // their queues.
+    "Microsoft.EventGrid/eventSubscriptions/read",
+    "Microsoft.EventGrid/eventSubscriptions/write",
 ];
 
 /// What the verifier reads outside the group: the publisher's community gallery images its

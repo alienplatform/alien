@@ -39,6 +39,25 @@ pub fn notification_rule_key(rule: &StorageNotification) -> String {
     ])
 }
 
+/// Every Event Grid subscription name of this container's rules starts with this. Azure
+/// container names are ASCII; the hash keeps long names distinct after truncation.
+pub fn azure_subscription_prefix(container: &str) -> String {
+    let head: String = container.chars().take(28).collect();
+    let hash = format!("{:x}", Sha256::digest(container.as_bytes()));
+    format!("{head}-sn-{}-", &hash[..10])
+}
+
+/// The name of the Event Grid subscription that delivers one rule of the storage in
+/// `container`. It carries the hash of what the rule delivers, not its position. At most 59
+/// characters.
+pub fn azure_subscription_name(container: &str, rule: &StorageNotification) -> String {
+    format!(
+        "{}{}",
+        azure_subscription_prefix(container),
+        notification_rule_key(rule)
+    )
+}
+
 /// One GCS notification config: every rule of a Storage with the same queue and prefix.
 /// GCS filters by prefix only, so one config per rule would publish each object under a
 /// shared prefix once per rule. The consumer checks the suffixes instead.

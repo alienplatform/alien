@@ -121,6 +121,14 @@ pub enum ResourceWrite {
         container: String,
         body: Value,
     },
+    /// Azure create or update (PUT) of an Event Grid subscription on the install's storage
+    /// account: it delivers one notification rule of the signed storage to its queue.
+    #[serde(rename_all = "camelCase")]
+    PutEventSubscription {
+        account: String,
+        name: String,
+        body: Value,
+    },
 }
 
 impl ResourceWrite {
@@ -141,6 +149,7 @@ impl ResourceWrite {
             ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
             ResourceWrite::SetSubscriptionIamPolicy { .. } => "SetSubscriptionIamPolicy",
             ResourceWrite::CreateBlobContainer { .. } => "CreateBlobContainer",
+            ResourceWrite::PutEventSubscription { .. } => "PutEventSubscription",
             ResourceWrite::UpdateBlobContainer { .. } => "UpdateBlobContainer",
         }
     }
@@ -387,7 +396,8 @@ pub fn check_aws_write(
         | ResourceWrite::SetTopicIamPolicy { .. }
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
-        | ResourceWrite::UpdateBlobContainer { .. } => {
+        | ResourceWrite::UpdateBlobContainer { .. }
+        | ResourceWrite::PutEventSubscription { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -737,7 +747,8 @@ pub async fn forward_aws_write(
         | ResourceWrite::SetTopicIamPolicy { .. }
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
-        | ResourceWrite::UpdateBlobContainer { .. } => {
+        | ResourceWrite::UpdateBlobContainer { .. }
+        | ResourceWrite::PutEventSubscription { .. } => {
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
@@ -963,6 +974,11 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
             container,
             body,
         } => (account, container, body),
+        ResourceWrite::PutEventSubscription {
+            account,
+            name,
+            body,
+        } => return check_event_subscription(facts, account, name, body),
         other => {
             return Err(refused(format!("Azure takes no {} write", other.operation())));
         }
@@ -976,17 +992,109 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
             facts.resource_id
         )));
     }
+    check_account_name(write, account)?;
+    check_blob_container_body(body, storage.public_read).map_err(refused)
+}
+
+fn check_account_name(write: &ResourceWrite, account: &str) -> Result<()> {
     let plain = (3..=24).contains(&account.len())
         && account
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
-    if !plain {
-        return Err(refused(format!(
+    if plain {
+        Ok(())
+    } else {
+        Err(refused(format!(
             "{} names storage account '{account}', which is not an Azure storage account name",
             write.operation()
+        )))
+    }
+}
+
+/// An Event Grid subscription on the install's storage account must be the one the signed
+/// storage declares for one of its notification rules: its name is the rule's, it delivers
+/// only blob-created events of this storage's container and the rule's prefix and suffix, to
+/// the Service Bus queue of the rule's queue in this install's resource group, and it sets
+/// nothing else. Where a storage account's events go is who can read them.
+fn check_event_subscription(
+    facts: &ResourceFacts<'_>,
+    account: &str,
+    name: &str,
+    body: &Value,
+) -> Result<()> {
+    let operation = "PutEventSubscription";
+    check_account_name(
+        &ResourceWrite::PutEventSubscription {
+            account: account.to_string(),
+            name: name.to_string(),
+            body: Value::Null,
+        },
+        account,
+    )?;
+    let alien_signing::InstallId::Azure {
+        subscription,
+        resource_group,
+    } = &facts.place.install
+    else {
+        return Err(refused(format!("{operation} is for an Azure install")));
+    };
+    let storage = facts.storage()?;
+    let container = azure_container_name(&facts.place.prefix, facts.resource_id);
+    let rule = storage
+        .notifications
+        .iter()
+        .find(|rule| {
+            alien_core::storage_notifications::azure_subscription_name(&container, rule) == name
+        })
+        .ok_or_else(|| {
+            refused(format!(
+                "{operation} names subscription {name}, which is not a notification rule of storage '{}' in the signed stack",
+                facts.resource_id
+            ))
+        })?;
+    let queue = format!("{}-{}", facts.place.prefix, rule.queue.id);
+    let queue_prefix = format!(
+        "/subscriptions/{subscription}/resourceGroups/{resource_group}/providers/Microsoft.ServiceBus/namespaces/"
+    );
+    let destination = body
+        .pointer("/properties/destination/properties/resourceId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refused(format!("{operation} has no destination queue")))?;
+    let namespace = destination
+        .strip_prefix(&queue_prefix)
+        .and_then(|rest| rest.strip_suffix(&format!("/queues/{queue}")))
+        .filter(|namespace| !namespace.is_empty() && !namespace.contains('/'));
+    if namespace.is_none() {
+        return Err(refused(format!(
+            "{operation} delivers to {destination}, not queue {queue} in this install's Service Bus"
         )));
     }
-    check_blob_container_body(body, storage.public_read).map_err(refused)
+    let mut filter = json!({
+        "includedEventTypes": ["Microsoft.Storage.BlobCreated"],
+        "subjectBeginsWith": format!(
+            "/blobServices/default/containers/{container}/blobs/{}",
+            rule.prefix.as_deref().unwrap_or_default()
+        ),
+        "isSubjectCaseSensitive": true,
+    });
+    if let Some(suffix) = &rule.suffix {
+        filter["subjectEndsWith"] = json!(suffix);
+    }
+    let expected = json!({"properties": {
+        "destination": {
+            "endpointType": "ServiceBusQueue",
+            "properties": {"resourceId": destination},
+        },
+        "filter": filter,
+        "eventDeliverySchema": "CloudEventSchemaV1_0",
+    }});
+    if *body == expected {
+        Ok(())
+    } else {
+        Err(refused(format!(
+            "{operation} for {name} is not what the signed stack declares for that rule: expected {expected}"
+        )))
+    }
 }
 
 /// A blob container's fields: only `properties.publicAccess`, `Blob` when the signed storage is
@@ -1054,6 +1162,14 @@ pub async fn forward_azure_write(
                 .write_blob_container(reqwest::Method::PATCH, account, container, body)
                 .await?;
             Ok(json!({ "container": container }))
+        }
+        ResourceWrite::PutEventSubscription {
+            account,
+            name,
+            body,
+        } => {
+            azure.write_event_subscription(account, name, body).await?;
+            Ok(json!({ "subscription": name }))
         }
         other => Err(refused(format!("Azure takes no {} write", other.operation()))),
     }
