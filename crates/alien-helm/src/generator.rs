@@ -6106,13 +6106,20 @@ kind: Job
 metadata:
   name: {{ $pruneName }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": post-upgrade
     "helm.sh/hook-weight": "124"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # A failed prune Job stays for debugging, then Kubernetes removes it.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 0
   template:
+    metadata:
+      labels:
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -6127,6 +6134,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
         - name: current-history
           {{- if eq $backend "secret" }}
           secret:
@@ -6143,8 +6153,15 @@ spec:
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
           command:
             - /bin/sh
             - -ec
@@ -6299,6 +6316,8 @@ spec:
             - name: current-history
               mountPath: /history
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
 {{- end }}
 {{- end }}
 "#
@@ -6332,8 +6351,10 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # A failed cleanup Job stays for debugging, then Kubernetes removes it.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 1
   template:
     metadata:
@@ -6352,14 +6373,28 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       containers:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           command:
             - /bin/sh
             - -ec

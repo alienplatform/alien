@@ -278,3 +278,47 @@ fn the_chart_run_database_runs_as_the_postgres_user_with_limits() {
         container["resources"]["requests"]["memory"]
     );
 }
+
+#[test]
+fn hook_jobs_are_bounded_and_keep_a_failed_run_for_debugging() {
+    let chart = chart_files();
+    let values = "management:\n  token: test-credential\n";
+    let rendered = test_utils::helm_template(&chart, Some(values));
+    rendered.assert_ok("default install");
+    let job = yaml_documents(&rendered.stdout)
+        .into_iter()
+        .find(|document| {
+            document["kind"] == "Job"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-cleanup"))
+        })
+        .expect("the chart renders a pre-delete cleanup Job");
+    let annotations = to_yaml(&job["metadata"]["annotations"]);
+    assert!(
+        annotations.contains("before-hook-creation,hook-succeeded"),
+        "{annotations}"
+    );
+    assert!(!annotations.contains("hook-failed"), "{annotations}");
+    assert_eq!(job["spec"]["ttlSecondsAfterFinished"], 86400);
+    let container = &job["spec"]["template"]["spec"]["containers"][0];
+    assert_eq!(container["securityContext"]["readOnlyRootFilesystem"], true);
+    assert!(container["resources"]["limits"]["memory"].is_string());
+    assert_eq!(container["volumeMounts"][0]["mountPath"], "/tmp");
+    assert_eq!(job["spec"]["template"]["spec"]["volumes"][0]["name"], "tmp");
+
+    // The history prune Job renders only on upgrades with a protected history, so its
+    // template is checked as written.
+    let prune = &chart["templates/runtime-cleanup-history-prune.yaml"];
+    for required in [
+        "ttlSecondsAfterFinished: 86400",
+        "readOnlyRootFilesystem: true",
+        "limits:",
+        "mountPath: /tmp",
+        "deployment.labels",
+        "deployment.hookLabels",
+    ] {
+        assert!(prune.contains(required), "{required}");
+    }
+    assert!(!prune.contains("hook-failed"));
+}
