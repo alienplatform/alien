@@ -512,9 +512,7 @@ pub(super) fn mount_local_sandboxes_for_container(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::bindings::{
-        serialize_binding_as_env_var, PostgresBinding, QueueBinding, RedisBinding,
-    };
+    use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding, QueueBinding, RedisBinding};
 
     #[test]
     fn queue_network_binding_preserves_credentials_and_rewrites_only_loopback_host() {

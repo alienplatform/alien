@@ -359,7 +359,10 @@ async fn new_external_grant_requires_setup_until_installed_document_is_replaced(
 async fn a_catalog_action_added_after_setup_requires_setup_only_where_used() {
     // Each was added to ai/invoke after boundaries were installed in the field: one in a
     // statement it shares with other actions, one as a statement of its own on "*".
-    for added in ["bedrock-mantle:ListModels", "bedrock:ListInferenceProfiles"] {
+    for added in [
+        "bedrock-mantle:ListModels",
+        "bedrock:ListInferenceProfiles",
+    ] {
         catalog_action_added_after_setup(added).await;
     }
 }
