@@ -3313,6 +3313,40 @@ Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
 values with the installed Secret. Client-side `helm template --is-upgrade`
 cannot do that.
 
+## Workload priority
+
+A stack can declare a priority level on a container or daemon: `critical`, `high`,
+`normal` or `low`. The levels say which workloads matter more under node pressure;
+the cluster administrator decides which Kubernetes PriorityClass each level means.
+Map them in the install values:
+
+```yaml
+runtime:
+  workloadPriority:
+    classes:
+      critical: platform-critical
+      high: platform-high
+      normal: ""
+      low: platform-batch
+```
+
+A workload gets the class mapped to its level. A workload with no declared level, or
+a level whose entry is empty, gets no `priorityClassName`, as before. An install
+that sets none of these values renders and restarts exactly as it did.
+
+PriorityClasses are cluster-scoped, so the Operator never creates them. Point the
+levels at classes your cluster already has, or set
+`runtime.workloadPriority.create: true` and Helm creates `<release>-critical`,
+`-high`, `-normal` and `-low` (values 1000000, 100000, 0 and -100, never the
+default class) for any level you did not map yourself. Creating them needs
+cluster-scoped rights from whoever runs Helm. Removing the release removes the
+classes; running pods keep the priority they were admitted with.
+
+If a mapped class does not exist, Kubernetes rejects the pods and the workload
+reports `no PriorityClass with name ...`, followed by the values key to fix.
+Changing a mapping restarts only the workloads at that level. Sandboxes do not use
+priority levels, and platforms other than Kubernetes ignore the field.
+
 ## Logs
 
 Log collection is off by default. Enable it and choose one mode:
