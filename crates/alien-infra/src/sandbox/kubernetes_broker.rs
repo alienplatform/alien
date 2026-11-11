@@ -231,8 +231,10 @@ async fn claim_session_with_scope(
 /// How long a cold create waits for the pod to start and receive an address.
 ///
 /// Image pull on a node that has to be provisioned first is the slow part: 79 s measured on a
-/// scaled-to-zero Autopilot pool, and a multi-gigabyte image adds its pull time.
-const COLD_CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// scaled-to-zero Autopilot pool, and about 4 minutes for a 4 GB image on an EKS Auto Mode
+/// sandbox node (measured). Ten minutes covers that with room, and a pod that is still not
+/// running then is deleted and the caller gets a retryable 503 rather than a leaked pod.
+const COLD_CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 const COLD_CREATE_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 async fn pod_template(
