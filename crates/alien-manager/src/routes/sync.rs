@@ -3682,6 +3682,17 @@ async fn agent_sync(
         .unwrap_or(1)
         .min(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
     if deployment.required_deployment_protocol_version() > supported_protocol {
+        // The sync is refused, but the deployment still records which Operator
+        // version is stuck so the CLI can show it.
+        if let Some(operator_version) = req.operator_version.as_deref() {
+            if let Err(e) = state
+                .deployment_store
+                .record_operator_version(&subject, &req.deployment_id, operator_version)
+                .await
+            {
+                tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to record the Operator version of a rejected sync");
+            }
+        }
         // An Operator that reports its version is told which Operator and chart
         // version to move to; other actors keep the generic text.
         let message = match (&state.charts, req.operator_version.as_deref()) {

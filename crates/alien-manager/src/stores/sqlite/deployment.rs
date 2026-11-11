@@ -759,6 +759,27 @@ impl DeploymentStore for SqliteDeploymentStore {
         true
     }
 
+    async fn record_operator_version(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        operator_version: &str,
+    ) -> Result<(), AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(
+                Deployments::RuntimeMetadata,
+                Expr::cust_with_values(
+                    "json_set(COALESCE(runtime_metadata, '{}'), '$.operatorVersion', ?)",
+                    [operator_version],
+                ),
+            )
+            .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute_returning_rows_affected(&sql).await?;
+        Ok(())
+    }
+
     async fn create_deployment(
         &self,
         caller: &crate::auth::Subject,
@@ -2587,6 +2608,53 @@ mod gcp_project_consumer_tests {
             .await
             .expect("create GCP deployment")
             .id
+    }
+
+    #[tokio::test]
+    async fn recording_an_operator_version_changes_only_that_field() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manager.db");
+        let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
+        let store = SqliteDeploymentStore::new(db);
+        let caller = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &caller,
+                CreateDeploymentGroupParams {
+                    name: "operator-version".into(),
+                    max_deployments: 20,
+                    setup: DeploymentGroupSetup::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let id = create_gcp_deployment(
+            &store,
+            &group.id,
+            "operator-version",
+            "222222222222",
+            "running",
+        )
+        .await;
+        let before = store.get_deployment(&caller, &id).await.unwrap().unwrap();
+        assert_eq!(
+            before
+                .runtime_metadata
+                .as_ref()
+                .and_then(|m| m.operator_version.clone()),
+            None
+        );
+
+        store
+            .record_operator_version(&caller, &id, "1.2.3")
+            .await
+            .unwrap();
+
+        let after = store.get_deployment(&caller, &id).await.unwrap().unwrap();
+        let mut expected = before.runtime_metadata.clone().unwrap_or_default();
+        expected.operator_version = Some("1.2.3".to_string());
+        assert_eq!(after.runtime_metadata, Some(expected));
+        assert_eq!(after.status, before.status);
     }
 
     #[tokio::test]
