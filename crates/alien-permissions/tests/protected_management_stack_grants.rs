@@ -633,6 +633,33 @@ fn a_gcp_stack_permission_on_the_allow_list_still_renders() {
 }
 
 #[test]
+fn a_gcp_stack_condition_on_a_management_binding_is_refused() {
+    for expression in [
+        "true) || (true",
+        "resource.name.startsWith(\"projects/_/buckets/orders-\")",
+    ] {
+        let set = stack_set(
+            "gcp",
+            json!({ "predefinedRoles": ["roles/secretmanager.secretAccessor"] }),
+            json!({ "stack": {
+                "scope": "project",
+                "condition": { "title": "Stack condition", "expression": expression },
+            } }),
+        );
+        let error = render_gcp(&set, true).expect_err(&format!(
+            "`{expression}` must be refused on a protected install"
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("doesn't support conditions the stack supplies"),
+            "{expression}: {error}"
+        );
+        render_gcp(&set, false).expect("an unprotected install is unchanged");
+    }
+}
+
+#[test]
 fn every_predefined_role_the_catalog_grants_is_allowed_or_deliberately_refused() {
     let mut outside = std::collections::BTreeSet::new();
     for id in list_permission_set_ids() {

@@ -3,9 +3,12 @@
 
 mod iam_policy;
 
-use alien_permissions::generators::{signing_limits::aws_verifier_policy, AwsIamStatement};
+use alien_permissions::generators::{
+    signing_limits::{aws_management_limits, aws_verifier_policy},
+    AwsIamStatement,
+};
 use iam_policy::{evaluate, Decision, Request};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn statements(policy: &Value) -> Vec<AwsIamStatement> {
     let listed = |value: &Value| match value {
@@ -108,5 +111,58 @@ fn the_verifier_cannot_retag_another_installs_group_to_reach_it() {
         .request_tags(&[("deployment", "acme")])
         .resource_tags(resource_tags);
         assert_eq!(evaluate(&policy, &own), Decision::Allowed);
+    }
+}
+
+#[test]
+fn management_cannot_read_signing_inputs_or_state_however_a_stack_grants_ssm() {
+    let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+    let mut policy = statements(&limits);
+    policy.extend(statements(&json!({ "Statement": [{
+        "Sid": "StackGrant",
+        "Effect": "Allow",
+        "Action": ["ssm:GetParameter*", "ssm:DescribeParameters"],
+        "Resource": "*",
+    }] })));
+    let parameter = |name: &str| format!("arn:aws:ssm:us-east-1:111122223333:parameter/{name}");
+
+    for action in [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParameterHistory",
+    ] {
+        for name in [
+            "signed/acme/inputs/databaseUrl",
+            "signed/acme/inputs/nested/key",
+            "signed/acme/state",
+            // Another install in the same account.
+            "signed/acme-prod/inputs/databaseUrl",
+            "signed/acme-prod/state",
+        ] {
+            let request = Request::new(action, parameter(name));
+            assert_eq!(
+                evaluate(&policy, &request),
+                Decision::ExplicitlyDenied,
+                "{action} {name}"
+            );
+        }
+        // Parameters the app and the install's own vaults keep are not signing inputs.
+        let vault = Request::new(action, parameter("acme-secrets-DATABASE_URL"));
+        assert_eq!(evaluate(&policy, &vault), Decision::Allowed, "{action}");
+    }
+
+    // The fingerprint read the limits grant, and the one a broad stack grant also reaches.
+    let fingerprint = Request::new("ssm:GetParameter", parameter("signed/acme/fingerprint"));
+    assert_eq!(evaluate(&policy, &fingerprint), Decision::Allowed);
+
+    // The path read is authorised on the path, so a grant on `*` can't be allowed to return a
+    // whole hierarchy.
+    for path in ["signed/acme", "signed/acme/inputs", "signed", ""] {
+        let request = Request::new("ssm:GetParametersByPath", parameter(path));
+        assert_eq!(
+            evaluate(&policy, &request),
+            Decision::ExplicitlyDenied,
+            "{path}"
+        );
     }
 }

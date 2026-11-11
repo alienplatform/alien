@@ -98,6 +98,12 @@ pub fn is_management_held(permission_set: &PermissionSet) -> bool {
         || permission_set == management_stack_secrets_data()
 }
 
+/// Whether `permission_set` is the built-in set of its id, unchanged. Anything else came from the
+/// stack, so its grants and IAM conditions are not ones this repository reviewed.
+pub fn is_built_in_unchanged(permission_set: &PermissionSet) -> bool {
+    get_permission_set(&permission_set.id) == Some(permission_set)
+}
+
 /// The set that lets automatic AWS setup's management role read and sync the stack's vault
 /// parameters. Setup adds it as an inline set, so it is held by its exact contents, not its id.
 /// The deployer-secrets and signing Denies still apply on top of it.

@@ -2,7 +2,9 @@ use crate::{
     error::{ErrorData, Result},
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        protected_allowlist::{is_management_held, AllowListCloud, Kind as AllowListKind},
+        protected_allowlist::{
+            is_built_in_unchanged, is_management_held, AllowListCloud, Kind as AllowListKind,
+        },
         verifier_owned::gcp_verifier_owned,
     },
     variables::VariableInterpolator,
@@ -366,6 +368,19 @@ impl GcpRuntimePermissionsGenerator {
             };
             let resource_kind = binding_resource_kind(binding_spec);
             let condition = self.binding_condition(binding_spec, context)?;
+            if context.signing_protected
+                && condition.is_some()
+                && !is_built_in_unchanged(permission_set)
+            {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "gcp".to_string(),
+                    message: format!(
+                        "Permission set '{}' puts an IAM condition on a management binding; \
+                         a protected install doesn't support conditions the stack supplies",
+                        permission_set.id
+                    ),
+                }));
+            }
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
@@ -386,7 +401,7 @@ impl GcpRuntimePermissionsGenerator {
                             condition.clone(),
                             predefined_role.contains("secretmanager"),
                             context,
-                        ),
+                        )?,
                     });
                 }
             }
@@ -418,7 +433,7 @@ impl GcpRuntimePermissionsGenerator {
                     .iter()
                     .any(|permission| permission.starts_with("secretmanager.")),
                 context,
-            );
+            )?;
             bindings.push(GcpIamBinding {
                 role: custom_role.name.clone(),
                 members: vec![service_account.clone()],
@@ -516,21 +531,65 @@ fn protected_secret_condition(
     condition: Option<GcpIamCondition>,
     grants_secrets: bool,
     context: &PermissionContext,
-) -> Option<GcpIamCondition> {
+) -> Result<Option<GcpIamCondition>> {
     if !(context.signing_protected && grants_secrets) {
-        return condition;
+        return Ok(condition);
     }
-    Some(match condition {
-        Some(condition) => GcpIamCondition {
-            expression: format!("({}) && {SIGNED_SECRETS_EXCLUDED}", condition.expression),
-            ..condition
-        },
+    Ok(Some(match condition {
+        Some(condition) => {
+            if !is_single_cel_operand(&condition.expression) {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "gcp".to_string(),
+                    message: format!(
+                        "IAM condition '{}' can't be combined with the signing-secret exclusion: \
+                         its parentheses don't balance or it holds a comment",
+                        condition.title
+                    ),
+                }));
+            }
+            GcpIamCondition {
+                expression: format!("({}) && {SIGNED_SECRETS_EXCLUDED}", condition.expression),
+                ..condition
+            }
+        }
         None => GcpIamCondition {
             title: "Not signing inputs".to_string(),
             description: "Leaves out the secrets only setup writes".to_string(),
             expression: SIGNED_SECRETS_EXCLUDED.to_string(),
         },
-    })
+    }))
+}
+
+/// Whether wrapping `expression` in one pair of parentheses makes it a single operand: outside
+/// string literals the parentheses balance and never close more than they opened, and there is
+/// no `//` comment that would swallow what follows.
+fn is_single_cel_operand(expression: &str) -> bool {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut chars = expression.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(open) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == open {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' => depth += 1,
+            ')' => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = next;
+            }
+            '/' if chars.peek() == Some(&'/') => return false,
+            _ => {}
+        }
+    }
+    depth == 0 && quote.is_none()
 }
 
 fn gcp_residual_permissions(grant: &PermissionGrant) -> Option<&Vec<String>> {
@@ -888,4 +947,24 @@ fn dedupe_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
         }
     }
     deduped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_single_cel_operand;
+
+    #[test]
+    fn only_a_balanced_comment_free_expression_is_one_operand() {
+        for ok in [
+            "resource.name.startsWith(\"a\")",
+            "a && (b || c)",
+            "resource.name == \"a)(\"",
+            "x == 'it\\'s ) fine'",
+        ] {
+            assert!(is_single_cel_operand(ok), "{ok}");
+        }
+        for bad in ["true) || (true", "a)", "(a", "a // comment", "x == \"open"] {
+            assert!(!is_single_cel_operand(bad), "{bad}");
+        }
+    }
 }
