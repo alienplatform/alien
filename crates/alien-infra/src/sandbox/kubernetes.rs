@@ -19,7 +19,7 @@ use crate::core::{
 use crate::error::{ErrorData, Result};
 use crate::sandbox::{
     idle_pool_pod_with_labels, idle_selector, pool_deficit, require_sandboxed_runtime_class,
-    SandboxPlacement, LABEL_POOL_STATE, LABEL_SANDBOX,
+    session_deadline_passed, SandboxPlacement, LABEL_POOL_STATE, LABEL_SANDBOX, LABEL_SESSION,
 };
 use alien_core::{ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxOutputs};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -518,6 +518,7 @@ async fn replenish_warm_pool(
     })?;
 
     let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
+    let selector_scope = format!("{deployment_label_key}={deployment_label_value}");
     let idle = client
         .list_pods(
             namespace,
@@ -534,6 +535,8 @@ async fn replenish_warm_pool(
             message: "Failed to list idle sandbox pods".to_string(),
             resource_id: Some(sandbox.id.clone()),
         })?;
+
+    reap_expired_sessions(client.as_ref(), sandbox, namespace, &selector_scope).await;
 
     let mut created = 0;
     let Some(egress_environment) =
@@ -680,6 +683,41 @@ async fn ensure_image_pull_secret(
     )
     .await?;
     Ok(Some(name))
+}
+
+/// Deletes the claimed pods of this sandbox whose session deadline has passed.
+///
+/// A session's deadline starts at its claim, which a pod-level deadline cannot express, so the
+/// Operator ends the session instead. Best effort per pod, retried on the next tick.
+async fn reap_expired_sessions(
+    client: &dyn alien_k8s_clients::PodApi,
+    sandbox: &Sandbox,
+    namespace: &str,
+    scope: &str,
+) {
+    let selector = format!("{LABEL_SANDBOX}={},{LABEL_SESSION},{scope}", sandbox.id);
+    let Ok(claimed) = client.list_pods(namespace, Some(selector), None).await else {
+        return;
+    };
+    let now = chrono::Utc::now().timestamp();
+    for pod in claimed.items {
+        if !session_deadline_passed(&pod, now) {
+            continue;
+        }
+        let (Some(name), Some(uid)) = (pod.metadata.name.as_deref(), pod.metadata.uid.as_deref())
+        else {
+            continue;
+        };
+        // Only this pod: a name another session reuses later is a different uid.
+        match client.delete_pod_if_uid(namespace, name, uid).await {
+            Ok(()) => {
+                info!(sandbox_id = %sandbox.id, pod = %name, "Ended a session at its deadline")
+            }
+            Err(error) => {
+                warn!(sandbox_id = %sandbox.id, pod = %name, error = %error, "Failed to end an expired session")
+            }
+        }
+    }
 }
 
 /// Annotation holding the digest of the template an idle pool pod was built from.

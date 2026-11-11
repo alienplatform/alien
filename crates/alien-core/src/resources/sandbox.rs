@@ -395,7 +395,11 @@ impl SandboxCapabilities {
                 // of the uid, the agent's own threads included. `maxProcesses` is refused with
                 // `SANDBOX_CAPABILITY_UNSUPPORTED` rather than accepted and ignored.
                 process_limit: false,
-                // `activeDeadlineSeconds` on the pod, which the kubelet enforces.
+                // A create may name `timeoutMs` up to the declared `maxLifetimeSeconds`. The broker
+                // records the deadline on the pod at the claim and the Operator ends the session
+                // at it. The kubelet's `activeDeadlineSeconds` is not used: it counts from the
+                // pod's start, so an idle pool pod would spend a session's time before it was
+                // claimed.
                 sandbox_lifetime: true,
                 // The pod drops every capability, including the `CAP_SYS_ADMIN` the agent would
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather

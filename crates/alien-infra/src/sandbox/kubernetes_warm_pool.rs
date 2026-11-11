@@ -65,10 +65,50 @@ pub const ANNOTATION_SESSION_GENERATION: &str = "alien.dev/session-generation";
 /// Annotation recording the tenant key the session was created for, when it had one.
 pub const ANNOTATION_SESSION_TENANT: &str = "alien.dev/session-tenant";
 
+/// Annotation carrying the sandbox's declared `maxLifetimeSeconds`, written when the pod is built.
+pub const ANNOTATION_MAX_LIFETIME: &str = "alien.dev/max-lifetime-seconds";
+/// Annotation recording when the session must end (Unix seconds). The Operator deletes the pod
+/// after it.
+pub const ANNOTATION_SESSION_DEADLINE: &str = "alien.dev/session-deadline";
+
+/// A session asked to live longer than the sandbox allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifetimeTooLong {
+    /// What the sandbox declared, in seconds.
+    pub max_seconds: u64,
+}
+
 /// Records on the pod what the broker later answers about the session, so no process memory is
 /// the source of truth for it.
-pub fn annotate_claim(pod: &mut Pod, now_unix: i64, tenant_key: Option<&str>) {
+///
+/// The session's deadline starts here, at the claim, and is the requested timeout bounded by the
+/// sandbox's declared lifetime; with no timeout it is the declared lifetime itself.
+pub fn annotate_claim(
+    pod: &mut Pod,
+    now_unix: i64,
+    tenant_key: Option<&str>,
+    timeout_seconds: Option<u64>,
+) -> Result<(), LifetimeTooLong> {
+    let max_seconds: Option<u64> = pod
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(ANNOTATION_MAX_LIFETIME))
+        .and_then(|value| value.parse().ok());
+    let lifetime = match (timeout_seconds, max_seconds) {
+        (Some(timeout), Some(max)) if timeout > max => {
+            return Err(LifetimeTooLong { max_seconds: max })
+        }
+        (Some(timeout), _) => Some(timeout),
+        (None, max) => max,
+    };
     let annotations = pod.metadata.annotations.get_or_insert_with(BTreeMap::new);
+    if let Some(seconds) = lifetime {
+        annotations.insert(
+            ANNOTATION_SESSION_DEADLINE.to_string(),
+            (now_unix + seconds as i64).to_string(),
+        );
+    }
     annotations.insert(
         ANNOTATION_SESSION_CREATED_AT.to_string(),
         now_unix.to_string(),
@@ -77,6 +117,17 @@ pub fn annotate_claim(pod: &mut Pod, now_unix: i64, tenant_key: Option<&str>) {
     if let Some(tenant) = tenant_key {
         annotations.insert(ANNOTATION_SESSION_TENANT.to_string(), tenant.to_string());
     }
+    Ok(())
+}
+
+/// Whether a claimed pod's session deadline has passed.
+pub fn session_deadline_passed(pod: &Pod, now_unix: i64) -> bool {
+    pod.metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(ANNOTATION_SESSION_DEADLINE))
+        .and_then(|value| value.parse::<i64>().ok())
+        .is_some_and(|deadline| deadline <= now_unix)
 }
 
 /// Labels an idle pod: it belongs to the sandbox but to no session yet.

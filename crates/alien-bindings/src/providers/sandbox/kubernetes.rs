@@ -74,6 +74,10 @@ struct ClaimRequest<'a> {
     session_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     tenant_key: Option<&'a str>,
+    /// How long the session may live from the claim; the broker refuses more than the sandbox
+    /// declares.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
 }
 
 /// Asks the broker for a session and a fresh capability. `None` when no pod carries the id.
@@ -265,19 +269,6 @@ impl KubernetesSandbox {
         read_identity_token(&self.token_path, &self.binding_name).await
     }
 
-    /// Refused rather than dropped: a claim reaches a pod that is already running under the
-    /// deadline the declaration fixed, so a lifetime accepted here would never be applied.
-    fn refuse_create_time_lifetime(&self, request: &CreateSandboxRequest) -> Result<()> {
-        if request.timeout_ms.is_none() {
-            return Ok(());
-        }
-        Err(self.failed(
-            SandboxCapability::SandboxLifetime.as_str(),
-            "a pod is claimed from a warm pool already running under the deadline the sandbox \
-             declared, so a claim cannot choose its own",
-        ))
-    }
-
     fn cached(&self, sandbox_id: &str) -> Option<ClaimResponse> {
         self.claims
             .lock()
@@ -322,7 +313,6 @@ impl KubernetesSandbox {
 
     async fn create_resolved(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         self.validate_egress(request.egress.as_ref())?;
-        self.refuse_create_time_lifetime(&request)?;
         let _policy_write = self.policy_write.lock().await;
         let policy = request
             .egress
@@ -341,6 +331,7 @@ impl KubernetesSandbox {
                 sandbox_id: &self.resource_id,
                 session_id: &sandbox_id,
                 tenant_key: request.tenant_key.as_deref(),
+                timeout_ms: request.timeout_ms,
             })
             .send()
             .await
@@ -490,9 +481,8 @@ impl Sandbox for KubernetesSandbox {
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         self.validate_egress(request.egress.as_ref())?;
-        // Refused on the reconnect path too: a claimed pod honors a lifetime no more than a
-        // freshly claimed one would.
-        self.refuse_create_time_lifetime(&request)?;
+        // `timeout_ms` applies when this call creates the session. A session that already exists
+        // keeps the deadline it was created with.
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
                 if let Some(policy) = request.egress.clone() {

@@ -91,8 +91,10 @@ pub async fn claim_session(
         now_unix,
         None,
         None,
+        None,
     )
     .await
+    .map_err(SessionRequestError::into_alien)
 }
 
 pub(crate) async fn claim_session_for_deployment(
@@ -106,7 +108,8 @@ pub(crate) async fn claim_session_for_deployment(
     deployment_label_key: &str,
     deployment_label_value: &str,
     tenant_key: Option<&str>,
-) -> Result<ClaimedSession> {
+    timeout_seconds: Option<u64>,
+) -> std::result::Result<ClaimedSession, SessionRequestError> {
     claim_session_with_scope(
         pods,
         secrets,
@@ -117,6 +120,7 @@ pub(crate) async fn claim_session_for_deployment(
         now_unix,
         Some((deployment_label_key, deployment_label_value)),
         tenant_key,
+        timeout_seconds,
     )
     .await
 }
@@ -132,7 +136,8 @@ async fn claim_session_with_scope(
     now_unix: i64,
     expected_scope: Option<(&str, &str)>,
     tenant_key: Option<&str>,
-) -> Result<ClaimedSession> {
+    timeout_seconds: Option<u64>,
+) -> std::result::Result<ClaimedSession, SessionRequestError> {
     let (signing_key, deployment_label_key, deployment_label_value) =
         signing_key(secrets, namespace, secret_name, sandbox_id, expected_scope).await?;
     let selector = format!(
@@ -163,7 +168,7 @@ async fn claim_session_with_scope(
         if !claim_idle_pod(&mut candidate, session_id) {
             continue;
         }
-        crate::sandbox::annotate_claim(&mut candidate, now_unix, tenant_key);
+        crate::sandbox::annotate_claim(&mut candidate, now_unix, tenant_key, timeout_seconds)?;
 
         // A conflict here is another caller winning the same pod, not an error to report: try
         // the next one rather than failing a create that a warm pool can still satisfy.
@@ -218,6 +223,7 @@ async fn claim_session_with_scope(
         now_unix,
         template,
         tenant_key,
+        timeout_seconds,
     )
     .await
 }
@@ -274,15 +280,17 @@ async fn cold_create(
     now_unix: i64,
     mut pod: Pod,
     tenant_key: Option<&str>,
-) -> Result<ClaimedSession> {
+    timeout_seconds: Option<u64>,
+) -> std::result::Result<ClaimedSession, SessionRequestError> {
     // Born claimed: it never appears in the idle selector, so no one else can take it.
     if !claim_idle_pod(&mut pod, session_id) {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: "the sandbox pod template is not an idle pool pod".to_string(),
             resource_id: Some(sandbox_id.to_string()),
-        }));
+        })
+        .into());
     }
-    crate::sandbox::annotate_claim(&mut pod, now_unix, tenant_key);
+    crate::sandbox::annotate_claim(&mut pod, now_unix, tenant_key, timeout_seconds)?;
     let created =
         pods.create_pod(namespace, &pod)
             .await
@@ -330,7 +338,8 @@ async fn cold_create(
                     COLD_CREATE_TIMEOUT.as_secs()
                 ),
                 resource_id: Some(sandbox_id.to_string()),
-            }));
+            })
+            .into());
         }
         tokio::time::sleep(COLD_CREATE_POLL).await;
     }
@@ -472,8 +481,41 @@ pub(crate) async fn reattach_session_for_deployment(
 pub(crate) enum SessionRequestError {
     /// The session exists for a different tenant than the request names.
     TenantMismatch,
+    /// The requested timeout is longer than the sandbox's declared lifetime.
+    LifetimeTooLong(crate::sandbox::LifetimeTooLong),
     /// Anything else; retryable from the caller's point of view.
     Unavailable(AlienError<ErrorData>),
+}
+
+impl From<AlienError<ErrorData>> for SessionRequestError {
+    fn from(error: AlienError<ErrorData>) -> Self {
+        Self::Unavailable(error)
+    }
+}
+
+impl From<crate::sandbox::LifetimeTooLong> for SessionRequestError {
+    fn from(error: crate::sandbox::LifetimeTooLong) -> Self {
+        Self::LifetimeTooLong(error)
+    }
+}
+
+impl SessionRequestError {
+    fn into_alien(self) -> AlienError<ErrorData> {
+        match self {
+            Self::Unavailable(error) => error,
+            Self::TenantMismatch => AlienError::new(ErrorData::CloudPlatformError {
+                message: "the session belongs to another tenant".to_string(),
+                resource_id: None,
+            }),
+            Self::LifetimeTooLong(too_long) => AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "the sandbox allows a session of at most {} seconds",
+                    too_long.max_seconds
+                ),
+                resource_id: None,
+            }),
+        }
+    }
 }
 
 /// Finds the session `session_id`, or creates it. Any process of the deployment may call this
@@ -494,6 +536,7 @@ pub(crate) async fn find_or_create_session_for_deployment(
     deployment_label_key: &str,
     deployment_label_value: &str,
     tenant_key: Option<&str>,
+    timeout_seconds: Option<u64>,
 ) -> std::result::Result<ClaimedSession, SessionRequestError> {
     let unavailable = SessionRequestError::Unavailable;
     let existing = reattach_session_for_deployment(
@@ -528,9 +571,9 @@ pub(crate) async fn find_or_create_session_for_deployment(
         deployment_label_key,
         deployment_label_value,
         tenant_key,
+        timeout_seconds,
     )
-    .await
-    .map_err(SessionRequestError::Unavailable)?;
+    .await?;
 
     let mut contenders = claimed_pods(
         pods,
@@ -908,6 +951,44 @@ mod tests {
 
     /// The apiserver decides the race. A caller that lost one pod must take the next rather than
     /// failing a create the pool can still satisfy.
+    /// A session may ask for less than the sandbox's declared lifetime and never for more; the
+    /// deadline counts from the claim, so time an idle pod spent waiting is not taken from it.
+    #[test]
+    fn a_session_deadline_starts_at_the_claim_and_never_exceeds_the_declared_lifetime() {
+        let template = || {
+            let mut pod = idle_pod("pool-0", "10.1.2.3");
+            pod.metadata.annotations = Some(BTreeMap::from([(
+                crate::sandbox::ANNOTATION_MAX_LIFETIME.to_string(),
+                "3600".to_string(),
+            )]));
+            pod
+        };
+        let deadline = |pod: &Pod| {
+            pod.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get(crate::sandbox::ANNOTATION_SESSION_DEADLINE))
+                .cloned()
+        };
+
+        let mut by_default = template();
+        crate::sandbox::annotate_claim(&mut by_default, 1_000, None, None).unwrap();
+        assert_eq!(deadline(&by_default).as_deref(), Some("4600"));
+
+        let mut shorter = template();
+        crate::sandbox::annotate_claim(&mut shorter, 1_000, None, Some(60)).unwrap();
+        assert_eq!(deadline(&shorter).as_deref(), Some("1060"));
+
+        let mut longer = template();
+        let refused = crate::sandbox::annotate_claim(&mut longer, 1_000, None, Some(3601))
+            .expect_err("longer than the declared lifetime");
+        assert_eq!(refused.max_seconds, 3600);
+        assert_eq!(deadline(&longer), None, "a refused claim writes nothing");
+
+        assert!(crate::sandbox::session_deadline_passed(&by_default, 4_600));
+        assert!(!crate::sandbox::session_deadline_passed(&by_default, 4_599));
+    }
+
     /// The pod is the only record of a session: its creation time, generation and tenant come
     /// from annotations the claim wrote, so a process that did not create it reads the same.
     #[tokio::test]
@@ -938,6 +1019,7 @@ mod tests {
             DEPLOYMENT_LABEL_KEY,
             DEPLOYMENT_LABEL_VALUE,
             Some("tenant-a"),
+            Some(600),
         )
         .await
         .expect("claim");
@@ -954,6 +1036,11 @@ mod tests {
             (created_at, generation, tenant.as_deref()),
             (4_242, 1, Some("tenant-a"))
         );
+        // The deadline starts at the claim, not when the pod was built.
+        assert_eq!(
+            pod.metadata.annotations.as_ref().unwrap()[crate::sandbox::ANNOTATION_SESSION_DEADLINE],
+            (4_242 + 600).to_string()
+        );
     }
 
     #[tokio::test]
@@ -965,7 +1052,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
-        crate::sandbox::annotate_claim(&mut claimed, 77, Some("t1"));
+        crate::sandbox::annotate_claim(&mut claimed, 77, Some("t1"), None).unwrap();
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen_selector = Arc::clone(&seen);
         let mut mock = MockPodApi::new();

@@ -165,6 +165,12 @@ pub(crate) fn sandbox_pod_with_labels(
             name: Some(pod_name(&sandbox.id, session_id)),
             namespace: Some(namespace.to_string()),
             labels: Some(labels),
+            annotations: sandbox.lifecycle.max_lifetime_seconds.map(|seconds| {
+                BTreeMap::from([(
+                    crate::sandbox::ANNOTATION_MAX_LIFETIME.to_string(),
+                    seconds.to_string(),
+                )])
+            }),
             ..Default::default()
         },
         spec: Some(PodSpec {
@@ -175,9 +181,10 @@ pub(crate) fn sandbox_pod_with_labels(
             automount_service_account_token: Some(false),
             // A sandbox that exits stays exited; restarting hostile code hands it another go.
             restart_policy: Some("Never".to_string()),
-            // The kubelet kills the pod at the deadline, so the ceiling holds even if whatever
-            // created the session never comes back to terminate it.
-            active_deadline_seconds: sandbox.lifecycle.max_lifetime_seconds.map(i64::from),
+            // No `activeDeadlineSeconds`: the kubelet counts it from the pod's start, and an idle
+            // pool pod can wait for hours, so a session would inherit whatever time the pod had
+            // already spent waiting. The ceiling is recorded on the pod instead and the deadline
+            // starts at the claim (see `annotate_claim`); the Operator deletes a session at it.
             enable_service_links: Some(false),
             // The image's own USER runs the sandbox. `runAsNonRoot` makes the kubelet refuse an
             // image that would start as root, so root stays refused without choosing a uid for
@@ -582,9 +589,6 @@ mod tests {
         );
     }
 
-    /// The kubelet is what makes a session deadline a ceiling rather than a hope: it kills the
-    /// pod whether or not whatever created the session ever comes back to terminate it. This is
-    /// the only backend with the primitive, which is why the field is refused elsewhere.
     /// A claimed pod keeps its name, so any name derived from the pool's current depth is
     /// reissued while the old one is still in use — the pool then fails to refill exactly when
     /// it is under load, which is the case the pool exists for. `generateName` makes the
@@ -601,8 +605,11 @@ mod tests {
         );
     }
 
+    /// The ceiling is recorded on the pod rather than given to the kubelet as
+    /// `activeDeadlineSeconds`, which counts from the pod's start: an idle pool pod can wait for
+    /// hours, and the session that claims it would start with that time already spent.
     #[test]
-    fn a_pod_carries_the_declared_session_deadline() {
+    fn a_pod_records_the_declared_lifetime_and_leaves_the_kubelet_deadline_unset() {
         let pod = sandbox_pod(
             &sandbox(SandboxEgress::None),
             "s1",
@@ -612,19 +619,24 @@ mod tests {
             None,
         );
         assert_eq!(
-            pod.spec.expect("a spec").active_deadline_seconds,
-            Some(3600)
+            pod.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get(crate::sandbox::ANNOTATION_MAX_LIFETIME))
+                .map(String::as_str),
+            Some("3600")
         );
+        assert_eq!(pod.spec.expect("a spec").active_deadline_seconds, None);
     }
 
     /// A sandbox that declares no deadline must not acquire one by default — an unexpected kill
     /// mid-session is worse than an unbounded one the caller chose.
     #[test]
-    fn a_pod_without_a_declared_deadline_carries_none() {
+    fn a_pod_without_a_declared_deadline_records_none() {
         let mut config = sandbox(SandboxEgress::None);
         config.lifecycle.max_lifetime_seconds = None;
         let pod = sandbox_pod(&config, "s1", "sbx", "gvisor", None, None);
-        assert_eq!(pod.spec.expect("a spec").active_deadline_seconds, None);
+        assert!(pod.metadata.annotations.is_none());
     }
 
     #[test]

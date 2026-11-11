@@ -126,6 +126,9 @@ pub struct ClaimRequest {
     /// Tenant the session is created for; recorded on the pod
     #[serde(default)]
     pub tenant_key: Option<String>,
+    /// How long the session may live from the claim, bounded by the sandbox's declared lifetime
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 /// What the application needs to reach its session.
@@ -298,10 +301,13 @@ async fn claim(
         &authorization.deployment_label_key,
         &authorization.deployment_label_value,
         request.tenant_key.as_deref(),
+        request.timeout_ms.map(|ms| ms.div_ceil(1000)),
     )
     .await
     .map_err(|error| match error {
         SessionRequestError::TenantMismatch => StatusCode::CONFLICT,
+        // The caller asked for more than the sandbox declares; retrying cannot change that.
+        SessionRequestError::LifetimeTooLong(_) => StatusCode::BAD_REQUEST,
         // Retryable rather than fatal: a cold create can outlast a request and 503 is what tells
         // a caller to wait rather than to give up.
         SessionRequestError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -639,6 +645,7 @@ mod tests {
                 sandbox_id: "sbx".to_string(),
                 session_id: "session".to_string(),
                 tenant_key: None,
+                timeout_ms: None,
             }),
         )
         .await
