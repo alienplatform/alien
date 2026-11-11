@@ -1104,6 +1104,11 @@ output "chart_infrastructure_json" {
   description = "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`."
 }
 
+output "chart_service_accounts_json" {
+  value       = jsonencode({ serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
+  description = "The Helm chart's `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created), as JSON. Merge it into the chart's values."
+}
+
 === README.md ===
 # Deployment setup - eks-use-default
 
