@@ -212,6 +212,8 @@ fn install_allow_chart(context: &str) -> (Cleanup, Output) {
             "management.defaultUrl=https://manager.example.test",
             "--set",
             "sandbox.clusterDNS={10.96.0.10}",
+            "--set-string",
+            "sandbox.runtimeClassName=gvisor",
         ])
         .output()
         .expect("run helm install");
