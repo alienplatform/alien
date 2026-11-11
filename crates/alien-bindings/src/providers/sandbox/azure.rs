@@ -17,7 +17,7 @@ use futures::stream::{self, BoxStream};
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{checked_env_name, guard_for, Bounded, TimeoutReport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
+    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart, PreviewCapability,
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
@@ -325,6 +325,7 @@ impl Sandbox for AzureSandbox {
     fn capabilities(&self) -> SandboxCapabilities {
         let mut capabilities = SandboxCapabilities::azure();
         capabilities.jobs = self.agent;
+        capabilities.interactive_commands = self.agent;
         capabilities.supervisor_isolation = self.agent;
         capabilities
     }
@@ -335,6 +336,7 @@ impl Sandbox for AzureSandbox {
             .await?;
         let mut capabilities = SandboxCapabilities::azure();
         capabilities.jobs = agent;
+        capabilities.interactive_commands = agent;
         capabilities.supervisor_isolation = agent;
         Ok(capabilities)
     }
@@ -785,6 +787,30 @@ impl Sandbox for AzureSandbox {
             "sandbox.snapshot",
             "this client sends no snapshot request, and nothing owns the artifact once taken",
         ))
+    }
+
+    async fn run_interactive(
+        &self,
+        sandbox_id: &str,
+        request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        Self::checked_sandbox_id(RUN_INTERACTIVE, sandbox_id)?;
+        if request.timeout.is_zero() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.runInteractive".to_string(),
+                reason: "a command must carry a non-zero timeout".to_string(),
+            }));
+        }
+        // Starts untrusted code like `run_command`, so it re-reads the policy the same way.
+        let record = self.judged_sandbox(RUN_INTERACTIVE, sandbox_id).await?;
+        if !agent::uses_agent(&record)? {
+            return Err(self.unsupported(
+                RUN_INTERACTIVE,
+                "this sandbox was created without the agent, and the platform's exec takes no stdin",
+            ));
+        }
+        let agent = self.bound_agent(sandbox_id).await?;
+        super::interactive::run_interactive(agent, request).await
     }
 
     async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
@@ -1630,6 +1656,7 @@ const MAX_SANDBOX_ID: usize = 63;
 /// sandbox. The binding exposes no list, and the controller's lifetime reaper runs only for
 /// gateway groups, so the first one has no id-holder and nothing to reap it.
 const RUN_COMMAND: &str = "sandbox.runCommand";
+const RUN_INTERACTIVE: &str = "sandbox.runInteractive";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 
@@ -4830,9 +4857,15 @@ mod tests {
         let platform =
             SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a backend");
 
+        // The platform row says what the agent image can do; a provider that has not selected
+        // the agent transport reports the interactive commands it cannot serve as false.
+        let without_agent = SandboxCapabilities {
+            interactive_commands: false,
+            ..platform
+        };
         assert_eq!(
             sandbox_with(MockSandboxDataPlaneApi::new()).capabilities(),
-            platform
+            without_agent
         );
 
         let listed = AzureSandbox::new(
@@ -4847,7 +4880,7 @@ mod tests {
         );
         assert_eq!(
             listed.capabilities(),
-            platform,
+            without_agent,
             "the declaration is not the row"
         );
         assert!(
