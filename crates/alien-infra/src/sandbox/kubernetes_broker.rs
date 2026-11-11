@@ -238,6 +238,27 @@ async fn require_cluster_dns(
     secret_name: &str,
     sandbox_id: &str,
 ) -> Result<()> {
+    require_cluster_dns_with(
+        secrets,
+        namespace,
+        secret_name,
+        sandbox_id,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS)
+            .ok()
+            .as_deref(),
+        &crate::sandbox::kubernetes_dns::read_resolv_conf(),
+    )
+    .await
+}
+
+async fn require_cluster_dns_with(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    secret_name: &str,
+    sandbox_id: &str,
+    configured: Option<&str>,
+    resolv_conf: &str,
+) -> Result<()> {
     let secret = secrets.get_secret(namespace, secret_name).await.context(
         ErrorData::CloudPlatformError {
             message: format!("the capability Secret for '{sandbox_id}' is unreadable"),
@@ -252,13 +273,7 @@ async fn require_cluster_dns(
     if !required {
         return Ok(());
     }
-    crate::sandbox::kubernetes_dns::check(
-        std::env::var(alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS)
-            .ok()
-            .as_deref(),
-        &crate::sandbox::kubernetes_dns::read_resolv_conf(),
-    )
-    .map_err(|message| {
+    crate::sandbox::kubernetes_dns::check(configured, resolv_conf).map_err(|message| {
         AlienError::new(ErrorData::CloudPlatformError {
             message,
             resource_id: Some(sandbox_id.to_string()),
@@ -968,6 +983,47 @@ mod tests {
             })
         });
         pods
+    }
+
+    fn dns_secret(required: Option<&str>) -> Secret {
+        let mut secret = key_secret();
+        if let Some(value) = required {
+            secret.data.as_mut().unwrap().insert(
+                crate::sandbox::REQUIRES_CLUSTER_DNS_SECRET_KEY.to_string(),
+                k8s_openapi::ByteString(value.as_bytes().to_vec()),
+            );
+        }
+        secret
+    }
+
+    /// A wrong `sandbox.clusterDNS` refuses a new session on an allow sandbox, and the message
+    /// names the value and the address to set. A sandbox that does not need it, and a matching
+    /// value, both pass.
+    #[tokio::test]
+    async fn a_new_allow_session_is_refused_when_cluster_dns_does_not_match_the_resolver() {
+        let resolv = "nameserver 10.100.0.10\n";
+        let check = |required: Option<&'static str>, configured: Option<&'static str>| async move {
+            let mut secrets = MockSecretsApi::new();
+            secrets
+                .expect_get_secret()
+                .returning(move |_, _| Ok(dns_secret(required)));
+            require_cluster_dns_with(
+                &(Arc::new(secrets) as Arc<dyn SecretsApi>),
+                "ns",
+                "alien-sandbox-sbx-capability",
+                "sbx",
+                configured,
+                resolv,
+            )
+            .await
+        };
+        let error = check(Some("true"), Some("10.96.0.10")).await.unwrap_err();
+        assert!(error.to_string().contains("sandbox.clusterDNS"), "{error}");
+        assert!(error.to_string().contains("10.100.0.10"), "{error}");
+        assert!(check(Some("true"), None).await.is_err());
+        assert!(check(Some("true"), Some("10.100.0.10")).await.is_ok());
+        assert!(check(Some("false"), Some("10.96.0.10")).await.is_ok());
+        assert!(check(None, None).await.is_ok());
     }
 
     #[tokio::test]

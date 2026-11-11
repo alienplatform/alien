@@ -4243,6 +4243,12 @@ sandbox:
   # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is
   # empty: it starts a pod on demand, which takes as long as the node and image pull need.
   warmPoolSize: 2
+  # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
+  # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
+  # these addresses and nothing else on private ranges. Find it with:
+  #   kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf
+  # (EKS Auto Mode has no kube-dns Service; it uses 10.100.0.10 on the default service range.)
+  clusterDNS: []
 "#,
         );
     }
@@ -4741,7 +4747,11 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "runtimeClassName": { "type": "string" },
             "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "tolerations": { "type": "array" },
-            "warmPoolSize": { "type": "integer", "minimum": 0 }
+            "warmPoolSize": { "type": "integer", "minimum": 0 },
+            "clusterDNS": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
+            }
         }
     });
     serde_json::to_string_pretty(&schema)
@@ -6659,7 +6669,11 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS,
         alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE
     );
-    let broker = format!("{broker}{placement}");
+    let dns = format!(
+        "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
+    );
+    let broker = format!("{broker}{placement}{dns}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"

@@ -15,20 +15,22 @@
 use crate::emitter::{HelmEmitter, HelmFragment};
 use alien_core::sandbox_image::AGENT_PORT;
 use alien_core::{
-    import::EmitContext, ErrorData, ResourceRef, Result, Sandbox, SandboxEgress, Stack,
+    import::EmitContext, non_public_ipv4_ranges, ErrorData, ResourceRef, Result, Sandbox,
+    SandboxEgress, Stack,
 };
 use alien_error::AlienError;
 
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 
-// Released allow-mode address exclusions. New internet uses the gateway.
-const ALWAYS_DENIED_CIDRS: &[&str] = &[
-    "169.254.169.254/32",
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-];
+/// Reads `sandbox.clusterDNS` for an allow-egress policy and stops the render when it is missing,
+/// so an upgrade that would leave sandboxes with no name resolution never applies and the running
+/// release keeps its policy.
+const CLUSTER_DNS_VALUES: &str = r#"{{- $dns := dig "clusterDNS" (list) (default dict .Values.sandbox) -}}
+{{- if not $dns -}}
+{{- fail "sandbox.clusterDNS is not set. A sandbox with allow egress needs the address of the cluster DNS service (the nameserver in a pod's /etc/resolv.conf). Find it with: kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf and set sandbox.clusterDNS=[<that address>]." -}}
+{{- end -}}
+"#;
 
 /// Path the broker's RBAC lands at. Fixed rather than per-sandbox: the ClusterRole is one per
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
@@ -86,7 +88,7 @@ impl HelmEmitter for SandboxEmitter {
             RUNTIME_CLASS_HELPER_TEMPLATE.to_string(),
             RUNTIME_CLASS_HELPER.to_string(),
         );
-        if matches!(sandbox.egress, SandboxEgress::Internet) {
+        if network_policy_is_the_only_bound(&sandbox.egress) {
             fragment.extra_templates.insert(
                 "sandbox-cni-probe.yaml".to_string(),
                 super::sandbox_cni::template(),
@@ -94,6 +96,18 @@ impl HelmEmitter for SandboxEmitter {
         }
         Ok(fragment)
     }
+}
+
+/// Whether this egress mode's reach is bounded by the session NetworkPolicy and nothing else, so
+/// the chart must prove the cluster enforces NetworkPolicy before it installs or upgrades.
+///
+/// The proof is the `sandbox-cni-probe.yaml` pre-install and pre-upgrade hook: when it fails, Helm
+/// stops before applying any other manifest, so no Operator runs and no session is created. Under
+/// `internet` the policy is what confines a session to the gateway. Under `allow` there is no
+/// gateway, and the policy's address exclusions are all that keep a session off node metadata,
+/// node credentials and private ranges; on a CNI that ignores NetworkPolicy they are not in force.
+fn network_policy_is_the_only_bound(egress: &SandboxEgress) -> bool {
+    matches!(egress, SandboxEgress::Internet | SandboxEgress::Allow)
 }
 
 /// The policy that makes a sandbox's declared egress real.
@@ -124,6 +138,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             )
         })
         .collect();
+    let mut dns_values = String::new();
     let egress = match sandbox.egress {
         SandboxEgress::None => String::new(),
         // Select the Service's backing pods in this namespace and release. Kubernetes
@@ -151,15 +166,20 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             }));
         }
         SandboxEgress::Allow => {
-            let excepts: String = ALWAYS_DENIED_CIDRS
-                .iter()
-                .map(|cidr| format!("            - {cidr}\n"))
+            // Every range the egress gateway refuses as non-public: private, shared (100.64/10),
+            // loopback, all of link-local (instance metadata, ECS and EKS Pod Identity
+            // credentials), Azure's wire server, and reserved and multicast space. No rule names
+            // an IPv6 block, so no IPv6 destination is reachable.
+            let excepts: String = non_public_ipv4_ranges()
+                .map(|range| format!("            - {range}\n"))
                 .collect();
-            // DNS first, by selector rather than address. The excepts below cover the private
-            // ranges a cluster's DNS service lives in — 172.20/16 on EKS, 10.0/16 on AKS,
-            // 10.96/12 on kubeadm — so an address-based rule alone resolves no names anywhere
-            // except a cluster whose resolver sits on a link-local address.
-            let dns = "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
+            // DNS goes to the cluster's resolver address(es) alone, from `sandbox.clusterDNS`: the
+            // excepts cover the private ranges a resolver lives in, the address differs per
+            // cluster (10.100.0.10 on EKS Auto Mode, a node-local link-local address with NodeLocal
+            // DNS or AKS LocalDNS), and a chart rendered by Argo CD cannot look it up. Port 53 to
+            // any other private host, and every other port on these, stays refused.
+            dns_values = CLUSTER_DNS_VALUES.to_string();
+            let dns = "    - to:\n{{- range $dns }}\n        - ipBlock:\n            cidr: {{ printf \"%s/32\" . }}\n{{- end }}\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
             format!(
                 "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
             )
@@ -167,7 +187,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
     };
 
     Ok(format!(
-        r#"{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
+        r#"{dns_values}{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
 {{{{- $scopeValue := include "deployment.serviceAccountPrefix" . -}}}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -194,6 +214,7 @@ spec:
           port: {agent_port}
 {egress}"#,
         id = sandbox.id(),
+        dns_values = dns_values,
         label = LABEL_SANDBOX,
         agent_port = AGENT_PORT,
     ))

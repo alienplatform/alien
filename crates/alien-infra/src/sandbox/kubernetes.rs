@@ -618,7 +618,8 @@ async fn replenish_warm_pool(
         &pod,
         matches!(sandbox.egress, alien_core::SandboxEgress::Allow),
     )
-    .await {
+    .await
+    {
         warn!(sandbox_id = %sandbox.id, %namespace, error = %error, "Failed to publish the sandbox pod template");
     }
 
@@ -793,7 +794,11 @@ async fn publish_pod_template(
         })
     })?;
     let data = secret.data.get_or_insert_default();
-    let dns_flag = if requires_cluster_dns { b"true".to_vec() } else { b"false".to_vec() };
+    let dns_flag = if requires_cluster_dns {
+        b"true".to_vec()
+    } else {
+        b"false".to_vec()
+    };
     if data
         .get(POD_TEMPLATE_SECRET_KEY)
         .is_some_and(|existing| existing.0 == template)
