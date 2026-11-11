@@ -67,6 +67,35 @@
           }
         }
       }
+    ],
+    "gcp": [
+      // The ring is named `<stack prefix>-<key id>-<digest>`, so one condition limits every call
+      // to this deployment's rings. Checked against a real project: the condition allows
+      // `keyRings.create` under the prefix and denies it elsewhere.
+      {
+        "label": "create-key",
+        "description": "Create a key ring and crypto key under this deployment's prefix, and set the key's IAM policy.",
+        "grant": {
+          "permissions": [
+            "cloudkms.keyRings.create",
+            "cloudkms.keyRings.get",
+            "cloudkms.cryptoKeys.create",
+            "cloudkms.cryptoKeys.get",
+            "cloudkms.cryptoKeys.update",
+            "cloudkms.cryptoKeys.getIamPolicy",
+            "cloudkms.cryptoKeys.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SetupKeys",
+              "expression": "resource.name.startsWith(\"projects/${projectName}/locations/${region}/keyRings/${stackPrefix}-\")"
+            }
+          }
+        }
+      }
     ]
   }
 }
