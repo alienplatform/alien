@@ -391,6 +391,26 @@ def azure_expiry_guard(state, selected):
                                 raise RuntimeError('Disable Azure storage lifecycle delete rules affecting retained data, apply; nothing detached')
 
 
+def drop_orphaned_memorystore_policies(selected):
+    """Detach a Memorystore service connection policy only together with an instance.
+
+    GCP allows one policy per network and region, and rejects deleting it while an instance
+    uses it. A retained instance keeps its policy. Without one, the policy was created for an
+    instance that never came to exist, so it stays managed and the destroy plan removes it
+    instead of leaving it behind to block the next install on that network.
+    """
+    policy = 'google_network_connectivity_service_connection_policy'
+    instance = 'google_memorystore_instance'
+
+    def kind_and_module(item):
+        parts = item['address'].split('[')[0].split('.')
+        return parts[-2], parts[:-2]
+
+    with_instance = [module for kind, module in map(kind_and_module, selected) if kind == instance]
+    return [item for item in selected
+            if kind_and_module(item)[0] != policy or kind_and_module(item)[1] in with_instance]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--detach', action='store_true', help='confirm detachment before whole-setup teardown')
@@ -430,6 +450,7 @@ def main():
                 if instance['attributes'].get('container_access_type') != 'private':
                     raise RuntimeError('Set Azure container publicRead=false and apply before retaining ' + base + suffix + '; nothing detached')
             selected.append({'address': base + suffix, 'id': resource_id})
+    selected = drop_orphaned_memorystore_policies(selected)
     azure_expiry_guard(state, {item['address'] for item in selected})
     print(json.dumps(selected, indent=2))
     if not args.detach:
