@@ -105,7 +105,7 @@ async fn fetch_claim(
         let body = response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "sandbox.get".to_string(),
-            reason: format!("the sandbox broker returned {status}: {body}"),
+            reason: broker_refusal(status, &body),
         }));
     }
     response
@@ -166,6 +166,26 @@ impl super::interactive::BoundAgent for SessionAgent {
     fn provider(&self) -> &'static str {
         "kubernetes-sandbox"
     }
+}
+
+/// What a broker answer that is not a success means to the caller.
+///
+/// A 401 is the broker refusing the token itself. The broker accepts only a token projected for
+/// its own audience, which a workload that links the sandbox has mounted; a pod started before the
+/// sandbox was linked, or before an upgrade, has none until it is rolled, so the message says what
+/// to look for and that retrying after the roll is the fix.
+fn broker_refusal(status: reqwest::StatusCode, body: &str) -> String {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return format!(
+            "the sandbox broker refused this workload's token ({status}). The broker accepts \
+             only a ServiceAccount token projected for the audience `{}`, mounted at the \
+             sandbox binding's token path in every workload that links the sandbox. A workload \
+             started before that link or before the last upgrade has none until it is \
+             restarted; try again once it has been rolled",
+            "alien-sandbox-broker"
+        );
+    }
+    format!("the sandbox broker returned {status}: {body}")
 }
 
 /// Reads the pod's ServiceAccount token. Per call: Kubernetes rotates projected tokens in place.
@@ -346,10 +366,7 @@ impl KubernetesSandbox {
             let body = response.text().await.unwrap_or_default();
             // 503 is the pool being empty, which refills on the controller's next health tick.
             // Saying so is the difference between a caller retrying and a caller giving up.
-            return Err(self.failed(
-                "sandbox.create",
-                &format!("the sandbox broker returned {status}: {body}"),
-            ));
+            return Err(self.failed("sandbox.create", &broker_refusal(status, &body)));
         }
 
         let claim: ClaimResponse = response.json().await.into_alien_error().context(
@@ -530,10 +547,7 @@ impl Sandbox for KubernetesSandbox {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(self.failed(
-                "sandbox.list",
-                &format!("the sandbox broker returned {status}: {body}"),
-            ));
+            return Err(self.failed("sandbox.list", &broker_refusal(status, &body)));
         }
         let list: SessionList = response.json().await.into_alien_error().context(
             ErrorData::UnexpectedResponseFormat {
@@ -635,7 +649,7 @@ impl Sandbox for KubernetesSandbox {
             let reason = if status == reqwest::StatusCode::FORBIDDEN {
                 format!("port {port} is not one of this sandbox's declared preview ports")
             } else {
-                format!("the sandbox broker returned {status}")
+                broker_refusal(status, "")
             };
             return Err(self.failed("sandbox.preview", &reason));
         }
@@ -646,14 +660,15 @@ impl Sandbox for KubernetesSandbox {
             capability: String,
             expires_at: i64,
         }
-        let grant: Grant = response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.preview".to_string(),
-                reason: "the sandbox broker's answer was unreadable".to_string(),
-            })?;
+        let grant: Grant =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::OperationNotSupported {
+                    operation: "sandbox.preview".to_string(),
+                    reason: "the sandbox broker's answer was unreadable".to_string(),
+                })?;
         Ok(PreviewCapability {
             endpoint: grant.endpoint,
             headers: BTreeMap::from([(
@@ -709,10 +724,7 @@ impl Sandbox for KubernetesSandbox {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(self.failed(
-                "sandbox.terminate",
-                &format!("the sandbox broker returned {status}: {body}"),
-            ));
+            return Err(self.failed("sandbox.terminate", &broker_refusal(status, &body)));
         }
 
         if let Some(manager) = &self.egress_manager {
@@ -732,6 +744,17 @@ impl Sandbox for KubernetesSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_token_names_the_audience_and_says_to_retry_after_the_roll() {
+        let message = broker_refusal(reqwest::StatusCode::UNAUTHORIZED, "");
+        assert!(message.contains("alien-sandbox-broker"), "{message}");
+        assert!(message.contains("try again"), "{message}");
+        assert_eq!(
+            broker_refusal(reqwest::StatusCode::NOT_FOUND, "no such pod"),
+            "the sandbox broker returned 404 Not Found: no such pod"
+        );
+    }
     use alien_core::bindings::BindingValue;
     use axum::extract::{Path, Request};
     use axum::http::StatusCode;

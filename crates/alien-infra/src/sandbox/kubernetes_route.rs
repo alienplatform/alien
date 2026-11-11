@@ -30,8 +30,8 @@ use alien_error::Context;
 use alien_k8s_clients::kubernetes::pods::PodApi;
 use alien_k8s_clients::kubernetes::secrets::SecretsApi;
 use alien_k8s_clients::kubernetes::token_reviews::{
-    authenticated_for_audience, authenticated_user, is_service_account_in, review_for,
-    review_for_audience, TokenReviewsApi,
+    authenticated_for_audience, authenticated_user, is_service_account_in, review_for_audience,
+    TokenReviewsApi,
 };
 
 /// What the broker needs to serve one deployment's sandboxes.
@@ -241,8 +241,7 @@ pub fn broker_router_with_authorization(
         })
 }
 
-/// The audience of a ServiceAccount token projected for the session broker.
-pub const BROKER_AUDIENCE: &str = "alien-sandbox-broker";
+use crate::sandbox::kubernetes_broker_token::BROKER_AUDIENCE;
 
 /// Verifies the caller is a ServiceAccount owned by this deployment.
 ///
@@ -251,43 +250,24 @@ async fn authorize(
     state: &BrokerRouteState,
     headers: &HeaderMap,
 ) -> Result<BrokerDeploymentAuthorization, StatusCode> {
-    authorize_with(
-        state,
-        headers,
-        std::env::var("ALIEN_SANDBOX_BROKER_REQUIRE_AUDIENCE").as_deref() == Ok("true"),
-    )
-    .await
-}
-
-async fn authorize_with(
-    state: &BrokerRouteState,
-    headers: &HeaderMap,
-    require_audience: bool,
-) -> Result<BrokerDeploymentAuthorization, StatusCode> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    // The token a caller presents is reviewed for the broker's own audience first, so a token
-    // projected for it is useless against the API server or anything else. A pod that only has
-    // the ServiceAccount token the kubelet mounts by default carries the API server's audience,
-    // which is accepted until the workloads project one, unless the Operator is told to require
-    // the broker's (`ALIEN_SANDBOX_BROKER_REQUIRE_AUDIENCE=true`).
-    let reviews = &state.broker.token_reviews;
-    let mut verdict = reviews
+    // The token is reviewed for the broker's own audience alone. A ServiceAccount token the
+    // kubelet mounts by default is issued for the API server and is refused, so what a caller
+    // sends here is useless against anything else. Workloads that link a sandbox get a token
+    // projected for this audience, and the sandbox binding names where it is mounted.
+    let verdict = state
+        .broker
+        .token_reviews
         .create_token_review(&review_for_audience(token, BROKER_AUDIENCE))
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if !authenticated_for_audience(&verdict, BROKER_AUDIENCE) {
-        if require_audience {
-            return Err(StatusCode::UNAUTHORIZED);
-        }
-        verdict = reviews
-            .create_token_review(&review_for(token))
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
     // A rejected token comes back 200 with `authenticated: false`, so the verdict is read rather
@@ -500,6 +480,7 @@ mod tests {
     fn verdict(authenticated: bool, username: &str) -> TokenReview {
         TokenReview {
             status: Some(TokenReviewStatus {
+                audiences: authenticated.then(|| vec![BROKER_AUDIENCE.to_string()]),
                 authenticated: Some(authenticated),
                 user: Some(UserInfo {
                     username: Some(username.to_string()),
@@ -600,20 +581,10 @@ mod tests {
         );
     }
 
-    fn verdict_for(audiences: &[&str], username: &str) -> TokenReview {
-        let mut review = verdict(true, username);
-        review.status.as_mut().unwrap().audiences = Some(
-            audiences
-                .iter()
-                .map(|audience| audience.to_string())
-                .collect(),
-        );
-        review
-    }
-
-    /// The review must name the broker's audience. Without one the API server checks the token
-    /// against its own audience, so a default-mounted ServiceAccount token, a credential for the
-    /// API server itself, would be what every caller sends the broker.
+    /// The review must name the broker's audience, and only a verdict that matched it is
+    /// accepted. Without an audience the API server checks the token against its own, so the
+    /// ServiceAccount token every pod has mounted would be what callers send the broker, and a
+    /// credential for the API server itself.
     #[tokio::test]
     async fn the_token_review_names_the_brokers_audience() {
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -623,14 +594,14 @@ mod tests {
             .expect_create_token_review()
             .returning(move |review| {
                 recorded.lock().unwrap().push(review.spec.audiences.clone());
-                Ok(verdict_for(
-                    &[BROKER_AUDIENCE],
+                Ok(verdict(
+                    true,
                     "system:serviceaccount:alien-sandbox-sbx:worker",
                 ))
             });
-        authorize_with(&state_with(reviews), &bearer("projected"), true)
+        authorize(&state_with(reviews), &bearer("projected"))
             .await
-            .expect("a token projected for the broker is accepted, even when it is required");
+            .expect("a token projected for the broker is accepted");
         assert_eq!(
             seen.lock().unwrap().as_slice(),
             [Some(vec![BROKER_AUDIENCE.to_string()])],
@@ -638,30 +609,26 @@ mod tests {
         );
     }
 
-    /// A token the API server did not match to the broker's audience is the default one. It is
-    /// accepted while the workloads do not project one, and refused once the Operator requires it.
+    /// The pod's normal ServiceAccount token is issued for the API server. The API server answers
+    /// a review for another audience with an authenticated verdict that names the audience it did
+    /// match, or with none, and neither is accepted.
     #[tokio::test]
-    async fn a_default_audience_token_is_refused_when_the_broker_audience_is_required() {
-        let reviews = || {
+    async fn a_default_audience_token_is_refused() {
+        for audiences in [
+            Some(vec!["https://kubernetes.default.svc".to_string()]),
+            None,
+        ] {
             let mut reviews = MockTokenReviewsApi::new();
-            reviews.expect_create_token_review().returning(|review| {
-                Ok(match review.spec.audiences {
-                    Some(_) => verdict(false, ""),
-                    None => verdict_for(
-                        &["https://kubernetes.default.svc"],
-                        "system:serviceaccount:alien-sandbox-sbx:worker",
-                    ),
-                })
+            reviews.expect_create_token_review().returning(move |_| {
+                let mut review = verdict(true, "system:serviceaccount:alien-sandbox-sbx:worker");
+                review.status.as_mut().unwrap().audiences = audiences.clone();
+                Ok(review)
             });
-            reviews
-        };
-        authorize_with(&state_with(reviews()), &bearer("default"), false)
-            .await
-            .expect("accepted while workloads still send the default token");
-        let error = authorize_with(&state_with(reviews()), &bearer("default"), true)
-            .await
-            .expect_err("refused when the broker audience is required");
-        assert_eq!(error, StatusCode::UNAUTHORIZED);
+            let error = authorize(&state_with(reviews), &bearer("default"))
+                .await
+                .expect_err("the default token is not for the broker");
+            assert_eq!(error, StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[tokio::test]

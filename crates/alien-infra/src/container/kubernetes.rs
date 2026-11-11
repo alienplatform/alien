@@ -2841,7 +2841,7 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
-        let pod_spec = PodSpec {
+        let mut pod_spec = PodSpec {
             node_selector,
             service_account_name: Some(service_account_name.to_string()),
             // The gateway never calls the Kubernetes API; its configuration is projected.
@@ -2871,6 +2871,8 @@ impl KubernetesContainerController {
             restart_policy: Some("Always".to_string()),
             ..Default::default()
         };
+        // A workload that links a sandbox calls the session broker with a token projected for it.
+        crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
         Ok(pod_spec)
     }

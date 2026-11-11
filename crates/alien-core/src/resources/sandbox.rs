@@ -2136,10 +2136,16 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("AWS mints a port-scoped JWE");
 
-        let error = sandbox
+        sandbox
             .validate_for_platform(Platform::Kubernetes)
-            .expect_err("Kubernetes preview is deferred");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            .expect("Kubernetes serves preview to in-cluster callers through the agent");
+
+        for platform in [Platform::Azure, Platform::Gcp] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("these backends have no port-scoped credential");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        }
     }
 
     /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and

@@ -1075,9 +1075,10 @@ mod tests {
         );
         assert_eq!(
             params["tokenPath"],
-            "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            "/var/run/secrets/alien.dev/sandbox-broker/token",
+            "the token a linking pod has projected for the broker, not the default one"
         );
-        // A path Kubernetes already wrote, never a secret of ours.
+        // A path the kubelet writes, never a secret of ours.
         assert!(
             !params.to_string().contains("cHVibGlj"),
             "no key material belongs in a binding: {params}"
@@ -1396,7 +1397,7 @@ async fn ensure_capability_keypair(
 ///
 /// The binding carries this path rather than any secret of ours: the platform put the file
 /// there, and the broker verifies it with a `TokenReview`.
-const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+const SERVICE_ACCOUNT_TOKEN_PATH: &str = super::kubernetes_broker_token::TOKEN_PATH;
 
 /// Where the application reaches the session broker.
 ///
