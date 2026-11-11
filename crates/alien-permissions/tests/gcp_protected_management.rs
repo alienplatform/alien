@@ -86,6 +86,11 @@ fn project_grants(plan: &GcpGrantPlan) -> BTreeMap<String, (BTreeSet<String>, Op
 /// acting as or minting tokens for another service account, changing any IAM policy or a custom
 /// role, and starting code-carrying builds or engines.
 fn verifier_only(permission: &str) -> bool {
+    alien_permissions::generators::gcp_family(permission).is_some()
+}
+
+/// The permissions this file named by hand before the families existed. Each must be in a family.
+fn hand_listed_verifier_only(permission: &str) -> bool {
     permission.ends_with(".setIamPolicy")
         || [
             "run.services.create",
@@ -208,6 +213,21 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             "storage.hmacKeys.create",
             "storage.managedFolders.setIamPolicy",
             "artifactregistry.repositories.setIamPolicy",
+            // Added by the families: sandbox lifecycle and snapshots, Cloud SQL network fields,
+            // snapshot and health-check reads that let a group name another install's, and
+            // subscriptions that deliver the install's messages elsewhere.
+            "aiplatform.sandboxEnvironments.pause",
+            "aiplatform.sandboxEnvironments.resume",
+            "aiplatform.sandboxEnvironments.snapshot",
+            "cloudsql.instances.create",
+            "cloudsql.instances.update",
+            "compute.healthChecks.useReadOnly",
+            "compute.snapshots.useReadOnly",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.update",
+            "pubsub.topics.attachSubscription",
+            "storage.hmacKeys.delete",
+            "storage.hmacKeys.update",
         ]
         .into_iter()
         .map(String::from)
@@ -454,4 +474,22 @@ fn unprotected_management_conditions_are_unchanged() {
             );
         }
     }
+}
+
+#[test]
+fn every_permission_this_file_names_by_hand_is_in_a_family() {
+    // The list of what only the verifier may do was written by hand; the families replace it.
+    let mut checked = 0;
+    for id in alien_permissions::list_permission_set_ids() {
+        let set = alien_permissions::get_permission_set(id).expect("listed set");
+        for entry in set.platforms.gcp.iter().flatten() {
+            for permission in entry.grant.permissions.iter().flatten() {
+                if hand_listed_verifier_only(permission) {
+                    assert!(verifier_only(permission), "{id}: {permission}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 10, "only {checked} hand-listed permissions found");
 }

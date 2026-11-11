@@ -287,6 +287,108 @@ pub fn aws_family(action: &str, pass_role_services: Option<&[String]>) -> Option
     None
 }
 
+/// Whether the GCP permission verb only reads.
+fn gcp_read_verb(verb: &str) -> bool {
+    verb.starts_with("get") || verb.starts_with("list")
+}
+
+/// GCP services whose every write is RUN: a service's write decides what code runs.
+const GCP_RUN_PREFIXES: &[&str] = &[
+    "run.services.",
+    "run.jobs.",
+    "cloudbuild.builds.",
+    "aiplatform.reasoningEngines.",
+    "aiplatform.sandboxEnvironments.",
+    "aiplatform.sandboxEnvironmentTemplates.",
+    "aiplatform.sandboxEnvironmentSnapshots.",
+    "osconfig.",
+    "oslogin.",
+    "compute.instances.",
+    "compute.instanceTemplates.",
+    "compute.regionInstanceTemplates.",
+    "compute.instanceGroupManagers.",
+    "compute.regionInstanceGroupManagers.",
+    "compute.projects.set",
+];
+
+/// Writes under a RUN prefix the management identity keeps: starting a job as it is defined takes
+/// no overrides.
+const GCP_RUN_KEPT: &[&str] = &["run.jobs.run"];
+
+/// Writes under a REACH prefix: who may read, write or connect to the install.
+const GCP_REACH_PREFIXES: &[&str] = &[
+    "iam.roles.",
+    "storage.hmacKeys.",
+    "pubsub.subscriptions.create",
+    "pubsub.subscriptions.update",
+    "pubsub.topics.attachSubscription",
+    "cloudsql.instances.create",
+    "cloudsql.instances.update",
+    "cloudsql.instances.restore",
+    "cloudsql.instances.clone",
+];
+
+/// The family of the GCP permission, if it belongs to one.
+///
+/// A permission containing `*` is judged as the widest thing it could match, so it is in a
+/// family unless it starts with a read verb.
+pub fn gcp_family(permission: &str) -> Option<Family> {
+    let (resource, verb) = permission.rsplit_once('.').unwrap_or(("", permission));
+    // Minting a token for a service account is named like a read.
+    let mints_token = matches!(
+        permission,
+        "iam.serviceAccounts.getAccessToken" | "iam.serviceAccounts.getOpenIdToken"
+    );
+    if gcp_read_verb(verb) && !permission.contains('*') && !mints_token {
+        return None;
+    }
+    if permission.contains('*') {
+        return Some(Family::Run);
+    }
+    if verb == "setIamPolicy" || verb == "useReadOnly" {
+        return Some(Family::Reach);
+    }
+    if GCP_REACH_PREFIXES
+        .iter()
+        .any(|prefix| permission.starts_with(prefix))
+    {
+        return Some(Family::Reach);
+    }
+    if resource.starts_with("iam.") {
+        // Service accounts are created, updated and deleted by management: an identity with no
+        // grant has no power. Everything else on `iam.` changes who can act as whom.
+        let service_account_lifecycle = matches!(
+            permission,
+            "iam.serviceAccounts.create"
+                | "iam.serviceAccounts.update"
+                | "iam.serviceAccounts.delete"
+                | "iam.serviceAccounts.enable"
+                | "iam.serviceAccounts.disable"
+                | "iam.serviceAccounts.undelete"
+        );
+        return (!service_account_lifecycle).then_some(Family::Identity);
+    }
+    // Deleting changes no code and is out of scope. The exceptions are deleted by the verifier
+    // with the rest of a workload (Cloud Run services and jobs) or with what it writes (sandbox
+    // templates).
+    let deleted_by_verifier = permission.starts_with("run.services.")
+        || permission.starts_with("run.jobs.")
+        || permission.starts_with("aiplatform.sandboxEnvironmentTemplates.");
+    if verb == "delete" && !deleted_by_verifier {
+        return None;
+    }
+    if GCP_RUN_KEPT.contains(&permission) {
+        return None;
+    }
+    if GCP_RUN_PREFIXES
+        .iter()
+        .any(|prefix| permission.starts_with(prefix))
+    {
+        return Some(Family::Run);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +445,65 @@ mod tests {
             "autoscaling:Describe*",
         ] {
             assert_eq!(aws_family(action, None), None, "{action}");
+        }
+    }
+
+    #[test]
+    fn gcp_family_names_the_family_of_each_permission() {
+        for (permission, family) in [
+            ("run.services.update", Family::Run),
+            ("run.jobs.create", Family::Run),
+            ("cloudbuild.builds.create", Family::Run),
+            ("compute.instances.setMetadata", Family::Run),
+            ("compute.instances.attachDisk", Family::Run),
+            ("compute.instances.stop", Family::Run),
+            ("compute.instanceTemplates.create", Family::Run),
+            ("compute.projects.setCommonInstanceMetadata", Family::Run),
+            ("osconfig.patchDeployments.create", Family::Run),
+            ("aiplatform.sandboxEnvironmentTemplates.create", Family::Run),
+            ("iam.serviceAccounts.actAs", Family::Identity),
+            ("iam.serviceAccountKeys.create", Family::Identity),
+            ("iam.serviceAccounts.getAccessToken", Family::Identity),
+            ("storage.buckets.setIamPolicy", Family::Reach),
+            ("resourcemanager.projects.setIamPolicy", Family::Reach),
+            ("iam.roles.create", Family::Reach),
+            ("iam.roles.delete", Family::Reach),
+            ("storage.hmacKeys.create", Family::Reach),
+            ("compute.snapshots.useReadOnly", Family::Reach),
+            ("pubsub.subscriptions.create", Family::Reach),
+            ("pubsub.topics.attachSubscription", Family::Reach),
+            ("cloudsql.instances.update", Family::Reach),
+            ("run.*", Family::Run),
+        ] {
+            assert_eq!(gcp_family(permission), Some(family), "{permission}");
+        }
+    }
+
+    #[test]
+    fn gcp_family_leaves_reads_data_deletes_and_kept_permissions_alone() {
+        for permission in [
+            "run.services.get",
+            "run.jobs.list",
+            "run.jobs.run",
+            "compute.instances.get",
+            "compute.instances.delete",
+            "compute.instanceGroups.create",
+            "cloudbuild.workerpools.update",
+            "iam.serviceAccounts.create",
+            "iam.serviceAccounts.update",
+            "iam.serviceAccounts.delete",
+            "iam.serviceAccounts.get",
+            "storage.objects.create",
+            "storage.objects.get",
+            "pubsub.topics.publish",
+            "pubsub.subscriptions.consume",
+            "pubsub.subscriptions.delete",
+            "secretmanager.versions.add",
+            "datastore.entities.update",
+            "logging.logEntries.create",
+            "serviceusage.services.enable",
+        ] {
+            assert_eq!(gcp_family(permission), None, "{permission}");
         }
     }
 

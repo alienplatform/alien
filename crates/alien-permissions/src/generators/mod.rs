@@ -58,7 +58,7 @@ pub use protected_allowlist::{
 pub use verifier_owned::{
     aws_management_actions, aws_passed_to_services, azure_changes_what_runs,
     azure_protected_role_substitute, azure_runs_no_code, azure_verifier_owned_action,
-    azure_verifier_owned_data_action, azure_write_or_delete, gcp_verifier_owned,
+    azure_verifier_owned_data_action, azure_write_or_delete,
     AWS_VERIFIER_OWNED,
 };
-pub use families::{aws_family, Family};
+pub use families::{aws_family, gcp_family, Family};

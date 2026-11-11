@@ -610,29 +610,28 @@ fn a_gcp_predefined_role_outside_the_allow_list_is_refused() {
 }
 
 #[test]
-fn a_gcp_stack_permission_outside_the_allow_list_is_refused() {
+fn a_gcp_stack_permission_in_a_family_is_refused() {
     for permission in [
         "iam.serviceAccounts.actAs",
         "iam.serviceAccounts.getAccessToken",
         "iam.roles.create",
-        "secretmanager.versions.add",
         "compute.instances.create",
         "compute.projects.setCommonInstanceMetadata",
         "run.services.update",
-        "storage.buckets.delete",
+        "storage.buckets.setIamPolicy",
+        "pubsub.subscriptions.create",
         "*.create",
         "iam.*",
         "*",
     ] {
         let set = gcp_set(json!({ "permissions": ["storage.objects.get", permission] }));
-        let result = render_gcp(&set, true);
-        if alien_permissions::generators::gcp_verifier_owned(permission) {
-            let (_, permissions) = result.expect("a verifier-owned permission is dropped");
-            assert_eq!(permissions, ["storage.objects.get"], "{permission}");
-        } else {
-            let error = result.expect_err(&format!("{permission} must be refused"));
-            assert_refused(&error, permission, ALLOW_LIST_GCP);
-        }
+        let error = render_gcp(&set, true).expect_err(&format!("{permission} must be refused"));
+        assert_eq!(error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION", "{permission}");
+        assert!(
+            error.message.contains(&format!("'{permission}'")),
+            "{permission}: {}",
+            error.message
+        );
         render_gcp(&set, false).expect("an unprotected install is unchanged");
     }
 }
@@ -709,9 +708,19 @@ fn every_predefined_role_the_catalog_grants_is_allowed_or_deliberately_refused()
 }
 
 #[test]
-fn gcp_os_login_and_os_config_writes_are_left_out_of_a_protected_role() {
-    let set = gcp_set(json!({ "permissions": [
-        "storage.objects.get",
+fn gcp_os_login_and_os_config_writes_are_refused_for_a_stack_set_on_a_protected_install() {
+    let reads = ["storage.objects.get", "osconfig.patchJobs.get", "osconfig.guestPolicies.list"];
+    let (_, permissions) =
+        render_gcp(&gcp_set(json!({ "permissions": reads })), true).expect("reads render");
+    assert_eq!(
+        permissions,
+        [
+            "osconfig.guestPolicies.list",
+            "osconfig.patchJobs.get",
+            "storage.objects.get"
+        ]
+    );
+    for write in [
         "compute.instances.osAdminLogin",
         "compute.instances.osLogin",
         "osconfig.patchJobs.exec",
@@ -720,21 +729,13 @@ fn gcp_os_login_and_os_config_writes_are_left_out_of_a_protected_role() {
         "osconfig.osPolicyAssignments.create",
         "oslogin.users.update",
         "oslogin.sshPublicKeys.create",
-        "osconfig.patchJobs.get",
-        "osconfig.guestPolicies.list",
-    ] }));
-    let (_, permissions) = render_gcp(&set, true).expect("renders");
-    assert_eq!(
-        permissions,
-        [
-            "osconfig.guestPolicies.list",
-            "osconfig.patchJobs.get",
-            "storage.objects.get",
-        ]
-    );
-    let (_, unprotected) = render_gcp(&set, false).expect("renders");
-    assert!(unprotected.contains(&"osconfig.patchJobs.exec".to_string()));
-    assert!(unprotected.contains(&"compute.instances.osAdminLogin".to_string()));
+    ] {
+        let set = gcp_set(json!({ "permissions": ["storage.objects.get", write] }));
+        let error = render_gcp(&set, true).expect_err(write);
+        assert_eq!(error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION", "{write}");
+        let (_, unprotected) = render_gcp(&set, false).expect("renders");
+        assert!(unprotected.contains(&write.to_string()), "{write}");
+    }
 }
 
 fn aws_policy_json(id: &str, protected: bool) -> Value {

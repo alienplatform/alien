@@ -3,9 +3,9 @@ use crate::{
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
         protected_allowlist::{
-            is_built_in_unchanged, is_management_held, AllowListCloud, Kind as AllowListKind,
+            is_built_in_unchanged, AllowListCloud, Kind as AllowListKind,
         },
-        verifier_owned::gcp_verifier_owned,
+        families::gcp_family,
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -503,20 +503,24 @@ fn granted_permissions(
     permissions: &[String],
     context: &PermissionContext,
 ) -> Result<Vec<String>> {
-    let kept: Vec<String> = permissions
-        .iter()
-        .filter(|permission| !(context.signing_protected && gcp_verifier_owned(permission)))
-        .cloned()
-        .collect();
-    if context.signing_protected && !is_management_held(permission_set) {
-        for permission in &kept {
-            AllowListCloud::Gcp.require(
-                &permission_set.id,
-                AllowListKind::Permission,
-                permission,
-            )?;
+    if context.signing_protected && !is_built_in_unchanged(permission_set) {
+        for permission in permissions {
+            if let Some(family) = gcp_family(permission) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: permission.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
         }
     }
+    let kept: Vec<String> = permissions
+        .iter()
+        .filter(|permission| !(context.signing_protected && gcp_family(permission).is_some()))
+        .cloned()
+        .collect();
     Ok(kept)
 }
 
