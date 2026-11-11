@@ -4032,7 +4032,9 @@ runtime:
     # the manager this chart connects to).
     pullWithManagementToken: false
     # Follow the Operator image the manager targets, so upgrades need no helm
-    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    # upgrade. The Deployment is Recreate: the running pod stops before the
+    # new one starts. Set false when you deliver upgrades yourself (Argo CD,
+    # Flux, Renovate): the Operator then changes only with the chart version.
     selfUpdate: true
   # Pull secrets for the Operator and for the application's workloads (added
   # to their ServiceAccounts), for images in a registry that needs credentials.

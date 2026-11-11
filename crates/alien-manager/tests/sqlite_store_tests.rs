@@ -3933,6 +3933,51 @@ async fn setup_run_claims_a_failure_that_asks_for_setup() {
 }
 
 #[tokio::test]
+async fn reconcile_records_the_version_of_the_operator_that_reported() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+    assert!(dep
+        .runtime_metadata
+        .as_ref()
+        .is_none_or(|metadata| metadata.operator_version.is_none()));
+
+    let mut data = test_reconcile_data(&dep.id, "agent-sync", DeploymentStatus::Running, None);
+    data.operator_version = Some("3.3.40".to_string());
+    store.reconcile(&test_subject(), data).await.unwrap();
+
+    let stored = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored
+            .runtime_metadata
+            .and_then(|metadata| metadata.operator_version)
+            .as_deref(),
+        Some("3.3.40")
+    );
+
+    // A report that doesn't carry a version keeps the recorded one.
+    let data = test_reconcile_data(&dep.id, "agent-sync", DeploymentStatus::Running, None);
+    store.reconcile(&test_subject(), data).await.unwrap();
+    let stored = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored
+            .runtime_metadata
+            .and_then(|metadata| metadata.operator_version)
+            .as_deref(),
+        Some("3.3.40")
+    );
+}
+
+#[tokio::test]
 async fn newer_release_reaches_a_deployment_waiting_for_secrets_without_changing_its_status() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
