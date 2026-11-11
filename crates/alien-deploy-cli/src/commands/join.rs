@@ -3596,12 +3596,9 @@ fn unsigned_setting_refusal(field: &str, message: String) -> AlienError<ErrorDat
 /// flags, apart from the external mode.
 fn reject_unsigned_agent_settings(manifest: &MachineBundleManifest) -> Result<()> {
     let config = &manifest.config;
-    require_agent_file(
-        "bundle.config.path",
-        &config.path,
-        &["etc"],
-        |file| file.ends_with(".toml") && !AGENT_SETTINGS_FILES.contains(&file),
-    )?;
+    require_agent_file("bundle.config.path", &config.path, &["etc"], |file| {
+        file.ends_with(".toml") && !AGENT_SETTINGS_FILES.contains(&file)
+    })?;
     require_agent_file(
         "bundle.config.joinTokenFile",
         &config.join_token_file,
@@ -3635,7 +3632,9 @@ fn reject_unsigned_agent_settings(manifest: &MachineBundleManifest) -> Result<()
 
     for entry in &config.entries {
         let allowed = match (entry.key.as_str(), &entry.source) {
-            ("mode", MachineBundleConfigSource::Literal(value)) => value.as_str() == Some("external"),
+            ("mode", MachineBundleConfigSource::Literal(value)) => {
+                value.as_str() == Some("external")
+            }
             ("apiUrl", MachineBundleConfigSource::ControlPlaneUrl)
             | ("clusterId", MachineBundleConfigSource::ClusterId)
             | ("joinTokenFile", MachineBundleConfigSource::JoinTokenFile)
@@ -6726,10 +6725,7 @@ mod tests {
             );
         }
 
-        fn verified(
-            settings: &SigningSettings,
-            manifest: &MachineBundleManifest,
-        ) -> Result<()> {
+        fn verified(settings: &SigningSettings, manifest: &MachineBundleManifest) -> Result<()> {
             let dir = tempfile::tempdir().unwrap();
             verify_machine_agent(
                 settings,
@@ -6858,10 +6854,9 @@ mod tests {
                     m.config.entries.push(literal("devAuthToken", "x"));
                 }),
                 ("bundle.config.entries.otlpLogsEndpoint", &|m| {
-                    m.config.entries.push(literal(
-                        "otlpLogsEndpoint",
-                        "https://logs.example.com",
-                    ));
+                    m.config
+                        .entries
+                        .push(literal("otlpLogsEndpoint", "https://logs.example.com"));
                 }),
                 ("bundle.config.entries.mode", &|m| {
                     m.config.entries.push(MachineBundleConfigEntry {

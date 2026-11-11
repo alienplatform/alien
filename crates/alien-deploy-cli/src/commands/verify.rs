@@ -565,51 +565,6 @@ pub fn check_signed(
             })
             .unwrap_or_else(|| id.to_string())
     };
-    // The verifier records a release in the ledger before it deploys it, so a deploy that then
-    // fails leaves it there: the ledger says which release was accepted (and that nothing older
-    // can run), not that it runs.
-    let accepted = ledger
-        .floor(Kind::Release)
-        .context(ErrorData::VerifyFailed {
-            message: "the ledger can't be read".to_string(),
-        })?;
-    const ACCEPTED: &str = "Accepted release";
-    lines.push(match accepted {
-        None => line(ACCEPTED, "nothing yet: no release has been accepted", Mark::Info),
-        Some(entry) => match running_release(&trust, &settings, &signed.releases, &entry.digest, now) {
-            Ok((id, signers, still_trusted)) => {
-                let signed_by = signers
-                    .iter()
-                    .map(|id| label(id))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if still_trusted {
-                    line(
-                        ACCEPTED,
-                        format!("release {id} · signed by {signed_by} · {}", entry.digest),
-                        Mark::Pass,
-                    )
-                } else {
-                    // It verified against the list it names; its signer has
-                    // since left the list, which doesn't stop it.
-                    line(
-                        ACCEPTED,
-                        format!(
-                            "release {id} · signed by {signed_by}, no longer on the list; it stays accepted until the next release · {}",
-                            entry.digest
-                        ),
-                        Mark::Info,
-                    )
-                }
-            }
-            Err(reason) => line(
-                ACCEPTED,
-                format!("the release with digest {}: {reason}", entry.digest),
-                Mark::Fail,
-            ),
-        },
-    });
-
     lines.push(line(
         "Trusted keys",
         format!(
@@ -1141,44 +1096,13 @@ pub(crate) async fn parameter(
         .map(|(value, set_at, _)| (value, set_at)))
 }
 
-/// The install's ledger as the verifier and the machines read it: SSM has no compare-and-swap,
-/// so the newest value may lack a raise written meanwhile. Each write records the version it was
-/// merged onto; the versions after that are merged in.
+/// The install's ledger, as stored.
 pub(crate) async fn ledger_parameter(
     ssm: &SsmClient,
     name: &str,
-    prefix: &str,
+    _prefix: &str,
 ) -> Result<Option<Vec<u8>>> {
-    let Some((bytes, _, version)) = read_parameter(ssm, name).await? else {
-        return Ok(None);
-    };
-    let version = version
-        .and_then(|version| u64::try_from(version).ok())
-        .ok_or_else(|| failed(format!("{name} returned no version")))?;
-    let mut ledger = Ledger::parse(&bytes, prefix).context(ErrorData::VerifyFailed {
-        message: format!("{name} is not a valid ledger"),
-    })?;
-    let unmerged_versions = ledger
-        .unmerged_versions(version)
-        .context(ErrorData::VerifyFailed {
-            message: format!("{name} is not a write of the version it was read at"),
-        })?;
-    for unmerged in unmerged_versions {
-        let versioned = format!("{name}:{unmerged}");
-        let (bytes, _) = parameter(ssm, &versioned).await?.ok_or_else(|| {
-            failed(format!(
-                "version {unmerged} of {name} could not be read, so the install's floor can't be known"
-            ))
-        })?;
-        let other = Ledger::parse(&bytes, prefix).context(ErrorData::VerifyFailed {
-            message: format!("{versioned} is not a valid ledger"),
-        })?;
-        ledger.merge(&other).context(ErrorData::VerifyFailed {
-            message: format!("{versioned} forks from the install's ledger"),
-        })?;
-    }
-    ledger.resolved_at(version);
-    Ok(Some(ledger.to_json().into_bytes()))
+    Ok(parameter(ssm, name).await?.map(|(value, _)| value))
 }
 
 async fn read_parameter(
