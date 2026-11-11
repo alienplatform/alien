@@ -538,7 +538,14 @@ impl S3Api for S3Client {
 
         // Build the request – include the XML body & headers only when necessary.
         let url = self.url(bucket, "");
-        let mut builder = self.client.request(Method::PUT, &url).host(&host);
+        // Object ACLs stay off: every bucket is created with `BucketOwnerEnforced`, which is also
+        // S3's default for new buckets. Creating one with another ownership, or with an ACL,
+        // takes `s3:PutBucketOwnershipControls` or `s3:PutBucketAcl`.
+        let mut builder = self
+            .client
+            .request(Method::PUT, &url)
+            .host(&host)
+            .header("x-amz-object-ownership", "BucketOwnerEnforced");
 
         if let Some(body_xml) = body {
             builder = builder
@@ -2255,6 +2262,25 @@ mod tests {
             }),
         });
         S3Client::new(Client::new(), credentials)
+    }
+
+    /// A bucket is created with ownership `BucketOwnerEnforced`, so object ACLs are off.
+    #[tokio::test]
+    async fn a_bucket_is_created_with_object_ownership_enforced() {
+        let server = MockServer::start_async().await;
+        let created = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/new-bucket")
+                    .header("x-amz-object-ownership", "BucketOwnerEnforced");
+                then.status(200);
+            })
+            .await;
+        client(&server)
+            .create_bucket("new-bucket")
+            .await
+            .expect("the bucket is created");
+        created.assert_async().await;
     }
 
     fn zero_day_expiration() -> LifecycleConfiguration {

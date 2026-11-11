@@ -179,6 +179,10 @@ pub(super) const AWS_SHARING: &[&str] = &[
     "s3:*BucketPolicy",
     "s3:Put*PublicAccessBlock",
     "s3:PutAccessPointPolicy*",
+    // S3 requires these to create a bucket whose object ownership isn't `BucketOwnerEnforced` or
+    // that carries an ACL, so management can't create a bucket with object ACLs on. That is also
+    // why `s3:PutObjectAcl` is not here: it is inert under `BucketOwnerEnforced`, and the app's
+    // own storage grants hold it.
     "s3:PutBucketAcl",
     "s3:PutBucketOwnershipControls",
     "s3:PutMultiRegionAccessPointPolicy",
@@ -543,6 +547,8 @@ mod tests {
             ("sts:AssumeRole", Family::Identity),
             ("iam:PassRole", Family::Identity),
             ("s3:PutBucketPolicy", Family::Reach),
+            ("s3:PutBucketAcl", Family::Reach),
+            ("s3:PutBucketOwnershipControls", Family::Reach),
             ("sns:Subscribe", Family::Reach),
             ("ec2:AuthorizeSecurityGroupIngress", Family::Reach),
             ("rds:ModifyDBInstance", Family::Reach),
@@ -577,6 +583,7 @@ mod tests {
             "ssm:PutParameter",
             "s3:GetObject",
             "s3:PutObject",
+            "s3:PutObjectAcl",
             "dynamodb:PutItem",
             "sqs:SendMessage",
             "*:Get*",

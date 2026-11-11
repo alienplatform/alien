@@ -116,7 +116,10 @@ impl std::fmt::Debug for ModifyReplicationGroupRequest {
         f.debug_struct("ModifyReplicationGroupRequest")
             .field("id", &self.id)
             .field("node_type", &self.node_type)
-            .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -848,14 +851,16 @@ mod tests {
         create.auth_token = SECRET.into();
         let err = client.create_replication_group(create).await.unwrap_err();
         assert!(
-            err.error.as_ref().is_some_and(|e| matches!(
-                e,
-                ErrorData::RemoteResourceConflict { .. }
-            )),
+            err.error
+                .as_ref()
+                .is_some_and(|e| matches!(e, ErrorData::RemoteResourceConflict { .. })),
             "{err:?}"
         );
         let all = format!("{err:?} {}", serde_json::to_string(&err).unwrap());
-        assert!(!all.contains(SECRET), "create error leaked the token: {all}");
+        assert!(
+            !all.contains(SECRET),
+            "create error leaked the token: {all}"
+        );
 
         let err = client
             .modify_replication_group(ModifyReplicationGroupRequest {
@@ -866,7 +871,10 @@ mod tests {
             .await
             .unwrap_err();
         let all = format!("{err:?} {}", serde_json::to_string(&err).unwrap());
-        assert!(!all.contains(SECRET), "modify error leaked the token: {all}");
+        assert!(
+            !all.contains(SECRET),
+            "modify error leaked the token: {all}"
+        );
     }
 
     #[tokio::test]
