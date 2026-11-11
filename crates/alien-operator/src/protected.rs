@@ -19,11 +19,9 @@
 //!
 //! - a target's stack comes only from its verified statement; the manager may
 //!   move an image to another registry, never change its digest;
-//! - a release below the ledger's floor, or the floor's sequence with other
-//!   bytes, is refused, and so is a signer list older than the one accepted;
-//! - the release this install accepted keeps running after its signer leaves
-//!   the list (only the list's deny-list stops it), so removing a key never
-//!   stops the Operator from deploying what it already accepted;
+//! - a signer list older than the one accepted is refused; a release or
+//!   config signed by a key no longer on the list is refused too, so after a
+//!   signer is removed the current release is signed again by a current signer;
 //! - the deployment configuration is rebuilt here: environment variables only
 //!   for the input mappings the signed stack declares, developer inputs and
 //!   configurable env only from the deployment's signed `config/v1`, deployer
@@ -46,9 +44,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_signing::settings::names;
-use alien_signing::{
-    ConfigBody, InstallId, Kind, Ledger, Lookup, ReleaseBody, SigningSettings, Trust,
-};
+#[cfg(test)]
+use alien_signing::Kind;
+use alien_signing::{ConfigBody, InstallId, Ledger, Lookup, ReleaseBody, SigningSettings, Trust};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -85,6 +83,13 @@ pub struct OperatorTrust {
     /// The Operator image digest the accepted release allows, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_digest: Option<String>,
+    /// The sequence of the release applied last. Only for logging and for not re-applying the
+    /// same statements; it is not a floor, and an older signed release may be applied again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_sequence: Option<u64>,
+    /// The sequence of the config applied last, kept for the same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_sequence: Option<u64>,
 }
 
 impl OperatorTrust {
@@ -94,12 +99,9 @@ impl OperatorTrust {
             ledger: Ledger::new(prefix),
             signer_lists: Vec::new(),
             operator_digest: None,
+            release_sequence: None,
+            config_sequence: None,
         }
-    }
-
-    /// The sequence of the newest config applied, if any.
-    pub fn config_sequence(&self) -> Option<u64> {
-        self.ledger.config.as_ref().map(|entry| entry.sequence)
     }
 }
 
@@ -316,6 +318,8 @@ pub async fn find_signing(
             .map(|stored| stored.signer_lists.clone())
             .unwrap_or_default(),
         operator_digest: stored.and_then(|stored| stored.operator_digest.clone()),
+        release_sequence: stored.and_then(|stored| stored.release_sequence),
+        config_sequence: stored.and_then(|stored| stored.config_sequence),
     };
     Ok(Some((
         ReleaseSigning {
@@ -500,30 +504,13 @@ impl ReleaseSigning {
             now,
         )?;
         trust.extend_chain(&release.signer_lists, now)?;
-        let opened = signed.open()?;
-        let accepted = stored.ledger.release.as_ref();
-        let (sequence, digest, body, signers) =
-            if accepted.is_some_and(|floor| floor.digest == opened.digest) {
-                trust.keeps(&opened.digest)?;
-                let body: ReleaseBody = opened.body()?;
-                (opened.sequence, opened.digest, body, Vec::new())
-            } else {
-                if let Some(floor) = accepted {
-                    if opened.sequence <= floor.sequence {
-                        return Err(Refusal::OlderRelease {
-                            applied: floor.sequence,
-                            actual: opened.sequence,
-                        });
-                    }
-                }
-                let verified = trust.verify_release(signed, now)?;
-                (
-                    verified.sequence,
-                    verified.digest,
-                    verified.body,
-                    verified.signers.into_iter().collect(),
-                )
-            };
+        let verified = trust.verify_release(signed, now)?;
+        let (sequence, digest, body, signers) = (
+            verified.sequence,
+            verified.digest,
+            verified.body,
+            verified.signers.into_iter().collect::<Vec<_>>(),
+        );
         let stack = signed_stack(&body, platform)?;
         if relocate_images(&stack, &release.stack) != release.stack {
             return Err(Refusal::StackChanged);
@@ -540,8 +527,7 @@ impl ReleaseSigning {
 
     /// The target to store for `target`, the release it verified, and what
     /// the Operator keeps after accepting it. Refuses a release or config
-    /// below the ledger's floors, and a target without config once the
-    /// install accepted one.
+    /// the current signer list does not vouch for.
     pub fn protect_target(
         &self,
         platform: Platform,
@@ -551,25 +537,13 @@ impl ReleaseSigning {
     ) -> Result<(TargetDeployment, VerifiedRelease, OperatorTrust), Refusal> {
         let verified = self.verify_release(platform, &target.release_info, stored)?;
         let mut ledger = stored.ledger.clone();
-        ledger.raise(Kind::Release, verified.sequence, &verified.digest)?;
-        let signed_config = match &target.signed_config {
-            None => {
-                ledger.require(Kind::Config, false)?;
-                ConfigBody::default()
-            }
+        let (signed_config, config_sequence) = match &target.signed_config {
+            None => (ConfigBody::default(), None),
             Some(signed) => {
-                let config =
-                    verify_or_keep_config(&verified.trust, &stored.ledger, signed, &verified.body)?;
-                if let Some(applied) = stored.config_sequence() {
-                    if config.sequence < applied {
-                        return Err(Refusal::OlderConfig {
-                            applied,
-                            actual: config.sequence,
-                        });
-                    }
-                }
-                ledger.raise(Kind::Config, config.sequence, &config.digest)?;
-                config.body
+                let config = verified
+                    .trust
+                    .verify_config(signed, &verified.body, Utc::now())?;
+                (config.body, Some(config.sequence))
             }
         };
         verified.trust.record(&mut ledger)?;
@@ -577,6 +551,8 @@ impl ReleaseSigning {
             ledger,
             signer_lists: verified.trust.chain().statements().to_vec(),
             operator_digest: verified.body.components.get(OPERATOR_COMPONENT).cloned(),
+            release_sequence: Some(verified.sequence),
+            config_sequence,
         };
         let config = protect_config(
             platform,
@@ -651,37 +627,6 @@ fn signed_external_bindings(
         bindings.insert(id.as_str(), binding);
     }
     Ok(bindings)
-}
-
-/// `config` verified for this install and `release`, or kept: the config
-/// at the install's floor passes again even after its signer left the list
-/// (only the deny-list stops it), as the release at the floor does.
-fn verify_or_keep_config(
-    trust: &Trust,
-    ledger: &Ledger,
-    config: &SignedStatement,
-    release: &ReleaseBody,
-) -> Result<alien_signing::Verified<ConfigBody>, Refusal> {
-    let opened = config.open()?;
-    let at_floor = opened.kind == Kind::Config
-        && ledger
-            .config
-            .as_ref()
-            .is_some_and(|floor| floor.digest == opened.digest);
-    if !at_floor {
-        return Ok(trust.verify_config(config, release, ledger, Utc::now())?);
-    }
-    trust.keeps(&opened.digest)?;
-    let body: ConfigBody = opened.body()?;
-    body.check(release)?;
-    Ok(alien_signing::Verified {
-        kind: Kind::Config,
-        sequence: opened.sequence,
-        digest: opened.digest.clone(),
-        not_after: opened.not_after,
-        signers: BTreeSet::new(),
-        body,
-    })
 }
 
 /// OTLP export to `endpoint`, the signed config's OTLP/HTTP base URL, which
@@ -1242,44 +1187,28 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_ledger_only_rises_and_refuses_older_releases() {
+    fn the_ledger_records_the_trust_root_and_an_older_signed_release_runs_again() {
         let stored = accept(
             &fresh(),
             &target(signed_release(6, &stack(&pinned())), vec![]),
         )
         .unwrap();
-        assert_eq!(stored.ledger.release.as_ref().unwrap().sequence, 6);
+        assert_eq!(stored.release_sequence, Some(6));
         assert!(stored.ledger.is_sticky());
 
-        // The same release passes again; an older one, or another with its
-        // sequence, doesn't.
+        // The ledger holds trust, not a version floor: the same release passes again, and so
+        // does an older one signed by a current signer.
         accept(
             &stored,
             &target(signed_release(6, &stack(&pinned())), vec![]),
         )
         .expect("the accepted release passes again");
-        assert_eq!(
-            accept(
-                &stored,
-                &target(signed_release(5, &stack(&pinned())), vec![])
-            )
-            .unwrap_err(),
-            Refusal::OlderRelease {
-                applied: 6,
-                actual: 5
-            }
-        );
-        let other = stack(&format!(
-            "registry.example.com/shop/api@sha256:{}",
-            "e".repeat(64)
-        ));
-        assert_eq!(
-            accept(&stored, &target(signed_release(6, &other), vec![])).unwrap_err(),
-            Refusal::OlderRelease {
-                applied: 6,
-                actual: 6
-            }
-        );
+        let older = accept(
+            &stored,
+            &target(signed_release(5, &stack(&pinned())), vec![]),
+        )
+        .expect("an older signed release may run");
+        assert_eq!(older.release_sequence, Some(5));
     }
 
     #[test]
@@ -1295,58 +1224,36 @@ pub(crate) mod tests {
         );
     }
 
-    /// v7 verified the stored target again under the current list on every
-    /// pass, so removing the CI key that signed it stopped every deployment
-    /// pass. The ledger keeps the accepted release instead.
+    /// Removing a signer withdraws the vendor's word for everything that key signed, the release
+    /// the install runs included. The release is signed again by a current signer.
     #[test]
-    fn removing_the_ci_key_keeps_the_accepted_release_and_lands_the_next() {
+    fn removing_the_ci_key_refuses_what_it_signed_until_a_current_signer_signs_it() {
         let accepted_release = signed_release(5, &stack(&pinned()));
-        // CI signed the config too.
-        let configured = |release: ReleaseInfo| {
-            let mut target = target(release, vec![]);
-            target.signed_config = Some(signed_config(
-                1,
-                &this_install(),
-                serde_json::json!({"inputs": {"logLevel": "warn"}}),
-            ));
-            target
-        };
-        let configured_config = configured(accepted_release.clone()).signed_config;
-        let stored = accept(&fresh(), &configured(accepted_release.clone())).unwrap();
+        let stored = accept(&fresh(), &target(accepted_release.clone(), vec![])).unwrap();
 
         let mut without_ci = accepted_release.clone();
         without_ci.signer_lists = vec![signer_list(), test_signer_list_without_ci("shop")];
 
-        // Without the ledger (the old check), the accepted release no longer verifies.
-        let verified_again = signing().verify_release(Platform::Kubernetes, &without_ci, &fresh());
-        assert!(verified_again.is_err(), "the CI key is gone from the list");
-
-        // With it, the deployment loop still deploys the accepted release.
-        let kept = signing()
+        let refusal = signing()
             .verify_release(Platform::Kubernetes, &without_ci, &stored)
-            .expect("the accepted release keeps running after its signer leaves");
-        assert_eq!(kept.sequence, 5);
-        // So does the config CI signed, the one at the config floor.
-        let mut again = target(without_ci.clone(), vec![]);
-        again.signed_config = configured_config.clone();
-        accept(&stored, &again)
-            .expect("the accepted config keeps applying after its signer leaves");
+            .err()
+            .expect("the CI key is gone from the list")
+            .to_string();
+        assert!(
+            refusal.contains("not on signer list version 2"),
+            "{refusal}"
+        );
 
-        // The next release, signed by a key still on the list, lands with it.
-        let mut next_release = release_by(6, &stack(&pinned()), "production", "alice-laptop");
-        next_release.signer_lists = without_ci.signer_lists.clone();
-        let mut next = target(next_release.clone(), vec![]);
-        next.signed_config = configured_config;
-        let stored = accept(&stored, &next).expect("a release signed by the device lands");
+        // The same release signed by a key still on the list lands.
+        let mut by_device = release_by(5, &stack(&pinned()), "production", "alice-laptop");
+        by_device.signer_lists = without_ci.signer_lists.clone();
+        let stored =
+            accept(&stored, &target(by_device, vec![])).expect("a current signer's release");
         assert_eq!(stored.ledger.signer_list.as_ref().unwrap().sequence, 2);
 
-        // A newer release signed by the removed CI key is refused.
-        let mut by_ci = signed_release(7, &stack(&pinned()));
-        by_ci.signer_lists = without_ci.signer_lists.clone();
-        let mut by_ci = target(by_ci, vec![]);
-        by_ci.signed_config = configured(without_ci).signed_config;
-        assert!(accept(&stored, &by_ci).is_err());
-        // A new config CI signs is refused.
+        // A config the removed CI key signed is refused too.
+        let mut next_release = release_by(6, &stack(&pinned()), "production", "alice-laptop");
+        next_release.signer_lists = without_ci.signer_lists.clone();
         let mut new_config = target(next_release, vec![]);
         new_config.signed_config = Some(signed_config(
             2,
@@ -1393,17 +1300,6 @@ pub(crate) mod tests {
         test_statement("shop", Kind::Config, Some(install), sequence, 1, body)
             .sign_with("ci", &test_key(4))
             .unwrap()
-    }
-
-    /// `signed_config` built on the config `base` (sequence and digest).
-    pub(crate) fn signed_config_on(
-        sequence: u64,
-        install: &str,
-        mut body: serde_json::Value,
-        base: &alien_signing::Entry,
-    ) -> SignedStatement {
-        body["base"] = serde_json::json!({"sequence": base.sequence, "digest": base.digest});
-        signed_config(sequence, install, body)
     }
 
     pub(crate) fn this_install() -> String {
@@ -1458,30 +1354,7 @@ pub(crate) mod tests {
             "warn",
             "the signed value runs"
         );
-        assert_eq!(stored.config_sequence(), Some(3));
-
-        // An older config can't come back once a newer one was applied, and
-        // withholding the config is refused too.
-        let floor = stored.ledger.config.clone().expect("config 3 is the floor");
-        target.signed_config = Some(signed_config_on(
-            2,
-            &this_install(),
-            serde_json::json!({"inputs": {"logLevel": "trace"}}),
-            &floor,
-        ));
-        assert_eq!(
-            accept(&stored, &target).unwrap_err(),
-            Refusal::OlderConfig {
-                applied: 3,
-                actual: 2
-            }
-        );
-        target.signed_config = None;
-        let withheld = accept(&stored, &target).unwrap_err();
-        assert!(
-            matches!(&withheld, Refusal::Release { message, .. } if message.contains("none was delivered")),
-            "{withheld}"
-        );
+        assert_eq!(stored.config_sequence, Some(3));
 
         // Config signed for another install, or setting what the release
         // doesn't make configurable, is refused.
