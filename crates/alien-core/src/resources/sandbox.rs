@@ -382,12 +382,18 @@ impl SandboxCapabilities {
                 // capability.
                 interactive_commands: true,
                 preview: false,
+                // Nitro Sandboxes, gVisor and Kata pods cannot checkpoint a running pod, so a
+                // paused session would lose its state. `resume` on a running sandbox is a no-op.
                 pause_resume: false,
+                // The same reason: there is no way to capture a pod's filesystem and memory.
                 snapshot: false,
                 domain_egress_rules: false,
                 egress_deny: true,
                 enforced_limits: true,
-                // A pid ceiling is a kubelet setting per node, not a pod field.
+                // A pid ceiling is a kubelet setting per node (`podPidsLimit`), not a pod field,
+                // and the agent does not apply `RLIMIT_NPROC` because that counts every process
+                // of the uid, the agent's own threads included. `maxProcesses` is refused with
+                // `SANDBOX_CAPABILITY_UNSUPPORTED` rather than accepted and ignored.
                 process_limit: false,
                 // `activeDeadlineSeconds` on the pod, which the kubelet enforces.
                 sandbox_lifetime: true,
@@ -395,10 +401,9 @@ impl SandboxCapabilities {
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
                 supervisor_pid_namespace: false,
-                // The pod pins one uid (`run_as_user: 65534` on both pod and container) with
-                // `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no
-                // process can setuid to split the command off from a supervisor. No uid split is
-                // possible, so none exists.
+                // The pod runs as the image's one non-root user with `capabilities.drop: [ALL]`
+                // and `allow_privilege_escalation: false`, so no process can setuid to split the
+                // command off from a supervisor. No uid split is possible, so none exists.
                 supervisor_isolation: false,
             }),
             Platform::Local => Ok(Self {

@@ -603,8 +603,16 @@ impl Sandbox for KubernetesSandbox {
         Err(self.failed("pauseResume", "a pod cannot be paused and resumed"))
     }
 
-    async fn resume(&self, _sandbox_id: &str) -> Result<()> {
-        Err(self.failed("pauseResume", "a pod cannot be paused and resumed"))
+    /// A pod is never paused, so a sandbox that exists is already running and resuming it is a
+    /// no-op. One that does not exist cannot come back.
+    async fn resume(&self, sandbox_id: &str) -> Result<()> {
+        match self.claimed(sandbox_id).await? {
+            Some(_) => Ok(()),
+            None => Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxTerminated".to_string(),
+                reason: format!("sandbox.resume: no sandbox '{sandbox_id}' is running"),
+            })),
+        }
     }
 
     async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
@@ -697,6 +705,34 @@ mod tests {
             "sbx-pool",
         )
         .expect("the binding is complete")
+    }
+
+    /// A pod is never paused, so resuming a running sandbox succeeds without changing anything
+    /// and resuming one the broker does not know is refused.
+    #[tokio::test]
+    async fn resume_is_a_no_op_for_a_running_sandbox_and_refused_for_an_unknown_one() {
+        let broker = serve(Router::new().route(
+            BROKER_RELEASE_ROUTE,
+            axum::routing::get(|Path((_, session)): Path<(String, String)>| async move {
+                if session == "running" {
+                    Ok(Json(serde_json::json!({
+                        "sessionId": "running",
+                        "endpoint": "http://10.0.0.1:8080",
+                        "capability": "cap",
+                        "expiresAt": chrono::Utc::now().timestamp() + 300,
+                    })))
+                } else {
+                    Err(StatusCode::NOT_FOUND)
+                }
+            }),
+        ))
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        let sandbox = sandbox_over(broker, &token);
+
+        sandbox.resume("running").await.expect("a no-op");
+        let error = sandbox.resume("gone").await.expect_err("nothing to resume");
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
     }
 
     /// Terminate releases the claim at the route the broker serves, with the resource and the
