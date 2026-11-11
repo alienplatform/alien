@@ -29,6 +29,17 @@ use alien_core::bindings::KubernetesSandboxBinding;
 use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
 use alien_error::{AlienError, Context, IntoAlienError};
 
+/// A capability with less than this left is replaced before it is used, so a request built at the
+/// end of its life does not reach the agent after it has expired.
+const CAPABILITY_REFRESH_MARGIN_SECONDS: i64 = 60;
+
+/// What the broker lists for a sandbox.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionList {
+    session_ids: Vec<String>,
+}
+
 /// What the broker hands back for a claimed sandbox.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,11 +71,10 @@ pub struct KubernetesSandbox {
     token_path: String,
     binding_name: String,
     client: reqwest::Client,
-    /// Claims this process has made, so a later call can address the sandbox it already has.
+    /// Capabilities this process holds, so most calls need no round trip to the broker.
     ///
-    /// The capability is short-lived and the endpoint is a pod IP, so this is a cache of live
-    /// sandboxes rather than durable state. A sandbox this process did not claim is not
-    /// reachable, which is what `reconnect` means here.
+    /// Only a cache. The broker reads sessions off the pods themselves, so any process can look
+    /// a session up by id, and a capability that is close to expiring is replaced the same way.
     claims: Mutex<BTreeMap<String, ClaimResponse>>,
 }
 
@@ -161,12 +171,72 @@ impl KubernetesSandbox {
         ))
     }
 
-    fn claimed(&self, sandbox_id: &str) -> Option<ClaimResponse> {
+    fn cached(&self, sandbox_id: &str) -> Option<ClaimResponse> {
         self.claims
             .lock()
             .expect("no panic holds this lock")
             .get(sandbox_id)
             .cloned()
+    }
+
+    fn session_url(&self, session_id: &str) -> String {
+        format!(
+            "{}/v1/sandbox/{}/sessions/{session_id}",
+            self.broker_url, self.resource_id
+        )
+    }
+
+    /// The session with this id, from the cache while its capability has more than a minute left
+    /// and from the broker otherwise. `None` when no pod carries the id, which is a clean
+    /// not-found rather than an error.
+    async fn claimed(&self, sandbox_id: &str) -> Result<Option<ClaimResponse>> {
+        if let Some(claim) = self.cached(sandbox_id) {
+            if claim.expires_at - chrono::Utc::now().timestamp() > CAPABILITY_REFRESH_MARGIN_SECONDS
+            {
+                return Ok(Some(claim));
+            }
+        }
+
+        let response = self
+            .client
+            .get(self.session_url(sandbox_id))
+            .bearer_auth(self.identity_token().await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::OperationNotSupported {
+                operation: "sandbox.get".to_string(),
+                reason: "the sandbox broker is unreachable".to_string(),
+            })?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            self.claims
+                .lock()
+                .expect("no panic holds this lock")
+                .remove(sandbox_id);
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(self.failed(
+                "sandbox.get",
+                &format!("the sandbox broker returned {status}: {body}"),
+            ));
+        }
+        let claim: ClaimResponse = response.json().await.into_alien_error().context(
+            ErrorData::UnexpectedResponseFormat {
+                provider: "kubernetes-sandbox".to_string(),
+                binding_name: "sandbox.get".to_string(),
+                field: "body".to_string(),
+                response_json: "the broker returned a body this provider cannot parse".to_string(),
+            },
+        )?;
+        self.claims
+            .lock()
+            .expect("no panic holds this lock")
+            .insert(claim.session_id.clone(), claim.clone());
+        Ok(Some(claim))
     }
 
     fn failed(&self, operation: &str, reason: &str) -> AlienError<ErrorData> {
@@ -185,25 +255,12 @@ impl AgentTransport for KubernetesSandbox {
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
-        let claim = self.claimed(sandbox_id).ok_or_else(|| {
+        let claim = self.claimed(sandbox_id).await?.ok_or_else(|| {
             self.failed(
                 "sandbox.agent",
-                &format!(
-                    "sandbox '{sandbox_id}' was not claimed by this process; a pod IP and a \
-                     capability are only reachable by the caller that claimed them"
-                ),
+                &format!("sandbox '{sandbox_id}' does not exist; it may have been terminated"),
             )
         })?;
-
-        if claim.expires_at <= chrono::Utc::now().timestamp() {
-            return Err(self.failed(
-                "sandbox.agent",
-                &format!(
-                    "the capability for sandbox '{sandbox_id}' expired; the agent would refuse \
-                     this with a 401 that reads like a broken sandbox"
-                ),
-            ));
-        }
 
         Ok(self
             .client
@@ -322,17 +379,17 @@ impl Sandbox for KubernetesSandbox {
         })
     }
 
-    /// Only sandboxes this process claimed are addressable.
-    ///
-    /// A capability is minted to the caller that claimed the pod, so another process holding the
-    /// same sandbox id has nothing to reach it with. Returning `None` rather than erroring: the
-    /// sandbox may well exist, this caller simply cannot address it.
+    /// Any process of the deployment can look a session up by id: the broker reads it off the pod.
+    /// An id no pod carries is `None`.
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
-        Ok(self.claimed(sandbox_id).map(|claim| SandboxInstance {
-            sandbox_id: claim.session_id,
-            state: SandboxState::Running,
-            generation: 1,
-        }))
+        Ok(self
+            .claimed(sandbox_id)
+            .await?
+            .map(|claim| SandboxInstance {
+                sandbox_id: claim.session_id,
+                state: SandboxState::Running,
+                generation: 1,
+            }))
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -363,12 +420,10 @@ impl Sandbox for KubernetesSandbox {
             .egress_manager
             .as_ref()
             .ok_or_else(|| super::egress::unsupported("runtime policy"))?;
-        let claim = self.claimed(sandbox_id).ok_or_else(|| {
-            self.failed(
-                "sandbox.updateEgress",
-                "sandbox was not claimed by this process",
-            )
-        })?;
+        let claim = self
+            .claimed(sandbox_id)
+            .await?
+            .ok_or_else(|| self.failed("sandbox.updateEgress", "the sandbox does not exist"))?;
         let identity = Self::egress_identity(&claim)?;
         manager.update(identity, &policy).await?;
         let record = manager.policy_record(identity).await?;
@@ -376,13 +431,41 @@ impl Sandbox for KubernetesSandbox {
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
-        Ok(self
-            .claims
-            .lock()
-            .expect("no panic holds this lock")
-            .values()
-            .map(|claim| SandboxInstance {
-                sandbox_id: claim.session_id.clone(),
+        let response = self
+            .client
+            .get(format!(
+                "{}/v1/sandbox/{}/sessions",
+                self.broker_url, self.resource_id
+            ))
+            .bearer_auth(self.identity_token().await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::OperationNotSupported {
+                operation: "sandbox.list".to_string(),
+                reason: "the sandbox broker is unreachable".to_string(),
+            })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(self.failed(
+                "sandbox.list",
+                &format!("the sandbox broker returned {status}: {body}"),
+            ));
+        }
+        let list: SessionList = response.json().await.into_alien_error().context(
+            ErrorData::UnexpectedResponseFormat {
+                provider: "kubernetes-sandbox".to_string(),
+                binding_name: "sandbox.list".to_string(),
+                field: "body".to_string(),
+                response_json: "the broker returned a body this provider cannot parse".to_string(),
+            },
+        )?;
+        Ok(list
+            .session_ids
+            .into_iter()
+            .map(|sandbox_id| SandboxInstance {
+                sandbox_id,
                 state: SandboxState::Running,
                 generation: 1,
             })
@@ -446,16 +529,13 @@ impl Sandbox for KubernetesSandbox {
     ///
     /// Idempotent: a sandbox this process never claimed is already in the desired end state.
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
-        let Some(claim) = self.claimed(sandbox_id) else {
+        let Some(claim) = self.claimed(sandbox_id).await? else {
             return Ok(());
         };
 
         let response = self
             .client
-            .delete(format!(
-                "{}/v1/sandbox/{}/sessions/{}",
-                self.broker_url, self.resource_id, claim.session_id
-            ))
+            .delete(self.session_url(&claim.session_id))
             .bearer_auth(self.identity_token().await?)
             .send()
             .await
@@ -561,16 +641,19 @@ mod tests {
                 )
                 .route(
                     BROKER_RELEASE_ROUTE,
-                    delete(move |Path(addressed): Path<(String, String)>| {
-                        let released = Arc::clone(&released);
-                        async move {
-                            released
-                                .lock()
-                                .expect("no panic holds this lock")
-                                .push(addressed);
-                            StatusCode::NO_CONTENT
-                        }
-                    }),
+                    // Once released, the broker finds no pod carrying the session.
+                    axum::routing::get(|| async { StatusCode::NOT_FOUND }).delete(
+                        move |Path(addressed): Path<(String, String)>| {
+                            let released = Arc::clone(&released);
+                            async move {
+                                released
+                                    .lock()
+                                    .expect("no panic holds this lock")
+                                    .push(addressed);
+                                StatusCode::NO_CONTENT
+                            }
+                        },
+                    ),
                 )
                 .fallback(move |request: Request| {
                     let unrouted = Arc::clone(&unrouted);
@@ -622,5 +705,65 @@ mod tests {
                 .is_none(),
             "a released sandbox is no longer claimed"
         );
+    }
+
+    /// A second process has no claim of its own and still reaches the session by id, because the
+    /// broker reads it off the pod. An id no pod carries is a clean not-found, and a capability
+    /// near its end is replaced before a request is built with it.
+    #[tokio::test]
+    async fn another_process_reattaches_by_id_and_capabilities_are_refreshed() {
+        use axum::routing::get;
+        let lookups = Arc::new(Mutex::new(0_u32));
+        let counted = Arc::clone(&lookups);
+        let broker = serve(Router::new().route(
+            BROKER_RELEASE_ROUTE,
+            get(move |Path((_, session)): Path<(String, String)>| {
+                let counted = Arc::clone(&counted);
+                async move {
+                    *counted.lock().expect("no panic holds this lock") += 1;
+                    if session == "known" {
+                        Ok(Json(serde_json::json!({
+                            "agentSessionId": "uid-1",
+                            "sessionId": "known",
+                            "endpoint": "http://10.0.0.1:8080",
+                            "capability": "fresh",
+                            "expiresAt": chrono::Utc::now().timestamp() + 900,
+                        })))
+                    } else {
+                        Err(StatusCode::NOT_FOUND)
+                    }
+                }
+            }),
+        ))
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        let sandbox = sandbox_over(broker, &token);
+
+        let found = sandbox
+            .get("known")
+            .await
+            .expect("lookup works")
+            .expect("a process that never claimed it still finds it");
+        assert_eq!(found.sandbox_id, "known");
+        assert!(sandbox
+            .get("probe-id")
+            .await
+            .expect("an unknown id is not an error")
+            .is_none());
+
+        // A second call is served from the capability this process now holds.
+        sandbox.get("known").await.unwrap().unwrap();
+        assert_eq!(*lookups.lock().unwrap(), 2, "one lookup per id");
+
+        // Close to expiry, the next use asks the broker again.
+        sandbox
+            .claims
+            .lock()
+            .unwrap()
+            .get_mut("known")
+            .unwrap()
+            .expires_at = chrono::Utc::now().timestamp() + 10;
+        sandbox.get("known").await.unwrap().unwrap();
+        assert_eq!(*lookups.lock().unwrap(), 3, "refreshed before it expired");
     }
 }

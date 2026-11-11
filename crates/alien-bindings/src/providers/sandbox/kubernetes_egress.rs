@@ -77,7 +77,7 @@ mod tests {
     };
     use axum::{
         http::{HeaderMap, StatusCode},
-        routing::{delete, post, put},
+        routing::{delete, get, post, put},
         Json, Router,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -148,7 +148,7 @@ mod tests {
                 let agent = agent.clone();
                 async move { Json(serde_json::json!({"sessionId":"logical-id", "agentSessionId":"pod-uid", "endpoint":agent, "capability":"pod-capability", "expiresAt":chrono::Utc::now().timestamp()+300})) }
             }))
-            .route("/v1/sandbox/box/sessions/logical-id", delete(move || {
+            .route("/v1/sandbox/box/sessions/logical-id", get(|| async { StatusCode::NOT_FOUND }).delete(move || {
                 let releases = releases.clone();
                 async move { *releases.lock().unwrap() += 1; StatusCode::NO_CONTENT }
             }))).await;

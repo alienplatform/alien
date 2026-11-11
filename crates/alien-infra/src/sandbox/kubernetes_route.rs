@@ -192,9 +192,10 @@ pub fn broker_router_with_authorization(
 ) -> Router {
     Router::new()
         .route("/v1/sandbox/sessions", post(claim))
+        .route("/v1/sandbox/{sandbox}/sessions", axum::routing::get(list))
         .route(
             "/v1/sandbox/{sandbox}/sessions/{session}",
-            axum::routing::delete(release),
+            axum::routing::get(reattach).delete(release),
         )
         .with_state(BrokerRouteState {
             broker: state,
@@ -279,6 +280,67 @@ async fn claim(
         capability: claimed.capability,
         expires_at: claimed.expires_at,
     }))
+}
+
+/// Returns a session claimed earlier, by this process or another, with a fresh capability.
+async fn reattach(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path((sandbox_id, session)): Path<(String, String)>,
+) -> Result<Json<ClaimResponse>, StatusCode> {
+    let authorization = authorize(&state, &headers).await?;
+
+    let claimed = crate::sandbox::kubernetes_broker::reattach_session_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &sandbox_id,
+        &state.broker.namespace,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        chrono::Utc::now().timestamp(),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(ClaimResponse {
+        agent_session_id: claimed.agent_session_id,
+        session_id: claimed.session_id,
+        endpoint: claimed.endpoint,
+        capability: claimed.capability,
+        expires_at: claimed.expires_at,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionList {
+    session_ids: Vec<String>,
+}
+
+/// Lists the claimed sessions of a sandbox that belong to the caller's deployment.
+async fn list(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path(sandbox_id): Path<String>,
+) -> Result<Json<SessionList>, StatusCode> {
+    let authorization = authorize(&state, &headers).await?;
+
+    let session_ids = crate::sandbox::kubernetes_broker::list_sessions_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &sandbox_id,
+        &state.broker.namespace,
+        &capability_secret_name(&sandbox_id),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
+    Ok(Json(SessionList { session_ids }))
 }
 
 async fn release(

@@ -156,21 +156,13 @@ async fn claim_session_with_scope(
             continue;
         };
 
-        let expires_at = now_unix + CAPABILITY_LIFETIME_SECONDS;
-        let capability = sandbox_capability_token::mint(
-            &SandboxCapabilityClaims {
-                session_id: agent_session_id.clone(),
-                operation: SandboxOperationClass::Execute,
-                generation: 1,
-                expires_at,
-                key_id: secret_name.to_string(),
-            },
+        let (capability, expires_at) = mint_capability(
             &signing_key,
-        )
-        .context(ErrorData::CloudPlatformError {
-            message: "failed to mint a sandbox capability".to_string(),
-            resource_id: Some(sandbox_id.to_string()),
-        })?;
+            &agent_session_id,
+            secret_name,
+            sandbox_id,
+            now_unix,
+        )?;
 
         return Ok(ClaimedSession {
             agent_session_id,
@@ -190,6 +182,154 @@ async fn claim_session_with_scope(
         ),
         resource_id: Some(sandbox_id.to_string()),
     }))
+}
+
+/// Mints a capability for one pod's agent, valid for [`CAPABILITY_LIFETIME_SECONDS`].
+fn mint_capability(
+    signing_key: &ed25519_compact::SecretKey,
+    agent_session_id: &str,
+    secret_name: &str,
+    sandbox_id: &str,
+    now_unix: i64,
+) -> Result<(String, i64)> {
+    let expires_at = now_unix + CAPABILITY_LIFETIME_SECONDS;
+    let capability = sandbox_capability_token::mint(
+        &SandboxCapabilityClaims {
+            session_id: agent_session_id.to_string(),
+            operation: SandboxOperationClass::Execute,
+            generation: 1,
+            expires_at,
+            key_id: secret_name.to_string(),
+        },
+        signing_key,
+    )
+    .context(ErrorData::CloudPlatformError {
+        message: "failed to mint a sandbox capability".to_string(),
+        resource_id: Some(sandbox_id.to_string()),
+    })?;
+    Ok((capability, expires_at))
+}
+
+/// Finds the live pod of a claimed session of this deployment, if there is one.
+async fn claimed_pods(
+    pods: &Arc<dyn PodApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: Option<&str>,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+) -> Result<Vec<Pod>> {
+    let session = match session_id {
+        Some(session_id) => format!("{}={session_id}", crate::sandbox::LABEL_SESSION),
+        // Any value: only a claimed pod carries the session label.
+        None => crate::sandbox::LABEL_SESSION.to_string(),
+    };
+    let selector = format!(
+        "{}={sandbox_id},{session},{deployment_label_key}={deployment_label_value}",
+        crate::sandbox::LABEL_SANDBOX,
+    );
+    let found = pods
+        .list_pods(namespace, Some(selector), None)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("could not look up the sessions of '{sandbox_id}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    Ok(found
+        .items
+        .into_iter()
+        .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .collect())
+}
+
+/// Returns a session the caller already holds, with a fresh capability, or `None` when no pod
+/// carries that session id.
+///
+/// The pod's labels are the only record of a session, so any process of the deployment can
+/// address a session another one claimed, and a capability that is about to expire is replaced by
+/// asking again. A pod that exists but has no address yet is an error rather than `None`: the
+/// session exists and the caller should retry, not create a second one.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn reattach_session_for_deployment(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    sandbox_id: &str,
+    namespace: &str,
+    session_id: &str,
+    secret_name: &str,
+    now_unix: i64,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+) -> Result<Option<ClaimedSession>> {
+    let (signing_key, key, value) = signing_key(
+        secrets,
+        namespace,
+        secret_name,
+        sandbox_id,
+        Some((deployment_label_key, deployment_label_value)),
+    )
+    .await?;
+    let found = claimed_pods(pods, namespace, sandbox_id, Some(session_id), &key, &value).await?;
+    let Some(pod) = found.into_iter().next() else {
+        return Ok(None);
+    };
+    let agent_session_id = pod
+        .metadata
+        .uid
+        .clone()
+        .filter(|uid| !uid.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("session '{session_id}' has a pod with no identity"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        })?;
+    let address = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.pod_ip.clone())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("session '{session_id}' has no address yet"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        })?;
+    let (capability, expires_at) = mint_capability(
+        &signing_key,
+        &agent_session_id,
+        secret_name,
+        sandbox_id,
+        now_unix,
+    )?;
+    Ok(Some(ClaimedSession {
+        agent_session_id,
+        session_id: session_id.to_string(),
+        endpoint: format!("http://{address}:{AGENT_PORT}"),
+        capability,
+        expires_at,
+    }))
+}
+
+/// Ids of the claimed sessions of a sandbox that belong to this deployment.
+pub(crate) async fn list_sessions_for_deployment(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    sandbox_id: &str,
+    namespace: &str,
+    secret_name: &str,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+) -> Result<Vec<String>> {
+    let (_, key, value) = signing_key(
+        secrets,
+        namespace,
+        secret_name,
+        sandbox_id,
+        Some((deployment_label_key, deployment_label_value)),
+    )
+    .await?;
+    let found = claimed_pods(pods, namespace, sandbox_id, None, &key, &value).await?;
+    Ok(found.iter().filter_map(session_name).collect())
 }
 
 /// Puts a pod claimed a moment ago back in the pool.
@@ -494,6 +634,92 @@ mod tests {
 
     /// The apiserver decides the race. A caller that lost one pod must take the next rather than
     /// failing a create the pool can still satisfy.
+    #[tokio::test]
+    async fn a_session_claimed_elsewhere_is_reattached_with_a_fresh_capability() {
+        let mut claimed = idle_pod("pool-a", "10.0.0.7");
+        claimed
+            .metadata
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_selector = Arc::clone(&seen);
+        let mut mock = MockPodApi::new();
+        mock.expect_list_pods().returning(move |_, selector, _| {
+            seen_selector.lock().unwrap().push(selector.unwrap());
+            Ok(k8s_openapi::List {
+                items: vec![claimed.clone()],
+                ..Default::default()
+            })
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(mock);
+        let mut secrets = MockSecretsApi::new();
+        let secret = key_secret();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+
+        let session = reattach_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s1",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await
+        .expect("lookup works")
+        .expect("the session exists");
+
+        assert_eq!(session.session_id, "s1");
+        assert_eq!(session.endpoint, format!("http://10.0.0.7:{AGENT_PORT}"));
+        assert_eq!(session.expires_at, 1_000 + CAPABILITY_LIFETIME_SECONDS);
+        let selector = seen.lock().unwrap()[0].clone();
+        assert!(
+            selector.contains("alien.dev/sandbox-session=s1")
+                && selector.contains(&format!("{DEPLOYMENT_LABEL_KEY}={DEPLOYMENT_LABEL_VALUE}")),
+            "the lookup is scoped to the session and the deployment: {selector}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_session_is_not_found_rather_than_an_error() {
+        let mut mock = MockPodApi::new();
+        mock.expect_list_pods().returning(|_, _, _| {
+            Ok(k8s_openapi::List {
+                items: vec![],
+                ..Default::default()
+            })
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(mock);
+        let mut secrets = MockSecretsApi::new();
+        let secret = key_secret();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+
+        let session = reattach_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "missing",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await
+        .expect("an absent session is not an error");
+        assert!(session.is_none());
+    }
+
     #[tokio::test]
     async fn losing_the_race_on_one_pod_moves_to_the_next() {
         let mut pods = pods_returning(vec![
