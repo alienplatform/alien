@@ -8360,8 +8360,11 @@ when it names one. Add the ports of your bindings (a database 5432, a cache 6379
 to `runtime.networkPolicy.egress.ports`. Set `runtime.networkPolicy.dns.clusterIPs`
 to the cluster's DNS Service address (and the node-local DNS address, if any):
 on EKS Auto Mode and with node-local DNS the resolver is not a Pod the policy can
-select. It is off by default. Enforcement depends on the cluster's CNI: on EKS, set the VPC CNI
-`NETWORK_POLICY_ENFORCING_MODE` to `strict` so a policy applies from a Pod's first packet.
+select. It is off by default. Enforcement depends on the cluster's CNI: on EKS, turn on the
+network policy controller (EKS Auto Mode ignores policies otherwise). In the default
+`standard` mode a Pod can send traffic for a moment before its policy applies; `strict` closes
+that window but denies every Pod that has no policy, so it needs an allow policy for each Pod
+of the install.
 "#
     )
 }

@@ -675,20 +675,17 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     ];
                     if stack_has_sandbox(ctx.stack) {
                         // EKS Auto Mode does not enforce NetworkPolicy until the network policy
-                        // controller is on, so a sandbox's egress policy would be ignored.
-                        // `strict` holds a pod's traffic until its policy is applied.
+                        // controller is on, so a sandbox's egress policy would be ignored. Only
+                        // enforcement is turned on. `strict` mode (and a default-deny node
+                        // class) would also deny every Pod without a policy, which the chart's
+                        // own Pods and the Jobs it runs do not have: that stays the
+                        // installer's choice.
                         attrs.push(attr(
                             "configuration_values",
-                            expr::jsonencode(expr::object([
-                                ("enableNetworkPolicy", Expression::String("true".to_string())),
-                                (
-                                    "env",
-                                    expr::object([(
-                                        "NETWORK_POLICY_ENFORCING_MODE",
-                                        Expression::String("strict".to_string()),
-                                    )]),
-                                ),
-                            ])),
+                            expr::jsonencode(expr::object([(
+                                "enableNetworkPolicy",
+                                Expression::String("true".to_string()),
+                            )])),
                         ));
                     }
                     attrs

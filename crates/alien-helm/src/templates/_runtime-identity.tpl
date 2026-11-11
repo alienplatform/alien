@@ -48,7 +48,7 @@
 {{- end -}}
 {{- $url := default $endpoint .Values.management.url -}}
 {{- if and $url (not (hasPrefix "https://" (lower $url))) (not .Values.management.allowInsecure) -}}
-  {{- fail (printf "The management URL %q isn't https. The Operator sends its deployment token to it. Fix management.url (or management.defaultUrl), or set management.allowInsecure=true for a local or test manager." $url) -}}
+  {{- fail (printf "The management URL %q isn't https. The Operator sends its deployment token to it. Switch to https: set management.url (or management.defaultUrl) to the manager's https:// address. For a local or test manager only, set management.allowInsecure=true instead." $url) -}}
 {{- end -}}
 {{- $url -}}
 {{- end -}}

@@ -1344,10 +1344,9 @@ fn eks_turns_on_network_policy_enforcement_only_when_the_stack_has_a_sandbox() {
         .build();
     let block = vpc_cni(&with_sandbox);
     assert!(block.contains("enableNetworkPolicy = \"true\""), "{block}");
-    assert!(
-        block.contains("NETWORK_POLICY_ENFORCING_MODE = \"strict\""),
-        "{block}"
-    );
+    // Enforcement only: `strict` would deny every Pod that has no policy, the chart's own
+    // Pods and hook Jobs included.
+    assert!(!block.contains("NETWORK_POLICY_ENFORCING_MODE"), "{block}");
     assert_terraform_valid(
         &render(
             &with_sandbox,
