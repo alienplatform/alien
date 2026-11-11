@@ -576,7 +576,7 @@ enum RemoteAiBinding {
     Azure(RemoteAzureFoundryAiBinding),
 }
 
-enum RemoteSandboxBinding {
+pub(super) enum RemoteSandboxBinding {
     Aws(RemoteAwsSandboxBinding),
     Azure(RemoteAzureSandboxBinding),
     Gcp(RemoteGcpSandboxBinding),
@@ -1230,7 +1230,7 @@ async fn unique_current_release_remote_ai(
 /// prove that generated setup created the resource. Remote Bindings v0 must
 /// therefore reject them even if stale synchronized state contains binding
 /// parameters from an older manager.
-fn require_setup_owned_remote_binding(
+pub(super) fn require_setup_owned_remote_binding(
     deployment: &DeploymentRecord,
     resource_id: &str,
 ) -> Result<(), alien_error::AlienError<ErrorData>> {
@@ -1251,7 +1251,7 @@ fn require_setup_owned_remote_binding(
     Ok(())
 }
 
-fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) -> bool {
+pub(super) fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) -> bool {
     match status {
         Some(
             DeploymentStatus::Running
@@ -1314,7 +1314,7 @@ fn remote_binding_expiry(
 }
 
 /// Load the deployment's current release and the binding kind it declares for `resource_id`.
-async fn current_release_binding_kind(
+pub(super) async fn current_release_binding_kind(
     release_store: &dyn ReleaseStore,
     deployment: &DeploymentRecord,
     resource_id: &str,
@@ -1357,7 +1357,7 @@ async fn current_release_binding_kind(
 /// did not clear `remote_binding_params`. The current release is therefore the
 /// authoritative opt-in source. In particular, desired/prepared release data
 /// must not grant access while an update is still in progress.
-fn require_current_release_remote_access(
+pub(super) fn require_current_release_remote_access(
     release: &ReleaseRecord,
     deployment: &DeploymentRecord,
     resource_id: &str,
@@ -1868,7 +1868,7 @@ fn remote_ai_binding(
     }
 }
 
-fn remote_sandbox_binding(
+pub(super) fn remote_sandbox_binding(
     deployment: &DeploymentRecord,
     resource_id: &str,
 ) -> Result<RemoteSandboxBinding, alien_error::AlienError<ErrorData>> {

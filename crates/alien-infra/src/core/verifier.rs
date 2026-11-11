@@ -1107,7 +1107,20 @@ pub fn gcp_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpVerifier>
 /// group, at the ingress address Azure gave it, called with the management identity's token.
 pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpVerifier> {
     let config = ctx.get_azure_config()?;
-    let name = format!("{}-verifier", ctx.resource_prefix);
+    let resource_group = crate::azure_utils::get_resource_group_name(ctx.state)?;
+    let apps = ctx.service_provider.get_azure_container_apps_client(config)?;
+    azure_verifier_in(config, &ctx.resource_prefix, &resource_group, apps.as_ref()).await
+}
+
+/// The Azure verifier of the install with `resource_prefix` in `resource_group`, for a caller
+/// that has no controller context (the manager), called with `config`'s identity.
+pub async fn azure_verifier_in(
+    config: &AzureClientConfig,
+    resource_prefix: &str,
+    resource_group: &str,
+    apps: &dyn alien_azure_clients::azure::container_apps::ContainerAppsApi,
+) -> Result<HttpVerifier> {
+    let name = format!("{resource_prefix}-verifier");
     let token: Arc<dyn VerifierToken> = Arc::new(AzureManagementToken {
         config: config.clone(),
     });
@@ -1123,11 +1136,8 @@ pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpV
             Some(token),
         ));
     }
-    let resource_group = crate::azure_utils::get_resource_group_name(ctx.state)?;
-    let app = ctx
-        .service_provider
-        .get_azure_container_apps_client(config)?
-        .get_container_app(&resource_group, &name)
+    let app = apps
+        .get_container_app(resource_group, &name)
         .await
         .context(ErrorData::CloudPlatformError {
             message: format!("Failed to read the verifier Container App '{name}'"),
@@ -1152,6 +1162,34 @@ pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpV
         format!("https://{fqdn}"),
         Some(token),
     ))
+}
+
+/// Have `verifier` create the signed sandbox `sandbox_id`'s sandbox in `group` with `body`, the
+/// create body the Azure client builds, from the disk image built for `base`. The verifier
+/// checks it against the signed release and sends it unchanged; the answer is the sandbox the
+/// data plane created.
+pub async fn create_azure_sandbox(
+    verifier: &dyn Verifier,
+    statements: &ReleaseStatements,
+    config: Option<&SignedStatement>,
+    sandbox_id: &str,
+    group: &str,
+    base: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let written = apply_resource_write(
+        verifier,
+        statements,
+        config,
+        sandbox_id,
+        vec![ResourceWrite::CreateSandbox {
+            group: group.to_string(),
+            base: base.to_string(),
+            body,
+        }],
+    )
+    .await?;
+    Ok(written.answers.into_iter().next().unwrap_or_default())
 }
 
 /// The GCP and Azure verifier: `POST /` on the Cloud Run service or Container App with the same

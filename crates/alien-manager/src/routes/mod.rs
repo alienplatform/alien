@@ -31,6 +31,7 @@ pub mod whoami;
 pub mod airgap;
 pub mod auth;
 pub mod channels;
+pub mod sandbox_create;
 pub mod signing;
 
 use std::collections::HashMap;
@@ -203,6 +204,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(values::router())
         .merge(airgap::router())
         .merge(channels::router())
+        .merge(sandbox_create::router())
         .merge(signing::router())
         // Deployments
         .merge(deployments::router())

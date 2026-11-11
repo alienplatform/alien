@@ -55,6 +55,19 @@ pub struct AzureSandbox {
     cpu: String,
     memory: String,
     disk: Option<String>,
+    /// Where creates go on a protected install: the install's verifier, through the manager,
+    /// because the caller's own role cannot create sandboxes.
+    create_route: Option<std::sync::Arc<dyn SandboxCreateRoute>>,
+}
+
+/// Creates a sandbox for a caller whose own identity may not: the request carries only the
+/// environment, and whoever receives it builds everything else from the signed release.
+#[async_trait]
+pub trait SandboxCreateRoute: std::fmt::Debug + Send + Sync {
+    async fn create(
+        &self,
+        environment: &BTreeMap<String, String>,
+    ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>;
 }
 
 impl AzureSandbox {
@@ -83,7 +96,55 @@ impl AzureSandbox {
             cpu,
             memory,
             disk,
+            create_route: None,
         }
+    }
+
+    /// Send creates through `route` instead of the data plane.
+    pub fn with_create_route(mut self, route: std::sync::Arc<dyn SandboxCreateRoute>) -> Self {
+        self.create_route = Some(route);
+        self
+    }
+
+    /// The disk image reference and create body of a sandbox with `environment`, exactly as
+    /// `create` sends them, for a caller that hands them to the verifier instead. Only the
+    /// environment is the caller's; everything else comes from the binding. The verifier
+    /// rebuilds the same body from the signed release and refuses any difference.
+    pub async fn verified_create(
+        &self,
+        environment: BTreeMap<String, String>,
+    ) -> Result<(String, serde_json::Value)> {
+        checked_sandbox_env(CREATE, &environment)?;
+        if self.egress_manager.is_some() {
+            return Err(self.unsupported(
+                CREATE,
+                "a gateway egress policy has no signed form the verifier can check",
+            ));
+        }
+        let mut labels = BTreeMap::new();
+        if self.agent {
+            labels.insert(
+                agent::TRANSPORT_LABEL.into(),
+                agent::TRANSPORT_VERSION.into(),
+            );
+        }
+        let request = CreateSandbox {
+            disk_image: self.disk_image.clone(),
+            disk_image_id: self.disk_image_id().await?,
+            cpu: self.cpu.clone(),
+            memory: self.memory.clone(),
+            disk: self.disk.clone(),
+            environment,
+            labels,
+            egress: self.native_policy(),
+            customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                .then(|| "default".to_string()),
+            idle_pause_seconds: self.idle_pause_seconds,
+        };
+        Ok((
+            self.disk_image.clone(),
+            alien_azure_clients::azure::sandbox_data_plane::create_body(&request),
+        ))
     }
 
     /// The built disk image a sandbox starts from, or `None` to send the value as a catalog name,
@@ -367,23 +428,32 @@ impl Sandbox for AzureSandbox {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
         let asked = self.native_policy();
-        let disk_image_id = self.disk_image_id().await?;
-        let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
-        let sandbox = self
-            .create_from_image(CreateSandbox {
-                disk_image: self.disk_image.clone(),
-                disk_image_id,
-                cpu: self.cpu.clone(),
-                memory: self.memory.clone(),
-                disk: self.disk.clone(),
-                environment: request.env,
-                labels,
-                egress: asked.clone(),
-                customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
-                    .then(|| "default".to_string()),
-                idle_pause_seconds: self.idle_pause_seconds,
-            })
-            .await?;
+        let (sandbox, identity) = if let Some(route) = &self.create_route {
+            let sandbox = route
+                .create(&request.env)
+                .await
+                .map_err(|error| Self::failed(CREATE, error))?;
+            (sandbox, None)
+        } else {
+            let disk_image_id = self.disk_image_id().await?;
+            let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
+            let sandbox = self
+                .create_from_image(CreateSandbox {
+                    disk_image: self.disk_image.clone(),
+                    disk_image_id,
+                    cpu: self.cpu.clone(),
+                    memory: self.memory.clone(),
+                    disk: self.disk.clone(),
+                    environment: request.env,
+                    labels,
+                    egress: asked.clone(),
+                    customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                        .then(|| "default".to_string()),
+                    idle_pause_seconds: self.idle_pause_seconds,
+                })
+                .await?;
+            (sandbox, identity)
+        };
 
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
         // the requested one would hand back a handle that addresses nothing. Checked because
@@ -1783,6 +1853,89 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect("create succeeds");
+    }
+
+    #[derive(Debug)]
+    struct Route(std::sync::Mutex<Vec<BTreeMap<String, String>>>);
+
+    #[async_trait]
+    impl SandboxCreateRoute for Route {
+        async fn create(
+            &self,
+            environment: &BTreeMap<String, String>,
+        ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
+        {
+            self.0.lock().unwrap().push(environment.clone());
+            Ok(running("routed", None))
+        }
+    }
+
+    /// A routed create never reaches the data plane, and what the verifier is asked for is the
+    /// body the provider would have sent itself, so the two cannot drift apart.
+    #[tokio::test]
+    async fn a_routed_create_sends_the_body_the_provider_would_have_sent() {
+        let env = BTreeMap::from([("A".to_string(), "b".to_string())]);
+
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut direct = MockSandboxDataPlaneApi::new();
+        let capture = sent.clone();
+        direct
+            .expect_create_sandbox()
+            .times(1)
+            .returning(move |_, request| {
+                *capture.lock().unwrap() = Some(request);
+                Ok(running("s1", None))
+            });
+        settles_running(&mut direct, None);
+        let sandbox = AzureSandbox::new(
+            std::sync::Arc::new(direct),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            Some(300),
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        );
+        let (base, body) = sandbox.verified_create(env.clone()).await.expect("body");
+        sandbox
+            .create(CreateSandboxRequest {
+                env: env.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("create");
+        let request = sent.lock().unwrap().clone().expect("a create was sent");
+        assert_eq!(base, "ubuntu");
+        assert_eq!(
+            body,
+            alien_azure_clients::azure::sandbox_data_plane::create_body(&request)
+        );
+
+        let route = std::sync::Arc::new(Route(Default::default()));
+        // No create expectation: a create that reached the data plane would panic.
+        let mut routed_client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut routed_client, None);
+        let routed = AzureSandbox::new(
+            std::sync::Arc::new(routed_client),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        )
+        .with_create_route(route.clone());
+        let created = routed
+            .create(CreateSandboxRequest {
+                env: env.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("routed create");
+        assert_eq!(created.sandbox_id, "routed");
+        assert_eq!(*route.0.lock().unwrap(), vec![env]);
     }
 
     fn disk_image(id: &str, label: &str, state: &str) -> DiskImage {
