@@ -81,6 +81,12 @@ impl StackCompatibilityCheck for SandboxSetupInputsUnchangedCheck {
         config: &DeploymentConfig,
         platform: alien_core::Platform,
     ) -> Result<CheckResult> {
+        // The inputs are an AWS sandbox's build role, network and grant. Elsewhere a Live
+        // sandbox's image, limits and lifecycle are applied at runtime, and what setup owns
+        // there (the Kubernetes egress mode) is checked by the Frozen check.
+        if platform != alien_core::Platform::Aws {
+            return Ok(CheckResult::success());
+        }
         let (answers, still_frozen_gating) = surviving_frozen_gate_answers(new_stack);
         let declined = declined_live_resources(
             new_stack,
