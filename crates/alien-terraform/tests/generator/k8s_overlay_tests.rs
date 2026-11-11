@@ -18,8 +18,8 @@ use alien_core::{
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, ServiceAccount,
-    Stack, StackSettings, Storage, Worker, WorkerCode,
+    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
+    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module, TerraformHelmInstall, TerraformOptions,
@@ -1133,4 +1133,117 @@ fn eks_module_outputs_the_charts_infrastructure_values() {
     }
     assert!(compact.contains("type = \"storage\""), "{outputs}");
     assert!(compact.contains("service = \"s3\""), "{outputs}");
+}
+
+fn whole_module(module: &alien_terraform::ModuleFiles) -> String {
+    module
+        .iter()
+        .map(|(_, contents)| contents.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A new EKS cluster starts on Kubernetes 1.36 (Nitro sandboxes need it on Auto
+/// Mode), and an existing cluster is never upgraded by the module: the version
+/// is ignored after creation, so `terraform plan` shows no change for it.
+#[test]
+fn a_new_eks_cluster_starts_on_1_36_and_an_existing_one_is_not_upgraded() {
+    let stack = Stack::new("eks-version".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let rendered = whole_module(&module);
+    let cluster = rendered
+        .split("resource \"aws_eks_cluster\"")
+        .nth(1)
+        .expect("the module creates an EKS cluster");
+    let cluster = cluster.split("\nresource ").next().unwrap();
+    let compact = cluster.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("version = \"1.36\""), "{cluster}");
+    assert!(
+        compact
+            .replace(' ', "")
+            .contains("lifecycle{ignore_changes=[version]}"),
+        "{cluster}"
+    );
+}
+
+#[test]
+fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
+    use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+    let plain = Stack::new("aks-plain".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let rendered = whole_module(&render(
+        &plain,
+        TerraformTarget::Aks,
+        StackSettings::default(),
+    ));
+    assert!(!rendered.contains("KataVmIsolation"), "{rendered}");
+    assert!(!rendered.contains("azurerm_kubernetes_cluster_node_pool"));
+
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example.com/agent:latest".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let with_sandbox = Stack::new("aks-sandbox".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Live)
+        .build();
+    let module = render(
+        &with_sandbox,
+        TerraformTarget::Aks,
+        StackSettings::default(),
+    );
+    let rendered = whole_module(&module);
+    let pool = rendered
+        .split("resource \"azurerm_kubernetes_cluster_node_pool\"")
+        .nth(1)
+        .expect("a sandbox adds a node pool");
+    let pool = pool.split("\nresource ").next().unwrap();
+    let compact = pool.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        compact.contains("workload_runtime = \"KataVmIsolation\""),
+        "{pool}"
+    );
+    assert!(compact.contains("os_sku = \"AzureLinux\""), "{pool}");
+    assert!(compact.contains("vm_size = \"Standard_D4s_v3\""), "{pool}");
+    // Only a cluster this module creates gets the pool.
+    assert!(
+        compact.contains("count = var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+        "{pool}"
+    );
+    assert_terraform_valid(&module, "aks_kata_node_pool");
 }

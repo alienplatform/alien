@@ -10,7 +10,7 @@ use crate::{
 use alien_core::{
     import::EmitContext, Container, ErrorData, KubernetesCluster, KubernetesClusterOwnership,
     KubernetesClusterProvider, Network, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, ResourceLifecycle, Result, Stack, Worker,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, Worker,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -24,6 +24,15 @@ pub struct GcpKubernetesClusterEmitter;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureKubernetesClusterEmitter;
+
+/// Kubernetes version of an EKS cluster this module creates. Nitro-based
+/// sandboxes need 1.36 or later on EKS Auto Mode. Existing clusters keep their
+/// version: the attribute is ignored after creation.
+const EKS_KUBERNETES_VERSION: &str = "1.36";
+
+/// VM size of the AKS pool that runs sandboxes in Kata VM isolation. The size
+/// must support nested virtualization.
+const AKS_KATA_VM_SIZE: &str = "Standard_D4s_v3";
 
 const AKS_DEFAULT_VM_SIZE: &str = "Standard_D2s_v3";
 const AKS_SINGLE_NODE_VM_SIZE: &str = "Standard_D4s_v3";
@@ -590,6 +599,10 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     ),
                     attr("name", expr::template("${local.resource_prefix}-k8s")),
                     attr("role_arn", expr::raw(format!("aws_iam_role.{label}_cluster[0].arn"))),
+                    attr(
+                        "version",
+                        Expression::String(EKS_KUBERNETES_VERSION.to_string()),
+                    ),
                     attr("bootstrap_self_managed_addons", Expression::Bool(false)),
                     nested(block(
                         "vpc_config",
@@ -633,6 +646,12 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     nested(block(
                         "storage_config",
                         [nested(block("block_storage", [attr("enabled", Expression::Bool(true))]))],
+                    )),
+                    // An existing cluster is never upgraded through this module:
+                    // `version` only applies when the cluster is created.
+                    nested(block(
+                        "lifecycle",
+                        [attr("ignore_changes", expr::raw("[version]"))],
                     )),
                     attr(
                         "depends_on",
@@ -866,6 +885,12 @@ fn generated_kubernetes_exposure_count_expr(cluster_mode_condition: &str) -> Exp
     expr::raw(format!(
         "({cluster_mode_condition}) && try(local.advanced_settings.kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
     ))
+}
+
+fn stack_has_sandbox(stack: &Stack) -> bool {
+    stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
 }
 
 fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
@@ -1271,6 +1296,33 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                     attr("sku_tier", Expression::String("Standard".to_string())),
                 ],
             ));
+        if stack_has_sandbox(ctx.stack) {
+            // Sandboxes run in Kata VM isolation. The pool is added next to the
+            // cluster this module creates; an existing cluster is left alone.
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_kubernetes_cluster_node_pool",
+                &format!("{label}_kata"),
+                [
+                    attr(
+                        "count",
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                    ),
+                    attr("name", Expression::String("kata".to_string())),
+                    attr(
+                        "kubernetes_cluster_id",
+                        expr::raw(format!("azurerm_kubernetes_cluster.{label}[0].id")),
+                    ),
+                    attr("mode", Expression::String("User".to_string())),
+                    attr("vm_size", Expression::String(AKS_KATA_VM_SIZE.to_string())),
+                    attr("node_count", Expression::Number(1.into())),
+                    attr("os_sku", Expression::String("AzureLinux".to_string())),
+                    attr(
+                        "workload_runtime",
+                        Expression::String("KataVmIsolation".to_string()),
+                    ),
+                ],
+            ));
+        }
         fragment.resource_blocks.push(resource_block(
             "azurerm_role_assignment",
             &format!("{label}_current_client_kubernetes_rbac_cluster_admin"),
