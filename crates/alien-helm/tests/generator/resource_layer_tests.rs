@@ -972,7 +972,7 @@ fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
     let rendered = super::test_utils::helm_template(&chart.files, None);
     let output = format!("{rendered:?}");
     assert!(
-        output.contains("sandbox.clusterDNS") && output.contains("get svc -n kube-system kube-dns"),
+        output.contains("sandbox.clusterDNS") && output.contains("grep nameserver /etc/resolv.conf"),
         "the failure must name the value and the command that finds it: {output}"
     );
     // An address that is not an IPv4 literal is refused by the values schema.

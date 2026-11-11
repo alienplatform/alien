@@ -28,7 +28,7 @@ const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 /// release keeps its policy.
 const CLUSTER_DNS_VALUES: &str = r#"{{- $dns := dig "clusterDNS" (list) (default dict .Values.sandbox) -}}
 {{- if not $dns -}}
-{{- fail "sandbox.clusterDNS is not set. A sandbox with allow egress needs the address of the cluster DNS service (the nameserver in a pod's /etc/resolv.conf). Find it with: kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}' and set sandbox.clusterDNS=[<that address>]." -}}
+{{- fail "sandbox.clusterDNS is not set. A sandbox with allow egress needs the address of the cluster DNS service (the nameserver in a pod's /etc/resolv.conf). Find it with: kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf and set sandbox.clusterDNS=[<that address>]." -}}
 {{- end -}}
 "#;
 
