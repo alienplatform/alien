@@ -525,12 +525,18 @@ mod tests {
         };
         let mut quotas = MockServiceQuotasApi::new();
         quotas.expect_list_service_quotas().returning(move |_, _| {
-            Ok(ListServiceQuotasResponse { quotas: vec![quota(10.0)], next_token: None })
+            Ok(ListServiceQuotasResponse {
+                quotas: vec![quota(10.0)],
+                next_token: None,
+            })
         });
         quotas
             .expect_list_aws_default_service_quotas()
             .returning(move |_, _| {
-                Ok(ListServiceQuotasResponse { quotas: vec![quota(10_000.0)], next_token: None })
+                Ok(ListServiceQuotasResponse {
+                    quotas: vec![quota(10_000.0)],
+                    next_token: None,
+                })
             });
         let mut cloudwatch = MockCloudWatchApi::new();
         cloudwatch.expect_list_metrics().returning(|_| {
@@ -569,7 +575,12 @@ mod tests {
         let entry = |m: &ai_catalog::CatalogModel| {
             classify_bedrock_availability(
                 m,
-                &response(Some("AVAILABLE"), Some("AVAILABLE"), Some("AUTHORIZED"), Some("AVAILABLE")),
+                &response(
+                    Some("AVAILABLE"),
+                    Some("AVAILABLE"),
+                    Some("AUTHORIZED"),
+                    Some("AVAILABLE"),
+                ),
                 Utc::now(),
             )
         };
@@ -581,7 +592,10 @@ mod tests {
         };
         add_declared_model_signals(
             &mut observed,
-            &[alien_core::AiModel { id: "claude-sonnet-4-6".into(), required: true }],
+            &[alien_core::AiModel {
+                id: "claude-sonnet-4-6".into(),
+                required: true,
+            }],
             &quotas,
             &cloudwatch,
         )

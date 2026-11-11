@@ -227,9 +227,12 @@ mod tests {
 
     #[test]
     fn an_externally_bound_ai_resource_is_not_checked() {
-        use alien_core::{AiModel, ResourceLifecycle, StackBuilder};
-        let model = || AiModel { id: "claude-sonnet-4-6".into(), required: true };
-        let stack = StackBuilder::new("t".to_string())
+        use alien_core::{AiModel, ResourceLifecycle};
+        let model = || AiModel {
+            id: "claude-sonnet-4-6".into(),
+            required: true,
+        };
+        let stack = Stack::new("t".to_string())
             .add(
                 Ai::new("own".to_string()).models(vec![model()]).build(),
                 ResourceLifecycle::Live,
@@ -248,7 +251,10 @@ mod tests {
             }),
         );
         let declared = declared_models(&stack, &bindings);
-        assert_eq!(declared, vec![("own".to_string(), "claude-sonnet-4-6".to_string())]);
+        assert_eq!(
+            declared,
+            vec![("own".to_string(), "claude-sonnet-4-6".to_string())]
+        );
     }
 
     #[tokio::test]
