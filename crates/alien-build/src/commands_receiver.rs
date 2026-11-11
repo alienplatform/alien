@@ -94,7 +94,7 @@ async fn rust_app_links_marked_receiver(
 }
 
 /// Whether the normal dependencies of the package that builds `binary_name`
-/// from `src` include a `alien-commands` that carries the marker. In a
+/// from `src` include a `alien-commands`, every one of which carries the marker. In a
 /// workspace several members can build a binary of that name; the one Cargo
 /// builds from the resource's source directory is the package whose manifest
 /// is there. When none is, only a package that is the single builder of the
@@ -105,6 +105,7 @@ fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str, src
         .unwrap_or_else(|_| src.to_path_buf())
         .join("Cargo.toml");
     let packages = metadata["packages"].as_array().into_iter().flatten();
+    let mut receivers = HashSet::new();
     let mut marked = HashSet::new();
     let mut builders = Vec::new();
     let mut from_source = None;
@@ -112,8 +113,11 @@ fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str, src
         let Some(id) = package["id"].as_str() else {
             continue;
         };
-        if package["name"] == RUST_CRATE && package["metadata"]["alien"][MARKER_KEY] == true {
-            marked.insert(id);
+        if package["name"] == RUST_CRATE {
+            receivers.insert(id);
+            if package["metadata"]["alien"][MARKER_KEY] == true {
+                marked.insert(id);
+            }
         }
         let builds_binary = package["targets"]
             .as_array()
@@ -167,9 +171,12 @@ fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str, src
 
     let mut seen = HashSet::from([root]);
     let mut pending = vec![root];
+    let mut linked_receivers = 0;
+    let mut linked_marked = 0;
     while let Some(id) = pending.pop() {
-        if marked.contains(id) {
-            return true;
+        if receivers.contains(id) {
+            linked_receivers += 1;
+            linked_marked += usize::from(marked.contains(id));
         }
         for next in normal_dependencies.get(id).into_iter().flatten() {
             if seen.insert(next) {
@@ -177,7 +184,8 @@ fn cargo_metadata_links_marked_receiver(metadata: &Value, binary_name: &str, src
             }
         }
     }
-    false
+    // An older receiver left in the graph still reads the environment.
+    linked_receivers > 0 && linked_marked == linked_receivers
 }
 
 /// Resolves `@alienplatform/commands` the way Node does from `src`: the
@@ -368,6 +376,51 @@ mod tests {
             )
             .await
         );
+    }
+
+    /// An app can link an older receiver directly and a marked one through
+    /// another crate. The older one still reads the credential from the
+    /// environment, so the receiver is marked only when every linked one is.
+    #[tokio::test]
+    async fn an_app_linking_an_unmarked_and_a_marked_receiver_is_not_marked() {
+        let root = tempdir().unwrap();
+        write_receiver_crate(&root.path().join("old"), false);
+        let new = root.path().join("new");
+        fs::create_dir_all(new.join("src")).unwrap();
+        fs::write(
+            new.join("Cargo.toml"),
+            "[package]\nname = \"alien-commands\"\nversion = \"2.0.0\"\nedition = \"2021\"\n\n[package.metadata.alien]\ncommandsCapabilityFile = true\n",
+        )
+        .unwrap();
+        fs::write(new.join("src/lib.rs"), "").unwrap();
+        let helper = root.path().join("helper");
+        fs::create_dir_all(helper.join("src")).unwrap();
+        fs::write(
+            helper.join("Cargo.toml"),
+            "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nalien-commands = { path = \"../new\" }\n",
+        )
+        .unwrap();
+        fs::write(helper.join("src/lib.rs"), "").unwrap();
+        let app = root.path().join("app");
+        fs::create_dir_all(app.join("src")).unwrap();
+        fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nold-receiver = { path = \"../old\", package = \"alien-commands\" }\nhelper = { path = \"../helper\" }\n",
+        )
+        .unwrap();
+        fs::write(app.join("src/main.rs"), "fn main() {}").unwrap();
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        assert!(!receiver_reads_capability_file(app.to_str().unwrap(), &toolchain, LINUX).await);
+
+        // The same graph with the older receiver removed is marked.
+        fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nhelper = { path = \"../helper\" }\n",
+        )
+        .unwrap();
+        assert!(receiver_reads_capability_file(app.to_str().unwrap(), &toolchain, LINUX).await);
     }
 
     #[tokio::test]
