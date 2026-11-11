@@ -228,6 +228,15 @@ stackSettings: null
 infrastructure: null
 infrastructureExistingSecret: ""
 
+# Set true when Flux, Argo CD or another tool renders this chart without access to
+# the cluster (`helm template`). The render then fails unless existing Secrets supply
+# every credential the chart would otherwise generate: a generated value would change
+# on every render. Requires management.existingSecret.name,
+# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or
+# logCollector.token.
+gitops:
+  enabled: false
+
 basePlatform: null
 basePlatformConfig:
   gcp:
@@ -578,6 +587,13 @@ postgres: {}
     "postgres": { "type": "object" },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
+    "gitops": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Fail the render unless existing Secrets supply the management token and the encryption key, so a render never generates credentials." }
+      }
+    },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -1027,6 +1043,20 @@ different namespaces of one cluster from colliding. */ -}}
 {{- .runtimeEncryptionKey -}}
 {{- end -}}
 
+{{- define "deployment.validateGitops" -}}
+{{- if dig "enabled" false (default dict .Values.gitops) -}}
+  {{- if not .Values.management.existingSecret.name -}}
+    {{- fail "gitops.enabled requires management.existingSecret.name: a GitOps tool renders this chart on every sync, so the management token must come from a Secret you manage, not from values." -}}
+  {{- end -}}
+  {{- if not .Values.runtime.encryption.existingSecret.name -}}
+    {{- fail "gitops.enabled requires runtime.encryption.existingSecret.name: without cluster access every render would generate a different encryption key and make the installed state unreadable." -}}
+  {{- end -}}
+  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not .Values.logCollector.token) (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
+    {{- fail "gitops.enabled with logCollector.mode=nodeAgent requires logCollector.token: a generated collector token would change on every render. Use logCollector.mode=podApi, which needs no token." -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 === templates/serviceaccount.yaml ===
 {{- $runtimeLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $runtimeLabelValue := include "deployment.runtimeLabelValue" . -}}
@@ -1212,6 +1242,7 @@ roleRef:
 {{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
   {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
+{{- include "deployment.validateGitops" . -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
