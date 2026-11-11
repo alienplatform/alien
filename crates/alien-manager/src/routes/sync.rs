@@ -3682,9 +3682,16 @@ async fn agent_sync(
         .unwrap_or(1)
         .min(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
     if deployment.required_deployment_protocol_version() > supported_protocol {
-        return ErrorData::bad_request(
-            "This deployment requires a newer deployment protocol. Update the deployment actor or manager before retrying.",
-        ).into_response();
+        // An Operator that reports its version is told which Operator and chart
+        // version to move to; other actors keep the generic text.
+        let message = match (&state.charts, req.operator_version.as_deref()) {
+            (Some(charts), Some(operator_version)) => format!(
+                "This deployment requires a newer deployment protocol. {}",
+                charts.operator_upgrade_message(Some(operator_version))
+            ),
+            _ => "This deployment requires a newer deployment protocol. Update the deployment actor or manager before retrying.".to_string(),
+        };
+        return ErrorData::bad_request(message).into_response();
     }
     if let Some(reported) = req.current_state.as_ref() {
         let version = reported

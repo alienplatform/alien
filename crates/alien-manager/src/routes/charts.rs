@@ -97,6 +97,21 @@ impl ChartSettings {
         }
     }
 
+    /// What to tell an Operator that is too old for this manager: the Operator
+    /// this manager serves and the chart versions that carry it, with how to
+    /// move to one. `None` for the Operator version in use when unknown.
+    pub fn operator_upgrade_message(&self, current: Option<&str>) -> String {
+        let current = current.map_or("this Operator".to_string(), |v| format!("Operator {v}"));
+        format!(
+            "{current} is too old for this deployment. Operator {tag} accepts it, and chart \
+             versions 1.<release>.{number} carry it: run `helm upgrade <release> <chart> \
+             --version 1.<release>.{number}`, or raise the chart version in your GitOps source \
+             (Flux `semver: \"1.x\"` and Argo CD `targetRevision: \"1.*\"` pick it up by themselves).",
+            tag = self.operator_tag(),
+            number = operator_number(self.operator_tag()),
+        )
+    }
+
     /// Tag of the Operator image charts install.
     fn operator_tag(&self) -> &str {
         match &self.operator_upstream {
@@ -589,5 +604,29 @@ mod tests {
             ("host.example.com:5050/alien-operator", "latest")
         );
         assert_eq!(split_image("alien-operator:dev"), ("alien-operator", "dev"));
+    }
+}
+
+#[cfg(test)]
+mod upgrade_message_tests {
+    use super::ChartSettings;
+
+    #[test]
+    fn the_message_names_the_operator_and_the_chart_versions_that_carry_it() {
+        let settings = ChartSettings::new(
+            Some("ghcr.io/alienplatform/alien-operator:v3.3.59".to_string()),
+            false,
+        );
+        let message = settings.operator_upgrade_message(Some("v3.3.40"));
+        assert!(message.contains("Operator v3.3.40"), "{message}");
+        assert!(message.contains("Operator v3.3.59 accepts it"), "{message}");
+        assert!(message.contains("1.<release>.3003059"), "{message}");
+        assert!(
+            message.contains("--version 1.<release>.3003059"),
+            "{message}"
+        );
+        assert!(settings
+            .operator_upgrade_message(None)
+            .starts_with("this Operator is too old"));
     }
 }
