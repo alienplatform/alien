@@ -1110,6 +1110,10 @@
           },
           "type": "array"
         },
+        "priority": {
+          "$ref": "#/definitions/WorkloadPriority",
+          "description": "Relative scheduling importance. On Kubernetes the cluster administrator maps each\nlevel to a PriorityClass at install time; unset leaves the pod without one. Other\nplatforms ignore it."
+        },
         "public-endpoints": {
           "additionalProperties": {
             "additionalProperties": false,
@@ -1614,6 +1618,10 @@
         },
         "pool": {
           "type": "string"
+        },
+        "priority": {
+          "$ref": "#/definitions/WorkloadPriority",
+          "description": "Relative scheduling importance. On Kubernetes the cluster administrator maps each\nlevel to a PriorityClass at install time; unset leaves the pod without one. Other\nplatforms ignore it."
         },
         "public-endpoints": {
           "additionalProperties": {
@@ -3625,6 +3633,16 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadPriority": {
+      "description": "Relative scheduling importance of a workload.\n\nOn Kubernetes the deployment's cluster administrator maps each level to a\nPriorityClass at install time. Other platforms ignore it.",
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low"
+      ],
+      "type": "string"
     }
   },
   "description": "An Alien stack written in TOML.",

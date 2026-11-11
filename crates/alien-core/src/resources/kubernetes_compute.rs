@@ -5,6 +5,7 @@
 
 use crate::{
     instance_catalog::Architecture, CapacityGroup, ComputeCluster, Container, Daemon, Stack,
+    WorkloadPriority, ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -122,6 +123,86 @@ pub fn kubernetes_compute_node_selector(
             .to_string(),
         )])
     }))
+}
+
+/// Map a workload's priority level to the PriorityClass the cluster administrator chose for it.
+///
+/// Returns `None` when the workload declares no level or the administrator mapped none, so
+/// pod specs stay exactly as they were. The map comes from the Operator's
+/// `ALIEN_KUBERNETES_PRIORITY_CLASSES` environment variable, which the Helm chart sets only
+/// when `runtime.workloadPriority.classes` has an entry.
+pub fn kubernetes_priority_class_name(
+    priority: Option<WorkloadPriority>,
+) -> Result<Option<String>, String> {
+    priority_class_name_from(
+        priority,
+        std::env::var(ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_priority_class_map(raw: &str) -> Result<BTreeMap<String, String>, String> {
+    serde_json::from_str(raw).map_err(|error| {
+        format!(
+            "{ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES} must be a JSON object mapping \
+             critical, high, normal and low to PriorityClass names (chart value \
+             runtime.workloadPriority.classes): {error}"
+        )
+    })
+}
+
+fn priority_class_name_from(
+    priority: Option<WorkloadPriority>,
+    raw_map: Option<&str>,
+) -> Result<Option<String>, String> {
+    let (Some(priority), Some(raw)) = (priority, raw_map) else {
+        return Ok(None);
+    };
+    Ok(parse_priority_class_map(raw)?
+        .remove(priority.as_str())
+        .filter(|name| !name.is_empty()))
+}
+
+/// Add the chart value to fix when Kubernetes rejects a pod because its PriorityClass is missing.
+/// Other messages pass through unchanged.
+pub fn kubernetes_priority_class_failure_hint(message: &str) -> String {
+    priority_class_failure_hint_from(
+        message,
+        std::env::var(ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn priority_class_failure_hint_from(message: &str, raw_map: Option<&str>) -> String {
+    const MARKER: &str = "no PriorityClass with name ";
+    let Some(start) = message.find(MARKER).map(|index| index + MARKER.len()) else {
+        return message.to_string();
+    };
+    let class = message[start..]
+        .split(" was found")
+        .next()
+        .unwrap_or_default()
+        .trim_matches('"');
+    let levels: Vec<String> = raw_map
+        .and_then(|raw| parse_priority_class_map(raw).ok())
+        .map(|map| {
+            map.into_iter()
+                .filter(|(_, name)| name == class)
+                .map(|(level, _)| format!("runtime.workloadPriority.classes.{level}"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let keys = if levels.is_empty() {
+        "runtime.workloadPriority.classes".to_string()
+    } else {
+        levels.join(", ")
+    };
+    format!(
+        "{message}. Create the PriorityClass '{class}' or set {keys} in the Helm values to an \
+         existing PriorityClass (or set runtime.workloadPriority.create=true)"
+    )
 }
 
 /// Resolve placement, inferring a single declared cluster and its general or
@@ -352,6 +433,36 @@ mod tests {
         assert_eq!(
             kubernetes_compute_node_selector(&stack, None).unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn priority_class_maps_declared_level_only_when_mapped() {
+        let map = r#"{"critical":"vendor-core","high":""}"#;
+        let class = |level, map| priority_class_name_from(level, map).unwrap();
+        assert_eq!(
+            class(Some(WorkloadPriority::Critical), Some(map)).as_deref(),
+            Some("vendor-core")
+        );
+        assert_eq!(class(Some(WorkloadPriority::High), Some(map)), None);
+        assert_eq!(class(Some(WorkloadPriority::Low), Some(map)), None);
+        assert_eq!(class(None, Some(map)), None);
+        assert_eq!(class(Some(WorkloadPriority::Critical), None), None);
+        assert!(priority_class_name_from(Some(WorkloadPriority::Low), Some("nope")).is_err());
+    }
+
+    #[test]
+    fn missing_priority_class_error_names_class_and_values_key() {
+        let message = r#"FailedCreate: pods "api-1" is forbidden: no PriorityClass with name vendor-core was found"#;
+        let hint = priority_class_failure_hint_from(message, Some(r#"{"critical":"vendor-core"}"#));
+        assert!(hint.contains("'vendor-core'"), "{hint}");
+        assert!(
+            hint.contains("runtime.workloadPriority.classes.critical"),
+            "{hint}"
+        );
+        assert_eq!(
+            priority_class_failure_hint_from("quota exceeded", None),
+            "quota exceeded"
         );
     }
 

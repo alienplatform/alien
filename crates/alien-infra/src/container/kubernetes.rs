@@ -129,7 +129,9 @@ fn deployment_failure_progress(deployment: &Deployment) -> Option<String> {
         .message
         .as_deref()
         .unwrap_or("Could not create replicas");
-    Some(format!("{reason}: {message}"))
+    Some(alien_core::kubernetes_priority_class_failure_hint(
+        &format!("{reason}: {message}"),
+    ))
 }
 
 fn workload_ready(
@@ -2841,8 +2843,16 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
+        let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
         let pod_spec = PodSpec {
             node_selector,
+            priority_class_name,
             service_account_name: Some(service_account_name.to_string()),
             // The gateway never calls the Kubernetes API; its configuration is projected.
             automount_service_account_token: gateway.then_some(false),
@@ -4139,6 +4149,75 @@ mod tests {
             );
         }
         assert!(GATEWAY_READY_DELAY_SECONDS > 30);
+    }
+
+    /// Containers carry the PriorityClass the administrator mapped to their level; a container
+    /// without a level (or with a level nobody mapped) gets a pod spec identical to before.
+    #[tokio::test]
+    async fn pod_spec_carries_the_class_mapped_to_the_declared_priority() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let render = |priority: Option<alien_core::WorkloadPriority>| async move {
+            let mut config = manifest_test_container(&[], false);
+            config.priority = priority;
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let state = secrets_vault_state();
+            let mut ctx = harness.ctx();
+            ctx.state = &state;
+            let pod = manifest_test_controller()
+                .build_deployment(&config, "web", "test-ns", "web-sa", None, None, &ctx)
+                .await
+                .expect("deployment manifest")
+                .spec
+                .expect("deployment spec")
+                .template
+                .spec
+                .expect("pod spec");
+            (
+                pod.priority_class_name.clone(),
+                serde_json::to_string(&pod).unwrap(),
+            )
+        };
+        use alien_core::WorkloadPriority::*;
+        assert_eq!(
+            render(Some(Critical)).await.0.as_deref(),
+            Some("vendor-core")
+        );
+        assert_eq!(render(Some(Low)).await.0.as_deref(), Some("vendor-batch"));
+        // Declared but unmapped, and undeclared: no class, same bytes as a container
+        // that never heard of priorities.
+        let (unmapped, unmapped_json) = render(Some(High)).await;
+        let (none, none_json) = render(None).await;
+        assert_eq!((unmapped, none), (None, None));
+        assert_eq!(unmapped_json, none_json);
+        assert!(!none_json.contains("priorityClassName"));
+    }
+
+    #[test]
+    fn replica_failure_for_a_missing_priority_class_names_the_values_key() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 1},
+            "status": {"observedGeneration": 1, "conditions": [{
+                "type": "ReplicaFailure", "status": "True", "reason": "FailedCreate",
+                "message": "pods \"web-1\" is forbidden: no PriorityClass with name vendor-core was found"}]}
+        }))
+        .unwrap();
+        let message = deployment_failure_progress(&deployment).unwrap();
+        assert!(message.contains("'vendor-core'"), "{message}");
+        assert!(
+            message.contains("runtime.workloadPriority.classes.critical"),
+            "{message}"
+        );
     }
 
     /// Renders the Deployment the controller would submit for a fresh copy of

@@ -1153,8 +1153,16 @@ impl KubernetesDaemonController {
                 message,
             })
         })?;
+        let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
         let pod_spec = PodSpec {
             node_selector,
+            priority_class_name,
             service_account_name: service_account_name.map(str::to_owned),
             automount_service_account_token: service_account_name.is_none().then_some(false),
             containers: vec![container],
@@ -1439,6 +1447,49 @@ mod tests {
             pod_template_checksum_annotation(&daemonset.spec.expect("spec").template),
             Some(plan.checksum)
         );
+    }
+
+    #[tokio::test]
+    async fn daemonset_pod_spec_carries_the_class_mapped_to_the_declared_priority() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let render = |priority: Option<alien_core::WorkloadPriority>| async move {
+            let mut config = manifest_test_daemon(&[]);
+            config.priority = priority;
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let pod = manifest_test_controller()
+                .build_daemonset(
+                    &config,
+                    "agent",
+                    "test-ns",
+                    Some("agent-sa"),
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("daemonset manifest")
+                .spec
+                .expect("spec")
+                .template
+                .spec
+                .expect("pod spec");
+            (
+                pod.priority_class_name.clone(),
+                serde_json::to_string(&pod).unwrap(),
+            )
+        };
+        use alien_core::WorkloadPriority::*;
+        assert_eq!(render(Some(Low)).await.0.as_deref(), Some("vendor-batch"));
+        let (unmapped, unmapped_json) = render(Some(High)).await;
+        let (none, none_json) = render(None).await;
+        assert_eq!((unmapped, none), (None, None));
+        assert_eq!(unmapped_json, none_json);
+        assert!(!none_json.contains("priorityClassName"));
     }
 
     /// The runtime-less daemon contract on Kubernetes: `command` overrides

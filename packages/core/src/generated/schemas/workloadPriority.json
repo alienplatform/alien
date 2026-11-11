@@ -1,0 +1,1 @@
+{"type":"string","description":"Relative scheduling importance of a workload.\n\nOn Kubernetes the deployment's cluster administrator maps each level to a\nPriorityClass at install time. Other platforms ignore it.","enum":["critical","high","normal","low"],"x-readme-ref-name":"WorkloadPriority"}

@@ -347,6 +347,10 @@ fn generate_helm_chart_internal(
         poddisruptionbudget_tpl(),
     );
     files.insert(
+        "templates/priorityclass.yaml".to_string(),
+        priorityclass_tpl(),
+    );
+    files.insert(
         "templates/networkpolicy.yaml".to_string(),
         networkpolicy_tpl(),
     );
@@ -4105,6 +4109,19 @@ runtime:
     topologySpreadConstraints: []
     priorityClassName: ""
     runtimeClassName: ""
+  # Scheduling priority of the workloads the Operator creates. The stack declares a level per
+  # container or daemon (critical, high, normal, low); each level maps to a PriorityClass here.
+  # An empty entry leaves workloads at that level without a PriorityClass. Nothing changes for
+  # existing installs until an entry is set.
+  workloadPriority:
+    # Create one PriorityClass per level named <release>-<level>, for clusters without their
+    # own. Needs cluster-scoped write rights from whoever runs helm, never the Operator.
+    create: false
+    classes:
+      critical: ""
+      high: ""
+      normal: ""
+      low: ""
   pdb:
     enabled: false
     minAvailable: 1
@@ -4863,6 +4880,23 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "runtimeClassName": { "type": "string" }
           }
         },
+        "workloadPriority": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "classes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "critical": { "type": "string" },
+                "high": { "type": "string" },
+                "normal": { "type": "string" },
+                "low": { "type": "string" }
+              }
+            }
+          }
+        },
         "pdb": {
           "type": "object",
           "additionalProperties": false,
@@ -5524,6 +5558,20 @@ fn helpers_tpl() -> String {
 {{- $rawBase := regexReplaceAll "[^a-z0-9-]" (lower .root.Release.Name) "-" | trimAll "-" -}}
 {{- $base := default "release" $rawBase | trunc (int $maxBaseLength) | trimSuffix "-" -}}
 {{- printf "%s-%s%s" $base $hash $suffix -}}
+{{- end -}}
+
+{{- /* Level -> PriorityClass name for the workloads the Operator creates; "{}" when none is set. */ -}}
+{{- define "deployment.priorityClassMap" -}}
+{{- $priority := default dict .Values.runtime.workloadPriority -}}
+{{- $configured := default dict $priority.classes -}}
+{{- $classes := dict -}}
+{{- range $level := list "critical" "high" "normal" "low" -}}
+{{- $name := default (ternary (printf "%s-%s" (include "deployment.fullname" $) $level) "" (default false $priority.create)) (get $configured $level) -}}
+{{- if $name -}}
+{{- $_ := set $classes $level $name -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $classes -}}
 {{- end -}}
 
 {{- define "deployment.logCollectorName" -}}
@@ -6697,6 +6745,11 @@ spec:
             - name: OPERATOR_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
+            {{- $priorityClasses := include "deployment.priorityClassMap" . }}
+            {{- if ne $priorityClasses "{}" }}
+            - name: ALIEN_KUBERNETES_PRIORITY_CLASSES
+              value: {{ $priorityClasses | quote }}
+            {{- end }}
             {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
             - name: AWS_REGION
               value: {{ .Values.basePlatformConfig.aws.region | quote }}
@@ -7243,6 +7296,32 @@ spec:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+"#
+    .to_string()
+}
+
+/// Optional PriorityClasses for clusters that have none. Admins who already have classes map
+/// the levels to those instead and leave `create` off. Values stay well below the
+/// system-cluster-critical range so these never compete with Kubernetes components.
+fn priorityclass_tpl() -> String {
+    r#"{{- if .Values.runtime.workloadPriority.create }}
+{{- $classes := include "deployment.priorityClassMap" . | fromJson }}
+{{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
+{{- range $level := list "critical" "high" "normal" "low" }}
+{{- if eq (get $classes $level) (printf "%s-%s" (include "deployment.fullname" $) $level) }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ printf "%s-%s" (include "deployment.fullname" $) $level }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+value: {{ get $values $level }}
+globalDefault: false
+description: {{ printf "Created by the %s Helm release for workloads declared with priority %s." $.Release.Name $level | quote }}
+{{- end }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
