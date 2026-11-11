@@ -158,9 +158,15 @@ impl SqliteRuntimeIdentityStore {
         if operator_key_is_live(expires_at, now) {
             return Ok(None);
         }
-        self.issue_enrollment_code(deployment_id, now)
-            .await
-            .map(Some)
+        let (code, _, code_hash) = generate_token("ax_enroll_");
+        let expires_at = now + CODE_LIFETIME;
+        self.run(
+            "INSERT INTO runtime_enrollment_codes (code_hash, deployment_id, expires_at, from_group) \
+             VALUES (?1, ?2, ?3, 1)",
+            (code_hash, deployment_id.to_owned(), expires_at.timestamp()),
+        )
+        .await?;
+        Ok(Some((code, expires_at)))
     }
 
     /// The deployment a still-unused, unexpired token-made `code` belongs to,
@@ -182,7 +188,13 @@ impl SqliteRuntimeIdentityStore {
             )
             .await?
         else {
-            return Ok(None);
+            let Some(row) = self
+                .row(GROUP_CODE_KEY_SQL, (sha256_hash(code), now.timestamp()))
+                .await?
+            else {
+                return Ok(None);
+            };
+            return group_code_blocked_deployment(&row, now);
         };
         Ok(Some(RowParser::new(&row).string(0, "deployment_id")?))
     }
@@ -211,6 +223,19 @@ impl SqliteRuntimeIdentityStore {
                 .await
                 .into_alien_error()
                 .context(failed())?;
+            // A group code issued while the key looked stale must not replace
+            // a key that is live now, for instance one rotated since.
+            let mut blocked = tx
+                .query(GROUP_CODE_KEY_SQL, (code_hash.clone(), now.timestamp()))
+                .await
+                .into_alien_error()
+                .context(failed())?;
+            if let Some(row) = blocked.next().await.into_alien_error().context(failed())? {
+                if group_code_blocked_deployment(&row, now)?.is_some() {
+                    return Ok(None);
+                }
+            }
+            drop(blocked);
             let used = tx
                 .execute(
                     "UPDATE runtime_enrollment_codes SET initial_key_hash = ?2 \
@@ -337,6 +362,28 @@ impl SqliteRuntimeIdentityStore {
     }
 }
 
+/// The unused, unexpired group code `?1` (at time `?2`) with the expiry of its
+/// deployment's current key, when the deployment has one.
+const GROUP_CODE_KEY_SQL: &str = "SELECT runtime_enrollment_codes.deployment_id, \
+     runtime_daily_keys.expires_at FROM runtime_enrollment_codes \
+     JOIN runtime_daily_keys ON runtime_daily_keys.deployment_id = runtime_enrollment_codes.deployment_id \
+     WHERE code_hash = ?1 AND from_group = 1 AND initial_key_hash IS NULL \
+     AND runtime_enrollment_codes.expires_at > ?2";
+
+/// The deployment of a row of [`GROUP_CODE_KEY_SQL`] when its key is live.
+fn group_code_blocked_deployment(
+    row: &turso::Row,
+    now: DateTime<Utc>,
+) -> Result<Option<String>, AlienError> {
+    let parser = RowParser::new(row);
+    let expires_at = parser
+        .i64(1, "expires_at")
+        .ok()
+        .and_then(|seconds| DateTime::from_timestamp(seconds, 0));
+    let deployment_id = parser.string(0, "deployment_id")?;
+    Ok(operator_key_is_live(expires_at, now).then_some(deployment_id))
+}
+
 /// The one rule for whether an operator key is live: it was installed or
 /// rotated within [`LIVE_KEY_WINDOW`]. A missing time counts as live.
 pub(crate) fn operator_key_is_live(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
@@ -424,6 +471,74 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// A group code issued while the key looked stale must not replace the key
+    /// once the operator has rotated it: the key is checked again at enroll.
+    #[tokio::test]
+    async fn a_group_code_cannot_replace_a_key_rotated_after_it_was_issued() {
+        let (store, _directory) = store().await;
+        let hours = |count: i64| count * 3600;
+        let (admin, _) = store.issue_enrollment_code("dep-1", at(0)).await.unwrap();
+        store
+            .enroll(&admin, &sha256_hash("ax_day_v1_first"), at(0))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 26 hours later the key is stale, so the group code is issued.
+        let (code, _) = store
+            .issue_group_enrollment_code("dep-1", at(hours(26)))
+            .await
+            .unwrap()
+            .expect("a stale key gets a code");
+
+        // The operator rotates minutes later, then the code is used.
+        store
+            .rotate(
+                "dep-1",
+                "ax_day_v1_first",
+                &sha256_hash("ax_day_v1_second"),
+                at(hours(26) + 300),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let used_at = at(hours(26) + 600);
+        assert!(store
+            .enroll(&code, &sha256_hash("ax_day_v1_group"), used_at)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .token_code_blocked_by_key(&code, used_at)
+                .await
+                .unwrap(),
+            Some("dep-1".to_owned())
+        );
+        assert!(store
+            .verify_key("dep-1", "ax_day_v1_second", used_at)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .verify_key("dep-1", "ax_day_v1_group", used_at)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Left alone until the key is stale again, the same kind of code enrolls.
+        let (code, _) = store
+            .issue_group_enrollment_code("dep-1", at(hours(60)))
+            .await
+            .unwrap()
+            .expect("a stale key gets a code");
+        assert!(store
+            .enroll(&code, &sha256_hash("ax_day_v1_group"), at(hours(60) + 10))
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

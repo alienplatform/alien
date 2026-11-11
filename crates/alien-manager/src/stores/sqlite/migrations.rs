@@ -454,6 +454,25 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             })?;
     }
 
+    // Codes issued to a deployment group credential are marked, so enrolling
+    // with one checks again that the operator's key is not live. Older rows
+    // are not group codes.
+    if let Err(e) = conn
+        .execute(
+            "ALTER TABLE runtime_enrollment_codes ADD COLUMN from_group INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await
+    {
+        let msg = format!("{}", e);
+        if !msg.contains("duplicate column name") {
+            return Err(db_error(&format!(
+                "Enrollment code schema upgrade failed: {}",
+                msg
+            )));
+        }
+    }
+
     // Codes made from a deployment token are marked, so they stop working once
     // the deployment has an operator key. Older rows count as made by an admin.
     // Tolerate the "duplicate column" failure on already-migrated databases.
