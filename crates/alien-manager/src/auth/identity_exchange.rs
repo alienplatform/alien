@@ -311,9 +311,13 @@ pub async fn issue_enrollment_code(
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot issue an enrollment code").into_response();
     }
-    // A deployment token's code is issued only while the deployment has no
-    // operator key. A vendor's admin credential can always enroll again.
-    let issued = if subject.role == super::Role::DeploymentManager {
+    // A code made from a deployment token or a deployment group token is
+    // issued only while the deployment has no operator key. An administrator
+    // credential can always enroll again.
+    let issued = if matches!(
+        subject.role,
+        super::Role::DeploymentManager | super::Role::DeploymentGroupDeployer
+    ) {
         verifier
             .issue_enrollment_code_for_deployment_token(&deployment)
             .await

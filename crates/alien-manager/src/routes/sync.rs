@@ -1991,6 +1991,7 @@ pub(in crate::routes) mod tests {
 
     const TOKEN_ENROLLMENT_ADMIN: &str = "ax_admin_for_enrollment";
     const TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN: &str = "ax_deploy_before_enrollment";
+    const TOKEN_ENROLLMENT_GROUP_TOKEN: &str = "ax_group_for_enrollment";
 
     /// A manager with the real router, the real standalone identity store and
     /// two real tokens: a deployment token for `dep_test`, and an admin token.
@@ -2042,14 +2043,29 @@ pub(in crate::routes) mod tests {
                     .expect("token");
             }
 
+            tokens
+                .create_token(CreateTokenParams {
+                    token_type: TokenType::DeploymentGroup,
+                    key_prefix: TOKEN_ENROLLMENT_GROUP_TOKEN[..12].to_string(),
+                    key_hash: crate::ids::sha256_hash(TOKEN_ENROLLMENT_GROUP_TOKEN),
+                    deployment_group_id: Some("dg_test".into()),
+                    deployment_id: None,
+                })
+                .await
+                .expect("group token");
+
             let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
             let revocable_reports = Arc::new(Mutex::new(Vec::new()));
             let mut store = MockDeploymentStore::new();
             store.expect_requires_execution_claims().return_const(false);
             let current = stored.clone();
-            store
-                .expect_get_deployment()
-                .returning(move |_, _| Ok(Some(current.lock().unwrap().clone())));
+            // Any deployment of the group answers with the same record under
+            // the id asked for, so siblings can be told apart by key.
+            store.expect_get_deployment().returning(move |_, id| {
+                let mut record = current.lock().unwrap().clone();
+                record.id = id.to_string();
+                Ok(Some(record))
+            });
             let apply = |current: &Mutex<DeploymentRecord>, data: ReconcileData| {
                 let mut record = current.lock().unwrap().clone();
                 record.status = serde_json::to_value(data.state.status)
@@ -2157,9 +2173,17 @@ pub(in crate::routes) mod tests {
 
         /// `POST /v1/deployments/dep_test/enrollment-code` with `bearer`.
         async fn enrollment_code(&self, bearer: &str) -> (StatusCode, Value) {
+            self.enrollment_code_for("dep_test", bearer).await
+        }
+
+        async fn enrollment_code_for(
+            &self,
+            deployment_id: &str,
+            bearer: &str,
+        ) -> (StatusCode, Value) {
             Self::post(
                 self.identity_router(),
-                "/v1/deployments/dep_test/enrollment-code",
+                &format!("/v1/deployments/{deployment_id}/enrollment-code"),
                 Some(bearer),
                 Value::Null,
             )
@@ -2185,8 +2209,12 @@ pub(in crate::routes) mod tests {
         }
 
         async fn key_is_current(&self, key: &str) -> bool {
+            self.key_is_current_for("dep_test", key).await
+        }
+
+        async fn key_is_current_for(&self, deployment_id: &str, key: &str) -> bool {
             self.identity
-                .verify_key("dep_test", key, Utc::now())
+                .verify_key(deployment_id, key, Utc::now())
                 .await
                 .unwrap()
                 .is_some()
@@ -2462,6 +2490,48 @@ pub(in crate::routes) mod tests {
             1,
             "an admin code is not a refusal"
         );
+    }
+
+    /// A setup-link token covers every deployment of its group. Once a
+    /// deployment's operator holds a key it cannot be used to get a code that
+    /// replaces that key; before that it can, and an administrator always can.
+    #[tokio::test]
+    async fn a_group_token_cannot_mint_a_code_once_the_operator_has_a_key() {
+        let manager = TokenEnrollment::new().await;
+        let group = TOKEN_ENROLLMENT_GROUP_TOKEN;
+        let sibling = "dep_sibling";
+
+        // Before the sibling enrolled, the group token gets a code.
+        let (status, issued) = manager.enrollment_code_for(sibling, group).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+        assert_eq!(
+            manager
+                .enroll(issued["code"].as_str().expect("code"), "ax_day_v1_sibling")
+                .await,
+            StatusCode::OK
+        );
+        assert!(
+            manager
+                .key_is_current_for(sibling, "ax_day_v1_sibling")
+                .await
+        );
+
+        // After it enrolled, the group token is refused and the key is kept.
+        let (status, refused) = manager.enrollment_code_for(sibling, group).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["code"], "ENROLLMENT_KEY_EXISTS", "{refused}");
+        assert!(refused.get("deploymentCode").is_none());
+        assert!(
+            manager
+                .key_is_current_for(sibling, "ax_day_v1_sibling")
+                .await
+        );
+
+        // An administrator can still enroll the operator again.
+        let (status, issued) = manager
+            .enrollment_code_for(sibling, TOKEN_ENROLLMENT_ADMIN)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
     }
 
     /// A token-made code that is still unused when the deployment has a key
