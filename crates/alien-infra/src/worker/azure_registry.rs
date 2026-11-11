@@ -285,11 +285,22 @@ pub(crate) async fn prepare(
             || !same_id(&current.registry_id, &registry_id)
             || !same_id(&current.identity_id, identity_id)
         {
+            // An import left unfinished (its polling failed, or the release
+            // changed meanwhile) is polled before it is replaced, so it cannot
+            // block the next release forever once Azure has finished it.
             if !current.complete {
-                return Err(invalid(
-                    worker,
-                    "Wait for the previous image import before changing its source or setup identity",
-                ));
+                let operation = current
+                    .operation
+                    .as_ref()
+                    .ok_or_else(|| invalid(worker, "Image import operation handle is missing"))?;
+                if !client.poll_image_import(operation).await.context(
+                    ErrorData::ResourceConfigInvalid {
+                        message: "Registry image import did not complete".into(),
+                        resource_id: Some(worker.id.clone()),
+                    },
+                )? {
+                    return Ok(Some(Duration::from_secs(5)));
+                }
             }
             *saved = None;
         }
@@ -469,6 +480,19 @@ mod tests {
         image: &str,
         resolves_tag: bool,
     ) -> (Result<Option<Duration>>, Option<ImportedImage>) {
+        import_full(stored, live, image, resolves_tag, None, false)
+    }
+
+    /// [`import_source`] starting from a saved import, whose poll the registry
+    /// answers with `poll_done`.
+    fn import_full(
+        stored: &str,
+        live: &str,
+        image: &str,
+        resolves_tag: bool,
+        saved_import: Option<ImportedImage>,
+        poll_done: bool,
+    ) -> (Result<Option<Duration>>, Option<ImportedImage>) {
         let live = live.to_string();
         let mut identities = MockManagedIdentityApi::new();
         identities
@@ -508,6 +532,9 @@ mod tests {
             }))
             .unwrap())
         });
+        registries
+            .expect_poll_image_import()
+            .returning(move |_| Ok(poll_done));
         registries
             .expect_import_image()
             .returning(move |group, name, parameters| {
@@ -599,10 +626,11 @@ mod tests {
             .unwrap(),
         );
         executor.insert_saved_resource("registry", registry);
-        let mut saved = None;
+        let waiting_on_saved_import = saved_import.is_some() && !poll_done;
+        let mut saved = saved_import;
         let result = executor.with_context(|ctx| block_on(prepare(&mut saved, &worker, ctx)));
         let imports = imports.lock().unwrap();
-        if matches!(result, Ok(Some(_))) {
+        if matches!(result, Ok(Some(_))) && !waiting_on_saved_import {
             assert_eq!(imports.len(), 1);
             let (group, name, parameters) = &imports[0];
             assert_eq!((group.as_str(), name.as_str()), ("setup-rg", "setupacr"));
@@ -696,6 +724,56 @@ mod tests {
         );
         assert_eq!(result.unwrap(), None, "no import, no setup-update error");
         assert!(saved.is_none());
+    }
+
+    /// An import whose polling failed stays unfinished. A later release with a
+    /// different Worker image must not be blocked by it: the saved import is
+    /// polled first, and once Azure has finished it the new image is imported.
+    #[test]
+    fn an_unfinished_import_is_polled_before_a_different_image_replaces_it() {
+        let unfinished = ImportedImage {
+            source: format!("test-manager.alien.dev/app@sha256:{}", "a".repeat(64)),
+            image: format!("setupacr.azurecr.io/runtime/api@sha256:{}", "a".repeat(64)),
+            registry_id: registry_id(),
+            identity_id: identity_id("resourceGroups"),
+            operation: Some(
+                alien_azure_clients::long_running_operation::LongRunningOperation {
+                    url: "https://management.azure.com/operations/1".into(),
+                    retry_after: None,
+                    location_url: None,
+                },
+            ),
+            complete: false,
+            applied: false,
+        };
+        let new_image = format!("test-manager.alien.dev/app@sha256:{DIGEST}");
+
+        // Azure has not finished it: wait and poll again, nothing is imported.
+        let (result, saved) = import_full(
+            &identity_id("resourceGroups"),
+            &identity_id("resourcegroups"),
+            &new_image,
+            false,
+            Some(unfinished.clone()),
+            false,
+        );
+        assert_eq!(result.unwrap(), Some(Duration::from_secs(5)));
+        assert!(!saved.unwrap().complete);
+
+        // Azure has finished it: the new image is imported.
+        let (result, saved) = import_full(
+            &identity_id("resourceGroups"),
+            &identity_id("resourcegroups"),
+            &new_image,
+            false,
+            Some(unfinished),
+            true,
+        );
+        assert_eq!(result.unwrap(), Some(Duration::from_secs(5)));
+        assert_eq!(
+            saved.unwrap().image,
+            format!("setupacr.azurecr.io/runtime/api@sha256:{DIGEST}")
+        );
     }
 
     /// Ignoring case must not accept a different identity.
