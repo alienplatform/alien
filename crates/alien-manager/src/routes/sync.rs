@@ -151,9 +151,6 @@ pub struct AgentSyncRequest {
     pub session: String,
     #[serde(default)]
     pub supports_execution_claims: bool,
-    /// Absent for Operators that predate container tunnels.
-    #[serde(default)]
-    pub supports_tunnels: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -237,10 +234,6 @@ pub struct AgentSyncResponse {
     /// Complete release-independent target set. Older embedders omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
-    /// Base URL operators open tunnel connections to. Absent when this manager
-    /// does not accept tunnels; operators then never dial.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_url: Option<String>,
     /// Operator image this manager's charts install. Operators that manage
     /// their own workload update to it. Absent when the manager serves no
     /// charts.
@@ -1109,14 +1102,13 @@ pub(in crate::routes) mod tests {
                 &crate::auth::Subject::system(),
                 &request,
                 error,
-                Some("https://manager.example.test".into()),
             )
             .await
             .expect("acknowledge completed receipt")
             .expect("successful recovery");
             assert_eq!(
                 serde_json::to_value(response).expect("serialize acknowledgment"),
-                json!({"tunnelUrl": "https://manager.example.test"})
+                json!({})
             );
         }
     }
@@ -1138,7 +1130,6 @@ pub(in crate::routes) mod tests {
             &crate::auth::Subject::system(),
             &request,
             "SYNC_FAILED",
-            None,
         )
         .await
         .expect("unrelated error")
@@ -1148,7 +1139,6 @@ pub(in crate::routes) mod tests {
             &crate::auth::Subject::system(),
             &request,
             "DEPLOYMENT_UPDATE_CLAIM_LOST",
-            None,
         )
         .await
         .expect("live claim is not recovered")
@@ -1399,7 +1389,6 @@ pub(in crate::routes) mod tests {
                 RegistryRoutingTable::new(vec![]).expect("empty routing table"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-            tunnels: None,
             charts: None,
             release_channels: None,
             bundle_signing_key: None,
@@ -2340,60 +2329,6 @@ pub(in crate::routes) mod tests {
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
         assert!(!req.supports_execution_claims);
-        assert!(
-            !req.supports_tunnels,
-            "Operators that predate tunnels don't send the flag"
-        );
-    }
-
-    #[test]
-    fn tunnels_are_removed_for_operators_that_predate_them() {
-        let container = |id: &str, tunnel: Option<u16>| {
-            alien_core::Container::new(id.to_string())
-                .code(alien_core::ContainerCode::Image {
-                    image: "api:latest".to_string(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.5".to_string(),
-                    desired: "1".to_string(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "512Mi".to_string(),
-                    desired: "1Gi".to_string(),
-                })
-                .port(8080)
-                .maybe_tunnel(tunnel.map(|port| alien_core::ContainerTunnel { port }))
-                .permissions("execution".to_string())
-                .build()
-        };
-        let mut stack = alien_core::Stack::new("app".to_string())
-            .add(
-                container("api", Some(8080)),
-                alien_core::ResourceLifecycle::Live,
-            )
-            .add(
-                container("worker", None),
-                alien_core::ResourceLifecycle::Live,
-            )
-            .build();
-
-        assert!(crate::routes::sync::remove_container_tunnels(&mut stack));
-        let json = serde_json::to_value(&stack).unwrap();
-        assert!(
-            !json.to_string().contains("\"tunnel\""),
-            "no container may carry a tunnel: {json}"
-        );
-        // The rest of the container is delivered unchanged.
-        let api = stack
-            .resources()
-            .find(|(id, _)| id.as_str() == "api")
-            .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
-            .expect("api container");
-        assert_eq!(api.ports.len(), 1);
-        assert!(
-            !crate::routes::sync::remove_container_tunnels(&mut stack),
-            "nothing left to remove"
-        );
     }
 
     #[test]
@@ -3573,7 +3508,6 @@ async fn acknowledge_completed_claim(
     subject: &crate::auth::Subject,
     request: &AgentSyncRequest,
     error_code: &str,
-    tunnel_url: Option<String>,
 ) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
     if !matches!(
         error_code,
@@ -3597,7 +3531,6 @@ async fn acknowledge_completed_claim(
         commands_url: None,
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
-        tunnel_url,
         target_operator_image: None,
     }))
 }
@@ -3741,7 +3674,6 @@ async fn agent_sync(
                 &subject,
                 &req,
                 &error.code,
-                state.tunnels.as_ref().map(|_| state.config.base_url()),
             )
             .await
             {
@@ -3861,7 +3793,6 @@ async fn agent_sync(
                                     &subject,
                                     &req,
                                     &e.code,
-                                    state.tunnels.as_ref().map(|_| state.config.base_url()),
                                 )
                                 .await
                                 {
@@ -4038,15 +3969,8 @@ async fn agent_sync(
                         .await
                     }
                 };
-                match build_pull_target(
-                    &state,
-                    &deployment,
-                    r,
-                    management_config,
-                    agent_token,
-                    req.supports_tunnels,
-                )
-                .await
+                match build_pull_target(&state, &deployment, r, management_config, agent_token)
+                    .await
                 {
                     Ok(target) => Some(target),
                     Err(response) => return response,
@@ -4224,7 +4148,6 @@ async fn agent_sync(
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
         target_dynamic_containers,
-        tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
         target_operator_image: state
             .charts
             .as_ref()
@@ -4303,19 +4226,6 @@ async fn save_pull_render_failure(
 /// The target a pull deployment converges to for `release`: the release's
 /// stack for the deployment's platform and the deployment's configuration.
 /// Sync delivers it to connected Operators; air-gapped bundles carry it.
-/// Remove tunnel declarations from every container in `stack`, for Operators
-/// that would otherwise reject the whole target. Returns whether any were
-/// removed.
-fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
-    let mut removed = false;
-    for (_, entry) in stack.resources_mut() {
-        if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
-            removed |= container.tunnel.take().is_some();
-        }
-    }
-    removed
-}
-
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
 /// [`ManagementRenderer::PullTarget`].
@@ -4339,7 +4249,6 @@ pub(crate) async fn build_pull_target(
     r: crate::traits::ReleaseRecord,
     management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
-    operator_supports_tunnels: bool,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
@@ -4355,7 +4264,6 @@ pub(crate) async fn build_pull_target(
     let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
         .await
         .map_err(|e| e.into_response())?;
-    let deployment: &DeploymentRecord = &held;
 
     // Derive native image host for Lambda/Cloud Run so controllers
     // can resolve proxy URIs to native ECR/GAR URIs.
@@ -4376,14 +4284,6 @@ pub(crate) async fn build_pull_target(
             .into_response());
         }
     };
-
-    if !operator_supports_tunnels && remove_container_tunnels(&mut stack) {
-        tracing::info!(
-            deployment_id = %deployment.id,
-            release_id = %r.id,
-            "Operator predates container tunnels; delivering the release without them. Upgrade the Operator to enable tunnels."
-        );
-    }
 
     let (held, _) =
         crate::values::with_generated_inputs(state.values.as_deref(), Some(&stack), held)

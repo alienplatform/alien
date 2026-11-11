@@ -63,14 +63,8 @@ impl OssAuthz {
     fn project_reader(s: &Subject) -> bool {
         !matches!(
             s.role,
-            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher | Role::TunnelCaller
+            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher
         )
-    }
-
-    /// Group-scoped reads and sync belong to the group's own tokens, not to
-    /// capabilities scoped to the group (a tunnel caller).
-    fn group_member(s: &Subject) -> bool {
-        s.role != Role::TunnelCaller
     }
 
     /// True if the subject has *any* read authority on the project. Used for
@@ -140,7 +134,7 @@ impl Authz for OssAuthz {
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
-            } => Self::group_member(s) && deployment_group_id == &deployment.deployment_group_id,
+            } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Deployment { deployment_id, .. } => {
                 deployment_id == &deployment.id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
@@ -213,7 +207,7 @@ impl Authz for OssAuthz {
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
-            } => Self::group_member(s) && deployment_group_id == &dg.id,
+            } => deployment_group_id == &dg.id,
             Scope::Deployment { .. }
             | Scope::Commands { .. }
             | Scope::RemoteBindings { .. }
@@ -315,7 +309,7 @@ impl Authz for OssAuthz {
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
-            } => Self::group_member(s) && deployment_group_id == &deployment.deployment_group_id,
+            } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
             Scope::Project { project_id } => {
                 Self::is_project_writer(s) && project_id == &deployment.project_id
@@ -374,20 +368,6 @@ impl Authz for OssAuthz {
 
     fn can_act_on_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         self.can_read_deployment(s, deployment)
-    }
-
-    fn can_call_tunnel(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if s.role != Role::TunnelCaller {
-            return self.can_dispatch_command(s, deployment);
-        }
-        match &s.scope {
-            Scope::Project { project_id } => project_id == &deployment.project_id,
-            Scope::DeploymentGroup {
-                deployment_group_id,
-                ..
-            } => deployment_group_id == &deployment.deployment_group_id,
-            _ => false,
-        }
     }
 }
 
@@ -896,44 +876,5 @@ mod tests {
         assert!(!OssAuthz.can_sync_deployment(&gateway, &dep));
         assert!(!OssAuthz.can_push_image(&gateway, &default_project(), "repo"));
         assert!(!OssAuthz.can_pull_image(&gateway, &default_project(), "repo"));
-    }
-
-    #[test]
-    fn tunnel_callers_reach_tunnels_and_nothing_else() {
-        let tunnel_caller = |scope: Scope| Subject {
-            kind: SubjectKind::ServiceAccount {
-                id: "tok".to_string(),
-            },
-            workspace_id: "default".to_string(),
-            scope,
-            role: Role::TunnelCaller,
-            bearer_token: String::new(),
-        };
-        let authz = OssAuthz;
-        let all = tunnel_caller(Scope::Project {
-            project_id: "default".to_string(),
-        });
-        let group = tunnel_caller(Scope::DeploymentGroup {
-            project_id: "default".to_string(),
-            deployment_group_id: "dg_a".to_string(),
-        });
-
-        assert!(authz.can_call_tunnel(&all, &deployment("dep_1", "dg_a")));
-        assert!(authz.can_call_tunnel(&all, &deployment("dep_2", "dg_b")));
-        assert!(authz.can_call_tunnel(&group, &deployment("dep_1", "dg_a")));
-        assert!(!authz.can_call_tunnel(&group, &deployment("dep_2", "dg_b")));
-
-        for subject in [&all, &group] {
-            let d = deployment("dep_1", "dg_a");
-            assert!(!authz.can_read_deployment(subject, &d));
-            assert!(!authz.can_update_deployment(subject, &d));
-            assert!(!authz.can_delete_deployment(subject, &d));
-            assert!(!authz.can_sync_deployment(subject, &d));
-            assert!(!authz.can_dispatch_command(subject, &d));
-            assert!(!authz.can_create_release(subject, "default"));
-            assert!(!authz.can_push_image(subject, &default_project(), "repo"));
-            assert!(!authz.can_pull_image(subject, &default_project(), "repo"));
-            assert!(!authz.can_create_deployment_group(subject, "default"));
-        }
     }
 }

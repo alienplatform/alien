@@ -86,7 +86,6 @@ reqwest = { workspace = true, features = ["json"] }
 # URL
 url = { workspace = true }
 alien-helm = { workspace = true }
-alien-tunnel = { workspace = true, features = ["manager"] }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { workspace = true, features = ["service", "tokio"] }
@@ -124,7 +123,6 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [dev-dependencies]
 alien-bindings = { workspace = true, features = ["kubernetes"] }
 alien-manager-api = { workspace = true }
-alien-tunnel = { workspace = true, features = ["manager", "operator"] }
 alien-commands = { workspace = true, features = ["test-utils"] }
 alien-infra = { workspace = true, features = ["test-utils"] }
 mockall = { workspace = true }

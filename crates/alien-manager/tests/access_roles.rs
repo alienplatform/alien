@@ -1,5 +1,4 @@
-//! Which roles may hold a deployment's tunnel, and which may pull charts and
-//! the Operator image.
+//! Which roles may pull charts and the Operator image.
 //!
 //! The standalone manager only issues deployment-scoped tokens to Operators,
 //! but embedders' validators issue other deployment-scoped roles (viewers,
@@ -14,7 +13,6 @@ use alien_core::{
 use alien_manager::traits::{CreateReleaseParams, UpdateImportedDeploymentParams};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
@@ -50,8 +48,6 @@ use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams, CredentialResolver,
     DeploymentRecord, DeploymentStore, ReleaseStore, TokenStore,
 };
-use alien_tunnel::manager::TunnelRegistry;
-use alien_tunnel::operator::{self, TunnelClientConfig, TunnelTargets};
 
 /// Hands out the subject registered for each bearer token, the way an
 /// embedder's validator does.
@@ -99,9 +95,9 @@ fn token(role: Role) -> String {
     format!("{role:?}")
 }
 
-/// A manager with tunnels on, one deployment, and a token for every role
-/// below: deployment-scoped for the tunnel roles, project-scoped for the
-/// pull roles. Returns the state and the deployment's ID.
+/// A manager with one deployment and a token for every role below:
+/// deployment-scoped for the deployment roles, project-scoped for the pull
+/// roles. Returns the state and the deployment's ID.
 async fn state() -> (AppState, String, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let db = Arc::new(
@@ -214,7 +210,6 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: Some(TunnelRegistry::new()),
         charts: None,
         release_channels: None,
         bundle_signing_key: None,
@@ -225,26 +220,6 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         verify_limiter: std::sync::Arc::new(alien_manager::values::VerifyLimiter::default()),
     };
     (state, deployment.id, tmp)
-}
-
-/// Ask to open a tunnel connection with a role's token, and return the status.
-async fn connect(state: &AppState, role: Role) -> StatusCode {
-    let request = Request::builder()
-        .uri(alien_tunnel::CONNECT_PATH)
-        .header(header::AUTHORIZATION, format!("Bearer {}", token(role)))
-        .header(header::UPGRADE, "websocket")
-        .header(header::CONNECTION, "Upgrade")
-        .header(header::SEC_WEBSOCKET_VERSION, "13")
-        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
-        .header(header::SEC_WEBSOCKET_PROTOCOL, alien_tunnel::SUBPROTOCOL)
-        .body(Body::empty())
-        .unwrap();
-    alien_manager::routes::tunnel::router()
-        .with_state(state.clone())
-        .oneshot(request)
-        .await
-        .unwrap()
-        .status()
 }
 
 /// Pull a registry path, and return the status and body.
@@ -262,50 +237,6 @@ async fn pull(state: &AppState, role: Role, path: &str) -> (StatusCode, String) 
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, String::from_utf8_lossy(&body).into_owned())
-}
-
-#[tokio::test]
-async fn only_the_operator_can_hold_a_deployments_tunnel() {
-    let (state, deployment_id, _directory) = state().await;
-    let registry = state.tunnels.clone().expect("tunnels are on");
-
-    // The Operator's real tunnel client, dialing the manager's real route
-    // over TCP, gets a working connection for its deployment.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let manager_addr = listener.local_addr().unwrap();
-    let router = alien_manager::routes::tunnel::router().with_state(state.clone());
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let operator = tokio::spawn(operator::run(
-        TunnelClientConfig {
-            manager_url: format!("http://{manager_addr}").parse().unwrap(),
-            token: token(Role::DeploymentManager),
-            connections: 1,
-        },
-        TunnelTargets::new(),
-    ));
-    let mut waited = Duration::ZERO;
-    while registry.connection_count(&deployment_id) == 0 {
-        assert!(
-            waited < Duration::from_secs(10),
-            "the Operator's tunnel never connected"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        waited += Duration::from_millis(50);
-    }
-    operator.abort();
-
-    // Any other role for the same deployment is refused before the upgrade.
-    for role in [
-        Role::DeploymentViewer,
-        Role::DeploymentTelemetryWriter,
-        Role::RemoteBindingResolver,
-    ] {
-        assert_eq!(
-            connect(&state, role).await,
-            StatusCode::FORBIDDEN,
-            "a {role:?} token for the deployment must not receive its tunnel traffic"
-        );
-    }
 }
 
 #[tokio::test]

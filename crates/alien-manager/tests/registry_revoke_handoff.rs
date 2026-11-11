@@ -410,7 +410,6 @@ async fn handed_off_deployment(answer: Answer) -> Fixture {
             RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: None,
         charts: None,
         release_channels: None,
         bundle_signing_key: None,

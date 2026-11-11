@@ -4225,7 +4225,6 @@ async fn helm_upgrade(
         // The Operator buffers container logs for the next report.
         .args(["--set", "logCollector.enabled=true"])
         .args(["--set-string", "logCollector.mode=podApi"])
-        .args(["--set", "tunnel.enabled=false"])
         .args([
             "--set-string",
             &format!("airgapped.bundleSigningKey={trusted_key}"),

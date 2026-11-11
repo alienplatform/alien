@@ -1516,9 +1516,10 @@ mod setup_update_authorization_tests {
                     .egress(alien_core::ContainerEgress::Internet)
                     .security(alien_core::ContainerSecurity {
                         profile: alien_core::ContainerSecurityProfile::Restricted,
-                        run_as_user: 1000,
-                        run_as_group: 1000,
-                        read_only_root_filesystem: false,
+                        run_as_user: Some(1000),
+                        run_as_group: Some(1000),
+                        read_only_root_filesystem: Some(false),
+                        writable_paths: Vec::new(),
                     })
                     .build();
                 let mut result = stack;
@@ -1922,7 +1923,7 @@ mod setup_update_authorization_tests {
     /// that adds a resource keeps running without setup; only a wider declared grant stops.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
-    async fn automatic_aws_runtime_adds_resources_but_stops_for_a_wider_management_grant() {
+    async fn automatic_aws_runtime_adds_resources_but_halts_for_a_wider_management_grant() {
         let runner = PreflightRunner::with_registry({
             let mut registry = PreflightRegistry::new();
             registry.add_mutation(Box::new(

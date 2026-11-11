@@ -110,6 +110,10 @@ pub struct Daemon {
     /// it during provisioning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<DaemonRuntime>,
+    /// Pod Security profile. Absent means `restricted`; set
+    /// `profile: unrestricted` to opt out for an image that needs root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<crate::ContainerSecurity>,
     #[builder(default)]
     #[serde(default)]
     pub environment: HashMap<String, String>,

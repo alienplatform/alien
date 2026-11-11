@@ -1822,40 +1822,6 @@
             "bearer": []
           }
         ]
-      },
-      "post": {
-        "tags": [
-          "tokens"
-        ],
-        "summary": "`POST /v1/tokens` — create a scoped token (admin only).",
-        "operationId": "create_token",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateTokenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Token created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatedTokenResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
       }
     },
     "/v1/tokens/{id}": {
@@ -2269,10 +2235,6 @@
               },
               "supportsExecutionClaims": {
                 "type": "boolean"
-              },
-              "supportsTunnels": {
-                "type": "boolean",
-                "description": "Absent for Operators that predate container tunnels."
               }
             }
           },
@@ -2375,11 +2337,6 @@
           "targetOperatorImage": {
             "type": "string",
             "description": "Operator image this manager's charts install. Operators that manage\ntheir own workload update to it. Absent when the manager serves no\ncharts.",
-            "nullable": true
-          },
-          "tunnelUrl": {
-            "type": "string",
-            "description": "Base URL operators open tunnel connections to. Absent when this manager\ndoes not accept tunnels; operators then never dial.",
             "nullable": true
           }
         }
@@ -6946,13 +6903,6 @@
         },
         "additionalProperties": false
       },
-      "CreatableTokenType": {
-        "type": "string",
-        "description": "Token kinds an admin can create through the API.",
-        "enum": [
-          "tunnel"
-        ]
-      },
       "CreateCommandRequest": {
         "type": "object",
         "description": "Request to create a new command",
@@ -7196,22 +7146,6 @@
         },
         "additionalProperties": false
       },
-      "CreateTokenRequest": {
-        "type": "object",
-        "required": [
-          "type"
-        ],
-        "properties": {
-          "deploymentGroupId": {
-            "type": "string",
-            "description": "Limit the token to one deployment group's deployments.",
-            "nullable": true
-          },
-          "type": {
-            "$ref": "#/components/schemas/CreatableTokenType"
-          }
-        }
-      },
       "CreateTokenResponse": {
         "type": "object",
         "required": [
@@ -7226,25 +7160,6 @@
             "type": "string"
           }
         }
-      },
-      "CreatedTokenResponse": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TokenResponse"
-          },
-          {
-            "type": "object",
-            "required": [
-              "token"
-            ],
-            "properties": {
-              "token": {
-                "type": "string",
-                "description": "The raw token. Shown once; only its hash is stored."
-              }
-            }
-          }
-        ]
       },
       "CustomCertificateConfig": {
         "type": "object",
@@ -13295,17 +13210,12 @@
       "ManagerCapabilities": {
         "type": "object",
         "required": [
-          "tunnels",
           "charts"
         ],
         "properties": {
           "charts": {
             "type": "boolean",
             "description": "Helm charts at `oci://<registryHost>/charts/<stack>`."
-          },
-          "tunnels": {
-            "type": "boolean",
-            "description": "Requests into deployments through `/v1/deployments/{id}/tunnels/...`."
           },
           "values": {
             "type": "integer",

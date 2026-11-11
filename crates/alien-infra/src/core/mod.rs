@@ -41,6 +41,11 @@ pub mod k8s_secret_bindings;
 pub use k8s_secret_bindings::*;
 
 #[cfg(feature = "kubernetes")]
+pub mod pod_security;
+#[cfg(feature = "kubernetes")]
+pub use pod_security::*;
+
+#[cfg(feature = "kubernetes")]
 pub mod k8s_environment_secrets;
 #[cfg(feature = "kubernetes")]
 pub use k8s_environment_secrets::*;

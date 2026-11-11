@@ -45,7 +45,6 @@ members = [
   "crates/alien-cloudformation",
   "crates/alien-terraform",
   "crates/alien-helm",
-  "crates/alien-tunnel",
   "crates/alien-manager",
   "crates/alien-operator",
   "crates/alien-deploy-cli",
@@ -129,7 +128,6 @@ alien-terraform = { path = "crates/alien-terraform", version = "3.3.59" }
 alien-helm = { path = "crates/alien-helm", version = "3.3.59" }
 alien-manager = { path = "crates/alien-manager", version = "3.3.59" }
 alien-observer = { path = "crates/alien-observer", version = "3.3.59" }
-alien-tunnel = { path = "crates/alien-tunnel", version = "3.3.59" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "3.3.59", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", version = "3.3.59", default-features = false, features = ["rustls"] }

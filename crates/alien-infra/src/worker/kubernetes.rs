@@ -299,6 +299,14 @@ impl KubernetesWorkerController {
                     });
                 }
                 debug!(deployment_name=%deployment_name, "Deployment not yet ready");
+                if let Some(selector) = deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.selector.match_labels.as_ref())
+                {
+                    crate::core::fail_if_root_image_blocked(ctx, namespace, selector, &config.id)
+                        .await?;
+                }
             }
             Err(e)
                 if matches!(
@@ -1292,6 +1300,7 @@ mod tests {
     #[tokio::test]
     async fn create_retry_converges_existing_worker_to_corrective_release() {
         let server = httpmock::MockServer::start_async().await;
+        crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
         let config = Worker::new("worker".into())
             .code(WorkerCode::Image {
                 image: "example.test/worker:corrected".into(),
@@ -1404,6 +1413,7 @@ mod tests {
     async fn worker_create_accepts_ready_capacity_and_update_waits_through_slow_rollouts() {
         for (ready, total, complete) in [(3, 3, true), (1, 1, true), (1, 3, false), (0, 1, false)] {
             let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             let mut response = server.mock(|when, then| {
                 when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
                 then.status(200).json_body(serde_json::json!({

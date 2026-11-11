@@ -115,7 +115,10 @@
             "cron": "0 */6 * * *",
             "type": "schedule"
           }
-        ]
+        ],
+        "security": {
+          "profile": "restricted"
+        }
       },
       "dependencies": [],
       "lifecycle": "live"

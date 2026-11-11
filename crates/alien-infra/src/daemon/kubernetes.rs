@@ -263,6 +263,15 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        if let (Some(namespace), Some(selector)) = (
+            self.namespace.as_deref(),
+            self.read_daemonset(ctx)
+                .await?
+                .and_then(|daemonset| daemonset.spec?.selector.match_labels),
+        ) {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            crate::core::fail_if_root_image_blocked(ctx, namespace, &selector, &config.id).await?;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -1094,8 +1103,11 @@ impl KubernetesDaemonController {
         // vault-load pointer is stripped from the manifest.
         let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
+        let security = crate::core::pod_security(&config.id, config.security.as_ref(), &[])?;
         let container = Container {
             name: DAEMON_CONTAINER_NAME.to_string(),
+            security_context: security.container,
+            volume_mounts: (!security.mounts.is_empty()).then_some(security.mounts),
             image: Some(image),
             // The daemon contract: `command` overrides the image default
             // entrypoint, and the declared ResourceSpecs become real
@@ -1157,6 +1169,8 @@ impl KubernetesDaemonController {
             node_selector,
             service_account_name: service_account_name.map(str::to_owned),
             automount_service_account_token: service_account_name.is_none().then_some(false),
+            security_context: security.pod,
+            volumes: (!security.volumes.is_empty()).then_some(security.volumes),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
             image_pull_secrets,

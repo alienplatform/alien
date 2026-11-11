@@ -4164,12 +4164,6 @@ airgapped:
   # `alien-deploy sync --trusted-key`, and checked on every later one.
   bundleSigningKey: ""
 
-tunnel:
-  # Serve requests the control plane sends through the manager to the stack's
-  # declared tunnel endpoints, over the Operator's outbound connection.
-  # false closes the tunnel; nothing else changes.
-  enabled: true
-
 clusterBootstrap:
   metricsServer:
     enabled: false
@@ -5059,13 +5053,6 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "properties": {
         "enabled": { "type": "boolean" },
         "bundleSigningKey": { "type": "string" }
-      }
-    },
-    "tunnel": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": { "type": "boolean" }
       }
     },
     "heartbeat": {
@@ -6801,8 +6788,6 @@ spec:
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
-            - name: TUNNEL_ENABLED
-              value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
             {{- if dig "selfUpdate" true .Values.runtime.image }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}

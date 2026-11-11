@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ContainerSecuritySchema } from "./container-security-schema.js";
 import { DaemonCodeSchema } from "./daemon-code-schema.js";
 import { DaemonRuntimeSchema } from "./daemon-runtime-schema.js";
 import { HealthCheckSchema } from "./health-check-schema.js";
@@ -41,6 +42,9 @@ get "publicEndpoints"(){
               },
 get "runtime"(){
                 return z.union([DaemonRuntimeSchema, z.null()]).optional()
+              },
+get "security"(){
+                return z.union([ContainerSecuritySchema, z.null()]).optional()
               },
 "stopGracePeriodSeconds": z.int().min(1).max(86400).describe("Grace period in seconds for stopping daemon instances during updates, drains, and deletes.\n\nWhen omitted, the runtime backend applies its default. Valid values are\n1 second through 24 hours.").nullish()
     })

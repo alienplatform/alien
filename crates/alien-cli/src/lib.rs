@@ -1241,7 +1241,6 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Build the server
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
-        .tunnels()
         .charts(alien_manager::routes::charts::ChartSettings::new(
             toml_config.operator.image.clone(),
             toml_config.operator.insecure_registry,

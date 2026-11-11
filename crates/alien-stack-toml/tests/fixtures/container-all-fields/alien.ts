@@ -22,13 +22,13 @@ const ledger = new alien.Container("ledger")
   .gpu({ type: "nvidia-l4", count: 1 })
   .ports([9090, 9091])
   .publicEndpoint("api", 8080, { protocol: "http", hostLabel: "ledger", wildcardSubdomains: true })
-  .tunnel(7000)
   .egress("internet")
   .security({
     profile: "restricted",
     runAsUser: 10001,
     runAsGroup: 10002,
     readOnlyRootFilesystem: true,
+    writablePaths: ["/var/cache/ledger"],
   })
   .persistentStorage("100Gi", {
     mountPath: "/var/lib/ledger",

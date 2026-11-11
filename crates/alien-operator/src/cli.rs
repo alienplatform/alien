@@ -188,11 +188,6 @@ pub struct Args {
     #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
     pub stack_input_values_file: Option<PathBuf>,
 
-    /// Serve tunnel requests from the manager for the stack's declared tunnel
-    /// endpoints (`--tunnel-enabled=false` turns the tunnel off).
-    #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
-    pub tunnel_enabled: bool,
-
     /// This Operator's own Deployment; set to let the Operator move itself to
     /// the image the manager targets.
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
@@ -783,7 +778,6 @@ async fn run_operator_cli(
         .maybe_setup_release_file(args.setup_release_file.clone())
         .maybe_setup_fingerprint_file(args.setup_fingerprint_file.clone())
         .local_debug_enabled(args.enable_local_debug)
-        .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
         .maybe_resource_prefix(args.operator_resource_prefix.clone())
         .maybe_airgap_target_secret(args.airgap_target_secret)

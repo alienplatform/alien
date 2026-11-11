@@ -468,21 +468,6 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         None
     };
 
-    // Tunnel loop: serves requests from the manager for the stack's declared
-    // tunnel endpoints over outbound connections. Idle unless the manager
-    // advertises a tunnel URL and the stack declares endpoints.
-    let tunnel_handle = if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes)
-    {
-        Some(tokio::spawn({
-            let state = state.clone();
-            async move {
-                loops::tunnel::run_tunnel_loop(state).await;
-            }
-        }))
-    } else {
-        None
-    };
-
     // Air-gapped: targets arrive in bundles, state leaves in status exports.
     let airgap_handle = match (&config.airgap_target_secret, config.is_airgapped()) {
         (Some(secret), true) => Some(tokio::spawn({
@@ -679,13 +664,6 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "telemetry")),
-        _ = async {
-            if let Some(h) = tunnel_handle {
-                h.await.ok();
-            } else {
-                std::future::pending::<()>().await;
-            }
-        } => Ok(loop_exit(&cancel, "tunnel")),
         _ = async {
             if let Some(h) = airgap_handle {
                 h.await.ok();
@@ -1402,7 +1380,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_stops_local_daemon_processes() {
+    async fn cancellation_halts_local_daemon_processes() {
         let temp = tempfile::tempdir().expect("create test directory");
         let daemon_dir = temp.path().join("daemons").join("test-daemon");
         std::fs::create_dir_all(&daemon_dir).expect("create daemon directory");

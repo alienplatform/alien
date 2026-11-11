@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ContainerSecuritySchema } from "./container-security-schema.js";
 import { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { WorkerCodeSchema } from "./worker-code-schema.js";
@@ -33,6 +34,9 @@ get "publicEndpoints"(){
               },
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
+              },
+get "security"(){
+                return z.union([ContainerSecuritySchema, z.null()]).optional()
               },
 "timeoutSeconds": z.optional(z.int().min(1).max(3600).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 180")),
 get "triggers"(){

@@ -1,14 +1,14 @@
 # Run your service in your customers' Kubernetes clusters
 
-Keep your control plane in your cloud, and run one service inside each customer's Kubernetes cluster: on-prem, in their cloud account, or on a network with no internet at all. Customers install it once. You ship, watch and call every copy from a manager you run.
+Keep your control plane in your cloud, and run one service inside each customer's Kubernetes cluster: on-prem, in their cloud account, or on a network with no internet at all. Customers install it once. You ship and watch every copy from a manager you run.
 
 ```
  Your cloud                                Customer clusters
 ┌────────────────────────────────┐        ┌─────────────────────────────────────────┐
 │ Control plane ──▶ Manager      │◀═══════│ customer-1  Operator ─▶ files ─▶ S3     │
 │                   releases,    │◀═══════│ customer-2  Operator ─▶ files ─▶ MinIO  │
-│                   images, logs,│        └─────────────────────────────────────────┘
-│                   requests     │ by hand┌─────────────────────────────────────────┐
+│                   images, logs │        └─────────────────────────────────────────┘
+│                                │ by hand┌─────────────────────────────────────────┐
 │                                │◀─ ─ ─ ▶│ customer-3  air-gapped                  │
 │                                │        └─────────────────────────────────────────┘
 └────────────────────────────────┘
@@ -20,16 +20,15 @@ Keep your control plane in your cloud, and run one service inside each customer'
 2. **Customers install once.** One `helm install`. Their cluster connects out to your manager; nothing connects in.
 3. **Every release rolls out.** Each `alien release` updates every cluster. No `helm upgrade`, no registry credentials to hand out.
 4. **Logs come back.** Each cluster's logs reach your OpenTelemetry backend (Datadog, Grafana, Honeycomb, …), tagged with the customer.
-5. **Call it by customer.** Your control plane calls the service in any cluster through the manager, with its own authentication passing through.
-6. **Air-gapped sites too.** Clusters with no connection get the same releases as signed files carried in, and send their logs back the same way.
+5. **Air-gapped sites too.** Clusters with no connection get the same releases as signed files carried in, and send their logs back the same way.
 
 You can run all of it on your laptop in about half an hour: a local cluster plays three customers, one of them air-gapped.
 
 ## How it works
 
-**The manager** is your side: one container (`ghcr.io/alienplatform/alien-manager`) with its state in a volume. It keeps your releases, decides which one each customer runs, serves the chart and images each cluster pulls with its own token, forwards logs to your OpenTelemetry backend, and forwards your control plane's requests to a given cluster.
+**The manager** is your side: one container (`ghcr.io/alienplatform/alien-manager`) with its state in a volume. It keeps your releases, decides which one each customer runs, serves the chart and images each cluster pulls with its own token, and forwards logs to your OpenTelemetry backend.
 
-**The Operator** is the customer's side. The chart installs it next to your service. It keeps one outbound HTTPS connection to the manager, deploys the release it should run, sends logs, and carries your requests to the service. It updates itself when you upgrade the manager.
+**The Operator** is the customer's side. The chart installs it next to your service. It keeps one outbound HTTPS connection to the manager, deploys the release it should run, and sends logs. It updates itself when you upgrade the manager.
 
 **The service** is your code. This one is a small files service in Rust that keeps its data in the customer's own S3-compatible bucket (Amazon S3, MinIO, Ceph). [`alien.ts`](alien.ts) describes it:
 
@@ -38,7 +37,7 @@ const bucket = new alien.Storage("bucket").build() // the customer's bucket, nam
 
 const api = new alien.Container("api")
   .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "files" } })
-  .tunnel(8080) // your control plane calls port 8080 through the manager, nobody else can
+  .port(8080) // reachable inside the customer's cluster only
   .link(bucket)
   .permissions("api")
   .build()
@@ -173,34 +172,27 @@ kubectl --context kind-alien-demo -n customer-1 get pods
 
 In each namespace, `files-...` is the Operator and `api-...` is your service. The cluster pulled the chart, the Operator and your service's image from your manager. It never talked to another registry.
 
-### 7. Call a customer's service from your control plane
+### 7. Call a customer's service
 
-Your control plane gets a token that can only call services through the manager:
-
-```bash
-TUNNEL_TOKEN=$(alien tokens create --tunnel --json | jq -r .token)
-```
-
-Then it calls any customer's service by name, at `/v1/deployments/<customer>/tunnels/<container>/<path>`:
+The service listens on port 8080 inside each customer's cluster and is not exposed outside it. To try it from your laptop, forward the port and send the customer's access token:
 
 ```bash
-MANAGER=http://localhost:8080
+kubectl --context kind-alien-demo -n customer-1 port-forward svc/api 9080:8080 &
 
 curl -s -w '\n' -X PUT --data-binary 'quarterly numbers' \
-  $MANAGER/v1/deployments/customer-1/tunnels/api/files/reports/q3.txt \
-  -H "Proxy-Authorization: Bearer $TUNNEL_TOKEN" \
+  localhost:9080/files/reports/q3.txt \
   -H "Authorization: Bearer $CUSTOMER_1_ACCESS"
 
-curl -s -w '\n' $MANAGER/v1/deployments/customer-1/tunnels/api/files/reports/q3.txt \
-  -H "Proxy-Authorization: Bearer $TUNNEL_TOKEN" \
+curl -s -w '\n' localhost:9080/files/reports/q3.txt \
   -H "Authorization: Bearer $CUSTOMER_1_ACCESS"
+
+kill %1
 ```
 
-- The manager checks `Proxy-Authorization` and forwards the request over customer-1's Operator connection.
-- `Authorization` reaches the service untouched: the service checks its own token. Send customer-2's token to customer-1 and the service answers 401.
+- The service checks its own token. Send customer-2's token to customer-1 and the service answers 401.
 - Bodies stream both ways, so large files never sit in memory on the way.
 
-The file is now in customer-1's bucket, in their storage.
+The file is now in customer-1's bucket, in their storage. To let your own systems call the service from outside the cluster, the customer exposes it with an ingress; see "Public services under a customer domain" below.
 
 ### 8. Ship an update
 
@@ -220,8 +212,9 @@ Both Operators pick up the new release on their next check-in and roll it out. N
 
 ```bash
 alien deployments ls        # update-pending, then running on the new release
-curl -s -w '\n' $MANAGER/v1/deployments/customer-2/tunnels/api/health \
-  -H "Proxy-Authorization: Bearer $TUNNEL_TOKEN"     # ok, v2
+kubectl --context kind-alien-demo -n customer-2 port-forward svc/api 9081:8080 &
+curl -s -w '\n' localhost:9081/health     # ok, v2
+kill %1
 ```
 
 ### 9. Read the logs
@@ -312,7 +305,7 @@ stackSettings:
         secretName: app-tls
 ```
 
-The site owns DNS, the ingress controller and the referenced TLS Secret. The files service in this example uses a tunnel instead, so it does not need this public endpoint configuration.
+The site owns DNS, the ingress controller and the referenced TLS Secret. The files service in this example declares no public endpoint, so it does not need this configuration.
 
 A failed workload rollout still writes the Operator's failed state and buffered logs to `from-site/` before the CLI exits with an error. Carry that report back even if the update could not finish.
 
@@ -358,22 +351,7 @@ rm -rf airgap customer-1.json customer-2.json customer-3.json
 
 **Onboard each customer** with `alien onboard`, and send their admin what it prints: the token, the two Helm commands and the `values.yaml` for their bucket. Their cluster needs outbound HTTPS to your manager's URL, nothing else. See [Kubernetes](https://alien.dev/docs/deploying/kubernetes).
 
-**Call the services** from your control plane with a tunnel token: `alien tokens create --tunnel`, optionally limited to one customer with `--customer`. See [Tunnels](https://alien.dev/docs/tunnels).
-
-```ts
-const res = await fetch(
-  `https://manager.example.com/v1/deployments/${customer}/tunnels/api/files/${key}`,
-  {
-    method: "PUT",
-    body: file,
-    headers: {
-      "Proxy-Authorization": `Bearer ${process.env.ALIEN_TUNNEL_TOKEN}`,
-      Authorization: `Bearer ${accessTokens[customer]}`,
-      "If-None-Match": "*",
-    },
-  },
-)
-```
+**Call the services** by giving each one a public endpoint (`.publicEndpoint(...)` in `alien.ts`) and having the customer's admin route it through their ingress, as in the section below. The service keeps checking its own access token on every request.
 
 **Air-gapped sites** need `alien-deploy`, a container registry of their own, and a way to move a folder in and out. See [Air-gapped deployments](https://alien.dev/docs/deploying/air-gapped).
 

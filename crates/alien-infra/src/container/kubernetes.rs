@@ -754,6 +754,13 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
+        crate::core::fail_if_root_image_blocked(
+            ctx,
+            namespace,
+            &self.workload_labels(ctx, &config.id, self.build_labels(workload_name)),
+            &config.id,
+        )
+        .await?;
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -2735,15 +2742,9 @@ impl KubernetesContainerController {
                 probe.initial_delay_seconds = Some(GATEWAY_READY_DELAY_SECONDS);
             }
         }
-        let security = config.security.as_ref();
-        if security.is_some_and(|settings| settings.run_as_user <= 0 || settings.run_as_group <= 0)
-        {
-            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Restricted container security needs positive user and group IDs"
-                    .to_string(),
-            }));
-        }
+        let security =
+            crate::core::pod_security(&config.id, config.security.as_ref(), &volume_mounts)?;
+        volume_mounts.extend(security.mounts);
 
         let container = K8sContainer {
             name: kubernetes_resource_name("", &config.id),
@@ -2764,15 +2765,7 @@ impl KubernetesContainerController {
             env: Some(env_vars),
             liveness_probe,
             readiness_probe,
-            security_context: security.map(|settings| SecurityContext {
-                allow_privilege_escalation: Some(false),
-                read_only_root_filesystem: Some(settings.read_only_root_filesystem),
-                capabilities: Some(Capabilities {
-                    drop: Some(vec!["ALL".to_string()]),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            security_context: security.container,
             volume_mounts: if volume_mounts.is_empty() {
                 None
             } else {
@@ -2826,6 +2819,8 @@ impl KubernetesContainerController {
             });
         }
 
+        volumes.extend(security.volumes);
+
         let pool = alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(
             |message| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2846,17 +2841,7 @@ impl KubernetesContainerController {
             service_account_name: Some(service_account_name.to_string()),
             // The gateway never calls the Kubernetes API; its configuration is projected.
             automount_service_account_token: gateway.then_some(false),
-            security_context: security.map(|settings| PodSecurityContext {
-                run_as_non_root: Some(true),
-                run_as_user: Some(settings.run_as_user),
-                run_as_group: Some(settings.run_as_group),
-                fs_group: Some(settings.run_as_group),
-                seccomp_profile: Some(SeccompProfile {
-                    type_: "RuntimeDefault".to_string(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            security_context: security.pod,
             containers: vec![container],
             image_pull_secrets: image_pull_secret_name.map(|name| {
                 vec![LocalObjectReference {
@@ -3140,6 +3125,7 @@ mod tests {
     async fn create_retry_converges_existing_workload_to_corrective_release() {
         for stateful in [false, true] {
             let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             let config = manifest_test_container(&[("RELEASE", "corrected")], stateful);
             let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             let mut ctx = harness.ctx();
@@ -3269,6 +3255,7 @@ mod tests {
     async fn workload_progress_reports_current_replica_failure_and_clears_after_repair() {
         for updating in [false, true] {
             let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             let mut response = serde_json::json!({
                 "apiVersion": "apps/v1", "kind": "Deployment",
                 "metadata": {"name": "web", "generation": 2},
@@ -3329,6 +3316,7 @@ mod tests {
                 [(1, 1, true), (3, 3, true), (1, 3, false), (0, 1, false)]
             {
                 let server = httpmock::MockServer::start_async().await;
+                crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
                 let kind = if stateful {
                     "StatefulSet"
                 } else {
@@ -4079,7 +4067,11 @@ mod tests {
             .template
             .spec
             .unwrap();
-        assert!(pod.volumes.is_none());
+        assert!(pod
+            .volumes
+            .iter()
+            .flatten()
+            .all(|volume| volume.secret.is_none()));
         let error = controller
             .additional_environment_secrets(&earlier, &ctx)
             .await
@@ -4235,9 +4227,10 @@ mod tests {
         });
         config.security = Some(ContainerSecurity {
             profile: ContainerSecurityProfile::Restricted,
-            run_as_user: 65532,
-            run_as_group: 65532,
-            read_only_root_filesystem: true,
+            run_as_user: Some(65532),
+            run_as_group: Some(65532),
+            read_only_root_filesystem: Some(true),
+            writable_paths: Vec::new(),
         });
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let deployment = manifest_test_controller()

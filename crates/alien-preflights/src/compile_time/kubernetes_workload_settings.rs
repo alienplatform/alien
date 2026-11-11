@@ -141,9 +141,10 @@ mod tests {
             })
             .security(ContainerSecurity {
                 profile: ContainerSecurityProfile::Restricted,
-                run_as_user: 65532,
-                run_as_group: 65532,
-                read_only_root_filesystem: true,
+                run_as_user: Some(65532),
+                run_as_group: Some(65532),
+                read_only_root_filesystem: Some(true),
+                writable_paths: Vec::new(),
             })
             .permissions("worker".to_string())
             .build();

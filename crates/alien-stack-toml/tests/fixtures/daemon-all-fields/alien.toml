@@ -18,6 +18,7 @@ memory = "512Mi"
 stop-grace-period = "2m"
 health-check = { port = 9100, path = "/healthz", method = "HEAD", timeout = "3s", failure-threshold = 4 }
 runtime = { network-mode = "host", pid-namespace = "host", privileged = true, user = "0", mounts = [{ source = "/var/lib/acme", target = "/state", options = "ro" }, { source = "/etc/acme", target = "/config" }] }
+security = { profile = "unrestricted" }
 links = ["reports"]
 permissions = { reports = ["storage/data-write"] }
 env = { AGENT_MODE = "resident", AGENT_BATCH = 50 }

@@ -138,11 +138,4 @@ pub trait Authz: Send + Sync {
     }
     /// Generic "can act on deployment".
     fn can_act_on_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-
-    /// Whether `subject` may send requests into the deployment through the
-    /// tunnel. Defaults to the command-dispatch rule: both run caller-chosen
-    /// requests against code inside the deployment.
-    fn can_call_tunnel(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
-        self.can_dispatch_command(subject, deployment)
-    }
 }

@@ -141,12 +141,6 @@ pub struct OperatorConfig {
     /// running old pod, and the report is skipped.
     pub setup_fingerprint_file: Option<PathBuf>,
 
-    /// Accept tunnel requests from the manager for the stack's declared
-    /// tunnel endpoints. The operator dials only when the manager advertises
-    /// a tunnel URL and the stack declares at least one endpoint.
-    #[builder(default = true)]
-    pub tunnel_enabled: bool,
-
     /// This Operator's own Deployment (in `namespace`). When set, the
     /// Operator updates its own image to the one the manager targets.
     pub self_update_deployment: Option<String>,

@@ -40,8 +40,6 @@ pub struct ManagerInfoResponse {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ManagerCapabilities {
-    /// Requests into deployments through `/v1/deployments/{id}/tunnels/...`.
-    pub tunnels: bool,
     /// Helm charts at `oci://<registryHost>/charts/<stack>`.
     pub charts: bool,
     /// Deployment values held by this manager at `/v1/values/{scope}`. The
@@ -75,7 +73,6 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
         url: url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: ManagerCapabilities {
-            tunnels: state.tunnels.is_some(),
             charts: state.charts.is_some(),
             values: (state
                 .values

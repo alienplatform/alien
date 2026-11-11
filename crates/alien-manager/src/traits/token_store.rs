@@ -11,9 +11,6 @@ pub enum TokenType {
     Admin,
     DeploymentGroup,
     Deployment,
-    /// Sends requests through deployment tunnels and nothing else. Scoped
-    /// to one deployment group when `deployment_group_id` is set.
-    Tunnel,
 }
 
 impl std::fmt::Display for TokenType {
@@ -22,7 +19,6 @@ impl std::fmt::Display for TokenType {
             TokenType::Admin => write!(f, "admin"),
             TokenType::DeploymentGroup => write!(f, "deployment-group"),
             TokenType::Deployment => write!(f, "deployment"),
-            TokenType::Tunnel => write!(f, "tunnel"),
         }
     }
 }
@@ -34,7 +30,6 @@ impl TokenType {
             TokenType::Admin => "ax_admin_",
             TokenType::DeploymentGroup => "ax_dg_",
             TokenType::Deployment => "ax_deploy_",
-            TokenType::Tunnel => "ax_tunnel_",
         }
     }
 }

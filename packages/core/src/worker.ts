@@ -1,4 +1,5 @@
 import {
+  type ContainerSecurity,
   type ReadinessProbe,
   type ResourceType,
   type WorkerCode,
@@ -158,6 +159,20 @@ export class Worker extends ResourceBuilder {
    */
   public permissions(permissions: string): this {
     this._config.permissions = permissions
+    return this
+  }
+
+  /**
+   * Adjusts the Kubernetes Pod Security profile. Workers run under the "restricted"
+   * profile by default (non-root, seccomp RuntimeDefault, all capabilities
+   * dropped, read-only root filesystem with a writable /tmp). Use
+   * `writablePaths` for other directories the image writes to.
+   *
+   * Opt out only for an image that must run as root:
+   * `.security({ profile: "unrestricted" })`. Other platforms ignore it.
+   */
+  public security(settings: ContainerSecurity): this {
+    this._config.security = settings
     return this
   }
 
