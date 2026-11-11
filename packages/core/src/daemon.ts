@@ -1,7 +1,7 @@
 import {
+  type ContainerSecurity,
   type DaemonCode,
   type Daemon as DaemonConfig,
-  type ContainerSecurity,
   type DaemonRuntime,
   DaemonSchema,
   type ExposeProtocol,
