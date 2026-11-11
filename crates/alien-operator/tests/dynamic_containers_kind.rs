@@ -129,6 +129,12 @@ async fn two_independent_containers_update_and_delete() {
     let namespace = std::env::var("ALIEN_DYNAMIC_KIND_NAMESPACE").expect("set Kind namespace");
     assert!(namespace.starts_with("alien-dynamic-"));
     let deployment_id = "dep_kind_dynamic_1040";
+    // What the chart gives the Operator Pod: the release's runtime scope label, which the
+    // pre-delete cleanup selects on.
+    const SCOPE_KEY: &str = "alien.dev/deployment";
+    const SCOPE_VALUE: &str = "kind-release";
+    std::env::set_var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY", SCOPE_KEY);
+    std::env::set_var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE", SCOPE_VALUE);
     let mut config = alien_k8s_clients::KubernetesClientConfig::try_kubeconfig()
         .await
         .expect("Kind kubeconfig");
@@ -244,6 +250,54 @@ async fn two_independent_containers_update_and_delete() {
         &[first.clone(), second.clone()],
     )
     .await;
+
+    // `helm uninstall` removes what the release's runtime scope label selects, so every
+    // Deployment, Service and Secret a dynamic container made must carry it.
+    let dynamic = format!("alien.dev/dynamic-deployment={deployment_id}");
+    let scope = format!("{SCOPE_KEY}={SCOPE_VALUE}");
+    let in_scope = |label: String| {
+        let client = &client;
+        let namespace = &namespace;
+        async move {
+            let mut names: Vec<String> = Vec::new();
+            names.extend(
+                client
+                    .list_deployments(namespace, Some(label.clone()), None)
+                    .await
+                    .unwrap()
+                    .items
+                    .into_iter()
+                    .filter_map(|o| o.metadata.name.map(|n| format!("deployment/{n}"))),
+            );
+            names.extend(
+                client
+                    .list_services(namespace, Some(label.clone()), None)
+                    .await
+                    .unwrap()
+                    .items
+                    .into_iter()
+                    .filter_map(|o| o.metadata.name.map(|n| format!("service/{n}"))),
+            );
+            names.extend(
+                client
+                    .list_secrets(namespace, Some(label), None)
+                    .await
+                    .unwrap()
+                    .items
+                    .into_iter()
+                    .filter_map(|o| o.metadata.name.map(|n| format!("secret/{n}"))),
+            );
+            names.sort();
+            names
+        }
+    };
+    let dynamic_objects = in_scope(dynamic.clone()).await;
+    assert!(dynamic_objects.len() >= 3, "{dynamic_objects:?}");
+    assert_eq!(
+        in_scope(format!("{dynamic},{scope}")).await,
+        dynamic_objects,
+        "every dynamic container object must carry the release's runtime scope label"
+    );
 
     let owned = client
         .list_deployments(
