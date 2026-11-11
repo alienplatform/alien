@@ -123,4 +123,5 @@ async fn retry_refuses_a_pinned_release_that_changes_frozen_setup() {
         .expect_err("the installed chart's setup cannot be changed by a retry");
     let message = format!("{error:?}");
     assert!(message.contains("DEPLOYMENT_SETUP_REQUIRED"), "{message}");
+    assert!(message.contains("helm upgrade"), "{message}");
 }

@@ -598,7 +598,12 @@ pub async fn handle_initial_setup_failed(
             &client_config,
             existing,
         )
-        .await?;
+        .await
+        .context(ErrorData::StackExecutionFailed {
+            message: "The pinned release changes setup that the installed Helm chart provides. \
+                      Run `helm upgrade` to the chart for that release, then retry"
+                .to_string(),
+        })?;
         metadata.pending_prepared_release_id = current
             .target_release
             .as_ref()
