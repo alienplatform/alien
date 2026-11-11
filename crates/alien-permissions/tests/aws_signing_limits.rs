@@ -174,6 +174,8 @@ fn the_verifier_sets_bucket_policies_only_on_its_installs_buckets() {
     assert_eq!(evaluate(&policy, &own), Decision::Allowed);
     let other = Request::new("s3:PutBucketPolicy", "arn:aws:s3:::someone-elses-assets");
     assert_eq!(evaluate(&policy, &other), Decision::NotAllowed);
+    let block = Request::new("s3:PutBucketPublicAccessBlock", "arn:aws:s3:::acme-assets");
+    assert_eq!(evaluate(&policy, &block), Decision::Allowed);
     // It can read nothing a bucket holds: the grant is for the policy alone.
     let object = Request::new("s3:GetObject", "arn:aws:s3:::acme-assets/key");
     assert_eq!(evaluate(&policy, &object), Decision::NotAllowed);

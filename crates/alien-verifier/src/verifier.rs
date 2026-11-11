@@ -679,8 +679,13 @@ mod tests {
             newest: &dyn StillNewest,
         ) -> Result<Value> {
             newest.check().await?;
-            let ResourceWrite::PutBucketPolicy { policy, .. } = write;
-            self.forwarded.lock().unwrap().push(policy.clone());
+            let sent = match write {
+                ResourceWrite::PutBucketPolicy { policy, .. } => policy.clone(),
+                ResourceWrite::PutPublicAccessBlock { configuration, .. } => {
+                    configuration.to_string()
+                }
+            };
+            self.forwarded.lock().unwrap().push(sent);
             Ok(json!({"operation": write.operation()}))
         }
     }
@@ -820,6 +825,44 @@ mod tests {
         let reason = refusal(verifier.handle(unknown).await);
         assert!(reason.contains("is not in the signed stack"), "{reason}");
         assert!(backend.forwarded.lock().unwrap().is_empty());
+    }
+
+    /// The public access block of a storage the stack does not declare public keeps every
+    /// protection; a request that lowers one is refused, and the signed one is sent unchanged.
+    #[tokio::test]
+    async fn a_public_access_block_is_checked_against_the_signed_stack() {
+        let bucket = format!("{PREFIX}-assets");
+        let request = |public_read: bool, bucket: &str, configuration: Value| {
+            json!({"applyResourceWrite": {
+                "release": storage_release(public_read),
+                "signerLists": [signer_list()],
+                "resource": "assets",
+                "writes": [{"putPublicAccessBlock": {
+                    "bucket": bucket, "configuration": configuration,
+                }}],
+            }})
+        };
+        let all = json!({"BlockPublicAcls": true, "IgnorePublicAcls": true,
+                         "BlockPublicPolicy": true, "RestrictPublicBuckets": true});
+        let (verifier, backend) = resource_verifier();
+        verifier
+            .handle(request(false, &bucket, all.clone()))
+            .await
+            .expect("the signed block is accepted");
+        assert_eq!(backend.forwarded.lock().unwrap().len(), 1);
+
+        let mut open = all.clone();
+        open["BlockPublicPolicy"] = json!(false);
+        let (verifier, backend) = resource_verifier();
+        let reason = refusal(verifier.handle(request(false, &bucket, open.clone())).await);
+        assert!(reason.contains("BlockPublicPolicy"), "{reason}");
+        let reason = refusal(verifier.handle(request(false, "other", all)).await);
+        assert!(reason.contains("not acme-prod-assets"), "{reason}");
+        assert!(backend.forwarded.lock().unwrap().is_empty());
+        verifier
+            .handle(request(true, &bucket, open))
+            .await
+            .expect("a declared public storage may open its block");
     }
 
     /// The release the install's ledger records, if any.

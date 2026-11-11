@@ -71,6 +71,41 @@ pub fn check_bucket_policy(
     Ok(())
 }
 
+/// Why `configuration`, a bucket's public access block as the cloud client sends it, is not one
+/// the stack allows: a storage that is not declared `public_read` keeps all four protections on.
+/// A declared public storage may set any of them, since its bucket policy is already checked.
+pub fn check_public_access_block(configuration: &Value, public_read: bool) -> Result<(), String> {
+    let configuration = configuration
+        .as_object()
+        .ok_or("the public access block is not a JSON object")?;
+    const FIELDS: [&str; 4] = [
+        "BlockPublicAcls",
+        "IgnorePublicAcls",
+        "BlockPublicPolicy",
+        "RestrictPublicBuckets",
+    ];
+    if let Some(key) = configuration
+        .keys()
+        .find(|key| !FIELDS.contains(&key.as_str()))
+    {
+        return Err(format!(
+            "the public access block has an unknown field '{key}'"
+        ));
+    }
+    if public_read {
+        return Ok(());
+    }
+    for field in FIELDS {
+        if configuration.get(field) != Some(&Value::Bool(true)) {
+            return Err(format!(
+                "the public access block does not set {field} to true, and the signed stack does \
+                 not declare this storage public"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +209,27 @@ mod tests {
             .expect_err("unknown field");
         check_bucket_policy(&policy(vec![json!({"Effect": "Maybe"})]), BUCKET, false)
             .expect_err("bad effect");
+    }
+
+    #[test]
+    fn a_private_storage_keeps_every_public_access_protection() {
+        let all = json!({"BlockPublicAcls": true, "IgnorePublicAcls": true,
+                         "BlockPublicPolicy": true, "RestrictPublicBuckets": true});
+        check_public_access_block(&all, false).expect("all on");
+        for field in [
+            "BlockPublicAcls",
+            "IgnorePublicAcls",
+            "BlockPublicPolicy",
+            "RestrictPublicBuckets",
+        ] {
+            let mut one_off = all.clone();
+            one_off[field] = json!(false);
+            check_public_access_block(&one_off, false).expect_err(field);
+            check_public_access_block(&one_off, true).expect("declared public");
+            let mut missing = all.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            check_public_access_block(&missing, false).expect_err(field);
+        }
+        check_public_access_block(&json!({"Surprise": true}), true).expect_err("unknown field");
     }
 }

@@ -8,7 +8,10 @@
 //! never management, the verifier or the setup identity.
 
 use alien_core::{ResourceEntry, Stack, Storage};
-use alien_permissions::{aws_bucket_policy::check_bucket_policy, aws_resource_policies};
+use alien_permissions::{
+    aws_bucket_policy::{check_bucket_policy, check_public_access_block},
+    aws_resource_policies,
+};
 use alien_signing::SignedStatement;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,6 +47,12 @@ pub enum ResourceWrite {
     /// S3 PutBucketPolicy, with the policy document as the controller sends it.
     #[serde(rename_all = "camelCase")]
     PutBucketPolicy { bucket: String, policy: String },
+    /// S3 PutPublicAccessBlock, with the configuration as the cloud client serialises it.
+    #[serde(rename_all = "camelCase")]
+    PutPublicAccessBlock {
+        bucket: String,
+        configuration: Value,
+    },
 }
 
 impl ResourceWrite {
@@ -51,6 +60,7 @@ impl ResourceWrite {
     pub fn operation(&self) -> &'static str {
         match self {
             ResourceWrite::PutBucketPolicy { .. } => "PutBucketPolicy",
+            ResourceWrite::PutPublicAccessBlock { .. } => "PutPublicAccessBlock",
         }
     }
 }
@@ -111,6 +121,24 @@ pub fn aws_partition(region: &str) -> &'static str {
     }
 }
 
+/// The storage a bucket write is for: the write must name the storage's own bucket.
+fn own_bucket<'a>(
+    facts: &'a ResourceFacts<'_>,
+    bucket: &str,
+    operation: &str,
+) -> Result<&'a Storage> {
+    let storage = facts.storage()?;
+    let own =
+        aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, facts.resource_id);
+    if bucket != own {
+        return Err(refused(format!(
+            "{operation} names bucket {bucket}, not {own}, the name this install gives storage '{}'",
+            facts.resource_id
+        )));
+    }
+    Ok(storage)
+}
+
 /// Check a write for an AWS resource: it must name the resource's own cloud name, and everything
 /// it allows must be what the signed stack declares.
 pub fn check_aws_write(
@@ -120,22 +148,18 @@ pub fn check_aws_write(
 ) -> Result<()> {
     match write {
         ResourceWrite::PutBucketPolicy { bucket, policy } => {
-            let storage = facts.storage()?;
-            let own = aws_resource_policies::aws_prefixed_resource_name(
-                &facts.place.prefix,
-                facts.resource_id,
-            );
-            if *bucket != own {
-                return Err(refused(format!(
-                    "PutBucketPolicy names bucket {bucket}, not {own}, the name this install gives \
-                     storage '{}'",
-                    facts.resource_id
-                )));
-            }
+            let storage = own_bucket(facts, bucket, "PutBucketPolicy")?;
             let document: Value = serde_json::from_str(policy)
                 .map_err(|error| refused(format!("the bucket policy is not JSON: {error}")))?;
             let arn = format!("arn:{}:s3:::{bucket}", aws_partition(region));
             check_bucket_policy(&document, &arn, storage.public_read).map_err(refused)
+        }
+        ResourceWrite::PutPublicAccessBlock {
+            bucket,
+            configuration,
+        } => {
+            let storage = own_bucket(facts, bucket, "PutPublicAccessBlock")?;
+            check_public_access_block(configuration, storage.public_read).map_err(refused)
         }
     }
 }
@@ -155,6 +179,21 @@ pub async fn forward_aws_write(
                     operation: format!("s3:PutBucketPolicy {bucket}"),
                 },
             )?;
+            Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::PutPublicAccessBlock {
+            bucket,
+            configuration,
+        } => {
+            let configuration: alien_aws_clients::s3::PublicAccessBlockConfiguration =
+                serde_json::from_value(configuration.clone()).map_err(|error| {
+                    refused(format!("the public access block does not parse: {error}"))
+                })?;
+            s3.put_public_access_block(bucket, configuration)
+                .await
+                .context(crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("s3:PutPublicAccessBlock {bucket}"),
+                })?;
             Ok(json!({ "bucket": bucket }))
         }
     }

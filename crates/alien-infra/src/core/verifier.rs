@@ -385,6 +385,12 @@ pub enum ResourceWrite {
     /// S3 PutBucketPolicy.
     #[serde(rename_all = "camelCase")]
     PutBucketPolicy { bucket: String, policy: String },
+    /// S3 PutPublicAccessBlock.
+    #[serde(rename_all = "camelCase")]
+    PutPublicAccessBlock {
+        bucket: String,
+        configuration: serde_json::Value,
+    },
 }
 
 /// What `applyResourceWrite` did.
