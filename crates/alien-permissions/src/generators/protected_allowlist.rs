@@ -38,8 +38,6 @@ pub enum AllowListCloud {
     Aws,
     /// `protected-management/azure.allow`
     Azure,
-    /// `protected-management/gcp.allow`
-    Gcp,
 }
 
 impl AllowListCloud {
@@ -48,23 +46,18 @@ impl AllowListCloud {
         match self {
             Self::Aws => "crates/alien-permissions/protected-management/aws.allow",
             Self::Azure => "crates/alien-permissions/protected-management/azure.allow",
-            Self::Gcp => "crates/alien-permissions/protected-management/gcp.allow",
         }
     }
 
     fn list(self) -> &'static AllowList {
         static AWS: OnceLock<AllowList> = OnceLock::new();
         static AZURE: OnceLock<AllowList> = OnceLock::new();
-        static GCP: OnceLock<AllowList> = OnceLock::new();
         match self {
             Self::Aws => AWS.get_or_init(|| {
                 AllowList::parse(include_str!("../../protected-management/aws.allow"))
             }),
             Self::Azure => AZURE.get_or_init(|| {
                 AllowList::parse(include_str!("../../protected-management/azure.allow"))
-            }),
-            Self::Gcp => GCP.get_or_init(|| {
-                AllowList::parse(include_str!("../../protected-management/gcp.allow"))
             }),
         }
     }
@@ -259,7 +252,6 @@ mod tests {
         for cloud in [
             AllowListCloud::Aws,
             AllowListCloud::Azure,
-            AllowListCloud::Gcp,
         ] {
             assert!(!cloud.list().entries.is_empty(), "{}", cloud.file());
         }

@@ -3,7 +3,7 @@ use crate::{
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
         protected_allowlist::{
-            is_built_in_unchanged, AllowListCloud, Kind as AllowListKind,
+            is_built_in_unchanged,
         },
         families::gcp_family,
     },
@@ -214,10 +214,14 @@ impl GcpRuntimePermissionsGenerator {
         for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
             validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
-            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+            let residual = gcp_residual_permissions(&platform_permission.grant);
+            let replaced = replaced_role_permissions(&platform_permission.grant, context);
+            if residual.is_none() && replaced.is_empty() {
                 continue;
-            };
-            let permissions = granted_permissions(permission_set, permissions, context)?;
+            }
+            let mut permissions: Vec<String> = residual.cloned().unwrap_or_default();
+            permissions.extend(replaced);
+            let permissions = granted_permissions(permission_set, &permissions, context)?;
             if permissions.is_empty() {
                 continue;
             }
@@ -382,14 +386,19 @@ impl GcpRuntimePermissionsGenerator {
                 }));
             }
 
+            // A protected install's management identity holds predefined roles only from the
+            // built-in list. A role with a family permission becomes a custom role without it.
+            let mut replaced_role_permissions: Vec<String> = Vec::new();
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
                     if context.signing_protected {
-                        AllowListCloud::Gcp.require(
-                            &permission_set.id,
-                            AllowListKind::Role,
-                            predefined_role,
-                        )?;
+                        if let Some(permissions) = gcp_role_without_family_permissions(predefined_role)
+                        {
+                            replaced_role_permissions
+                                .extend(permissions.iter().map(|p| p.to_string()));
+                            continue;
+                        }
+                        require_built_in_gcp_role(&permission_set.id, predefined_role)?;
                     }
                     bindings.push(GcpIamBinding {
                         role: predefined_role.clone(),
@@ -406,10 +415,13 @@ impl GcpRuntimePermissionsGenerator {
                 }
             }
 
-            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+            let residual = gcp_residual_permissions(&platform_permission.grant);
+            if residual.is_none() && replaced_role_permissions.is_empty() {
                 continue;
-            };
-            let permissions = granted_permissions(permission_set, permissions, context)?;
+            }
+            let mut permissions: Vec<String> = residual.cloned().unwrap_or_default();
+            permissions.extend(replaced_role_permissions);
+            let permissions = granted_permissions(permission_set, &permissions, context)?;
             if permissions.is_empty() {
                 continue;
             }
@@ -489,6 +501,114 @@ impl GcpRuntimePermissionsGenerator {
             expression: interpolated_expression,
         })
     }
+}
+
+/// The predefined roles the built-in management profile binds on GCP. A predefined role can't be
+/// narrowed, so a protected install refuses every other one (a broad role such as `roles/editor`,
+/// or one GCP adds later). Roles that hold a family permission are not here: see
+/// [`gcp_role_without_family_permissions`].
+pub const GCP_BUILT_IN_ROLES: &[&str] = &[
+    "roles/artifactregistry.reader",
+    "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+    "roles/cloudkms.viewer",
+    "roles/datastore.user",
+    "roles/datastore.viewer",
+    "roles/iam.roleViewer",
+    "roles/iam.serviceAccountViewer",
+    "roles/logging.logWriter",
+    "roles/pubsub.publisher",
+    "roles/pubsub.viewer",
+    "roles/run.invoker",
+    "roles/run.viewer",
+    "roles/secretmanager.secretAccessor",
+    "roles/secretmanager.secretVersionAdder",
+    "roles/secretmanager.viewer",
+    "roles/serviceusage.serviceUsageViewer",
+    "roles/storage.bucketViewer",
+    "roles/storage.objectCreator",
+    "roles/storage.objectViewer",
+];
+
+/// Predefined roles that carry a family permission, with what the management identity gets
+/// instead: the role's permissions minus the family ones, as a custom role setup creates.
+const GCP_ROLES_WITHOUT_FAMILY_PERMISSIONS: &[(&str, &[&str])] = &[
+    // Minus `storage.objects.setIamPolicy`.
+    (
+        "roles/storage.objectAdmin",
+        &[
+            "storage.objects.create",
+            "storage.objects.delete",
+            "storage.objects.get",
+            "storage.objects.getIamPolicy",
+            "storage.objects.list",
+            "storage.objects.update",
+            "storage.multipartUploads.abort",
+            "storage.multipartUploads.create",
+            "storage.multipartUploads.list",
+            "storage.multipartUploads.listParts",
+        ],
+    ),
+    // Minus `pubsub.topics.attachSubscription`.
+    (
+        "roles/pubsub.subscriber",
+        &[
+            "pubsub.snapshots.get",
+            "pubsub.snapshots.list",
+            "pubsub.subscriptions.consume",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.list",
+        ],
+    ),
+    // The API-enabling permissions only; the predefined admin role also carries quota and
+    // consumer-settings writes.
+    (
+        "roles/serviceusage.serviceUsageAdmin",
+        &[
+            "serviceusage.operations.get",
+            "serviceusage.operations.list",
+            "serviceusage.services.disable",
+            "serviceusage.services.enable",
+            "serviceusage.services.get",
+            "serviceusage.services.list",
+        ],
+    ),
+];
+
+/// The custom-role permissions that replace `role` on a protected install, if it has any.
+pub fn gcp_role_without_family_permissions(role: &str) -> Option<&'static [&'static str]> {
+    GCP_ROLES_WITHOUT_FAMILY_PERMISSIONS
+        .iter()
+        .find(|(name, _)| *name == role)
+        .map(|(_, permissions)| *permissions)
+}
+
+/// What a protected install's management identity gets instead of the predefined roles in `grant`
+/// that carry a family permission.
+fn replaced_role_permissions(grant: &PermissionGrant, context: &PermissionContext) -> Vec<String> {
+    if !context.signing_protected {
+        return Vec::new();
+    }
+    grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .filter_map(|role| gcp_role_without_family_permissions(role))
+        .flat_map(|permissions| permissions.iter().map(|p| p.to_string()))
+        .collect()
+}
+
+fn require_built_in_gcp_role(permission_set_id: &str, role: &str) -> Result<()> {
+    if GCP_BUILT_IN_ROLES.contains(&role) {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+        platform: "gcp".to_string(),
+        message: format!(
+            "Permission set '{permission_set_id}' binds the predefined role '{role}' to a protected \
+             install's management identity; a predefined role can't be narrowed, so only the \
+             built-in management roles are accepted"
+        ),
+    }))
 }
 
 /// The permissions of a catalog entry the rendered identity receives: all of them, except that a

@@ -104,7 +104,6 @@ fn assert_family_refused(
     );
 }
 const ALLOW_LIST_AZURE: &str = "crates/alien-permissions/protected-management/azure.allow";
-const ALLOW_LIST_GCP: &str = "crates/alien-permissions/protected-management/gcp.allow";
 
 fn assert_refused(
     error: &alien_error::AlienError<alien_permissions::ErrorData>,
@@ -591,7 +590,7 @@ fn render_gcp(
 }
 
 #[test]
-fn a_gcp_predefined_role_outside_the_allow_list_is_refused() {
+fn a_gcp_predefined_role_outside_the_built_in_list_is_refused() {
     for role in [
         "roles/editor",
         "roles/owner",
@@ -609,7 +608,8 @@ fn a_gcp_predefined_role_outside_the_allow_list_is_refused() {
         let set = gcp_set(json!({ "predefinedRoles": [role] }));
         let error = render_gcp(&set, true)
             .expect_err(&format!("{role} must be refused on a protected install"));
-        assert_refused(&error, role, ALLOW_LIST_GCP);
+        assert_eq!(error.code, "GENERATOR_ERROR", "{role}");
+        assert!(error.message.contains(role), "{error}");
         render_gcp(&set, false).expect("an unprotected install is unchanged");
     }
 

@@ -47,6 +47,7 @@ pub use azure_setup_owned::{
     AZURE_SERVICE_BUS_DATA_SENDER_ROLE_ID,
 };
 pub use gcp_runtime::{
+    gcp_role_without_family_permissions, GCP_BUILT_IN_ROLES,
     custom_role_description_names_prefix, custom_role_namespace_for_prefix,
     custom_role_permission_set_prefix, custom_role_prefix, legacy_custom_role_namespace_for_prefix,
     GcpBindingResourceKind, GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding,

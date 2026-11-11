@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpGrantPlan, GcpRuntimePermissionsGenerator},
+    generators::{gcp_role_without_family_permissions, GcpBindingTargetScope, GcpGrantPlan, GcpRuntimePermissionsGenerator},
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 
@@ -143,9 +143,25 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             assert!(held.is_empty(), "{id}: {role_id} still holds {held:?}");
             // A role keeps its ID and binding and only loses permissions, so setup updates it
             // in place. A binding that grants Secret Manager also leaves out the signing inputs.
-            let (before, before_condition) = unprotected
-                .get(role_id)
-                .unwrap_or_else(|| panic!("{id}: {role_id} is new in the protected rendering"));
+            // A predefined role that carries a family permission becomes a custom role, so
+            // the protected rendering can hold a role the unprotected one doesn't.
+            let Some((before, before_condition)) = unprotected.get(role_id) else {
+                let replacement: BTreeSet<&str> = [
+                    "roles/storage.objectAdmin",
+                    "roles/pubsub.subscriber",
+                    "roles/serviceusage.serviceUsageAdmin",
+                ]
+                .into_iter()
+                .filter_map(gcp_role_without_family_permissions)
+                .flatten()
+                .copied()
+                .collect();
+                assert!(
+                    permissions.iter().all(|p| replacement.contains(p.as_str())),
+                    "{id}: {role_id} is new in the protected rendering and holds {permissions:?}"
+                );
+                continue;
+            };
             let exclusion = r#"!resource.name.extract("/secrets/{name}").startsWith("signed-")"#;
             let expected = if permissions.iter().any(|p| p.starts_with("secretmanager.")) {
                 Some(match before_condition {
@@ -265,7 +281,11 @@ fn protected_management_is_never_bound_to_an_impersonation_role() {
             &context(true),
         )
         .expect_err("a token creator binding lets management act as any service account");
-    assert_eq!(error.code, "PROTECTED_MANAGEMENT_ACTION_REFUSED");
+    assert_eq!(error.code, "GENERATOR_ERROR");
+    assert!(
+        error.message.contains("roles/iam.serviceAccountTokenCreator"),
+        "{error}"
+    );
     assert!(GcpRuntimePermissionsGenerator::new()
         .generate_grant_plan(
             get_permission_set("service-account/impersonate").expect("registered set"),
@@ -489,4 +509,36 @@ fn every_permission_this_file_names_by_hand_is_in_a_family() {
         }
     }
     assert!(checked > 10, "only {checked} hand-listed permissions found");
+}
+
+/// Every predefined role the registry's sets bind is either on the built-in list (and so has no
+/// family permission by review), is replaced by a custom role without family permissions, or is
+/// the one role management is never bound to.
+#[test]
+fn every_predefined_role_in_the_registry_is_accounted_for() {
+    use alien_permissions::generators::{gcp_family, GCP_BUILT_IN_ROLES};
+
+    for id in list_permission_set_ids() {
+        let Some(entries) = get_permission_set(id).and_then(|set| set.platforms.gcp.as_ref())
+        else {
+            continue;
+        };
+        for entry in entries {
+            for role in entry.grant.predefined_roles.iter().flatten() {
+                let accounted = GCP_BUILT_IN_ROLES.contains(&role.as_str())
+                    || gcp_role_without_family_permissions(role).is_some()
+                    // Only on sets management never holds: impersonation and remote execution.
+                    || id.starts_with("service-account/impersonate")
+                    || id.ends_with("/remote-execute")
+                    || id.ends_with("/execute")
+                    || id.ends_with("/invoke");
+                assert!(accounted, "{id} binds {role}, which no list accounts for");
+            }
+        }
+    }
+    for role in ["roles/storage.objectAdmin", "roles/pubsub.subscriber", "roles/serviceusage.serviceUsageAdmin"] {
+        for permission in gcp_role_without_family_permissions(role).expect("replaced") {
+            assert_eq!(gcp_family(permission), None, "{role}: {permission}");
+        }
+    }
 }
