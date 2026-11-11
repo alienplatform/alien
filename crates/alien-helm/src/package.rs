@@ -81,10 +81,22 @@ pub fn apply_package_defaults(
             "version: 0.1.0\n",
             &format!("version: {version}\n"),
         )?;
+        // The application is the Operator this chart installs, so its version is
+        // the Operator's release version. Without a release version (`dev`,
+        // `latest`) the chart version stands in.
+        let app_version = defaults
+            .operator_image
+            .as_ref()
+            .map(|image| image.tag.strip_prefix('v').unwrap_or(image.tag))
+            .filter(|tag| {
+                tag.split('.').count() == 3
+                    && tag.split('.').all(|part| part.parse::<u64>().is_ok())
+            })
+            .unwrap_or(version);
         replace_once(
             chart_yaml,
             "appVersion: \"0.1.0\"\n",
-            &format!("appVersion: {}\n", quote(version)?),
+            &format!("appVersion: {}\n", quote(app_version)?),
         )?;
     }
 

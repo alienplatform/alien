@@ -4000,7 +4000,7 @@ fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
 
 fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
     format!(
-        "apiVersion: v2\nname: {chart_name}\ndescription: Deployment chart for {stack_id}\ntype: application\nversion: 0.1.0\nappVersion: \"0.1.0\"\n",
+        "apiVersion: v2\nname: {chart_name}\ndescription: Deployment chart for {stack_id}\ntype: application\nversion: 0.1.0\nappVersion: \"0.1.0\"\nkubeVersion: \">=1.27.0-0\"\n",
         stack_id = stack.id()
     )
 }

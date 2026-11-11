@@ -196,3 +196,45 @@ fn the_schema_types_the_postgres_and_exposure_values() {
     assert!(!bad_mode.is_ok(), "{}", bad_mode.stdout);
     assert!(bad_mode.stderr.contains("mode"), "{}", bad_mode.stderr);
 }
+
+#[test]
+fn chart_yaml_names_the_kubernetes_versions_and_the_operator_version() {
+    use alien_helm::{apply_package_defaults, OperatorImageDefault, PackageDefaults};
+
+    let stack = Stack::new("chart-meta".to_string()).build();
+    let chart = alien_helm::generate_helm_chart(
+        &stack,
+        alien_helm::HelmOptions {
+            registry: &alien_helm::HelmRegistry::built_in(),
+            stack_settings: StackSettings::default(),
+            chart_name: "chart-meta".to_string(),
+        },
+    )
+    .unwrap();
+    assert!(chart.files["Chart.yaml"].contains("kubeVersion: \">=1.27.0-0\"\n"));
+
+    let packaged = |tag: &str| {
+        apply_package_defaults(
+            chart.clone(),
+            &PackageDefaults {
+                version: Some("1.4.3003059"),
+                management_url: None,
+                operator_image: Some(OperatorImageDefault {
+                    repository: "ghcr.io/alienplatform/alien-operator",
+                    tag,
+                }),
+                log_collector: None,
+                registry_pull_secret: false,
+                setup: None,
+            },
+        )
+        .unwrap()
+        .files["Chart.yaml"]
+            .clone()
+    };
+    let release = packaged("v3.3.59");
+    assert!(release.contains("version: 1.4.3003059\n"), "{release}");
+    assert!(release.contains("appVersion: \"3.3.59\"\n"), "{release}");
+    // A tag that isn't a release version leaves the chart version as the app version.
+    assert!(packaged("dev").contains("appVersion: \"1.4.3003059\"\n"));
+}
