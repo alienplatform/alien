@@ -38,6 +38,16 @@ fn chart_runtime_class() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The class pods are built with: the chart's current value, else what an earlier run recorded,
+/// else the class installs without the value have always used. Read again on every update and
+/// health tick, so changing `sandbox.runtimeClassName` and upgrading takes effect on the next
+/// pod and the idle pool rolls to it.
+fn runtime_class_to_use(recorded: Option<&str>, chart: Option<String>) -> String {
+    chart
+        .or_else(|| recorded.map(str::to_string))
+        .unwrap_or_else(|| LEGACY_RUNTIME_CLASS.to_string())
+}
+
 /// Idle pods the chart asks for (`sandbox.warmPoolSize`); `None` for a chart that predates it.
 fn chart_warm_pool_size() -> Option<usize> {
     std::env::var(alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE)
@@ -110,30 +120,7 @@ impl KubernetesSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         // The chart's value wins over what an earlier run recorded, so changing
         // `sandbox.runtimeClassName` and upgrading takes effect.
-        let runtime_class = chart_runtime_class()
-            .or_else(|| self.runtime_class.clone())
-            .unwrap_or_else(|| LEGACY_RUNTIME_CLASS.to_string());
-
-        let kubernetes_config = ctx.get_kubernetes_config()?;
-        let client = ctx
-            .service_provider
-            .get_kubernetes_runtime_class_client(kubernetes_config)
-            .await?;
-
-        let available =
-            client
-                .list_runtime_classes()
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to list RuntimeClasses".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-        // Before any pod exists. On Autopilot an unschedulable pod is not rejected — node
-        // auto-provisioning picks it up and it sits in Pending while nodes are billed.
-        require_sandboxed_runtime_class(&config.id, &runtime_class, &available.items)?;
-
-        self.runtime_class = Some(runtime_class);
+        confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
         self.sandbox_id = Some(config.id.clone());
         self.default_policy = config.default_policy.clone();
         self.broker_url = Some(broker_url(&config.id)?);
@@ -179,6 +166,7 @@ impl KubernetesSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
 
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
         self.broker_url = Some(broker_url(&config.id)?);
@@ -259,6 +247,7 @@ impl KubernetesSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
         self.default_policy = config.default_policy.clone();
         self.broker_url = Some(broker_url(&config.id)?);
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
@@ -496,6 +485,36 @@ struct WarmPool {
 ///
 /// Runs on the health tick rather than on session create: a create that had to wait for a pod
 /// to be built would be the 79s cold path this pool exists to avoid.
+/// Checks the class the chart names today (a sandboxed one the cluster declares) and records it.
+/// Skips the cluster lookup when it is the class already confirmed. Before any pod is built with
+/// it: on Autopilot an unschedulable pod is not rejected, node auto-provisioning picks it up and
+/// it sits in Pending while nodes are billed.
+async fn confirm_runtime_class(
+    recorded: &mut Option<String>,
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+) -> Result<()> {
+    let wanted = runtime_class_to_use(recorded.as_deref(), chart_runtime_class());
+    if recorded.as_deref() == Some(wanted.as_str()) {
+        return Ok(());
+    }
+    let kubernetes_config = ctx.get_kubernetes_config()?;
+    let client = ctx
+        .service_provider
+        .get_kubernetes_runtime_class_client(kubernetes_config)
+        .await?;
+    let available = client
+        .list_runtime_classes()
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to list RuntimeClasses".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    require_sandboxed_runtime_class(sandbox_id, &wanted, &available.items)?;
+    *recorded = Some(wanted);
+    Ok(())
+}
+
 async fn replenish_warm_pool(
     ctx: &ResourceControllerContext<'_>,
     sandbox: &Sandbox,
@@ -1011,6 +1030,30 @@ mod tests {
             base,
             template_hash(&pool_pod("registry/app:1", "4Gi")),
             "limits"
+        );
+    }
+
+    /// `sandbox.runtimeClassName` can change on a chart upgrade: the value in the environment
+    /// wins over what an earlier run recorded, and the class is part of what the idle pool is
+    /// compared against, so the pool rolls to it.
+    #[test]
+    fn a_changed_runtime_class_is_used_and_rolls_the_idle_pool() {
+        assert_eq!(
+            runtime_class_to_use(Some("gvisor"), Some("isolated-sandbox".to_string())),
+            "isolated-sandbox"
+        );
+        assert_eq!(runtime_class_to_use(Some("kata"), None), "kata");
+        assert_eq!(runtime_class_to_use(None, None), LEGACY_RUNTIME_CLASS);
+
+        let pod_with = |class: &str| {
+            let mut pod = pool_pod("registry/app:1", "2Gi");
+            pod.spec.as_mut().unwrap().runtime_class_name = Some(class.to_string());
+            pod
+        };
+        assert_ne!(
+            template_hash(&pod_with("gvisor")),
+            template_hash(&pod_with("isolated-sandbox")),
+            "an idle pod built with the old class is stale"
         );
     }
 
