@@ -1135,6 +1135,97 @@ fn eks_module_outputs_the_charts_infrastructure_values() {
     assert!(compact.contains("service = \"s3\""), "{outputs}");
 }
 
+fn eks_stack_with_databases() -> Stack {
+    Stack::new("with-databases".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Redis::new("cache".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build()
+}
+
+/// A stack with a Postgres or Redis resource renders on EKS: the module leaves them out and
+/// says the installer supplies their bindings. Before this, rendering failed with
+/// IMPORT_REGISTRATION_MISSING.
+#[test]
+fn eks_module_leaves_out_resources_the_installer_binds() {
+    let module = render(
+        &eks_stack_with_databases(),
+        TerraformTarget::Eks,
+        StackSettings::default(),
+    );
+    let all = whole_module(&module);
+    assert!(!all.contains("aws_rds") && !all.contains("aws_rds_cluster"), "{all}");
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("output \"installer_supplied_bindings\""), "{outputs}");
+    assert!(compact.contains("db = \"postgres\""), "{outputs}");
+    assert!(compact.contains("cache = \"redis\""), "{outputs}");
+    let readme = module.get("README.md").expect("README.md");
+    assert!(readme.contains("## Bindings you supply"), "{readme}");
+    assert!(readme.contains("`db` (postgres)") && readme.contains("`cache` (redis)"));
+    // What the module does create is still bound as before.
+    assert!(compact.contains("output \"chart_infrastructure_json\""), "{outputs}");
+    assert_terraform_valid(&module, "eks_installer_bindings");
+}
+
+/// An emitter an embedder registers for the type always wins over the skip.
+#[test]
+fn a_registered_emitter_still_renders_its_resource() {
+    use alien_terraform::{TfEmitter, TfFragment};
+
+    struct Marker;
+    impl TfEmitter for Marker {
+        fn emit(
+            &self,
+            _ctx: &alien_core::import::EmitContext<'_>,
+        ) -> alien_core::Result<TfFragment> {
+            Ok(TfFragment::default())
+        }
+        fn emit_import_ref(
+            &self,
+            _ctx: &alien_core::import::EmitContext<'_>,
+        ) -> alien_core::Result<hcl::Expression> {
+            Ok(hcl::Expression::String("registered-postgres".to_string()))
+        }
+    }
+
+    let mut registry = TfRegistry::built_in();
+    registry.register("postgres", alien_core::Platform::Aws, Marker);
+    let module = super::helpers::render_with_registry(
+        &eks_stack_with_databases(),
+        TerraformTarget::Eks,
+        StackSettings::default(),
+        &registry,
+    )
+    .expect("renders");
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("cache = \"redis\""), "{outputs}");
+    assert!(!compact.contains("db = \"postgres\""), "{outputs}");
+    assert!(
+        whole_module(&module).contains("registered-postgres"),
+        "the registered emitter's import data is in the registration"
+    );
+}
+
 fn whole_module(module: &alien_terraform::ModuleFiles) -> String {
     module
         .iter()

@@ -353,6 +353,8 @@ pub(crate) fn render_terraform_module(
     let mut deployer_secrets_vault_binding: Option<Expression> = None;
     // The chart's `infrastructure` entries for resources this module creates.
     let mut chart_infrastructure: Vec<(String, Expression)> = Vec::new();
+    // Resources this module doesn't create: the installer supplies their bindings.
+    let mut installer_bindings: Vec<(String, String)> = Vec::new();
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -375,6 +377,18 @@ pub(crate) fn render_terraform_module(
             && (resource_type == Sandbox::RESOURCE_TYPE
                 || resource_type == ComputeCluster::RESOURCE_TYPE)
         {
+            continue;
+        }
+
+        // A type with no emitter on this target that the installer can bind to existing
+        // infrastructure is left out of the module; the installer supplies its binding. An
+        // emitter registered for the type (an embedder may add one) always wins.
+        if target.is_kubernetes()
+            && options.registry.emitter(&resource_type, platform).is_none()
+            && alien_core::EXTERNAL_BINDING_TYPES
+                .contains(&resource_type.as_ref())
+        {
+            installer_bindings.push((resource_id.clone(), resource_type.as_ref().to_string()));
             continue;
         }
 
@@ -786,6 +800,7 @@ pub(crate) fn render_terraform_module(
             deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?
                 .into_iter()
                 .chain(chart_infrastructure_output(chart_infrastructure))
+                .chain(installer_bindings_output(&installer_bindings))
                 .collect(),
         ))?,
     );
@@ -810,6 +825,12 @@ pub(crate) fn render_terraform_module(
             profile,
         ),
     );
+
+    if let Some(note) = installer_bindings_readme(&installer_bindings) {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(&note);
+        }
+    }
 
     if matches!(target, TerraformTarget::Azure | TerraformTarget::Aks)
         && stack.resources.values().any(|entry| {
@@ -2039,6 +2060,38 @@ fn chart_infrastructure_output(
         expr::jsonencode(expr::object(bindings)),
         "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`.".to_string(),
     ))
+}
+
+/// `installer_supplied_bindings`: the resources this module leaves out because the installer
+/// binds them to existing infrastructure (id to type).
+fn installer_bindings_output(
+    bindings: &[(String, String)],
+) -> Option<(String, Expression, String)> {
+    if bindings.is_empty() {
+        return None;
+    }
+    Some((
+        "installer_supplied_bindings".to_string(),
+        expr::jsonencode(expr::object(
+            bindings
+                .iter()
+                .map(|(id, kind)| (id.clone(), Expression::String(kind.clone()))),
+        )),
+        "Resources this module does not create. Supply each one as an `infrastructure` binding when you install the chart; the install fails naming the value when one is missing.".to_string(),
+    ))
+}
+
+fn installer_bindings_readme(bindings: &[(String, String)]) -> Option<String> {
+    if bindings.is_empty() {
+        return None;
+    }
+    let mut note = String::from(
+        "\n## Bindings you supply\n\nThis module does not create the resources below. Bind each one to existing infrastructure in the chart's `infrastructure` values (or, for a database, enable the chart-managed one); the install fails naming the value when a binding is missing. The `installer_supplied_bindings` output lists them.\n\n",
+    );
+    for (id, kind) in bindings {
+        note.push_str(&format!("- `{id}` ({kind})\n"));
+    }
+    Some(note)
 }
 
 fn deployer_secret_outputs(

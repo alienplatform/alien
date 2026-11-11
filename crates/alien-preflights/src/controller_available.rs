@@ -28,14 +28,5 @@ pub const KUBERNETES_CONTROLLER_TYPES: &[&str] = &[
 ];
 
 /// Resource types an installer can bind to existing infrastructure with an
-/// [`alien_core::ExternalBinding`].
-pub const EXTERNAL_BINDING_TYPES: &[&str] = &[
-    "storage",
-    "queue",
-    "kv",
-    "artifact-registry",
-    "vault",
-    "postgres",
-    "redis",
-    "ai",
-];
+/// [`alien_core::ExternalBinding`] (defined in `alien-core`, which the generators share).
+pub use alien_core::EXTERNAL_BINDING_TYPES;
