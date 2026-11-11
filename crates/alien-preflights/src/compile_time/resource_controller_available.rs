@@ -48,8 +48,8 @@ impl CompileTimeCheck for ResourceControllerAvailableCheck {
     }
 
     fn should_run(&self, _stack: &Stack, platform: Platform) -> bool {
-        // The other platforms register more controllers outside this
-        // repository, so only Kubernetes is complete here.
+        // Kubernetes is the one target whose controller list is complete in
+        // this repository, so it is the only one checked for now.
         platform == Platform::Kubernetes
     }
 
