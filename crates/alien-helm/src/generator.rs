@@ -7873,6 +7873,14 @@ metadata:
   name: {chart_name}
 spec:
   interval: 10m
+  # Without retries Flux marks the release Stalled after one failed install or upgrade and
+  # stops until someone forces a reconcile.
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
   chartRef:
     kind: OCIRepository
     name: {chart_name}
