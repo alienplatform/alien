@@ -181,6 +181,14 @@ fn snapshot(namespace: &str) -> BTreeMap<String, String> {
     seen
 }
 
+/// The plain Deployment and its pods (`deployment/plain`, `pod/plain-...`).
+fn plain_snapshot(namespace: &str) -> BTreeMap<String, String> {
+    snapshot(namespace)
+        .into_iter()
+        .filter(|(name, _)| name == "deployment/plain" || name.starts_with("pod/plain-"))
+        .collect()
+}
+
 fn priority_of(namespace: &str, container: &str) -> String {
     let pods = kubectl_json(namespace, &["get", "pods"]);
     let pod = pods["items"]
@@ -320,10 +328,13 @@ async fn mapped_priority_classes_reach_pods_and_an_unset_upgrade_restarts_nothin
     );
 
     let prioritized = stack(true);
-    let plain_before = snapshot(&namespace)
-        .into_iter()
-        .filter(|(name, _)| name.contains("-plain"))
-        .collect::<BTreeMap<_, _>>();
+    let plain_before = plain_snapshot(&namespace);
+    assert!(
+        plain_before
+            .keys()
+            .any(|name| name.starts_with("pod/plain-")),
+        "the restart check must see the plain pods: {plain_before:?}"
+    );
     state = converge(&prioritized, &client_config, state).await;
     wait_ready(&namespace).await;
     let _ = state;
@@ -333,16 +344,16 @@ async fn mapped_priority_classes_reach_pods_and_an_unset_upgrade_restarts_nothin
             priority_of(&namespace, name),
         );
     }
-    assert_eq!(
-        priority_of(&namespace, "core"),
-        format!("{RELEASE}-critical")
-    );
-    assert_eq!(priority_of(&namespace, "batch"), format!("{RELEASE}-low"));
+    // Created class names carry a namespace/release hash: cluster-scoped, so two same-named
+    // releases in different namespaces must not collide.
+    let classes: serde_json::Value = serde_json::from_str(&map).unwrap();
+    let critical = classes["critical"].as_str().unwrap();
+    let low = classes["low"].as_str().unwrap();
+    assert!(critical.starts_with(&format!("{RELEASE}-")) && critical.ends_with("-critical"));
+    assert_eq!(priority_of(&namespace, "core"), critical);
+    assert_eq!(priority_of(&namespace, "batch"), low);
     assert_eq!(priority_of(&namespace, "plain"), "");
-    let plain_after = snapshot(&namespace)
-        .into_iter()
-        .filter(|(name, _)| name.contains("-plain"))
-        .collect::<BTreeMap<_, _>>();
+    let plain_after = plain_snapshot(&namespace);
     assert_eq!(
         plain_before, plain_after,
         "a workload with no level is not restarted"

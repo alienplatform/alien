@@ -59,10 +59,25 @@ pub struct KubernetesDaemonController {
     /// Public endpoint state (Service/route names, resolved public URL).
     #[serde(default)]
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
+    /// PriorityClass name applied to the pod spec last. The chart's class mapping is read at
+    /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_priority_class: Option<String>,
+    /// Kubernetes' explanation for a DaemonSet that cannot create pods.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) workload_failure: Option<String>,
 }
 
 #[controller]
 impl KubernetesDaemonController {
+    fn get_progress(&self) -> Option<&str> {
+        match self.state {
+            KubernetesDaemonState::WaitingForDaemonSet
+            | KubernetesDaemonState::WaitingForUpdate => self.workload_failure.as_deref(),
+            _ => None,
+        }
+    }
+
     #[flow_entry(Create)]
     #[handler(
         state = CreateStart,
@@ -180,6 +195,13 @@ impl KubernetesDaemonController {
         )
         .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
 
         let daemonset = self
             .build_daemonset(
@@ -263,6 +285,7 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        self.record_workload_failure(ctx).await;
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -558,6 +581,13 @@ impl KubernetesDaemonController {
         )
         .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
 
         let mut new_daemonset = self
             .build_daemonset(
@@ -601,6 +631,7 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        self.record_workload_failure(ctx).await;
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -909,6 +940,16 @@ impl KubernetesDaemonController {
             return Ok(false);
         };
         let config = ctx.desired_resource_config::<Daemon>()?;
+        let desired_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        if desired_priority_class != self.applied_priority_class {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -989,6 +1030,26 @@ impl KubernetesDaemonController {
             &mut self.public_endpoint,
         )
         .await
+    }
+
+    /// Remember why pods cannot be created, when the mapped PriorityClass is missing.
+    async fn record_workload_failure(&mut self, ctx: &ResourceControllerContext<'_>) {
+        self.workload_failure = match (
+            ctx.desired_resource_config::<Daemon>(),
+            self.namespace.as_deref(),
+            self.daemon_set_name.as_deref(),
+        ) {
+            (Ok(config), Some(namespace), Some(name)) => {
+                crate::kubernetes_priority_events::missing_priority_class_progress(
+                    ctx,
+                    config.priority,
+                    namespace,
+                    name,
+                )
+                .await
+            }
+            _ => None,
+        };
     }
 
     async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {

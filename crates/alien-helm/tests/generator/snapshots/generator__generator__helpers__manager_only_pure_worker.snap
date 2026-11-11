@@ -121,7 +121,7 @@ runtime:
   # An empty entry leaves workloads at that level without a PriorityClass. Nothing changes for
   # existing installs until an entry is set.
   workloadPriority:
-    # Create one PriorityClass per level named <release>-<level>, for clusters without their
+    # Create one PriorityClass per level named <release>-<hash>-<level> (the hash is derived from namespace and release), for clusters without their
     # own. Needs cluster-scoped write rights from whoever runs helm, never the Operator.
     create: false
     classes:
@@ -881,7 +881,7 @@ postgres: {}
 {{- $configured := default dict $priority.classes -}}
 {{- $classes := dict -}}
 {{- range $level := list "critical" "high" "normal" "low" -}}
-{{- $name := default (ternary (printf "%s-%s" (include "deployment.fullname" $) $level) "" (default false $priority.create)) (get $configured $level) -}}
+{{- $name := default (ternary (include "deployment.releaseScopedName" (dict "root" $ "suffix" (printf "-%s" $level))) "" (default false $priority.create)) (get $configured $level) -}}
 {{- if $name -}}
 {{- $_ := set $classes $level $name -}}
 {{- end -}}
@@ -2923,12 +2923,13 @@ spec:
 {{- $classes := include "deployment.priorityClassMap" . | fromJson }}
 {{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
 {{- range $level := list "critical" "high" "normal" "low" }}
-{{- if eq (get $classes $level) (printf "%s-%s" (include "deployment.fullname" $) $level) }}
+{{- $configured := default dict $.Values.runtime.workloadPriority.classes }}
+{{- if not (get $configured $level) }}
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
-  name: {{ printf "%s-%s" (include "deployment.fullname" $) $level }}
+  name: {{ get $classes $level }}
   labels:
     {{- include "deployment.labels" $ | nindent 4 }}
 value: {{ get $values $level }}
@@ -3348,8 +3349,8 @@ that sets none of these values renders and restarts exactly as it did.
 
 PriorityClasses are cluster-scoped, so the Operator never creates them. Point the
 levels at classes your cluster already has, or set
-`runtime.workloadPriority.create: true` and Helm creates `<release>-critical`,
-`-high`, `-normal` and `-low` (values 1000000, 100000, 0 and -100, never the
+`runtime.workloadPriority.create: true` and Helm creates `<release>-<hash>-critical`,
+`-high`, `-normal` and `-low` (the hash keeps same-named releases in different namespaces apart) (values 1000000, 100000, 0 and -100, never the
 default class) for any level you did not map yourself. Creating them needs
 cluster-scoped rights from whoever runs Helm. Removing the release removes the
 classes; running pods keep the priority they were admitted with.

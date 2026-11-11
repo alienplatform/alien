@@ -838,13 +838,6 @@ fn workload_priority_maps_each_level_to_the_class_the_admin_names() {
 fn workload_priority_create_renders_four_release_named_classes_below_system_ones() {
     let (map, classes) = priority_render("runtime:\n  workloadPriority:\n    create: true\n");
     let map: serde_json::Value = serde_json::from_str(&map.expect("env is set")).unwrap();
-    assert_eq!(
-        map,
-        serde_json::json!({
-            "critical": "acme-critical", "high": "acme-high",
-            "normal": "acme-normal", "low": "acme-low"
-        })
-    );
     let rendered: Vec<(String, i64, bool)> = classes
         .iter()
         .map(|class| {
@@ -855,13 +848,24 @@ fn workload_priority_create_renders_four_release_named_classes_below_system_ones
             )
         })
         .collect();
+    // Cluster-scoped names carry a namespace/release hash so two releases that share a
+    // name in different namespaces never collide.
+    let name = |level: &str| map[level].as_str().unwrap().to_string();
+    for level in ["critical", "high", "normal", "low"] {
+        let n = name(level);
+        assert!(
+            n.starts_with("acme-") && n.ends_with(&format!("-{level}")),
+            "{n}"
+        );
+        assert_ne!(n, format!("acme-{level}"), "name must be namespace-scoped");
+    }
     assert_eq!(
         rendered,
         vec![
-            ("acme-critical".to_string(), 1_000_000, false),
-            ("acme-high".to_string(), 100_000, false),
-            ("acme-normal".to_string(), 0, false),
-            ("acme-low".to_string(), -100, false),
+            (name("critical"), 1_000_000, false),
+            (name("high"), 100_000, false),
+            (name("normal"), 0, false),
+            (name("low"), -100, false),
         ]
     );
     assert!(classes[0]["description"].as_str().unwrap().contains("acme"));
@@ -876,12 +880,33 @@ fn workload_priority_create_skips_levels_the_admin_mapped_elsewhere() {
     );
     let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
     assert_eq!(map["critical"], "vendor-core");
-    assert_eq!(map["high"], "acme-high");
     let names: Vec<_> = classes
         .iter()
         .map(|class| class["metadata"]["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["acme-high", "acme-normal", "acme-low"]);
+    assert_eq!(
+        names,
+        [
+            map["high"].as_str().unwrap(),
+            map["normal"].as_str().unwrap(),
+            map["low"].as_str().unwrap()
+        ]
+    );
+}
+
+/// An explicit mapping whose name equals a generated name is still the admin's class:
+/// the chart must not try to create it.
+#[test]
+fn workload_priority_create_never_creates_a_class_the_admin_named() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: acme-critical\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    assert_eq!(map["critical"], "acme-critical");
+    assert_eq!(classes.len(), 3);
+    assert!(classes
+        .iter()
+        .all(|c| c["metadata"]["name"] != "acme-critical"));
 }
 
 #[test]

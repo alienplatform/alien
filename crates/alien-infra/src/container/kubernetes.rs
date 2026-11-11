@@ -217,6 +217,10 @@ pub struct KubernetesContainerController {
     /// Kubernetes' explanation for a workload that cannot create replicas.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) workload_failure: Option<String>,
+    /// PriorityClass name applied to the pod spec last. The chart's class mapping is read at
+    /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_priority_class: Option<String>,
 }
 
 #[controller]
@@ -410,6 +414,13 @@ impl KubernetesContainerController {
             )
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
         self.reconcile_network_policy(config, &container_name, &namespace, ctx)
             .await?;
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
@@ -756,6 +767,16 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
+        if self.is_stateful {
+            self.workload_failure =
+                crate::kubernetes_priority_events::missing_priority_class_progress(
+                    ctx,
+                    config.priority,
+                    namespace,
+                    workload_name,
+                )
+                .await;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1365,6 +1386,13 @@ impl KubernetesContainerController {
             )
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
         self.service_port = first_declared_container_port(config);
         self.reconcile_network_policy(config, workload_name, namespace, ctx)
             .await?;
@@ -1550,6 +1578,16 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
+        if self.is_stateful {
+            self.workload_failure =
+                crate::kubernetes_priority_events::missing_priority_class_progress(
+                    ctx,
+                    config.priority,
+                    namespace,
+                    workload_name,
+                )
+                .await;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -2105,6 +2143,16 @@ impl KubernetesContainerController {
             // Ready checks the vault value alongside the deployment snapshot.
             return Ok(false);
         }
+        let desired_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        if desired_priority_class != self.applied_priority_class {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -2184,6 +2232,7 @@ mod output_tests {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -2253,6 +2302,7 @@ mod output_tests {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -2321,6 +2371,7 @@ impl KubernetesContainerController {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         }
@@ -3629,6 +3680,7 @@ mod tests {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -4640,6 +4692,34 @@ mod tests {
             templates[0].metadata, templates[2].metadata,
             "a new secret version must change the pod template (rollout)"
         );
+    }
+
+    /// A Helm upgrade that remaps a level changes the pod spec without touching the stack,
+    /// so the controller compares the class it applied with the one now mapped.
+    #[test]
+    fn needs_update_detects_a_changed_priority_class_mapping() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let mut config = manifest_test_container(&[], false);
+        config.priority = Some(alien_core::WorkloadPriority::Critical);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+
+        let mut controller = manifest_test_controller();
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+        controller.applied_priority_class = Some("old-class".to_string());
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+        controller.applied_priority_class = Some("vendor-core".to_string());
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
     }
 
     #[test]
