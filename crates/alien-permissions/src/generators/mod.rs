@@ -32,7 +32,7 @@ pub use aws_managed_policies::{
 pub use aws_runtime::{
     ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
-pub use azure_runtime::{
+pub use azure_runtime::{AZURE_BUILT_IN_ROLES, 
     azure_predefined_role_id, custom_roles_by_scope, dedupe_azure_role_bindings,
     management_roles_by_scope, protected_management_assignable_scopes, AzureCustomRole,
     AzureGrantPlan, AzureManagementRoles, AzureManagementScopeKind, AzureRoleBinding,
@@ -53,9 +53,7 @@ pub use gcp_runtime::{
     GcpBindingResourceKind, GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding,
     GcpIamBindings, GcpIamCondition, GcpRuntimePermissionsGenerator,
 };
-pub use protected_allowlist::{
-    is_management_held, management_stack_secrets_data, AllowListCloud, Kind as AllowListKind,
-};
+pub use protected_allowlist::management_stack_secrets_data;
 pub use verifier_owned::{
     aws_management_actions, aws_passed_to_services, azure_changes_what_runs,
     azure_protected_role_substitute, azure_runs_no_code, azure_verifier_owned_action,

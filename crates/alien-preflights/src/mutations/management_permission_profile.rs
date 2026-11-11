@@ -501,7 +501,7 @@ fn management_profile_contains(
 
 /// Generates the default management permission profile from resource ownership
 /// and feature settings.
-fn generate_auto_management_profile(
+pub(crate) fn generate_auto_management_profile(
     stack: &Stack,
     stack_state: &StackState,
     config: &DeploymentConfig,

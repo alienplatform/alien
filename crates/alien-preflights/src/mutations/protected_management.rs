@@ -15,7 +15,7 @@
 
 use crate::{
     error::{ErrorData, Result},
-    mutations::runs_on_platform_or_base,
+    mutations::{management_permission_profile::generate_auto_management_profile, runs_on_platform_or_base},
     StackMutation,
 };
 use alien_core::{
@@ -102,7 +102,7 @@ impl StackMutation for ProtectedManagementRefusalMutation {
     async fn mutate(
         &self,
         stack: Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
         if config.stack_settings.setup_management == SetupManagement::Automatic {
@@ -125,8 +125,19 @@ impl StackMutation for ProtectedManagementRefusalMutation {
                 ));
             }
             ManagementPermissions::Extend(profile) => {
+                // A stack that was prepared before carries the sets the built-in profile derived
+                // from its resources; those are filtered by the renderer, not refused. Only
+                // what the vendor added is checked.
+                let derived = generate_auto_management_profile(&stack, stack_state, config)?;
                 for (scope, sets) in &profile.0 {
                     for reference in sets {
+                        if derived
+                            .as_ref()
+                            .and_then(|derived| derived.0.get(scope))
+                            .is_some_and(|derived| derived.contains(reference))
+                        {
+                            continue;
+                        }
                         let set = match reference {
                             PermissionSetReference::Name(id) => {
                                 let Some(set) = alien_permissions::get_permission_set(id) else {

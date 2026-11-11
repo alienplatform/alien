@@ -3,7 +3,7 @@ use crate::{
     generators::{
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
         families::{azure_family, azure_reach_exclusions, Family},
-        protected_allowlist::{is_built_in_unchanged, is_management_held, AllowListCloud, Kind as AllowListKind},
+        protected_allowlist::{is_built_in_unchanged, require_azure_data_action},
         verifier_owned::{
             azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
             azure_verifier_owned_data_action,
@@ -521,11 +521,7 @@ impl AzureRuntimePermissionsGenerator {
                         if protected_role_substitute(permission_set, role_name).is_some() {
                             continue;
                         }
-                        AllowListCloud::Azure.require(
-                            &permission_set.id,
-                            AllowListKind::Role,
-                            role_name,
-                        )?;
+                        require_built_in_azure_role(&permission_set.id, role_name)?;
                     }
                     let role_definition_id =
                         self.predefined_role_definition_id(role_name, context)?;
@@ -861,6 +857,39 @@ fn granted_actions(
     Ok(kept)
 }
 
+/// The predefined roles the built-in management profile binds on Azure. A predefined role can't
+/// be narrowed, so a protected install refuses every other one. Roles that reach the verifier's
+/// identity or run templates are replaced by custom roles instead (see
+/// `azure_protected_role_substitute`), and roles only sets that management never holds bind
+/// (a registry push, sandbox execution) are not here.
+pub const AZURE_BUILT_IN_ROLES: &[&str] = &[
+    "AcrPull",
+    "Azure Service Bus Data Receiver",
+    "Azure Service Bus Data Sender",
+    "Cognitive Services User",
+    "Key Vault Reader",
+    "Monitoring Reader",
+    "Reader",
+    "Storage Blob Data Contributor",
+    "Storage Blob Data Reader",
+    "Storage Table Data Contributor",
+    "Storage Table Data Reader",
+];
+
+fn require_built_in_azure_role(permission_set_id: &str, role: &str) -> Result<()> {
+    if AZURE_BUILT_IN_ROLES.iter().any(|built_in| built_in.eq_ignore_ascii_case(role)) {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+        platform: "azure".to_string(),
+        message: format!(
+            "Permission set '{permission_set_id}' binds the predefined role '{role}' to a protected \
+             install's management identity; a predefined role can't be narrowed, so only the \
+             built-in management roles are accepted"
+        ),
+    }))
+}
+
 /// The data actions of an entry the rendered identity receives. A protected install's
 /// management identity receives only the data actions on the Azure allow-list, whichever set
 /// grants them: setup's deny settings don't reach the data plane, and a data action such as
@@ -878,7 +907,7 @@ fn granted_data_actions(
             .iter()
             .filter(|action| action.contains(['*', '?']) || kept.contains(action))
         {
-            AllowListCloud::Azure.require(&permission_set.id, AllowListKind::DataAction, action)?;
+            require_azure_data_action(&permission_set.id, action)?;
         }
     }
     Ok(kept)
@@ -911,7 +940,7 @@ fn protected_role_substitute(
     permission_set: &PermissionSet,
     role: &str,
 ) -> Option<&'static [&'static str]> {
-    azure_protected_role_substitute(role).filter(|_| is_management_held(permission_set))
+    azure_protected_role_substitute(role).filter(|_| is_built_in_unchanged(permission_set))
 }
 
 /// The actions the entry's substituted predefined roles stand for. Empty off a protected install.

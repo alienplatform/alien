@@ -8,7 +8,7 @@ mod common;
 use alien_core::PermissionSet;
 use alien_permissions::{
     generators::{
-        aws_family, is_management_held, management_stack_secrets_data, AwsCloudFormationPermissionsGenerator,
+        aws_family, management_stack_secrets_data, AwsCloudFormationPermissionsGenerator,
         AwsRuntimePermissionsGenerator, AzureRuntimePermissionsGenerator,
         GcpRuntimePermissionsGenerator,
     },
@@ -244,11 +244,11 @@ fn a_changed_copy_of_a_built_in_set_is_a_stack_set() {
 }
 
 #[test]
-fn no_held_built_in_aws_set_is_refused_on_a_protected_install() {
+fn no_built_in_aws_set_is_refused_on_a_protected_install() {
     let mut rendered = 0;
     for id in list_permission_set_ids() {
         let set = get_permission_set(id).expect("listed set");
-        if set.platforms.aws.is_none() || !is_management_held(set) {
+        if set.platforms.aws.is_none() {
             continue;
         }
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -290,11 +290,10 @@ fn setups_identity_sets_render_for_management_without_their_family_actions() {
 }
 
 #[test]
-fn a_held_set_id_does_not_exempt_a_changed_copy() {
+fn a_set_id_does_not_exempt_a_changed_copy() {
     let mut copy = get_permission_set("storage/provision")
         .expect("built-in set")
         .clone();
-    assert!(is_management_held(&copy));
     let aws = copy.platforms.aws.as_mut().expect("aws entries");
     aws[0]
         .grant
@@ -302,7 +301,6 @@ fn a_held_set_id_does_not_exempt_a_changed_copy() {
         .as_mut()
         .expect("actions")
         .push("iam:CreateRole".to_string());
-    assert!(!is_management_held(&copy));
     let error = render_aws(&copy, true).expect_err("a changed copy is checked");
     assert_eq!(error.code, "PROTECTED_MANAGEMENT_FAMILY_ACTION");
     assert!(error.message.contains("'storage/provision'"), "{}", error.message);
@@ -538,7 +536,7 @@ fn the_built_in_vault_secret_write_is_refused_for_the_management_identity() {
 }
 
 #[test]
-fn an_azure_predefined_role_outside_the_allow_list_is_refused() {
+fn an_azure_predefined_role_outside_the_built_in_list_is_refused() {
     for role in [
         "Key Vault Contributor",
         "Key Vault Secrets User",
@@ -550,7 +548,8 @@ fn an_azure_predefined_role_outside_the_allow_list_is_refused() {
         let error = AzureRuntimePermissionsGenerator::new()
             .generate_grant_plan(&set, BindingTarget::Stack, &azure_context(true))
             .expect_err(&format!("{role} must be refused on a protected install"));
-        assert_refused(&error, role, ALLOW_LIST_AZURE);
+        assert_eq!(error.code, "GENERATOR_ERROR", "{role}: {}", error.message);
+        assert!(error.message.contains(&format!("'{role}'")), "{}", error.message);
     }
     let set = azure_role_set(&["Reader"]);
     let plan = AzureRuntimePermissionsGenerator::new()
@@ -920,7 +919,6 @@ fn a_wildcard_data_action_that_covers_a_verifier_power_is_refused() {
 #[test]
 fn the_stack_secrets_set_setup_adds_is_held_by_its_contents_not_its_id() {
     let set = management_stack_secrets_data();
-    assert!(is_management_held(set));
     let actions = render_aws(set, true).expect("the set setup adds renders");
     assert!(
         actions.contains(&"ssm:PutParameter".to_string()),
@@ -935,7 +933,6 @@ fn the_stack_secrets_set_setup_adds_is_held_by_its_contents_not_its_id() {
         not_resources: Vec::new(),
         condition: None,
     });
-    assert!(!is_management_held(&wider));
 }
 
 #[test]
@@ -992,7 +989,13 @@ fn no_built_in_set_gives_a_protected_azure_management_identity_a_family_action()
         let set = get_permission_set(id).expect("listed set");
         // A protected Azure install refuses vaults until the signing vault has its own resource
         // group, so the vault sets render nothing there yet.
-        if set.platforms.azure.is_none() || id.starts_with("vault/") || !is_management_held(set) {
+        // Management never holds the sets that execute or call into a deployment.
+        if set.platforms.azure.is_none()
+            || id.starts_with("vault/")
+            || id.ends_with("/execute")
+            || id.ends_with("/remote-execute")
+            || id.ends_with("/invoke")
+        {
             continue;
         }
         let plan = match AzureRuntimePermissionsGenerator::new().generate_grant_plan(
@@ -1002,6 +1005,11 @@ fn no_built_in_set_gives_a_protected_azure_management_identity_a_family_action()
         ) {
             Ok(plan) => plan,
             Err(error) if error.message.contains("is not supported by platform") => continue,
+            // A set that binds a role outside the built-in management list is not one management
+            // holds (the setup-owned registry roles, sandbox execution).
+            Err(error) if error.message.contains("can't be narrowed") => continue,
+            // Everything the set grants is a family action, so nothing is left to render.
+            Err(error) if error.message.contains("produced no Azure bindings") => continue,
             Err(error) => panic!("{id}: {}", error.message),
         };
         rendered += 1;
@@ -1025,4 +1033,26 @@ fn no_built_in_set_gives_a_protected_azure_management_identity_a_family_action()
     }
     assert!(rendered > 20, "only {rendered} built-in sets rendered");
     assert_eq!(offenders, Vec::<String>::new());
+}
+
+#[test]
+fn every_azure_built_in_management_role_is_a_registry_role_without_family_actions() {
+    use alien_permissions::generators::AZURE_BUILT_IN_ROLES;
+    let mut bound = std::collections::BTreeSet::new();
+    for id in list_permission_set_ids() {
+        let set = get_permission_set(id).expect("listed set");
+        for entry in set.platforms.azure.iter().flatten() {
+            bound.extend(entry.grant.predefined_roles.iter().flatten().cloned());
+        }
+    }
+    for role in AZURE_BUILT_IN_ROLES {
+        assert!(bound.contains(*role), "{role} is listed but no built-in set binds it");
+    }
+    // The Azure roles in the list are read or data-plane roles; none writes the control plane.
+    for role in AZURE_BUILT_IN_ROLES {
+        assert!(
+            role.contains("Data") || role.contains("Reader") || role.contains("Pull") || role.contains("User"),
+            "{role} looks like a role that can write the control plane"
+        );
+    }
 }

@@ -3,23 +3,17 @@
 # Azure's deny settings refuse writes and deletes at the install's resource group, but not an
 # `/action` and not the data plane, so what management's roles may name is limited here.
 #
-# - `action`: control-plane actions. Checked for every permission set except the built-in sets
-#   `held-sets.allow` names, which are reviewed separately and filtered by the verifier-owned list.
-# - `data`: data-plane actions. Checked for every permission set rendered into a management role,
-#   built-in or not, whether setup creates the role or the runtime assigns it. The runtime's
-#   role-assignment condition can't name the scope it assigns at, so a role it may assign can
-#   land on the signing vault, whose secrets hold the ledger and the signed inputs.
-# - `role`: predefined roles, exact names. Checked for every permission set. A held built-in set
-#   that binds `Managed Identity Contributor` or `Network Contributor` gets a custom role instead
-#   (`verifier_owned.rs`), because those roles reach the verifier's identity or run templates.
+# Data-plane actions, checked for every permission set rendered into a management role, built-in or
+# not, whether setup creates the role or the runtime assigns it. The runtime's role-assignment
+# condition can't name the scope it assigns at, so a role it may assign can land on the signing
+# vault, whose secrets hold the ledger and the signed inputs. This file goes once the signing vault
+# has its own resource group.
 #
-# Format: `<kind> <pattern or name>  # reason`. A requested pattern is covered when this file's
+# Format: `data <pattern>  # reason`. A requested pattern is covered when this file's
 # pattern matches it with the requested pattern's own `*` and `?` taken as literal characters,
 # so `*/read` covers `Microsoft.Storage/storageAccounts/read` but not `Microsoft.Storage/*`.
 # Every line needs a reason. Key Vault secret reads and writes and certificate writes are
 # deliberately absent: a vault's secrets hold the signing ledger and the signed inputs.
-
-action */read                    # reads; no read changes a resource
 
 data Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read    # reads blobs
 data Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write   # writes blobs
@@ -43,15 +37,3 @@ data Microsoft.App/sandboxGroups/sandboxes/read               # sandboxes (built
 data Microsoft.App/sandboxGroups/sandboxes/count/read         # sandboxes (built-in sandbox sets)
 data Microsoft.App/sandboxGroups/sandboxes/delete             # sandboxes (built-in sandbox sets)
 
-role Reader                              # reads the group
-role Key Vault Reader                    # reads vault metadata; no secret values
-role Monitoring Reader                   # reads metrics
-role Storage Blob Data Reader            # reads blobs
-role Storage Blob Data Contributor       # blob data; account settings are control-plane actions
-role Storage Table Data Reader           # reads table entities
-role Storage Table Data Contributor      # table data
-role Azure Service Bus Data Receiver     # receives queue messages
-role Azure Service Bus Data Sender       # sends queue messages
-role AcrPull                             # pulls images
-role Cognitive Services User             # calls an AI deployment
-role Cognitive Services OpenAI User      # calls an AI deployment
