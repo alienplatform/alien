@@ -319,6 +319,11 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/jobs/poll", post(job_poll))
         .route("/v1/jobs/cancel", post(job_cancel))
         .route("/v1/interactive", post(interactive_start))
+        // A request for one declared port of the code in the sandbox. Authorized by a preview
+        // capability for that port, never by the Execute one.
+        .route("/v1/preview/{port}", axum::routing::any(preview))
+        .route("/v1/preview/{port}/", axum::routing::any(preview))
+        .route("/v1/preview/{port}/{*rest}", axum::routing::any(preview))
         // A write is at most 256 KiB from the client, so the file-transfer ceiling the rest of the
         // router allows would only let a hostile caller make the agent hold more per request.
         .route(
@@ -1014,6 +1019,62 @@ fn reparse<T: serde::de::DeserializeOwned>(body: &Bytes) -> std::result::Result<
 }
 
 /// Verifies the request may reach this session, or refuses it.
+/// Forwards a request to a port of the sandbox's own server.
+async fn preview(
+    State(state): State<Arc<AgentState>>,
+    request: axum::extract::Request,
+) -> std::result::Result<Response, ApiError> {
+    let AgentAuthorization::Capability {
+        public_key,
+        identity,
+    } = &state.authorization
+    else {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "this sandbox does not serve preview".to_string(),
+        });
+    };
+    let path = request.uri().path().to_string();
+    let after = path.strip_prefix("/v1/preview/").unwrap_or_default();
+    let (port_text, rest) = after.split_once('/').unwrap_or((after, ""));
+    let port: u16 = port_text.parse().map_err(|_| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message: "the preview port is not a port number".to_string(),
+    })?;
+    let token = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "a valid preview capability is required".to_string(),
+        })?;
+    let claims = sandbox_capability_token::verify(
+        token,
+        public_key,
+        identity,
+        SandboxOperationClass::Preview,
+        chrono::Utc::now().timestamp(),
+    )
+    .map_err(ApiError::from)?;
+    // The capability names the port it admits, and the sandbox names the ports it declared; the
+    // path is neither, so it is checked against both.
+    if !claims.admits_port(port)
+        || !crate::preview::port_is_declared(port, &crate::preview::declared_ports())
+    {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "this capability does not admit that port".to_string(),
+        });
+    }
+    let target = match request.uri().query() {
+        Some(query) => format!("/{rest}?{query}"),
+        None => format!("/{rest}"),
+    };
+    Ok(crate::preview::forward(request, port, target, claims.expires_at).await)
+}
+
 async fn authorize(
     state: &AgentState,
     peer: SocketAddr,

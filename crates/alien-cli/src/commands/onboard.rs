@@ -1829,6 +1829,8 @@ struct HelmInstall {
     release: String,
     customer: String,
     infrastructure: Vec<(String, String)>,
+    /// The stack has a sandbox, so the install names the cluster's sandboxed RuntimeClass.
+    sandbox: bool,
 }
 
 impl HelmInstall {
@@ -1854,6 +1856,9 @@ impl HelmInstall {
             release: stack.id().to_string(),
             customer: customer.to_string(),
             infrastructure,
+            sandbox: stack
+                .resources()
+                .any(|(_, entry)| entry.config.resource_type().as_ref() == "sandbox"),
         }
     }
 
@@ -1884,7 +1889,7 @@ impl HelmInstall {
         } else {
             ("", "")
         };
-        let values = if self.infrastructure.is_empty() {
+        let values = if self.infrastructure.is_empty() && !self.sandbox {
             ""
         } else {
             " \\\n  --values values.yaml"
@@ -1905,10 +1910,20 @@ impl HelmInstall {
     }
 
     fn values_example(&self) -> String {
-        if self.infrastructure.is_empty() {
-            return String::new();
+        let mut yaml = String::new();
+        if self.sandbox {
+            // Argo CD renders without cluster access, so the chart cannot pick the class from
+            // the Kubernetes version there; naming it also keeps Helm and GitOps renders equal.
+            yaml.push_str(
+                "sandbox:\n  # The sandboxed RuntimeClass of this cluster: isolated-sandbox on EKS,\n  \
+                 # gvisor on GKE, the cluster's Kata RuntimeClass on AKS or on-premises.\n  \
+                 runtimeClassName: <runtime-class>\n",
+            );
         }
-        let mut yaml = String::from("infrastructure:\n");
+        if self.infrastructure.is_empty() {
+            return yaml;
+        }
+        yaml.push_str("infrastructure:\n");
         for (id, resource_type) in &self.infrastructure {
             match resource_type.as_str() {
                 "storage" => yaml.push_str(&format!(

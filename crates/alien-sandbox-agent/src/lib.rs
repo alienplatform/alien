@@ -8,6 +8,7 @@ pub mod jobs;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;
+pub mod preview;
 #[cfg(unix)]
 pub mod privilege;
 pub mod server;

@@ -132,6 +132,7 @@ pub(super) async fn build_worker_deployment(
         image_pull_secrets,
         ..Default::default()
     };
+    crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
     if ctx.deployment_config.runtime_identity_audience.is_some() {
         crate::kubernetes_runtime_credentials::mount(

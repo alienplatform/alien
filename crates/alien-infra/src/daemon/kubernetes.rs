@@ -1277,6 +1277,7 @@ impl KubernetesDaemonController {
             termination_grace_period_seconds: config.stop_grace_period_seconds.map(i64::from),
             ..Default::default()
         };
+        crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
         if ctx.deployment_config.runtime_identity_audience.is_some() {
             crate::kubernetes_runtime_credentials::mount(

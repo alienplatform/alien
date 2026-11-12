@@ -64,11 +64,11 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
             // AWS-only even where a runtime sandbox controller exists, as on Azure.
             if resource_entry.config.downcast_ref::<Sandbox>().is_some()
                 && resource_entry.lifecycle == ResourceLifecycle::Live
-                && platform != Platform::Aws
+                && !matches!(platform, Platform::Aws | Platform::Kubernetes)
             {
                 errors.push(format!(
                     "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
-                     support; only AWS provisions a sandbox at runtime",
+                     support; only AWS and Kubernetes provision a sandbox at runtime",
                     resource_id,
                     platform.as_str()
                 ));
@@ -506,14 +506,26 @@ mod tests {
 
     /// On Azure or GCP a remote grant names a parent that must exist when the package applies,
     /// which only the package that creates the sandbox can do, so only AWS may declare one Live.
+    /// Kubernetes has no remote grant: the Operator builds the pods itself, so it may as well.
     #[tokio::test]
-    async fn a_live_sandbox_is_refused_on_every_platform_but_aws() {
-        for platform in [
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
+    async fn a_live_sandbox_is_accepted_on_kubernetes() {
+        let result = FrozenResourceLifecycleCheck
+            .check(
+                &sandbox_stack(ResourceLifecycle::Live),
+                Platform::Kubernetes,
+            )
+            .await
+            .expect("the check runs");
+        assert!(
+            !result.errors.iter().any(|e| e.contains("Live lifecycle")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_sandbox_is_refused_where_a_remote_grant_needs_a_parent() {
+        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
             let result = FrozenResourceLifecycleCheck
                 .check(&sandbox_stack(ResourceLifecycle::Live), platform)
                 .await
@@ -526,7 +538,9 @@ mod tests {
             let message = result
                 .errors
                 .iter()
-                .find(|error| error.contains("only AWS provisions a sandbox at runtime"))
+                .find(|error| {
+                    error.contains("only AWS and Kubernetes provision a sandbox at runtime")
+                })
                 .unwrap_or_else(|| {
                     panic!(
                         "the refusal must name why, on {platform:?}: {:?}",
