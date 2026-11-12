@@ -178,60 +178,84 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         "dynamicContainerRepositories": ["repo"],
     }))
     .expect("stack decodes");
-    let mut metadata = helm_setup_update_metadata();
-    metadata.deletion_policy = DeletionPolicy::Erase;
-    metadata.airgapped_report = Some(AirgappedReportMetadata {
-        written_at: Some(at),
-        received_at: at,
-    });
-    metadata.operator_version = Some("3.3.61".to_string());
-    metadata.credential_retry = Some(CredentialRetry {
-        started_at: at,
-        status: DeploymentStatus::Provisioning,
-    });
-    metadata.initial_setup_authority = InitialSetupAuthority::default();
-    metadata.automatic_setup = true;
-    metadata.last_synced_env_vars_hash = Some("hash".to_string());
-    metadata.last_synced_secret_names = vec!["DB_PASSWORD".to_string()];
-    metadata.vault_credentials_revoked = true;
-    metadata.retained_storage_protection_hash = Some("hash".to_string());
-    metadata.retained_storage_protection_confirmed_at = Some(at);
-    metadata.retained_data_protection_started_at = Some(at);
-    metadata.prepared_stack = Some(stack.clone());
-    metadata.persisted_gate_answers = [("gate".to_string(), true)].into_iter().collect();
-    metadata.pending_prepared_stack = Some(stack.clone());
-    metadata.pending_prepared_release_id = Some("rel_dddddddddddddddddddddddddddd".to_string());
-    metadata.direct_setup_revision = Some("rev".to_string());
-    metadata.registry_access_granted = true;
-    metadata.registry_access = Some(RegistryAccess {
-        repositories: vec!["repo".to_string()],
-        ..RegistryAccess::default()
-    });
-    metadata.setup_scaffolding = [(
-        "worker".to_string(),
-        SetupScaffolding::AwsSandbox {
-            build_role_name: "build".to_string(),
-            egress: Some(AwsSandboxEgressScaffolding {
-                operator_role_name: "operator".to_string(),
-                security_group_id: Some("sg-1".to_string()),
-                connector_arn: Some("arn:aws:lambda:us-east-1:1:connector".to_string()),
-                connector_request: Some("request".to_string()),
-            }),
-            image_arn: Some("arn:aws:lambda:us-east-1:1:image".to_string()),
-        },
-    )]
-    .into_iter()
-    .collect();
-    metadata.deployer_secrets = vec![fully_populated_deployer_secret()];
-    metadata.ai_access_checks = vec![AiAccessCheck {
-        resource_id: "ai".to_string(),
-        model_id: "claude-sonnet-5".to_string(),
-        result: AiAccessCheckResult::Refused,
-        detail: Some("not enabled".to_string()),
-        tested_at: at,
-    }];
-    metadata.deployer_secrets_checked_at = Some(at);
-    metadata.resources_waiting_for_secrets = vec!["reader".to_string()];
+    let metadata = RuntimeMetadata {
+        setup_update_authorization: Some(SetupUpdateAuthorization {
+            nonce: "nonce-1".to_string(),
+            baseline_frozen_digest: "before".to_string(),
+            target_frozen_digest: "after".to_string(),
+            release_id: "rel_aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            setup_target: "kubernetes".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+        }),
+        setup_report_refusal: Some(SetupReportRefusal {
+            reason: "Release rel_b is unknown.".to_string(),
+            reported_release_id: "rel_bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            at: "2026-11-10T00:00:00Z".parse().expect("timestamp parses"),
+        }),
+        cloud_setup_required: Some(CloudSetupRequired {
+            release_id: "rel_cccccccccccccccccccccccccccc".to_string(),
+            reason: "This release adds or changes 'assets', which lives in your cloud account"
+                .to_string(),
+        }),
+        installed_helm_release: Some(InstalledHelmRelease {
+            name: "my-app".to_string(),
+            namespace: "my-app".to_string(),
+        }),
+        deletion_policy: DeletionPolicy::Erase,
+        airgapped_report: Some(AirgappedReportMetadata {
+            written_at: Some(at),
+            received_at: at,
+        }),
+        operator_version: Some("3.3.61".to_string()),
+        credential_retry: Some(CredentialRetry {
+            started_at: at,
+            status: DeploymentStatus::Provisioning,
+        }),
+        initial_setup_authority: InitialSetupAuthority::default(),
+        automatic_setup: true,
+        last_synced_env_vars_hash: Some("hash".to_string()),
+        last_synced_secret_names: vec!["DB_PASSWORD".to_string()],
+        vault_credentials_revoked: true,
+        retained_storage_protection_hash: Some("hash".to_string()),
+        retained_storage_protection_confirmed_at: Some(at),
+        retained_data_protection_started_at: Some(at),
+        prepared_stack: Some(stack.clone()),
+        persisted_gate_answers: [("gate".to_string(), true)].into_iter().collect(),
+        pending_prepared_stack: Some(stack.clone()),
+        pending_prepared_release_id: Some("rel_dddddddddddddddddddddddddddd".to_string()),
+        direct_setup_revision: Some("rev".to_string()),
+        registry_access_granted: true,
+        registry_access: Some(RegistryAccess {
+            repositories: vec!["repo".to_string()],
+            service_types: vec!["lambda".to_string()],
+        }),
+        setup_scaffolding: [(
+            "worker".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: "build".to_string(),
+                egress: Some(AwsSandboxEgressScaffolding {
+                    operator_role_name: "operator".to_string(),
+                    security_group_id: Some("sg-1".to_string()),
+                    connector_arn: Some("arn:aws:lambda:us-east-1:1:connector".to_string()),
+                    connector_request: Some("request".to_string()),
+                }),
+                image_arn: Some("arn:aws:lambda:us-east-1:1:image".to_string()),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        deployer_secrets: vec![fully_populated_deployer_secret()],
+        ai_access_checks: vec![AiAccessCheck {
+            resource_id: "ai".to_string(),
+            model_id: "claude-sonnet-5".to_string(),
+            result: AiAccessCheckResult::Refused,
+            detail: Some("not enabled".to_string()),
+            tested_at: at,
+        }],
+        deployer_secrets_checked_at: Some(at),
+        resources_waiting_for_secrets: vec!["reader".to_string()],
+    };
 
     let release = ReleaseInfo {
         release_id: Some("rel_eeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string()),
