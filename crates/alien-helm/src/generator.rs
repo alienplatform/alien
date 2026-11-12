@@ -5157,6 +5157,14 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "bundleSigningKey": { "type": "string" }
       }
     },
+    "tunnel": {
+      "type": "object",
+      "description": "Deprecated and ignored: container tunnels were removed. Kept so upgrades of installs that saved tunnel.enabled still pass validation.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "heartbeat": {
       "type": "object",
       "additionalProperties": false,

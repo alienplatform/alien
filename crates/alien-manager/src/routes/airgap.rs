@@ -184,7 +184,14 @@ async fn target(
         Err(error) => return error.into_response(),
     };
     let mut target: TargetDeployment =
-        match super::sync::build_pull_target(&state, &deployment, release, management_config, None)
+        match super::sync::build_pull_target(
+            &state,
+            &deployment,
+            release,
+            management_config,
+            None,
+            true,
+        )
             .await
         {
             Ok(target) => target,

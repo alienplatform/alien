@@ -13220,12 +13220,17 @@
       "ManagerCapabilities": {
         "type": "object",
         "required": [
+          "tunnels",
           "charts"
         ],
         "properties": {
           "charts": {
             "type": "boolean",
             "description": "Helm charts at `oci://<registryHost>/charts/<stack>`."
+          },
+          "tunnels": {
+            "type": "boolean",
+            "description": "Always false: container tunnels were removed. Still served because\nCLIs released before the removal require the field."
           },
           "values": {
             "type": "integer",

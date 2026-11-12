@@ -151,6 +151,9 @@ pub struct AgentSyncRequest {
     pub session: String,
     #[serde(default)]
     pub supports_execution_claims: bool,
+    /// Absent for Operators that predate the pod security profile settings.
+    #[serde(default)]
+    pub supports_pod_security: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -2940,6 +2943,81 @@ pub(in crate::routes) mod tests {
         }
     }
 
+    #[test]
+    fn security_settings_old_operators_cannot_read_are_removed() {
+        use alien_core::{ContainerSecurity, ContainerSecurityProfile};
+        let container = |id: &str, security: Option<ContainerSecurity>| {
+            let mut container = alien_core::Container::new(id.to_string())
+                .code(alien_core::ContainerCode::Image {
+                    image: "api:latest".to_string(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .port(8080)
+                .permissions("execution".to_string())
+                .build();
+            container.security = security;
+            container
+        };
+        let old_form = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            run_as_group: Some(1000),
+            read_only_root_filesystem: Some(true),
+            writable_paths: vec![],
+        };
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(
+                container(
+                    "optout",
+                    Some(ContainerSecurity {
+                        profile: ContainerSecurityProfile::Unrestricted,
+                        run_as_user: None,
+                        run_as_group: None,
+                        read_only_root_filesystem: None,
+                        writable_paths: vec![],
+                    }),
+                ),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container(
+                    "partial",
+                    Some(ContainerSecurity {
+                        run_as_user: None,
+                        ..old_form.clone()
+                    }),
+                ),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container("complete", Some(old_form.clone())),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert!(super::downgrade_container_security(&mut stack));
+        let security = |id: &str| {
+            stack
+                .resources()
+                .find(|(rid, _)| rid.as_str() == id)
+                .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
+                .expect("container")
+                .security
+                .clone()
+        };
+        assert_eq!(security("optout"), None);
+        assert_eq!(security("partial"), None);
+        assert_eq!(security("complete"), Some(old_form));
+        assert!(!super::downgrade_container_security(&mut stack));
+    }
+
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
             image_registry: None,
@@ -3989,8 +4067,15 @@ async fn agent_sync(
                         .await
                     }
                 };
-                match build_pull_target(&state, &deployment, r, management_config, agent_token)
-                    .await
+                match build_pull_target(
+                    &state,
+                    &deployment,
+                    r,
+                    management_config,
+                    agent_token,
+                    req.supports_pod_security,
+                )
+                .await
                 {
                     Ok(target) => Some(target),
                     Err(response) => return response,
@@ -4246,6 +4331,31 @@ async fn save_pull_render_failure(
 /// The target a pull deployment converges to for `release`: the release's
 /// stack for the deployment's platform and the deployment's configuration.
 /// Sync delivers it to connected Operators; air-gapped bundles carry it.
+/// Drop `security` settings an Operator that predates pod security profiles
+/// cannot parse (it would reject the whole target, including its own
+/// self-update). Such Operators already apply no security context unless a
+/// container declares the complete old form, so removing the rest keeps their
+/// behavior as it was. Returns whether anything was removed.
+fn downgrade_container_security(stack: &mut alien_core::Stack) -> bool {
+    use alien_core::ContainerSecurityProfile;
+    let mut removed = false;
+    for (_, entry) in stack.resources_mut() {
+        if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
+            let readable = container.security.as_ref().is_none_or(|security| {
+                security.profile == ContainerSecurityProfile::Restricted
+                    && security.run_as_user.is_some()
+                    && security.run_as_group.is_some()
+                    && security.read_only_root_filesystem.is_some()
+            });
+            if !readable {
+                container.security = None;
+                removed = true;
+            }
+        }
+    }
+    removed
+}
+
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
 /// [`ManagementRenderer::PullTarget`].
@@ -4269,6 +4379,7 @@ pub(crate) async fn build_pull_target(
     r: crate::traits::ReleaseRecord,
     management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
+    operator_supports_pod_security: bool,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
@@ -4304,6 +4415,14 @@ pub(crate) async fn build_pull_target(
             .into_response());
         }
     };
+
+    if !operator_supports_pod_security && downgrade_container_security(&mut stack) {
+        tracing::info!(
+            deployment_id = %deployment.id,
+            release_id = %r.id,
+            "Operator predates pod security profiles; delivering the release without the settings it cannot read. Upgrade the Operator to apply them."
+        );
+    }
 
     let (held, _) =
         crate::values::with_generated_inputs(state.values.as_deref(), Some(&stack), held)
