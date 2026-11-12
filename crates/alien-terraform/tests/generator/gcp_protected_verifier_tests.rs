@@ -384,7 +384,9 @@ fn the_verifier_holds_its_bucket_permissions_only_on_the_installs_own_buckets() 
         "the bucket role is bound without a name condition: {bindings:?}"
     );
     assert!(
-        text.contains(r#"resource.name.startsWith(\"projects/_/buckets/${local.resource_prefix}-\")"#),
+        text.contains(
+            r#"resource.name.startsWith(\"projects/_/buckets/${local.resource_prefix}-\")"#
+        ),
         "the condition names the install's bucket prefix"
     );
 }
@@ -416,9 +418,15 @@ fn the_verifier_holds_its_pubsub_permissions_only_on_the_installs_own_queues() {
     let (roles, bindings) = verifier_custom_roles(&text);
     for (permission, role) in [
         ("pubsub.topics.create", "signing_verifier_queue_create"),
-        ("pubsub.subscriptions.create", "signing_verifier_queue_create"),
+        (
+            "pubsub.subscriptions.create",
+            "signing_verifier_queue_create",
+        ),
         ("pubsub.topics.setIamPolicy", "signing_verifier_queues"),
-        ("pubsub.subscriptions.setIamPolicy", "signing_verifier_queues"),
+        (
+            "pubsub.subscriptions.setIamPolicy",
+            "signing_verifier_queues",
+        ),
     ] {
         let holders: Vec<&String> = roles
             .iter()
@@ -475,7 +483,9 @@ fn the_verifier_alone_holds_the_permissions_that_create_sandbox_engines_and_temp
         assert_eq!(holders, ["signing_verifier_sandboxes"], "{permission}");
     }
     assert!(
-        bindings.iter().any(|(role, _)| role == "signing_verifier_sandboxes"),
+        bindings
+            .iter()
+            .any(|(role, _)| role == "signing_verifier_sandboxes"),
         "the sandbox role is bound: {bindings:?}"
     );
 }
@@ -511,7 +521,9 @@ fn the_verifier_alone_holds_the_permissions_that_create_and_resize_database_inst
         assert_eq!(holders, ["signing_verifier_databases"], "{permission}");
     }
     assert!(
-        bindings.iter().any(|(role, _)| role == "signing_verifier_databases"),
+        bindings
+            .iter()
+            .any(|(role, _)| role == "signing_verifier_databases"),
         "the database role is bound: {bindings:?}"
     );
 }
@@ -547,7 +559,61 @@ fn the_verifier_alone_holds_the_permissions_that_create_schedule_jobs() {
         assert_eq!(holders, ["signing_verifier_schedules"], "{permission}");
     }
     assert!(
-        bindings.iter().any(|(role, _)| role == "signing_verifier_schedules"),
+        bindings
+            .iter()
+            .any(|(role, _)| role == "signing_verifier_schedules"),
         "the schedule role is bound: {bindings:?}"
+    );
+}
+
+#[test]
+fn the_verifier_acts_as_exactly_the_runtime_service_accounts() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            },
+            "execution-sa": {
+                "config": { "id": "execution-sa", "type": "service-account", "stackPermissionSets": [] },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            },
+            "reader-sa": {
+                "config": { "id": "reader-sa", "type": "service-account", "stackPermissionSets": [] },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .expect("stack");
+    let settings = StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let text = module_text(&render(&stack, TerraformTarget::Gcp, settings));
+    let mut grants: Vec<String> = text
+        .split("resource \"google_service_account_iam_member\" \"")
+        .skip(1)
+        .map(|block| block.split('"').next().unwrap_or_default().to_string())
+        .filter(|label| label.starts_with("signing_verifier_acts_as_"))
+        .collect();
+    grants.sort();
+    assert_eq!(
+        grants,
+        [
+            "signing_verifier_acts_as_execution_sa",
+            "signing_verifier_acts_as_reader_sa"
+        ],
+        "one actAs grant per runtime service account and none for management or the verifier"
+    );
+    // Each grant is the user role (it carries iam.serviceAccounts.actAs) for the verifier's own member.
+    assert_eq!(
+        text.matches("roles/iam.serviceAccountUser").count(),
+        2,
+        "no other account is granted the user role"
     );
 }
