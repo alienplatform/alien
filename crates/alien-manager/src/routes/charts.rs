@@ -27,6 +27,8 @@
 //! never kept, so they are unknown: serving another chart under them is what
 //! made versions mutable.
 
+use std::sync::Arc;
+
 use alien_core::{DeploymentModel, Platform, StackSettings};
 use alien_helm::{
     apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
