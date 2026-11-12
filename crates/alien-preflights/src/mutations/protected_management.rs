@@ -21,7 +21,7 @@ use crate::{
     StackMutation,
 };
 use alien_core::{
-    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform,
+    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform, Postgres, Queue, ResourceLifecycle,
     SetupManagement, Stack, StackState,
 };
 use alien_error::AlienError;
@@ -115,6 +115,41 @@ impl StackMutation for ProtectedManagementRefusalMutation {
                     .to_string(),
                 "setup",
             ));
+        }
+        // Setup grants management one publisher role on every topic named `<prefix>-*-rq`, which
+        // is how it dispatches commands to any worker, including one a later release adds. A
+        // queue whose topic ends the same way would fall under that grant.
+        if runs_on_platform_or_base(stack_state, config, Platform::Gcp) {
+            if let Some((id, _)) = stack.resources().find(|(id, entry)| {
+                id.ends_with("-rq") && entry.config.downcast_ref::<Queue>().is_some()
+            }) {
+                return Err(refusal(
+                    format!(
+                        "the queue '{id}' ends in '-rq'. On a protected GCP install management \
+                         may publish to every topic that ends in '-rq' (the commands topics of \
+                         workers), so a queue cannot use that ending. Rename it"
+                    ),
+                    id,
+                ));
+            }
+        }
+        // A live database is created by the controller: its master password, security group and
+        // subnet group are writes only setup may make on a protected install. A frozen one is
+        // created by the setup package, which manages the password itself.
+        if runs_on_platform_or_base(stack_state, config, Platform::Aws) {
+            if let Some((id, _)) = stack.resources().find(|(_, entry)| {
+                entry.lifecycle == ResourceLifecycle::Live
+                    && entry.config.downcast_ref::<Postgres>().is_some()
+            }) {
+                return Err(refusal(
+                    format!(
+                        "the Postgres database '{id}' is live. On a protected AWS install the \
+                         database has to be created by setup: change its lifecycle to frozen, or \
+                         install without release signing"
+                    ),
+                    id,
+                ));
+            }
         }
         match stack.management() {
             ManagementPermissions::Auto => {}
@@ -331,4 +366,54 @@ mod tests {
         .await
         .expect("an unprotected install keeps the inline set");
     }
+    #[tokio::test]
+    async fn a_queue_ending_in_rq_is_refused_on_protected_gcp_only() {
+        let stack = || {
+            Stack::new("shop".to_string())
+                .add(Queue::new("jobs-rq".to_string()).build(), ResourceLifecycle::Live)
+                .build()
+        };
+        let error = prepared(stack(), Platform::Gcp, config(true, SetupManagement::Manual))
+            .await
+            .expect_err("the queue falls under management's publisher grant");
+        assert!(error.contains("jobs-rq") && error.contains("-rq"), "{error}");
+        prepared(stack(), Platform::Gcp, config(false, SetupManagement::Manual))
+            .await
+            .expect("an unprotected install is unaffected");
+        prepared(stack(), Platform::Aws, config(true, SetupManagement::Manual))
+            .await
+            .expect("the grant is GCP's");
+    }
+
+    #[tokio::test]
+    async fn a_live_postgres_is_refused_on_protected_aws_only() {
+        let stack = |lifecycle| {
+            Stack::new("shop".to_string())
+                .add(Postgres::new("db".to_string()).build(), lifecycle)
+                .build()
+        };
+        let error = prepared(
+            stack(ResourceLifecycle::Live),
+            Platform::Aws,
+            config(true, SetupManagement::Manual),
+        )
+        .await
+        .expect_err("a live database is created by the controller");
+        assert!(error.contains("'db'") && error.contains("frozen"), "{error}");
+        prepared(
+            stack(ResourceLifecycle::Frozen),
+            Platform::Aws,
+            config(true, SetupManagement::Manual),
+        )
+        .await
+        .expect("a frozen database is created by setup");
+        prepared(
+            stack(ResourceLifecycle::Live),
+            Platform::Aws,
+            config(false, SetupManagement::Manual),
+        )
+        .await
+        .expect("an unprotected install keeps a live database");
+    }
+
 }

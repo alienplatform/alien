@@ -617,3 +617,58 @@ fn the_verifier_acts_as_exactly_the_runtime_service_accounts() {
         "no other account is granted the user role"
     );
 }
+
+/// Management dispatches commands to workers through topics the worker controller creates. On a
+/// protected install setup grants it publishing once, by name, so a worker a later release adds
+/// needs no setup update; an install whose management profile has no dispatch set gets nothing.
+#[test]
+fn management_publishes_to_commands_topics_by_name_only_when_it_dispatches_commands() {
+    let stack_with = |management: serde_json::Value| -> Stack {
+        serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {
+                "verifier": {
+                    "config": { "id": "verifier", "type": "verifier" },
+                    "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+                },
+                "management": {
+                    "config": { "id": "management", "type": "remote-stack-management" },
+                    "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+                }
+            },
+            "permissions": { "profiles": { "execution": {} }, "management": management }
+        }))
+        .expect("stack")
+    };
+    let settings = |signed: bool| StackSettings {
+        signing: signed.then(|| StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let dispatching = serde_json::json!({ "extend": { "*": ["worker/dispatch-command"] } });
+
+    let text = module_text(&render(&stack_with(dispatching.clone()), TerraformTarget::Gcp, settings(true)));
+    let block = text
+        .split("resource \"google_project_iam_member\"")
+        .skip(1)
+        .find(|block| block.contains("commands_topic_publisher"))
+        .expect("a publisher grant for the commands topics");
+    let block = &block[..block.find("\n}").unwrap_or(block.len())];
+    assert!(block.contains("roles/pubsub.publisher"), "{block}");
+    assert!(
+        block.contains("google_service_account.") && !block.contains("signing_verifier"),
+        "bound to management, not the verifier: {block}"
+    );
+    assert!(
+        block.contains(r#"resource.name.startsWith(\"projects/${var.gcp_project}/topics/${local.resource_prefix}-\")"#)
+            && block.contains(r#"resource.name.endsWith(\"-rq\")"#),
+        "limited by name to this install's commands topics: {block}"
+    );
+
+    let unsigned = module_text(&render(&stack_with(dispatching), TerraformTarget::Gcp, settings(false)));
+    assert!(!unsigned.contains("commands_topic_publisher"), "unsigned installs are unchanged");
+    let without = module_text(&render(&stack_with(serde_json::json!("auto")), TerraformTarget::Gcp, settings(true)));
+    assert!(!without.contains("commands_topic_publisher"), "no dispatch set, no grant");
+}
