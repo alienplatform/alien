@@ -2523,17 +2523,7 @@ impl StackExecutor {
                             Ok(()) => {
                                 let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
-                                                                       // Store old config. An interrupted update keeps the config the resource was
-                                                                       // last stable on, not the one it was still applying.
-                                    state.previous_config =
-                                        if current_state.status == ResourceStatus::Updating {
-                                            current_state
-                                                .previous_config
-                                                .clone()
-                                                .or(Some(current_state.config.clone()))
-                                        } else {
-                                            Some(current_state.config.clone())
-                                        };
+                                    state.previous_config = previous_config_for_update(current_state);
                                     state.dependencies = desired_config.dependencies.clone(); // Update dependencies to match new config
                                     state.status = controller.get_status();
                                     state.outputs = controller.get_outputs();
@@ -3665,5 +3655,18 @@ impl StackExecutor {
         });
 
         desired_resources_are_synced && deleting_resources_are_synced
+    }
+}
+
+/// The config recorded as "before" when an update starts. An update that interrupts another
+/// keeps the config the resource was last stable on, not the one it was still applying.
+fn previous_config_for_update(current_state: &StackResourceState) -> Option<Resource> {
+    if current_state.status == ResourceStatus::Updating {
+        current_state
+            .previous_config
+            .clone()
+            .or_else(|| Some(current_state.config.clone()))
+    } else {
+        Some(current_state.config.clone())
     }
 }
