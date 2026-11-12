@@ -3046,6 +3046,9 @@
             }
           ]
         },
+        "runtimeIdentityExchange": {
+          "type": "boolean"
+        },
         "timeoutSeconds": {
           "type": "integer"
         },

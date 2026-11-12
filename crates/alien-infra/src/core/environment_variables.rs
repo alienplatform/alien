@@ -568,7 +568,14 @@ impl EnvironmentVariableBuilder {
                     "/var/run/alien-runtime/telemetry.json".into(),
                 );
             }
-            self.env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
+            // Only an image the build recorded as exchanging identity can do without the
+            // telemetry secrets; an older runtime reads them and would lose log export.
+            if ctx
+                .desired_resource_config::<alien_core::Worker>()?
+                .runtime_identity_exchange
+            {
+                self.env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
+            }
             self.env_vars
                 .insert("ALIEN_IDENTITY_PROVIDER".into(), provider.into());
             self.env_vars
@@ -1188,6 +1195,67 @@ mod tests {
             previous_environment = Some(environment);
         }
     }
+    /// Worker environment for `worker` on AWS with identity mode on.
+    #[cfg(feature = "aws")]
+    async fn aws_identity_mode_worker_env(worker: alien_core::Worker) -> HashMap<String, String> {
+        use crate::{core::controller_test::SingleControllerExecutor, worker::AwsWorkerController};
+        use alien_core::Platform;
+
+        let id = worker.id.clone();
+        let executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .runtime_identity_audience("manager-one".into())
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let initial = HashMap::from([(
+            alien_core::ENV_ALIEN_RUNTIME_SECRETS.to_string(),
+            r#"{"hash":"h"}"#.to_string(),
+        )]);
+        executor.with_context(|ctx| {
+            EnvironmentVariableBuilder::new(&initial)
+                .add_worker_runtime_env_vars(ctx, &id, 30)
+                .unwrap()
+                .build()
+        })
+    }
+
+    #[cfg(feature = "aws")]
+    fn aws_worker(runtime_identity_exchange: bool) -> alien_core::Worker {
+        let mut worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "api:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        worker.runtime_identity_exchange = runtime_identity_exchange;
+        worker
+    }
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn identity_mode_keeps_runtime_secrets_for_a_worker_image_without_identity_exchange() {
+        let env = aws_identity_mode_worker_env(aws_worker(false)).await;
+        assert!(
+            env.contains_key(alien_core::ENV_ALIEN_RUNTIME_SECRETS),
+            "an image that cannot exchange identity still reads its telemetry secrets"
+        );
+        // The identity variables are still provided for runtimes that use them.
+        assert_eq!(env["ALIEN_IDENTITY_PROVIDER"], "aws");
+        assert_eq!(env["ALIEN_MANAGER_AUDIENCE"], "manager-one");
+    }
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn identity_mode_drops_runtime_secrets_for_a_worker_image_with_identity_exchange() {
+        let env = aws_identity_mode_worker_env(aws_worker(true)).await;
+        assert!(!env.contains_key(alien_core::ENV_ALIEN_RUNTIME_SECRETS));
+        assert_eq!(env["ALIEN_IDENTITY_PROVIDER"], "aws");
+    }
+
     #[cfg(feature = "kubernetes")]
     #[test]
     fn kubernetes_custom_urls_are_available_before_workload_readiness() {

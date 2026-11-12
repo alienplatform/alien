@@ -207,24 +207,44 @@ impl StandaloneRuntimeIdentity {
     }
 }
 
-/// Internal state of every running service account used by a running worker.
+/// Whether a resource in this status still has a workload or role in the cloud account.
+/// A pending or failed update leaves the old one serving, so it keeps its telemetry; only
+/// a resource that was never created, failed to create, or is going away is refused.
+/// Listed variant by variant so a new status has to be placed here.
+fn resource_exists(status: ResourceStatus) -> bool {
+    match status {
+        ResourceStatus::Provisioning
+        | ResourceStatus::Running
+        | ResourceStatus::Updating
+        | ResourceStatus::UpdateFailed
+        | ResourceStatus::RefreshFailed => true,
+        ResourceStatus::Pending
+        | ResourceStatus::ProvisionFailed
+        | ResourceStatus::Deleting
+        | ResourceStatus::DeleteFailed
+        | ResourceStatus::TeardownRequired
+        | ResourceStatus::Deleted => false,
+    }
+}
+
+/// Internal state of every service account used by a worker that still exists.
 fn worker_service_accounts(state: &StackState) -> impl Iterator<Item = &serde_json::Value> {
     state.resources.values().filter_map(move |resource| {
-        if resource.status != ResourceStatus::Running {
+        if !resource_exists(resource.status) {
             return None;
         }
         let worker = resource.config.downcast_ref::<Worker>()?;
         let account = state
             .resources
             .get(&format!("{}-sa", worker.get_permissions()))?;
-        if account.status != ResourceStatus::Running {
+        if !resource_exists(account.status) {
             return None;
         }
         account.internal_state.as_ref()
     })
 }
 
-/// A running worker uses the role with this immutable ID.
+/// A worker that still exists uses the role with this immutable ID.
 fn aws_member(state: &StackState, role_id: &str) -> bool {
     worker_service_accounts(state).any(|account| {
         serde_json::from_value::<alien_infra::AwsServiceAccountController>(account.clone())
@@ -235,7 +255,7 @@ fn aws_member(state: &StackState, role_id: &str) -> bool {
     })
 }
 
-/// A running worker uses the service account with this unique ID and email.
+/// A worker that still exists uses the service account with this unique ID and email.
 fn gcp_member(state: &StackState, unique_id: &str, email: &str) -> bool {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -833,6 +853,40 @@ mod tests {
         ));
         state.resources.get_mut("api").unwrap().status = ResourceStatus::Deleted;
         assert!(!gcp_member(&state, "1234", email));
+    }
+
+    #[test]
+    fn membership_follows_whether_the_workload_still_exists() {
+        use ResourceStatus::*;
+        let mut state = aws_state("role-1");
+        let cases = [
+            (Pending, false),
+            (Provisioning, true),
+            (ProvisionFailed, false),
+            (Running, true),
+            (Updating, true),
+            (UpdateFailed, true),
+            (RefreshFailed, true),
+            (Deleting, false),
+            (DeleteFailed, false),
+            (TeardownRequired, false),
+            (Deleted, false),
+        ];
+        for (status, accepted) in cases {
+            // The worker and its service account are each judged by the same rule.
+            for id in ["api", "execution-sa"] {
+                state.resources.get_mut("api").unwrap().status = Running;
+                state.resources.get_mut("execution-sa").unwrap().status = Running;
+                state.resources.get_mut(id).unwrap().status = status;
+                assert_eq!(
+                    aws_member(&state, "role-1"),
+                    accepted,
+                    "{id} in {status:?}"
+                );
+                // The recorded identity must still match exactly.
+                assert!(!aws_member(&state, "role-2"), "{id} in {status:?}");
+            }
+        }
     }
 
     #[tokio::test]

@@ -286,6 +286,15 @@ pub struct Worker {
     /// Only applicable for workers with Public ingress.
     /// When configured, the probe will be executed after provisioning/update to verify the worker is ready.
     pub readiness_probe: Option<ReadinessProbe>,
+
+    /// Set by `alien build` when the Worker image was built on a runtime that
+    /// exchanges its cloud identity for telemetry credentials. Absent means the
+    /// image may be older and still reads `ALIEN_RUNTIME_SECRETS`, so a deployer
+    /// in identity mode keeps providing them. Build output replaces any value
+    /// written in the stack definition.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub runtime_identity_exchange: bool,
 }
 
 impl Worker {
