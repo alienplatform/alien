@@ -914,14 +914,29 @@ mod tests {
         }
     }
 
+    /// Each consumer gets the lifecycle its type allows: a database is Frozen, a
+    /// container is Live.
     fn stack_with_encrypted_consumer(consumer: alien_core::Resource, id: &str) -> Stack {
+        let lifecycle = if consumer.resource_type() == Postgres::RESOURCE_TYPE {
+            ResourceLifecycle::Frozen
+        } else {
+            ResourceLifecycle::Live
+        };
+        stack_with_encrypted_consumer_as(consumer, id, lifecycle)
+    }
+
+    fn stack_with_encrypted_consumer_as(
+        consumer: alien_core::Resource,
+        id: &str,
+        lifecycle: ResourceLifecycle,
+    ) -> Stack {
         let mut stack = stack_with_encrypted_storage(ResourceLifecycle::Frozen);
         stack.resources.shift_remove("customer-data");
         stack.resources.insert(
             id.to_string(),
             ResourceEntry {
                 config: consumer,
-                lifecycle: ResourceLifecycle::Live,
+                lifecycle,
                 dependencies: Vec::new(),
                 display_name: None,
                 description: None,
@@ -1007,6 +1022,30 @@ mod tests {
                 .unwrap();
             assert!(result.success, "{:?}", result.errors);
         }
+    }
+
+    #[tokio::test]
+    async fn a_live_encrypted_postgres_is_refused_with_the_frozen_only_message() {
+        let result = FrozenResourceLifecycleCheck
+            .check(
+                &stack_with_encrypted_consumer_as(
+                    encrypted_postgres(),
+                    "database",
+                    ResourceLifecycle::Live,
+                ),
+                Platform::Aws,
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("Postgres 'database' has to be Frozen")),
+            "{:?}",
+            result.errors
+        );
     }
 
     #[tokio::test]
