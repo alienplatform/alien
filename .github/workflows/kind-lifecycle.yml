@@ -143,8 +143,19 @@ jobs:
           EOF
           "$kind" create cluster --name "$cluster" --config "$RUNNER_TEMP/$cluster.yaml"
           helm repo add cilium https://helm.cilium.io
-          helm install cilium cilium/cilium --version 1.16.5 --namespace kube-system \
-            --set ipam.mode=kubernetes --wait --timeout 8m
+          # Cilium 1.20.4: the newest release whose compatibility table lists Kubernetes 1.36
+          # (kindest/node here is 1.36). One operator replica: its default of two has pod
+          # anti-affinity and never schedules on a one-node cluster.
+          if ! helm install cilium cilium/cilium --version 1.20.4 --namespace kube-system \
+            --set ipam.mode=kubernetes --set operator.replicas=1 --wait --timeout 8m; then
+            kubectl -n kube-system get pods -o wide || true
+            kubectl -n kube-system describe ds/cilium || true
+            for pod in $(kubectl -n kube-system get pods -l k8s-app=cilium -o name); do
+              kubectl -n kube-system logs "$pod" --all-containers --prefix || true
+              kubectl -n kube-system logs "$pod" --all-containers --prefix --previous || true
+            done
+            exit 1
+          fi
           kubectl wait --for=condition=Ready node --all --timeout=180s
           kubectl --namespace kube-system rollout status deployment/coredns --timeout=180s
           cargo test --locked -p alien-helm --test sandbox_allow_egress_kind -- \
