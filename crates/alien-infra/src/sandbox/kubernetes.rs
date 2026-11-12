@@ -468,6 +468,7 @@ impl KubernetesSandboxController {
 
         let created = pool.created;
         debug!(sandbox_id = %config.id, sessions, created, "Sandbox health check passed");
+        report_pods_without_network_ready_endpoint(ctx, &namespace, &config.id).await;
 
         // Counts of pods, never anything inside one. `sessions` covers every pod carrying the
         // sandbox label, the idle pool included, so what an application is actually running is
@@ -493,6 +494,68 @@ impl KubernetesSandboxController {
         });
 
         Ok(())
+    }
+}
+
+/// Message for a pool pod whose agent answers the readiness probe with 404.
+pub(crate) const NETWORK_READY_MISSING_MESSAGE: &str =
+    "sandbox agent image predates the network readiness check; use the agent image of this release";
+
+/// Names of the pods whose readiness probe failed because `/v1/network-ready` does not exist
+/// (HTTP 404). A pod with a policy that is not yet enforced answers 503 instead, which is not
+/// reported here.
+pub(crate) fn pods_probing_a_missing_network_ready_endpoint(
+    events: &[k8s_openapi::api::core::v1::Event],
+) -> Vec<String> {
+    let mut names: Vec<String> = events
+        .iter()
+        .filter(|event| {
+            event.involved_object.kind.as_deref() == Some("Pod")
+                && event.reason.as_deref() == Some("Unhealthy")
+                && event.message.as_deref().is_some_and(|m| {
+                    m.contains("Readiness probe failed") && m.contains("statuscode: 404")
+                })
+        })
+        .filter_map(|event| event.involved_object.name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Says why pool pods stay unready when their agent has no `/v1/network-ready`. Only logs; a
+/// failure to read events is not a health failure.
+async fn report_pods_without_network_ready_endpoint(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    sandbox_id: &str,
+) {
+    let Ok(config) = ctx.get_kubernetes_config() else {
+        return;
+    };
+    let Ok(client) = ctx
+        .service_provider
+        .get_kubernetes_event_client(config)
+        .await
+    else {
+        return;
+    };
+    let Ok(events) = client
+        .list_events(
+            namespace,
+            Some("involvedObject.kind=Pod,reason=Unhealthy".to_string()),
+        )
+        .await
+    else {
+        return;
+    };
+    let prefix = format!("{sandbox_id}-");
+    let pods: Vec<String> = pods_probing_a_missing_network_ready_endpoint(&events.items)
+        .into_iter()
+        .filter(|name| name.starts_with(&prefix))
+        .collect();
+    if !pods.is_empty() {
+        warn!(sandbox_id = %sandbox_id, pods = ?pods, "{NETWORK_READY_MISSING_MESSAGE}");
     }
 }
 
@@ -1129,6 +1192,40 @@ mod tests {
 
     /// A pod whose retire write succeeded but whose delete failed is in no pool. The next tick's
     /// sweep finds it by its `retired` label and deletes it.
+    #[test]
+    fn a_404_from_the_network_ready_probe_is_reported_and_a_503_is_not() {
+        use k8s_openapi::api::core::v1::{Event, ObjectReference};
+        let event = |name: &str, message: &str| Event {
+            involved_object: ObjectReference {
+                kind: Some("Pod".into()),
+                name: Some(name.into()),
+                ..Default::default()
+            },
+            reason: Some("Unhealthy".into()),
+            message: Some(message.into()),
+            ..Default::default()
+        };
+        let events = vec![
+            event(
+                "s-old",
+                "Readiness probe failed: HTTP probe failed with statuscode: 404",
+            ),
+            event(
+                "s-old",
+                "Readiness probe failed: HTTP probe failed with statuscode: 404",
+            ),
+            event(
+                "s-waiting",
+                "Readiness probe failed: HTTP probe failed with statuscode: 503",
+            ),
+        ];
+        assert_eq!(
+            pods_probing_a_missing_network_ready_endpoint(&events),
+            vec!["s-old"]
+        );
+        assert!(NETWORK_READY_MISSING_MESSAGE.contains("use the agent image of this release"));
+    }
+
     #[tokio::test]
     async fn a_retired_pod_whose_delete_failed_is_deleted_by_the_next_sweep() {
         let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
