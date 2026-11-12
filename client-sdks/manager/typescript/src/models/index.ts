@@ -15,6 +15,7 @@ export * from "./aiheartbeatdata.js";
 export * from "./aiheartbeatstatus.js";
 export * from "./aimodelavailability.js";
 export * from "./aimodelavailabilityobservation.js";
+export * from "./aiquotawarning.js";
 export * from "./alienerror.js";
 export * from "./artifactregistryheartbeatdata.js";
 export * from "./artifactregistryheartbeatstatus.js";
