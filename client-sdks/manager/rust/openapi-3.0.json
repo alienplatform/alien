@@ -2235,6 +2235,9 @@
               },
               "supportsExecutionClaims": {
                 "type": "boolean"
+              },
+              "supportsPodSecurity": {
+                "type": "boolean"
               }
             }
           },
