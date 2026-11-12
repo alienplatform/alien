@@ -122,17 +122,23 @@ fn allow_egress_install_is_refused_where_network_policy_is_not_enforced() {
         kubectl(&["--namespace", NAMESPACE, "get", "deployments", "-o", "name"]).trim(),
         ""
     );
-    assert_eq!(
-        kubectl(&[
-            "--namespace",
-            NAMESPACE,
-            "get",
-            "networkpolicies",
-            "-o",
-            "name"
-        ])
-        .trim(),
-        ""
+    // The probe's own policies stay behind when it fails (Helm keeps hook objects of a failed
+    // hook), so only policies that are not the probe's count.
+    let policies = kubectl(&[
+        "--namespace",
+        NAMESPACE,
+        "get",
+        "networkpolicies",
+        "-o",
+        "name",
+    ]);
+    let session_policies: Vec<&str> = policies
+        .lines()
+        .filter(|name| !name.contains("sandbox-cni"))
+        .collect();
+    assert!(
+        session_policies.is_empty(),
+        "no session policy may be installed: {session_policies:?}"
     );
 }
 
@@ -229,6 +235,8 @@ fn install_allow_chart(context: &str) -> (Cleanup, Output) {
             "management.defaultUrl=https://manager.example.test",
             "--set",
             "sandbox.clusterDNS={10.96.0.10}",
+            "--set-string",
+            "sandbox.runtimeClassName=gvisor",
         ])
         .output()
         .expect("run helm install");

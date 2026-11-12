@@ -18,6 +18,9 @@ pub const POOL_STATE_IDLE: &str = "idle";
 /// Value of [`LABEL_POOL_STATE`] once a session owns the pod.
 pub const POOL_STATE_CLAIMED: &str = "claimed";
 
+/// Value of [`LABEL_POOL_STATE`] for an idle pod the controller took out of the pool to delete.
+pub const POOL_STATE_RETIRED: &str = "retired";
+
 /// Selector matching pods this sandbox can still hand out.
 pub fn idle_selector(sandbox_id: &str) -> String {
     format!("{LABEL_SANDBOX}={sandbox_id},{LABEL_POOL_STATE}={POOL_STATE_IDLE}")
@@ -55,6 +58,107 @@ pub fn claim_idle_pod(pod: &mut Pod, session_id: &str) -> bool {
     labels.insert(LABEL_POOL_STATE.to_string(), POOL_STATE_CLAIMED.to_string());
     labels.insert(LABEL_SESSION.to_string(), session_id.to_string());
     true
+}
+
+/// Annotation recording when the session was claimed (Unix seconds).
+pub const ANNOTATION_SESSION_CREATED_AT: &str = "alien.dev/session-created-at";
+/// Annotation recording the session's generation. A released pod is deleted, never reused, so
+/// every session is generation 1; the record is what a process that did not create it reads.
+pub const ANNOTATION_SESSION_GENERATION: &str = "alien.dev/session-generation";
+/// Annotation recording the tenant key the session was created for, when it had one.
+pub const ANNOTATION_SESSION_TENANT: &str = "alien.dev/session-tenant";
+
+/// Annotation carrying the sandbox's declared `maxLifetimeSeconds`, written when the pod is built.
+pub const ANNOTATION_MAX_LIFETIME: &str = "alien.dev/max-lifetime-seconds";
+/// Annotation recording when the session must end (Unix seconds). The Operator deletes the pod
+/// after it.
+pub const ANNOTATION_SESSION_DEADLINE: &str = "alien.dev/session-deadline";
+
+/// A session asked to live longer than the sandbox allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifetimeTooLong {
+    /// What the sandbox declared, in seconds.
+    pub max_seconds: u64,
+}
+
+/// How long after a session's deadline the kubelet ends the pod if the Operator has not. The
+/// Operator ends it at the deadline itself; this only covers an Operator that is down.
+pub const KUBELET_BACKSTOP_GRACE_SECONDS: i64 = 300;
+
+/// Records on the pod what the broker later answers about the session, so no process memory is
+/// the source of truth for it.
+///
+/// The session's deadline starts here, at the claim, and is the requested timeout bounded by the
+/// sandbox's declared lifetime; with no timeout it is the declared lifetime itself.
+pub fn annotate_claim(
+    pod: &mut Pod,
+    now_unix: i64,
+    tenant_key: Option<&str>,
+    timeout_seconds: Option<u64>,
+) -> Result<(), LifetimeTooLong> {
+    let max_seconds: Option<u64> = pod
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(ANNOTATION_MAX_LIFETIME))
+        .and_then(|value| value.parse().ok());
+    let lifetime = match (timeout_seconds, max_seconds) {
+        (Some(timeout), Some(max)) if timeout > max => {
+            return Err(LifetimeTooLong { max_seconds: max })
+        }
+        (Some(timeout), _) => Some(timeout),
+        (None, max) => max,
+    };
+    let annotations = pod.metadata.annotations.get_or_insert_with(BTreeMap::new);
+    // A pod returned to the pool after a failed claim may still carry that claim's tenant and
+    // deadline; this claim owns these annotations, so it starts from none.
+    annotations.remove(ANNOTATION_SESSION_DEADLINE);
+    annotations.remove(ANNOTATION_SESSION_TENANT);
+    let deadline = lifetime.map(|seconds| now_unix + seconds as i64);
+    if let Some(deadline) = deadline {
+        annotations.insert(
+            ANNOTATION_SESSION_DEADLINE.to_string(),
+            deadline.to_string(),
+        );
+    }
+    // The kubelet's own backstop, in case the Operator is down at the deadline. The kubelet counts
+    // it from the pod's start, so it is set here at the claim, when the session's deadline is
+    // known: a pod that waited idle in the pool for hours has not lost any of its session. A pod
+    // that is not started yet counts from now.
+    let started = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.start_time.as_ref())
+        .map(|time| time.0.timestamp())
+        .unwrap_or(now_unix)
+        .min(now_unix);
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.active_deadline_seconds =
+            deadline.map(|deadline| (deadline - started).max(1) + KUBELET_BACKSTOP_GRACE_SECONDS);
+    }
+    annotations.insert(
+        ANNOTATION_SESSION_CREATED_AT.to_string(),
+        now_unix.to_string(),
+    );
+    annotations.insert(ANNOTATION_SESSION_GENERATION.to_string(), "1".to_string());
+    if let Some(tenant) = tenant_key {
+        annotations.insert(ANNOTATION_SESSION_TENANT.to_string(), tenant.to_string());
+    }
+    Ok(())
+}
+
+/// Whether a claimed pod's session deadline has passed.
+pub fn session_deadline_passed(pod: &Pod, now_unix: i64) -> bool {
+    session_deadline(pod).is_some_and(|deadline| deadline <= now_unix)
+}
+
+/// The Unix second the claimed pod's session ends, when it has a lifetime.
+pub fn session_deadline(pod: &Pod) -> Option<i64> {
+    pod.metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(ANNOTATION_SESSION_DEADLINE))
+        .and_then(|value| value.parse::<i64>().ok())
 }
 
 /// Labels an idle pod: it belongs to the sandbox but to no session yet.

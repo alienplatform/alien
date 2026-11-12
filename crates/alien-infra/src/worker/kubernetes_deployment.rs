@@ -126,7 +126,7 @@ pub(super) async fn build_worker_deployment(
                 message,
             })
         })?;
-    let pod_spec = PodSpec {
+    let mut pod_spec = PodSpec {
         node_selector,
         service_account_name: Some(service_account_name.to_string()),
         security_context: security.pod,
@@ -136,6 +136,7 @@ pub(super) async fn build_worker_deployment(
         image_pull_secrets,
         ..Default::default()
     };
+    crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
     Ok(Deployment {
         metadata: ObjectMeta {
