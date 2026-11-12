@@ -3192,12 +3192,50 @@
           "publicModelId": {
             "type": "string"
           },
+          "quotaWarnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiQuotaWarning"
+            },
+            "description": "Applied quotas far below the cloud's default for this model. Empty when none were read\nor none are low."
+          },
           "testedAt": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time"
+          },
+          "throttledLastHour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Requests the cloud throttled for this model in the last hour, from the cloud's own\nmetrics. `None` when not read; `Some(0)` is a real zero.",
+            "minimum": 0
+          }
+        }
+      },
+      "AiQuotaWarning": {
+        "type": "object",
+        "description": "One quota the account has set well below the cloud's default (under 10%).",
+        "required": [
+          "quotaName",
+          "applied",
+          "default"
+        ],
+        "properties": {
+          "applied": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {
+            "type": "number",
+            "format": "double"
+          },
+          "quotaName": {
+            "type": "string"
           }
         }
       },
