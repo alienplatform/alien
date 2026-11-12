@@ -578,6 +578,14 @@ pub(crate) async fn reattach_session_for_deployment(
                 resource_id: Some(sandbox_id.to_string()),
             })
         })?;
+    // A pod that is not Ready has not proven its NetworkPolicy is in force (see `cold_create`):
+    // a retry for a session whose pod is still starting must not receive it early.
+    if !pod_is_ready(&pod) {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("session '{session_id}' is not ready yet"),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
+    }
     let (capability, expires_at) = mint_capability(
         &signing_key,
         &agent_session_id,
@@ -2005,6 +2013,49 @@ mod tests {
             pod.metadata.annotations.as_ref().unwrap()[crate::sandbox::ANNOTATION_SESSION_DEADLINE],
             (4_242 + 600).to_string()
         );
+    }
+
+    /// A retry for a session whose pod has not proven its policy yet (not Ready) must not be
+    /// handed the pod: only the creating call waited for Ready.
+    #[tokio::test]
+    async fn a_session_whose_pod_is_not_ready_is_not_handed_out() {
+        let mut claimed = idle_pod("pool-a", "10.0.0.7");
+        claimed
+            .metadata
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
+        claimed.status.as_mut().unwrap().conditions = Some(ready_condition(false));
+        crate::sandbox::annotate_claim(&mut claimed, 77, None, None).unwrap();
+        let mut mock = MockPodApi::new();
+        mock.expect_list_pods().returning(move |_, _, _| {
+            Ok(k8s_openapi::List {
+                items: vec![claimed.clone()],
+                ..Default::default()
+            })
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(mock);
+        let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
+        let secret = key_secret();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        let result = reattach_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s1",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await;
+        assert!(result.is_err(), "a pod that is not Ready is not returned");
     }
 
     #[tokio::test]

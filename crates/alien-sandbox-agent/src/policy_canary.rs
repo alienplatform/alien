@@ -5,7 +5,7 @@
 //! Operator therefore names an address the policy must refuse (its own pod address) and the
 //! agent tries to connect to it. A connection that is accepted or refused outright means the
 //! pod can reach it, so the policy is not in force yet. A connection that is dropped (it times
-//! out) or cannot be routed means it is. Only then does `/v1/network-ready` answer 200, which
+//! out, three times in a row) means it is. An error that is not a drop proves nothing. Only then does `/v1/network-ready` answer 200, which
 //! is what the pod's readiness probe reads, and the Operator claims no pod that is not Ready.
 //!
 //! The answer is kept once given: a policy attached to a pod stays attached.
@@ -40,19 +40,38 @@ pub fn start_from_env() {
     }
 }
 
-/// Returns once a connection to `address` is dropped or cannot be routed.
+/// Returns once connections to `address` are dropped several times in a row. One timeout is not
+/// proof: the Operator pod can be briefly unreachable or slow, and an error that is not a drop
+/// (no route, network unreachable) says nothing about the policy, so it restarts the count.
 pub async fn prove_enforced(address: &str) {
+    let mut dropped = 0;
     loop {
-        if !reachable(address).await {
-            return;
+        if dropped_by_policy(address).await {
+            dropped += 1;
+            if dropped >= REQUIRED_DROPS {
+                return;
+            }
+        } else {
+            dropped = 0;
         }
         tokio::time::sleep(RETRY_EVERY).await;
     }
 }
 
+/// Consecutive dropped connections that count as proof.
+const REQUIRED_DROPS: u32 = 3;
+
+/// Whether the connection to `address` timed out: a dropped packet. Accepted, reset and every
+/// other error are not drops.
+async fn dropped_by_policy(address: &str) -> bool {
+    tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(address))
+        .await
+        .is_err()
+}
+
 /// Whether `address` answers: the connection is accepted, or the peer refuses it with a reset
-/// (which only a reachable host sends). A timeout is a dropped packet; any other error means the
-/// network refused to carry it.
+/// (which only a reachable host sends).
+#[cfg(test)]
 async fn reachable(address: &str) -> bool {
     match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(address)).await {
         Ok(Ok(_)) => true,
@@ -92,10 +111,15 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert!(!proof.is_finished(), "still answering: not enforced");
-        // An unroutable address stands in for a dropped packet.
         proof.abort();
-        tokio::time::timeout(Duration::from_secs(5), prove_enforced("[::1]:1/invalid"))
+    }
+
+    /// An error that is not a drop (here an address that does not parse) never counts as proof.
+    #[tokio::test]
+    async fn an_error_that_is_not_a_drop_is_not_proof() {
+        assert!(!dropped_by_policy("[::1]:1/invalid").await);
+        tokio::time::timeout(Duration::from_secs(3), prove_enforced("[::1]:1/invalid"))
             .await
-            .expect("an address that cannot be reached counts as blocked");
+            .expect_err("never proven by a non-drop error");
     }
 }
