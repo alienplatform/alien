@@ -85,14 +85,28 @@ impl StandaloneRuntimeIdentity {
         (self.clock)()
     }
 
-    async fn deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
-        let record = self
-            .deployments
+    async fn load(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
+        self.deployments
             .deployment(id)
             .await
             .map_err(|_| unavailable())?
-            .ok_or_else(refused)?;
+            .ok_or_else(refused)
+    }
+
+    /// The deployment for a workload credential: refused once deletion has started.
+    async fn deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
+        let record = self.load(id).await?;
         if matches!(record.status.as_str(), "deleting" | "deleted") {
+            return Err(refused());
+        }
+        Ok(record)
+    }
+
+    /// The deployment for its enrolled Operator. The Operator finishes a deletion and
+    /// reports it, including after a restart, so only a deleted deployment is refused.
+    async fn operator_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
+        let record = self.load(id).await?;
+        if record.status == "deleted" {
             return Err(refused());
         }
         Ok(record)
@@ -197,7 +211,7 @@ impl StandaloneRuntimeIdentity {
             .await
             .map_err(|_| unavailable())?
             .ok_or_else(refused)?;
-        let record = self.deployment(&state.deployment_id).await?;
+        let record = self.operator_deployment(&state.deployment_id).await?;
         // The enrolled operator acts for its own deployment only. Each purpose
         // still gets its own short lifetime from the issuer.
         Ok(VerifiedRuntimeIdentity {
@@ -765,6 +779,63 @@ mod tests {
             )
             .await
             .is_ok());
+    }
+
+    /// An enrolled Operator finishes a deletion, so it keeps its sync authority while the
+    /// deployment is being deleted. Workload credentials stop, and a deleted deployment gets
+    /// nothing.
+    #[tokio::test]
+    async fn operator_keeps_sync_authority_while_a_deployment_is_deleted() {
+        let now = signed_at();
+        let with_status = |status: &str| {
+            let mut record = record("dep-1", Platform::Aws, None);
+            record.status = status.into();
+            record
+        };
+        let key = "ax_day_v1_first";
+        let exchange = |purpose: RuntimePurpose| IdentityExchangeRequest {
+            deployment_id: "dep-1".into(),
+            purpose,
+            proof: RuntimeIdentityProof::DailyKey { key: key.into() },
+        };
+        // (status, operator accepted, workload accepted by the deployment gate)
+        let cases = [
+            ("running", true, true),
+            ("delete-pending", true, true),
+            ("deleting", true, false),
+            ("delete-failed", true, true),
+            ("teardown-required", true, true),
+            ("teardown-failed", true, true),
+            ("deleted", false, false),
+        ];
+        for (status, operator, workload) in cases {
+            let (verifier, _directory) =
+                verifier(vec![with_status(status)], clock(vec![now]), None).await;
+            let (code, _) = verifier
+                .issue_enrollment_code(&with_status("running"))
+                .await
+                .unwrap();
+            verifier
+                .enroll(&IdentityEnrollmentRequest {
+                    code,
+                    initial_key_hash: sha256_hash(key),
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                verifier
+                    .verify(&exchange(RuntimePurpose::OperatorSync), AUDIENCE)
+                    .await
+                    .is_ok(),
+                operator,
+                "operator sync in {status}"
+            );
+            assert_eq!(
+                verifier.deployment("dep-1").await.is_ok(),
+                workload,
+                "workload credentials in {status}"
+            );
+        }
     }
 
     /// Pods pull images with a credential the operator writes into a Secret.

@@ -149,6 +149,10 @@ const UNCOVERED: &[(&str, &str)] = &[
         "#Daemon/commands-capability-file",
         "Set by `alien build`; a value written in the stack definition is replaced",
     ),
+    (
+        "#Worker/runtime-identity-exchange",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
 ];
 
 #[test]
