@@ -349,6 +349,12 @@ const GCP_REACH_PREFIXES: &[&str] = &[
     "cloudsql.instances.update",
     "cloudsql.instances.restore",
     "cloudsql.instances.clone",
+    // Not listed on purpose: `compute.addresses.*` and `compute.forwardingRules.*`. A Cloud SQL
+    // private service connect endpoint is an internal address in the install's subnet plus a
+    // forwarding rule to the instance's service attachment. That opens nothing from outside,
+    // because the attachment admits only the install's own project (pinned by
+    // `allowedConsumerProjects` on the instance). Forwarding rules in general carry
+    // load-balancer traffic, which is out of scope for these families.
 ];
 
 /// The family of the GCP permission, if it belongs to one.
