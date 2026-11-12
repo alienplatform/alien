@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use alien_core::{DeploymentModel, Platform, StackSettings};
+use alien_core::{DeploymentModel, Platform, Stack, StackSettings};
 use alien_helm::{
     apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
     LogCollectorDefault, OperatorImageDefault, PackageDefaults, SetupDefault,
@@ -425,7 +425,7 @@ async fn chart_version(
     if let Some(chart) = kept.into_iter().find(|chart| chart.version == version) {
         return Ok(chart);
     }
-    let rendered = render(state, settings, release, version)?;
+    let rendered = render(state, settings, release, version).await?;
     state
         .release_store
         .store_chart_if_absent(subject, rendered)
@@ -433,8 +433,32 @@ async fn chart_version(
         .map_err(|e| store_failed("keep the chart", e))
 }
 
+/// The stack after the preparation every Kubernetes deployment applies, with no cloud queries.
+async fn prepare_stack(
+    stack: &Stack,
+    stack_settings: &StackSettings,
+) -> alien_preflights::error::Result<Stack> {
+    let config = alien_core::DeploymentConfig::builder()
+        .stack_settings(stack_settings.clone())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "empty".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        })
+        .allow_frozen_changes(false)
+        .external_bindings(alien_core::ExternalBindings::default())
+        .build();
+    alien_preflights::runner::PreflightRunner::new()
+        .apply_mutations(
+            stack.clone(),
+            &alien_core::StackState::new(Platform::Kubernetes),
+            &config,
+        )
+        .await
+}
+
 /// Render a release's chart.
-fn render(
+async fn render(
     state: &AppState,
     settings: &ChartSettings,
     release: &ReleaseRecord,
@@ -451,6 +475,13 @@ fn render(
         deployment_model: DeploymentModel::Pull,
         ..Default::default()
     };
+    // The chart carries what the Operator cannot create itself, such as the service accounts
+    // of resources Alien adds to the stack (the sandbox egress gateway), so it is generated
+    // from the prepared stack, the same one `alien render` prints.
+    let prepared = prepare_stack(stack, &stack_settings)
+        .await
+        .map_err(|e| render_failed(format!("failed to prepare the stack: {e}")))?;
+    let stack = &prepared;
     let chart = generate_helm_chart(
         stack,
         HelmOptions {

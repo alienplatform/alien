@@ -566,14 +566,16 @@ impl KubernetesSandbox {
             }
             .await;
             if let Err(error) = installation {
-                // Release the claimed pod even if publishing its initial policy failed.
-                self.terminate(&claim.session_id)
-                    .await
-                    .context(ErrorData::SandboxEgressGatewayUnavailable {
-                    reason:
-                        "initial policy delivery failed and the claimed pod could not be cleaned up"
-                            .into(),
-                })?;
+                // Release the claimed pod even if publishing its initial policy failed. When the
+                // release fails too, the caller still learns why the policy was not published:
+                // that is the error to fix, and the cleanup failure is logged beside it.
+                if let Err(cleanup) = self.terminate(&claim.session_id).await {
+                    tracing::warn!(
+                        sandbox_id = %claim.session_id,
+                        error = %cleanup,
+                        "the claimed pod could not be released after its initial egress policy failed"
+                    );
+                }
                 return Err(error);
             }
         }
