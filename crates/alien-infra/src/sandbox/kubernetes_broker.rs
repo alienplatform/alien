@@ -793,6 +793,7 @@ const ANNOTATION_SETUP_PENDING: &str = "alien.dev/setup-pending";
 /// Set on a reservation once its creator has claimed the session's pod. Ending a session or
 /// reporting its setup only lets go of a reservation in this state: one without it belongs to a
 /// creator that is still claiming, and a second pod for the id would follow if it were cleared.
+/// The value is the unix second of the claim, where the setup window starts.
 const ANNOTATION_CLAIMED: &str = "alien.dev/session-claimed";
 /// How long a creator may take over a session's setup. Past it a session that is still marked is
 /// reported as ready: a creator that died mid-setup must not leave every caller waiting for a
@@ -933,7 +934,24 @@ async fn setup_pending(
         .get(ANNOTATION_RESERVED_AT)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
-    Ok(now_unix - reserved_at <= SETUP_WINDOW_SECONDS)
+    // The setup window starts when the creator's claim finished, not when it reserved the id: a
+    // cold create can take much longer than the window. Before the claim is recorded the creator
+    // is still claiming, which the reservation's own lifetime bounds.
+    Ok(match claimed_at(&annotations, reserved_at) {
+        Some(claimed_at) => now_unix - claimed_at <= SETUP_WINDOW_SECONDS,
+        None => now_unix - reserved_at <= RESERVATION_TTL_SECONDS,
+    })
+}
+
+/// Unix second at which the creator recorded its claim, if it has. A record without a readable
+/// time counts from the reservation.
+fn claimed_at(
+    annotations: &std::collections::BTreeMap<String, String>,
+    reserved_at: i64,
+) -> Option<i64> {
+    annotations
+        .get(ANNOTATION_CLAIMED)
+        .map(|value| value.parse::<i64>().unwrap_or(reserved_at))
 }
 
 /// The creator reports that its setup of the session is done (or that it ended the session):
@@ -1004,30 +1022,50 @@ async fn release_claimed_reservation(
     }
 }
 
-/// Marks the reservation this creator holds as one whose session is claimed. Best effort: an
-/// unmarked reservation is only cleared by the sweep after its window.
+/// Marks the reservation this creator holds as one whose session is claimed, at `now_unix`, which
+/// is when the setup window starts. An error leaves the reservation setup-pending but unclaimed,
+/// which neither the ready report nor ending the session lets go of, so the caller fails the
+/// create rather than continue.
 async fn mark_reservation_claimed(
     secrets: &Arc<dyn SecretsApi>,
     namespace: &str,
     sandbox_id: &str,
     session_id: &str,
     uid: Option<&str>,
-) {
+    now_unix: i64,
+) -> Result<()> {
     let name = reservation_name(sandbox_id, session_id);
-    let Ok(mut secret) = secrets.get_secret(namespace, &name).await else {
-        return;
-    };
+    let mut secret =
+        secrets
+            .get_secret(namespace, &name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("could not read the reservation of session '{session_id}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
     // Only the object this creator created; the update carries its resourceVersion, so a
     // concurrent change fails it.
     if secret.metadata.uid.as_deref() != uid {
-        return;
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "the reservation of session '{session_id}' is no longer this creator's"
+            ),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
     }
     secret
         .metadata
         .annotations
         .get_or_insert_with(Default::default)
-        .insert(ANNOTATION_CLAIMED.to_string(), "true".to_string());
-    let _ = secrets.update_secret(namespace, &name, &secret).await;
+        .insert(ANNOTATION_CLAIMED.to_string(), now_unix.to_string());
+    secrets
+        .update_secret(namespace, &name, &secret)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("could not record the claim of session '{session_id}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    Ok(())
 }
 
 /// Deletes the session reservations of `sandbox_id` that were abandoned: a creator that never
@@ -1063,12 +1101,13 @@ pub(crate) async fn sweep_abandoned_reservations(
             .get(ANNOTATION_RESERVED_AT)
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(0);
-        let window = if annotations.contains_key(ANNOTATION_SETUP_PENDING) {
-            SETUP_WINDOW_SECONDS
-        } else {
-            RESERVATION_TTL_SECONDS
+        // A claimed reservation is judged from the claim; one still being claimed from the
+        // reservation, which a cold create may hold for as long as its lifetime.
+        let (since, window) = match claimed_at(&annotations, reserved_at) {
+            Some(claimed_at) => (claimed_at, SETUP_WINDOW_SECONDS),
+            None => (reserved_at, RESERVATION_TTL_SECONDS),
         };
-        if now_unix - reserved_at > window
+        if now_unix - since > window
             && secrets
                 .delete_secret_if_uid(namespace, name, uid)
                 .await
@@ -1162,14 +1201,35 @@ pub(crate) async fn find_or_create_session_for_deployment(
                 // the setup is done, so a caller that finds the session meanwhile can tell.
                 let keep = hold_for_setup && matches!(&outcome, Ok(session) if session.created);
                 if keep {
-                    mark_reservation_claimed(
+                    let marked = mark_reservation_claimed(
                         secrets,
                         namespace,
                         sandbox_id,
                         session_id,
                         uid.as_deref(),
+                        now_unix + started.elapsed().as_secs() as i64,
                     )
                     .await;
+                    if let Err(error) = marked {
+                        // The session cannot be handed over with a setup window nobody can end:
+                        // end the pod this call claimed and let go of its own reservation.
+                        let selector = format!(
+                            "{}={sandbox_id},{}={session_id}",
+                            crate::sandbox::LABEL_SANDBOX,
+                            crate::sandbox::LABEL_SESSION
+                        );
+                        let _ =
+                            release_matching_session(pods, namespace, session_id, selector).await;
+                        release_reservation(
+                            secrets,
+                            namespace,
+                            sandbox_id,
+                            session_id,
+                            uid.as_deref(),
+                        )
+                        .await;
+                        return Err(SessionRequestError::Unavailable(error));
+                    }
                 } else {
                     release_reservation(secrets, namespace, sandbox_id, session_id, uid.as_deref())
                         .await;
@@ -1983,6 +2043,8 @@ mod tests {
         secrets: std::sync::Mutex<BTreeMap<String, Secret>>,
         versions: std::sync::Mutex<u64>,
         uids: std::sync::atomic::AtomicUsize,
+        /// Makes every Secret update fail, as an API server error would.
+        fail_secret_updates: std::sync::atomic::AtomicBool,
     }
 
     fn conflict(name: &str) -> alien_error::AlienError<alien_client_core::ErrorData> {
@@ -2098,6 +2160,7 @@ mod tests {
                 return Err(conflict(&name));
             }
             let mut stored = secret.clone();
+            stored.metadata.resource_version = Some("1".to_string());
             stored.metadata.uid = Some(format!(
                 "uid-{}",
                 self.uids.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -2154,11 +2217,28 @@ mod tests {
             name: &str,
             secret: &Secret,
         ) -> alien_client_core::Result<Secret> {
-            self.secrets
-                .lock()
-                .unwrap()
-                .insert(name.to_string(), secret.clone());
-            Ok(secret.clone())
+            if self
+                .fail_secret_updates
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(conflict(name));
+            }
+            let mut secrets = self.secrets.lock().unwrap();
+            // Like the API server: an update carries the resourceVersion it read, and loses to
+            // any change made since.
+            let current = secrets
+                .get(name)
+                .and_then(|stored| stored.metadata.resource_version.clone());
+            if current != secret.metadata.resource_version {
+                return Err(conflict(name));
+            }
+            let mut stored = secret.clone();
+            stored.metadata.resource_version = Some(format!(
+                "{}",
+                current.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) + 1
+            ));
+            secrets.insert(name.to_string(), stored.clone());
+            Ok(stored)
         }
         async fn delete_secret_if_uid(
             &self,
@@ -2306,6 +2386,138 @@ mod tests {
         assert!(!held.contains_key(&abandoned));
         assert!(held.contains_key(&recent));
         assert!(held.contains_key("alien-sandbox-sbx-capability"));
+    }
+
+    /// A cold create can take longer than the setup window. The window counts from the claim, so
+    /// a session whose claim finished at +300 s is still being set up at +301 s and the sweep
+    /// leaves its reservation alone; counted from the reservation both would already be over.
+    #[tokio::test]
+    async fn the_setup_window_starts_at_the_claim_not_at_the_reservation() {
+        let cluster = Arc::new(FakeCluster::default());
+        let name = stored_reservation(
+            &cluster,
+            "sbx",
+            "slow",
+            "uid-slow",
+            1_000,
+            &[ANNOTATION_SETUP_PENDING],
+        );
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        let claimed_at = 1_000 + 300;
+        mark_reservation_claimed(&secrets, "ns", "sbx", "slow", Some("uid-slow"), claimed_at)
+            .await
+            .unwrap();
+
+        let soon = claimed_at + 1;
+        assert!(setup_pending(&secrets, "ns", "sbx", "slow", soon)
+            .await
+            .unwrap());
+        assert_eq!(
+            sweep_abandoned_reservations(&secrets, "ns", "sbx", soon)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(cluster.secrets.lock().unwrap().contains_key(&name));
+
+        let late = claimed_at + SETUP_WINDOW_SECONDS + 1;
+        assert!(!setup_pending(&secrets, "ns", "sbx", "slow", late)
+            .await
+            .unwrap());
+        assert_eq!(
+            sweep_abandoned_reservations(&secrets, "ns", "sbx", late)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    /// A reservation still being claimed is judged by the reservation's lifetime, not the setup
+    /// window: a cold create holds it for as long as it takes.
+    #[tokio::test]
+    async fn an_unclaimed_reservation_is_swept_only_after_the_reservation_lifetime() {
+        let cluster = Arc::new(FakeCluster::default());
+        let name = stored_reservation(
+            &cluster,
+            "sbx",
+            "claiming",
+            "uid-c",
+            1_000,
+            &[ANNOTATION_SETUP_PENDING],
+        );
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        let during_cold_create = 1_000 + SETUP_WINDOW_SECONDS + 100;
+        assert!(
+            setup_pending(&secrets, "ns", "sbx", "claiming", during_cold_create)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            sweep_abandoned_reservations(&secrets, "ns", "sbx", during_cold_create)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(cluster.secrets.lock().unwrap().contains_key(&name));
+        assert_eq!(
+            sweep_abandoned_reservations(
+                &secrets,
+                "ns",
+                "sbx",
+                1_000 + RESERVATION_TTL_SECONDS + 1
+            )
+            .await
+            .unwrap(),
+            1
+        );
+    }
+
+    /// When the creator cannot record its claim, the create fails and leaves nothing behind: no
+    /// pod nobody holds, no reservation that nothing releases.
+    #[tokio::test]
+    async fn a_create_that_cannot_record_its_claim_fails_and_leaves_nothing() {
+        let cluster = Arc::new(FakeCluster::default());
+        let mut pod = idle_pod("pool-0", "10.0.0.1");
+        pod.metadata.resource_version = Some("1".to_string());
+        cluster.pods.lock().unwrap().push(pod);
+        cluster
+            .fail_secret_updates
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let pods: Arc<dyn PodApi> = cluster.clone();
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        let result = find_or_create_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s1",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+            None,
+            None,
+            true,
+        )
+        .await;
+        assert!(result.is_err(), "the create must not succeed");
+        assert!(
+            cluster.secrets.lock().unwrap().is_empty(),
+            "the reservation is let go"
+        );
+        let carrying_session = cluster
+            .pods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|pod| {
+                pod.metadata
+                    .labels
+                    .as_ref()
+                    .is_some_and(|labels| labels.contains_key(crate::sandbox::LABEL_SESSION))
+            })
+            .count();
+        assert_eq!(carrying_session, 0, "the claimed pod was ended");
     }
 
     /// Several processes asking for one new id at the same moment all get one pod: the id is
