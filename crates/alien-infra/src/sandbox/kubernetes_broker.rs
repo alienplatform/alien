@@ -790,6 +790,10 @@ const RESERVATION_POLL: std::time::Duration = std::time::Duration::from_millis(5
 const ANNOTATION_RESERVED_AT: &str = "alien.dev/reserved-at";
 /// Set on a reservation the creator keeps until it reports that the session's setup is done.
 const ANNOTATION_SETUP_PENDING: &str = "alien.dev/setup-pending";
+/// Set on a reservation once its creator has claimed the session's pod. Ending a session or
+/// reporting its setup only lets go of a reservation in this state: one without it belongs to a
+/// creator that is still claiming, and a second pod for the id would follow if it were cleared.
+const ANNOTATION_CLAIMED: &str = "alien.dev/session-claimed";
 /// How long a creator may take over a session's setup. Past it a session that is still marked is
 /// reported as ready: a creator that died mid-setup must not leave every caller waiting for a
 /// session that is only missing its egress policy, which each of them can set.
@@ -809,10 +813,14 @@ fn reservation_name(sandbox_id: &str, session_id: &str) -> String {
 
 /// What `reserve` found.
 enum Reservation {
-    /// This caller holds the id and is the only one creating its session.
-    Held,
+    /// This caller holds the id and is the only one creating its session. `uid` names the object
+    /// it created, so it only ever lets go of its own.
+    Held { uid: Option<String> },
     /// Another creator holds it, since this unix second.
-    Taken { reserved_at: i64 },
+    Taken {
+        reserved_at: i64,
+        uid: Option<String>,
+    },
 }
 
 /// Creates the per-id reservation if no one holds it. Kubernetes refuses a second create of the
@@ -851,7 +859,9 @@ async fn reserve(
         ..Default::default()
     };
     match secrets.create_secret(namespace, &reservation).await {
-        Ok(_) => Ok(Reservation::Held),
+        Ok(created) => Ok(Reservation::Held {
+            uid: created.metadata.uid,
+        }),
         Err(error)
             if matches!(
                 error.error,
@@ -859,17 +869,19 @@ async fn reserve(
             ) =>
         {
             let held = secrets.get_secret_metadata(namespace, &name).await;
-            let reserved_at = match held {
-                Ok(meta) => meta
-                    .annotations
-                    .and_then(|annotations| annotations.get(ANNOTATION_RESERVED_AT).cloned())
-                    .and_then(|value| value.parse::<i64>().ok())
-                    // A reservation nobody can date is as old as it can be.
-                    .unwrap_or(0),
+            let (reserved_at, uid) = match held {
+                Ok(meta) => (
+                    meta.annotations
+                        .and_then(|annotations| annotations.get(ANNOTATION_RESERVED_AT).cloned())
+                        .and_then(|value| value.parse::<i64>().ok())
+                        // A reservation nobody can date is as old as it can be.
+                        .unwrap_or(0),
+                    meta.uid,
+                ),
                 // Released between the two calls: the next attempt decides again.
-                Err(_) => now_unix,
+                Err(_) => (now_unix, None),
             };
-            Ok(Reservation::Taken { reserved_at })
+            Ok(Reservation::Taken { reserved_at, uid })
         }
         Err(error) => Err(Err::<(), _>(error)
             .context(ErrorData::CloudPlatformError {
@@ -943,20 +955,129 @@ pub(crate) async fn finish_session_setup_for_deployment(
         Some((deployment_label_key, deployment_label_value)),
     )
     .await?;
-    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+    release_claimed_reservation(secrets, namespace, sandbox_id, session_id).await;
     Ok(())
 }
 
-/// Lets go of the reservation. Best effort: one that is left behind expires on its own.
+/// Lets go of the reservation with this uid, and of no other: the name is reused by the next
+/// creator of the id. Best effort: one that is left behind is deleted by the Operator's sweep.
 async fn release_reservation(
     secrets: &Arc<dyn SecretsApi>,
     namespace: &str,
     sandbox_id: &str,
     session_id: &str,
+    uid: Option<&str>,
 ) {
+    let Some(uid) = uid else { return };
     let _ = secrets
-        .delete_secret(namespace, &reservation_name(sandbox_id, session_id))
+        .delete_secret_if_uid(namespace, &reservation_name(sandbox_id, session_id), uid)
         .await;
+}
+
+/// Lets go of the reservation, if it is one whose creator has claimed the session's pod. A
+/// reservation of a creator that is still claiming is left alone, so a concurrent create of the
+/// same id keeps its hold and cannot be joined by a second pod. Deleted by uid: a reservation
+/// another creator took in between is a different object.
+async fn release_claimed_reservation(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+) {
+    let name = reservation_name(sandbox_id, session_id);
+    let Ok(meta) = secrets.get_secret_metadata(namespace, &name).await else {
+        return;
+    };
+    let claimed = meta
+        .annotations
+        .as_ref()
+        .is_some_and(|annotations| annotations.contains_key(ANNOTATION_CLAIMED));
+    if claimed {
+        release_reservation(
+            secrets,
+            namespace,
+            sandbox_id,
+            session_id,
+            meta.uid.as_deref(),
+        )
+        .await;
+    }
+}
+
+/// Marks the reservation this creator holds as one whose session is claimed. Best effort: an
+/// unmarked reservation is only cleared by the sweep after its window.
+async fn mark_reservation_claimed(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+    uid: Option<&str>,
+) {
+    let name = reservation_name(sandbox_id, session_id);
+    let Ok(mut secret) = secrets.get_secret(namespace, &name).await else {
+        return;
+    };
+    // Only the object this creator created; the update carries its resourceVersion, so a
+    // concurrent change fails it.
+    if secret.metadata.uid.as_deref() != uid {
+        return;
+    }
+    secret
+        .metadata
+        .annotations
+        .get_or_insert_with(Default::default)
+        .insert(ANNOTATION_CLAIMED.to_string(), "true".to_string());
+    let _ = secrets.update_secret(namespace, &name, &secret).await;
+}
+
+/// Deletes the session reservations of `sandbox_id` that were abandoned: a creator that never
+/// reported its setup leaves one past the setup window, and one that died mid-claim leaves one
+/// past the reservation's lifetime. Returns how many were deleted.
+pub(crate) async fn sweep_abandoned_reservations(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    now_unix: i64,
+) -> Result<usize> {
+    let selector = format!("{}={sandbox_id}", crate::sandbox::LABEL_SANDBOX);
+    let listed = secrets
+        .list_secrets(namespace, Some(selector), None)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to list session reservations".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    let mut deleted = 0;
+    for secret in listed.items {
+        let (Some(name), Some(uid)) = (
+            secret.metadata.name.as_deref(),
+            secret.metadata.uid.as_deref(),
+        ) else {
+            continue;
+        };
+        if !name.starts_with("alien-session-claim-") {
+            continue;
+        }
+        let annotations = secret.metadata.annotations.unwrap_or_default();
+        let reserved_at = annotations
+            .get(ANNOTATION_RESERVED_AT)
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(0);
+        let window = if annotations.contains_key(ANNOTATION_SETUP_PENDING) {
+            SETUP_WINDOW_SECONDS
+        } else {
+            RESERVATION_TTL_SECONDS
+        };
+        if now_unix - reserved_at > window
+            && secrets
+                .delete_secret_if_uid(namespace, name, uid)
+                .await
+                .is_ok()
+        {
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
 }
 
 /// Finds the session `session_id`, or creates it. Any process of the deployment may call this
@@ -1014,7 +1135,7 @@ pub(crate) async fn find_or_create_session_for_deployment(
         .await
         .map_err(unavailable)?
         {
-            Reservation::Held => {
+            Reservation::Held { uid } => {
                 // The previous holder labels its pod before it lets go, so a session that was
                 // created while this call was between its lookup and its reservation is visible now.
                 let outcome = match reattach().await {
@@ -1040,15 +1161,26 @@ pub(crate) async fn find_or_create_session_for_deployment(
                 // The creator that asked to set the session up keeps the reservation until it says
                 // the setup is done, so a caller that finds the session meanwhile can tell.
                 let keep = hold_for_setup && matches!(&outcome, Ok(session) if session.created);
-                if !keep {
-                    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+                if keep {
+                    mark_reservation_claimed(
+                        secrets,
+                        namespace,
+                        sandbox_id,
+                        session_id,
+                        uid.as_deref(),
+                    )
+                    .await;
+                } else {
+                    release_reservation(secrets, namespace, sandbox_id, session_id, uid.as_deref())
+                        .await;
                 }
                 return outcome;
             }
-            Reservation::Taken { reserved_at } => {
+            Reservation::Taken { reserved_at, uid } => {
                 if now_unix + elapsed - reserved_at > RESERVATION_TTL_SECONDS {
-                    // Its creator died before it could let go.
-                    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+                    // Its creator died before it could let go. Only the object seen is deleted.
+                    release_reservation(secrets, namespace, sandbox_id, session_id, uid.as_deref())
+                        .await;
                 } else if started.elapsed() >= COLD_CREATE_TIMEOUT {
                     return Err(SessionRequestError::Unavailable(AlienError::new(
                         ErrorData::CloudPlatformError {
@@ -1231,7 +1363,7 @@ pub(crate) async fn release_session_for_deployment(
     );
     let released = release_matching_session(pods, namespace, session_id, selector).await;
     // A session that ends while its creator was setting it up must not leave callers waiting.
-    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+    release_claimed_reservation(secrets, namespace, sandbox_id, session_id).await;
     released
 }
 
@@ -1291,6 +1423,9 @@ mod tests {
             ))
         });
         secrets.expect_delete_secret().returning(|_, _| Ok(()));
+        secrets
+            .expect_delete_secret_if_uid()
+            .returning(|_, _, _| Ok(()));
     }
     use k8s_openapi::api::core::v1::{PodStatus, Secret};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -1847,6 +1982,7 @@ mod tests {
         pods: std::sync::Mutex<Vec<Pod>>,
         secrets: std::sync::Mutex<BTreeMap<String, Secret>>,
         versions: std::sync::Mutex<u64>,
+        uids: std::sync::atomic::AtomicUsize,
     }
 
     fn conflict(name: &str) -> alien_error::AlienError<alien_client_core::ErrorData> {
@@ -1961,8 +2097,13 @@ mod tests {
             if secrets.contains_key(&name) {
                 return Err(conflict(&name));
             }
-            secrets.insert(name, secret.clone());
-            Ok(secret.clone())
+            let mut stored = secret.clone();
+            stored.metadata.uid = Some(format!(
+                "uid-{}",
+                self.uids.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            secrets.insert(name, stored.clone());
+            Ok(stored)
         }
         async fn get_secret(&self, _: &str, name: &str) -> alien_client_core::Result<Secret> {
             tokio::task::yield_now().await;
@@ -2002,21 +2143,169 @@ mod tests {
             _: Option<String>,
             _: Option<String>,
         ) -> alien_client_core::Result<List<Secret>> {
-            Ok(List::default())
+            Ok(List {
+                items: self.secrets.lock().unwrap().values().cloned().collect(),
+                ..Default::default()
+            })
         }
         async fn update_secret(
             &self,
             _: &str,
-            _: &str,
+            name: &str,
             secret: &Secret,
         ) -> alien_client_core::Result<Secret> {
+            self.secrets
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), secret.clone());
             Ok(secret.clone())
+        }
+        async fn delete_secret_if_uid(
+            &self,
+            _: &str,
+            name: &str,
+            uid: &str,
+        ) -> alien_client_core::Result<()> {
+            tokio::task::yield_now().await;
+            let mut secrets = self.secrets.lock().unwrap();
+            if secrets
+                .get(name)
+                .is_some_and(|secret| secret.metadata.uid.as_deref() == Some(uid))
+            {
+                secrets.remove(name);
+            }
+            Ok(())
         }
         async fn delete_secret(&self, _: &str, name: &str) -> alien_client_core::Result<()> {
             tokio::task::yield_now().await;
             self.secrets.lock().unwrap().remove(name);
             Ok(())
         }
+    }
+
+    fn stored_reservation(
+        cluster: &FakeCluster,
+        sandbox: &str,
+        session: &str,
+        uid: &str,
+        reserved_at: i64,
+        annotations: &[&str],
+    ) -> String {
+        let name = reservation_name(sandbox, session);
+        let mut map =
+            BTreeMap::from([(ANNOTATION_RESERVED_AT.to_string(), reserved_at.to_string())]);
+        for key in annotations {
+            map.insert(key.to_string(), "true".to_string());
+        }
+        cluster.secrets.lock().unwrap().insert(
+            name.clone(),
+            Secret {
+                metadata: ObjectMeta {
+                    name: Some(name.clone()),
+                    uid: Some(uid.to_string()),
+                    labels: Some(BTreeMap::from([(
+                        crate::sandbox::LABEL_SANDBOX.to_string(),
+                        sandbox.to_string(),
+                    )])),
+                    annotations: Some(map),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        name
+    }
+
+    /// Ending a session must not clear the reservation of a concurrent create of the same id that
+    /// is still claiming: its pod would be followed by a second one for the id.
+    #[tokio::test]
+    async fn ending_a_session_leaves_a_creator_that_is_still_claiming_its_reservation() {
+        let cluster = Arc::new(FakeCluster::default());
+        let still_claiming = stored_reservation(
+            &cluster,
+            "sbx",
+            "s1",
+            "uid-claiming",
+            1_000,
+            &[ANNOTATION_SETUP_PENDING],
+        );
+        let claimed = stored_reservation(
+            &cluster,
+            "sbx",
+            "s2",
+            "uid-claimed",
+            1_000,
+            &[ANNOTATION_SETUP_PENDING, ANNOTATION_CLAIMED],
+        );
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        release_claimed_reservation(&secrets, "ns", "sbx", "s1").await;
+        release_claimed_reservation(&secrets, "ns", "sbx", "s2").await;
+        let held = cluster.secrets.lock().unwrap();
+        assert!(
+            held.contains_key(&still_claiming),
+            "a claiming creator keeps its hold"
+        );
+        assert!(
+            !held.contains_key(&claimed),
+            "a claimed session's reservation is let go"
+        );
+    }
+
+    /// A creator that lets go late must not delete the reservation a later creator took under the
+    /// same name.
+    #[tokio::test]
+    async fn letting_go_deletes_only_the_object_the_creator_created() {
+        let cluster = Arc::new(FakeCluster::default());
+        let name = stored_reservation(&cluster, "sbx", "s1", "uid-new", 1_000, &[]);
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        release_reservation(&secrets, "ns", "sbx", "s1", Some("uid-old")).await;
+        assert!(cluster.secrets.lock().unwrap().contains_key(&name));
+        release_reservation(&secrets, "ns", "sbx", "s1", Some("uid-new")).await;
+        assert!(!cluster.secrets.lock().unwrap().contains_key(&name));
+    }
+
+    /// A reservation a client never reported ready is deleted once its window has passed; a recent
+    /// one, and a Secret that is not a reservation, are left alone.
+    #[tokio::test]
+    async fn the_sweep_deletes_abandoned_reservations_only() {
+        let cluster = Arc::new(FakeCluster::default());
+        let abandoned = stored_reservation(
+            &cluster,
+            "sbx",
+            "old",
+            "u1",
+            1_000,
+            &[ANNOTATION_SETUP_PENDING, ANNOTATION_CLAIMED],
+        );
+        let recent = stored_reservation(
+            &cluster,
+            "sbx",
+            "new",
+            "u2",
+            1_000 + SETUP_WINDOW_SECONDS,
+            &[ANNOTATION_SETUP_PENDING],
+        );
+        cluster.secrets.lock().unwrap().insert(
+            "alien-sandbox-sbx-capability".to_string(),
+            Secret {
+                metadata: ObjectMeta {
+                    name: Some("alien-sandbox-sbx-capability".to_string()),
+                    uid: Some("u3".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        let deleted =
+            sweep_abandoned_reservations(&secrets, "ns", "sbx", 1_000 + SETUP_WINDOW_SECONDS + 1)
+                .await
+                .unwrap();
+        assert_eq!(deleted, 1);
+        let held = cluster.secrets.lock().unwrap();
+        assert!(!held.contains_key(&abandoned));
+        assert!(held.contains_key(&recent));
+        assert!(held.contains_key("alien-sandbox-sbx-capability"));
     }
 
     /// Several processes asking for one new id at the same moment all get one pod: the id is

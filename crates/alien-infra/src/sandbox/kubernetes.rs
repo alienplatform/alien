@@ -745,10 +745,14 @@ async fn reap_expired_sessions_of(ctx: &ResourceControllerContext<'_>, sandbox: 
             .service_provider
             .get_kubernetes_pod_client(kubernetes_config)
             .await?;
-        Result::Ok((namespace, client))
+        let secrets = ctx
+            .service_provider
+            .get_kubernetes_secrets_client(kubernetes_config)
+            .await?;
+        Result::Ok((namespace, client, secrets))
     }
     .await;
-    let (namespace, client) = match prepared {
+    let (namespace, client, secrets) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             warn!(sandbox_id = %sandbox.id, error = %error, "Could not reach the cluster to end expired sessions; trying again on the next tick");
@@ -767,6 +771,17 @@ async fn reap_expired_sessions_of(ctx: &ResourceControllerContext<'_>, sandbox: 
     .await
     {
         warn!(sandbox_id = %sandbox.id, error = %error, "Could not list sessions to end expired ones; trying again on the next tick");
+    }
+    // Reservations a creator abandoned (it never reported its setup, or died) are not sessions.
+    if let Err(error) = super::kubernetes_broker::sweep_abandoned_reservations(
+        &secrets,
+        &namespace,
+        &sandbox.id,
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+    {
+        warn!(sandbox_id = %sandbox.id, error = %error, "Could not delete abandoned session reservations; trying again on the next tick");
     }
 }
 
