@@ -1249,7 +1249,11 @@ mod tests {
             .request("s1", reqwest::Method::GET, "/v1/health")
             .await
             .expect("a request is built");
-        assert_eq!(*lookups.lock().unwrap(), 0, "served from the held capability");
+        assert_eq!(
+            *lookups.lock().unwrap(),
+            0,
+            "served from the held capability"
+        );
 
         // Close to expiry, building the next request asks the broker again.
         sandbox
