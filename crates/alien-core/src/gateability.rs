@@ -170,19 +170,17 @@ mod tests {
     }
 
     #[test]
-    fn postgres_is_live_gateable_only() {
+    fn postgres_is_frozen_gateable_only() {
         assert_eq!(gate_refusal("postgres", "db"), None);
         let gateability = type_gateability("postgres");
-        // Frozen postgres has no setup emitter today; the gate rule allows it
-        // and the missing emitter refuses the render, exactly as for an
-        // ungated frozen postgres.
-        assert!(gateability.live);
+        assert!(gateability.frozen && !gateability.live);
     }
 
     #[test]
-    fn redis_gates_like_postgres() {
+    fn redis_is_gateable_in_both_lifecycles() {
         assert_eq!(gate_refusal("redis", "cache"), None);
-        assert!(type_gateability("redis").live);
+        let gateability = type_gateability("redis");
+        assert!(gateability.frozen && gateability.live);
     }
 
     #[test]

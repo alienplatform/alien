@@ -140,7 +140,10 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         | "azure-service-bus-namespace"
         // Email holds durable routing state (domain identities, DKIM
         // verification, receipt rules) that setup owns end to end.
-        | "email" => frozen_only(),
+        | "email"
+        // A database is created by setup, which also owns its password, network and size: a
+        // later release changes it by re-running setup.
+        | "postgres" => frozen_only(),
         // Durable search state, setup-owned only: there is no runtime
         // controller that could provision or replace the collection.
         "experimental/aws-opensearch" => frozen_only(),
@@ -148,7 +151,7 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         // output, so Alien copies it into Secret Manager after setup and needs `redis/management`
         // even while the resource is Frozen.
         "redis" => user_choice_with_management(),
-        "storage" | "queue" | "kv" | "vault" | "postgres" | "ai" => user_choice(),
+        "storage" | "queue" | "kv" | "vault" | "ai" => user_choice(),
         _ => user_choice(),
     }
 }
@@ -365,7 +368,7 @@ mod tests {
 
     #[test]
     fn data_resources_can_be_frozen_or_live() {
-        for resource_type in ["storage", "queue", "kv", "vault", "postgres", "redis", "ai"] {
+        for resource_type in ["storage", "queue", "kv", "vault", "redis", "ai"] {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert_eq!(
                 policy.requires_management_permissions(),
@@ -377,6 +380,15 @@ mod tests {
             assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
             assert!(!policy.should_emit_in_setup(ResourceLifecycle::Live));
         }
+    }
+
+    #[test]
+    fn postgres_is_frozen_only() {
+        let policy = ownership_policy_for_resource_type("postgres");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
     }
 
     #[test]

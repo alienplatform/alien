@@ -57,6 +57,14 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     resource_entry.lifecycle,
                     policy.allowed_lifecycles()
                 ));
+                if resource_type == "postgres" {
+                    errors.push(format!(
+                        "Postgres '{}' has to be Frozen: change its lifecycle to frozen. Setup \
+                         creates the database, and a change to it (size, version, network) goes \
+                         through setup",
+                        resource_id
+                    ));
+                }
             }
 
             // A remote grant on Azure or GCP names a parent that must exist when the package
@@ -939,5 +947,39 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("must contain exactly one Storage resource")));
+    }
+
+    #[tokio::test]
+    async fn a_live_postgres_is_refused_on_every_cloud_and_says_what_to_do() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            let stack = |lifecycle| {
+                Stack::new("shop".to_string())
+                    .add(alien_core::Postgres::new("db".to_string()).build(), lifecycle)
+                    .build()
+            };
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack(ResourceLifecycle::Live), platform)
+                .await
+                .unwrap();
+            assert!(!result.success, "{platform:?}");
+            let text = result.errors.join("\n");
+            assert!(
+                text.contains("allowed lifecycles are Frozen")
+                    && text.contains("change its lifecycle to frozen")
+                    && text.contains("goes through setup"),
+                "{platform:?}: {text}"
+            );
+            let frozen = FrozenResourceLifecycleCheck
+                .check(&stack(ResourceLifecycle::Frozen), platform)
+                .await
+                .unwrap();
+            assert!(frozen.success, "{platform:?}: {:?}", frozen.errors);
+        }
     }
 }
