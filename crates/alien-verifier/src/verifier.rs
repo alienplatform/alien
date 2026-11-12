@@ -723,6 +723,7 @@ mod tests {
                 | ResourceWrite::PutWorkerBucketNotification { configuration, .. } => {
                     configuration.to_string()
                 }
+                ResourceWrite::PutScheduleTargets { targets, .. } => targets.to_string(),
                 ResourceWrite::CreateEventSourceMapping { request }
                 | ResourceWrite::UpdateEventSourceMapping { request, .. } => request.to_string(),
                 ResourceWrite::CreateQueue { queue_name, .. } => queue_name.clone(),
@@ -833,6 +834,9 @@ mod tests {
                 queue: alien_core::ResourceRef::new(alien_core::Queue::RESOURCE_TYPE, "jobs"),
                 batch: None,
             })
+            .trigger(alien_core::WorkerTrigger::Schedule {
+                cron: "0 * * * *".to_string(),
+            })
             .build();
         let stack = alien_core::Stack::new("shop".to_string())
             .add(jobs, alien_core::ResourceLifecycle::Frozen)
@@ -849,6 +853,76 @@ mod tests {
         )
         .unwrap();
         signed_release(1, &body)
+    }
+
+    /// A schedule rule may only call the worker's own function, and only a rule of a signed
+    /// schedule trigger.
+    #[tokio::test]
+    async fn schedule_targets_are_checked_against_the_signed_stack() {
+        let function = format!("{PREFIX}-api");
+        let own_arn = format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{function}");
+        let request = |rule: &str, targets: Value| {
+            json!({"applyResourceWrite": {
+                "release": worker_release(),
+                "signerLists": [signer_list()],
+                "resource": "api",
+                "writes": [{"putScheduleTargets": {"rule": rule, "targets": targets}}],
+            }})
+        };
+        let (verifier, backend) = resource_verifier();
+        let signed = json!([{"Id": "1", "Arn": own_arn}]);
+        verifier
+            .handle(request(&format!("{function}-cron-1"), signed.clone()))
+            .await
+            .expect("the signed schedule is accepted");
+        let sent: Value = serde_json::from_str(&backend.forwarded.lock().unwrap()[0]).unwrap();
+        assert_eq!(sent, signed, "sent unchanged");
+
+        let other = format!("arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PREFIX}-verifier");
+        for (name, write) in [
+            (
+                "another function",
+                request(
+                    &format!("{function}-cron-1"),
+                    json!([{"Id": "1", "Arn": other}]),
+                ),
+            ),
+            (
+                "a second target",
+                request(
+                    &format!("{function}-cron-1"),
+                    json!([{"Id": "1", "Arn": own_arn}, {"Id": "2", "Arn": other}]),
+                ),
+            ),
+            (
+                "a target that carries more",
+                request(
+                    &format!("{function}-cron-1"),
+                    json!([{"Id": "1", "Arn": own_arn, "Input": "{}"}]),
+                ),
+            ),
+            (
+                "an index that is not a schedule",
+                request(&format!("{function}-cron-0"), signed.clone()),
+            ),
+            (
+                "an index past the triggers",
+                request(&format!("{function}-cron-7"), signed.clone()),
+            ),
+            (
+                "a padded index",
+                request(&format!("{function}-cron-01"), signed.clone()),
+            ),
+            (
+                "another worker's rule",
+                request(&format!("{PREFIX}-verifier-cron-1"), signed.clone()),
+            ),
+        ] {
+            let forwarded = backend.forwarded.lock().unwrap().len();
+            let reason = refusal(verifier.handle(write).await);
+            assert!(reason.starts_with("Refused: "), "{name}: {reason}");
+            assert_eq!(backend.forwarded.lock().unwrap().len(), forwarded, "{name}");
+        }
     }
 
     /// A mapping reads only from a queue the signed stack triggers the worker from, and feeds

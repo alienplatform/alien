@@ -207,6 +207,8 @@ pub struct AwsBackend<L, M> {
     pub s3: Box<dyn alien_aws_clients::s3::S3Api>,
     /// SQS, for the queues of the stack.
     pub sqs: Box<dyn alien_aws_clients::sqs::SqsApi>,
+    /// EventBridge, for the targets of the stack's schedule rules.
+    pub eventbridge: Box<dyn alien_aws_clients::eventbridge::EventBridgeApi>,
     /// Lambda MicroVMs, for the images of the stack's sandboxes.
     pub microvms: Box<dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi>,
     /// Lambda.
@@ -266,6 +268,7 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
             &self.lambda,
             self.s3.as_ref(),
             self.sqs.as_ref(),
+            self.eventbridge.as_ref(),
             write,
         )
         .await

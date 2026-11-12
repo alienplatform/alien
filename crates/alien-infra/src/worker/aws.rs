@@ -290,6 +290,58 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    /// Point a schedule rule at the worker's function. On a protected install the verifier checks
+    /// the target against the signed stack and sets it.
+    async fn put_schedule_target(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_id: &str,
+        rule_name: &str,
+        function_arn: &str,
+    ) -> Result<()> {
+        let targets = vec![EventBridgeTarget {
+            id: "1".to_string(),
+            arn: function_arn.to_string(),
+        }];
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, worker_id)? {
+            let aws_cfg = ctx.get_aws_config()?;
+            let lambda = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+            let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            let targets = serde_json::to_value(&targets).into_alien_error().context(
+                ErrorData::CloudPlatformError {
+                    message: "The schedule targets do not serialize".to_string(),
+                    resource_id: Some(worker_id.to_string()),
+                },
+            )?;
+            crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                worker_id,
+                vec![crate::core::verifier::ResourceWrite::PutScheduleTargets {
+                    rule: rule_name.to_string(),
+                    targets,
+                }],
+            )
+            .await?;
+            return Ok(());
+        }
+        let aws_cfg = ctx.get_aws_config()?;
+        ctx.service_provider
+            .get_aws_eventbridge_client(aws_cfg)
+            .await?
+            .put_targets(PutTargetsRequest {
+                rule: rule_name.to_string(),
+                targets,
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to add target to EventBridge rule '{}'", rule_name),
+                resource_id: Some(worker_id.to_string()),
+            })?;
+        Ok(())
+    }
+
     /// Write a bucket's notification document for this worker's storage trigger. On a protected
     /// install the verifier checks it against the signed stack and sends it unchanged.
     async fn put_storage_trigger_notification(
@@ -305,22 +357,24 @@ impl AwsWorkerController {
         let lambda = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         if let Some(release) = crate::core::verifier::protected_statements(ctx, worker_id)? {
             let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
-            let configuration = serde_json::to_value(document)
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
+            let configuration = serde_json::to_value(document).into_alien_error().context(
+                ErrorData::CloudPlatformError {
                     message: "The bucket notification document does not serialize".to_string(),
                     resource_id: Some(worker_id.to_string()),
-                })?;
+                },
+            )?;
             crate::core::verifier::apply_resource_write(
                 &verifier,
                 release,
                 ctx.deployment_config.signed_config.as_ref(),
                 worker_id,
-                vec![crate::core::verifier::ResourceWrite::PutWorkerBucketNotification {
-                    storage: storage_id.to_string(),
-                    bucket: bucket.to_string(),
-                    configuration,
-                }],
+                vec![
+                    crate::core::verifier::ResourceWrite::PutWorkerBucketNotification {
+                        storage: storage_id.to_string(),
+                        bucket: bucket.to_string(),
+                        configuration,
+                    },
+                ],
             )
             .await?;
             return Ok(());
@@ -2932,22 +2986,8 @@ impl AwsWorkerController {
                 }
 
                 // Add Lambda as the target of the rule
-                eventbridge_client
-                    .put_targets(PutTargetsRequest {
-                        rule: rule_name.clone(),
-                        targets: vec![EventBridgeTarget {
-                            id: "1".to_string(),
-                            arn: function_arn.to_string(),
-                        }],
-                    })
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to add target to EventBridge rule '{}'",
-                            rule_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                self.put_schedule_target(ctx, &config.id, &rule_name, function_arn)
+                    .await?;
 
                 if !self
                     .eventbridge_permission_statement_ids
@@ -4610,22 +4650,8 @@ impl AwsWorkerController {
                         }
                     }
 
-                    eventbridge_client
-                        .put_targets(PutTargetsRequest {
-                            rule: rule_name.clone(),
-                            targets: vec![EventBridgeTarget {
-                                id: "1".to_string(),
-                                arn: function_arn.to_string(),
-                            }],
-                        })
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add target to EventBridge rule '{}'",
-                                rule_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    self.put_schedule_target(ctx, &current_config.id, &rule_name, function_arn)
+                        .await?;
 
                     if !self
                         .eventbridge_permission_statement_ids
@@ -5902,16 +5928,19 @@ impl AwsWorkerController {
                         release,
                         ctx.deployment_config.signed_config.as_ref(),
                         &worker_config.id,
-                        vec![crate::core::verifier::ResourceWrite::UpdateEventSourceMapping {
-                            uuid: uuid.clone(),
-                            request: serde_json::to_value(&update).into_alien_error().context(
-                                ErrorData::CloudPlatformError {
-                                    message: "The event source mapping request does not serialize"
-                                        .to_string(),
-                                    resource_id: Some(worker_config.id.clone()),
-                                },
-                            )?,
-                        }],
+                        vec![
+                            crate::core::verifier::ResourceWrite::UpdateEventSourceMapping {
+                                uuid: uuid.clone(),
+                                request: serde_json::to_value(&update).into_alien_error().context(
+                                    ErrorData::CloudPlatformError {
+                                        message:
+                                            "The event source mapping request does not serialize"
+                                                .to_string(),
+                                        resource_id: Some(worker_config.id.clone()),
+                                    },
+                                )?,
+                            },
+                        ],
                     )
                     .await?;
                 } else {
@@ -5956,15 +5985,17 @@ impl AwsWorkerController {
                 release,
                 ctx.deployment_config.signed_config.as_ref(),
                 &worker_config.id,
-                vec![crate::core::verifier::ResourceWrite::CreateEventSourceMapping {
-                    request: serde_json::to_value(&request).into_alien_error().context(
-                        ErrorData::CloudPlatformError {
-                            message: "The event source mapping request does not serialize"
-                                .to_string(),
-                            resource_id: Some(worker_config.id.clone()),
-                        },
-                    )?,
-                }],
+                vec![
+                    crate::core::verifier::ResourceWrite::CreateEventSourceMapping {
+                        request: serde_json::to_value(&request).into_alien_error().context(
+                            ErrorData::CloudPlatformError {
+                                message: "The event source mapping request does not serialize"
+                                    .to_string(),
+                                resource_id: Some(worker_config.id.clone()),
+                            },
+                        )?,
+                    },
+                ],
             )
             .await?;
             let uuid = written.answers[0]["uuid"]
@@ -12455,7 +12486,11 @@ mod tests {
             return answer.clone();
         }
         let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
-        let writes = request["applyWrite"]["writes"].as_array().unwrap().len();
+        let writes = request["applyWrite"]["writes"]
+            .as_array()
+            .or_else(|| request["applyResourceWrite"]["writes"].as_array())
+            .unwrap()
+            .len();
         let mut body: serde_json::Value = serde_json::from_slice(&answer.payload).unwrap();
         let one = body.as_object_mut().unwrap().remove("answer").unwrap();
         body["answers"] = serde_json::json!(vec![one; writes]);
@@ -13047,7 +13082,11 @@ mod tests {
             .map(|(function, payload)| {
                 assert_eq!(function, "test-verifier");
                 let request = serde_json::from_slice::<serde_json::Value>(payload).unwrap();
-                let writes = request["applyWrite"]["writes"].as_array().unwrap().clone();
+                let writes = request["applyWrite"]["writes"]
+                    .as_array()
+                    .or_else(|| request["applyResourceWrite"]["writes"].as_array())
+                    .unwrap()
+                    .clone();
                 assert_eq!(
                     writes.len(),
                     1,
@@ -13061,10 +13100,20 @@ mod tests {
                 .iter()
                 .map(|write| write.as_object().unwrap().keys().next().unwrap().as_str())
                 .collect::<Vec<_>>(),
-            ["createFunction", "addPermission", "putFunctionConcurrency"],
-            "the verifier creates the function, grants the rule and sets its concurrency"
+            [
+                "createFunction",
+                "addPermission",
+                "putScheduleTargets",
+                "putFunctionConcurrency"
+            ],
+            "the verifier creates the function, grants the rule, points it at the function and \
+             sets the concurrency"
         );
         for (_, payload) in &invocations {
+            // The resource writes are checked by the verifier's own tests.
+            if payload.windows(17).any(|w| w == b"applyResourceWrit") {
+                continue;
+            }
             let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
             answer.expect("the verifier's tables accept the controller's request");
             assert_eq!(forwarded.len(), 1);
@@ -13076,9 +13125,10 @@ mod tests {
             "the rule management created may invoke the function"
         );
         assert_eq!(
-            writes[2]["putFunctionConcurrency"]["reservedConcurrentExecutions"],
+            writes[3]["putFunctionConcurrency"]["reservedConcurrentExecutions"],
             5
         );
+        assert_eq!(writes[2]["putScheduleTargets"]["rule"], "test-api-cron-0");
     }
 
     /// A verifier failure that isn't a refusal (a cloud call, a write that raced another) is

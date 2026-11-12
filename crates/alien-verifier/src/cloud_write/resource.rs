@@ -92,6 +92,10 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: Value,
     },
+    /// EventBridge PutTargets of one of a worker's schedule rules: the only target is the
+    /// worker's own function.
+    #[serde(rename_all = "camelCase")]
+    PutScheduleTargets { rule: String, targets: Value },
     /// Lambda CreateEventSourceMapping, with the request as the cloud client serialises it.
     #[serde(rename_all = "camelCase")]
     CreateEventSourceMapping { request: Value },
@@ -216,6 +220,7 @@ impl ResourceWrite {
             ResourceWrite::PutPublicAccessBlock { .. } => "PutPublicAccessBlock",
             ResourceWrite::PutBucketNotification { .. } => "PutBucketNotification",
             ResourceWrite::PutWorkerBucketNotification { .. } => "PutWorkerBucketNotification",
+            ResourceWrite::PutScheduleTargets { .. } => "PutScheduleTargets",
             ResourceWrite::CreateEventSourceMapping { .. } => "CreateEventSourceMapping",
             ResourceWrite::UpdateEventSourceMapping { .. } => "UpdateEventSourceMapping",
             ResourceWrite::CreateQueue { .. } => "CreateQueue",
@@ -395,7 +400,8 @@ pub fn check_aws_write(
             configuration,
         } => {
             worker_trigger_storage(facts, storage)?;
-            let own = aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, storage);
+            let own =
+                aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, storage);
             if *bucket != own {
                 return Err(refused(format!(
                     "PutWorkerBucketNotification names bucket {bucket}, not {own}, the bucket of \
@@ -404,6 +410,9 @@ pub fn check_aws_write(
             }
             notification_document(configuration)?;
             Ok(())
+        }
+        ResourceWrite::PutScheduleTargets { rule, targets } => {
+            check_schedule_targets(facts, rule, targets)
         }
         ResourceWrite::CreateEventSourceMapping { request } => {
             let request: CreateEventSourceMappingRequest = parse_exact(request)?;
@@ -581,6 +590,43 @@ fn parse_exact<T: serde::de::DeserializeOwned + Serialize>(request: &Value) -> R
     Ok(parsed)
 }
 
+/// A schedule rule is `<function>-cron-<index>` for a signed Schedule trigger of this worker, and
+/// its one target is the worker's own function.
+fn check_schedule_targets(facts: &ResourceFacts<'_>, rule: &str, targets: &Value) -> Result<()> {
+    let worker = facts.worker()?;
+    let own = facts.place.function_name(facts.resource_id)?;
+    let index = rule
+        .strip_prefix(&format!("{own}-cron-"))
+        .and_then(|index| index.parse::<usize>().ok())
+        .filter(|index| index.to_string() == rule[own.len() + 6..])
+        .ok_or_else(|| {
+            refused(format!(
+                "PutScheduleTargets names rule {rule}, not a {own}-cron-<index> rule"
+            ))
+        })?;
+    if !matches!(
+        worker.triggers.get(index),
+        Some(alien_core::WorkerTrigger::Schedule { .. })
+    ) {
+        return Err(refused(format!(
+            "the signed stack has no schedule trigger {index} on worker '{}'",
+            facts.resource_id
+        )));
+    }
+    let (account, region) = aws_account_and_region(facts)?;
+    let own_arn = format!(
+        "arn:{}:lambda:{region}:{account}:function:{own}",
+        aws_partition(&region)
+    );
+    let expected = json!([{ "Id": "1", "Arn": own_arn }]);
+    if *targets != expected {
+        return Err(refused(format!(
+            "PutScheduleTargets must have the single target {own_arn} with id 1, got {targets}"
+        )));
+    }
+    Ok(())
+}
+
 fn check_function_name(facts: &ResourceFacts<'_>, named: &str, operation: &str) -> Result<()> {
     facts.worker()?;
     let own = facts.place.function_name(facts.resource_id)?;
@@ -712,9 +758,11 @@ pub async fn check_notification_state(
             let events = worker_trigger_storage(facts, storage)?;
             let function = facts.place.function_name(facts.resource_id)?;
             let entry = alien_aws_clients::s3::LambdaFunctionConfiguration {
-                id: Some(alien_core::storage_notifications::aws_trigger_notification_id(
-                    &function, storage,
-                )),
+                id: Some(
+                    alien_core::storage_notifications::aws_trigger_notification_id(
+                        &function, storage,
+                    ),
+                ),
                 lambda_function_arn: format!(
                     "arn:{}:lambda:{region}:{account}:function:{function}",
                     aws_partition(&region)
@@ -752,9 +800,9 @@ fn worker_trigger_storage(facts: &ResourceFacts<'_>, storage: &str) -> Result<Ve
             alien_core::WorkerTrigger::Storage {
                 storage: reference,
                 events,
-            } if reference.id == storage => {
-                Some(alien_core::storage_notifications::aws_trigger_events(events))
-            }
+            } if reference.id == storage => Some(
+                alien_core::storage_notifications::aws_trigger_events(events),
+            ),
             _ => None,
         })
         .ok_or_else(|| {
@@ -819,14 +867,10 @@ fn check_notification_document(
             entry.queue_arn, resource_id
         )));
     }
-    if let Some(entry) = new
-        .lambda_function_configurations
-        .iter()
-        .find(|entry| {
-            !current.lambda_function_configurations.contains(entry)
-                && !desired_functions.contains(entry)
-        })
-    {
+    if let Some(entry) = new.lambda_function_configurations.iter().find(|entry| {
+        !current.lambda_function_configurations.contains(entry)
+            && !desired_functions.contains(entry)
+    }) {
         return Err(refused(format!(
             "PutBucketNotification adds a function destination {}",
             entry.lambda_function_arn
@@ -871,6 +915,7 @@ pub async fn forward_aws_write(
     lambda: &dyn alien_aws_clients::lambda::LambdaApi,
     s3: &dyn alien_aws_clients::s3::S3Api,
     sqs: &dyn alien_aws_clients::sqs::SqsApi,
+    eventbridge: &dyn alien_aws_clients::eventbridge::EventBridgeApi,
     write: &ResourceWrite,
 ) -> Result<Value> {
     use alien_error::Context;
@@ -914,6 +959,21 @@ pub async fn forward_aws_write(
                     operation: format!("s3:PutBucketNotification {bucket}"),
                 })?;
             Ok(json!({ "bucket": bucket }))
+        }
+        ResourceWrite::PutScheduleTargets { rule, targets } => {
+            let targets: Vec<alien_aws_clients::eventbridge::EventBridgeTarget> =
+                serde_json::from_value(targets.clone())
+                    .map_err(|error| refused(format!("the targets do not parse: {error}")))?;
+            eventbridge
+                .put_targets(alien_aws_clients::eventbridge::PutTargetsRequest {
+                    rule: rule.clone(),
+                    targets,
+                })
+                .await
+                .context(crate::error::ErrorData::CloudCallFailed {
+                    operation: format!("events:PutTargets {rule}"),
+                })?;
+            Ok(json!({ "rule": rule }))
         }
         ResourceWrite::CreateEventSourceMapping { request } => {
             let request: CreateEventSourceMappingRequest = parse_exact(request)?;

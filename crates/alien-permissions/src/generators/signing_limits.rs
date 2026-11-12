@@ -322,6 +322,14 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 }
             },
             {
+                // What a schedule rule calls is the verifier's to write: it checks the target
+                // against the signed stack.
+                "Sid": "SetThisInstallsScheduleTargets",
+                "Effect": "Allow",
+                "Action": "events:PutTargets",
+                "Resource": format!("arn:aws:events:{region}:{account}:rule/{prefix}-*")
+            },
+            {
                 // It reads a mapping before it changes it, to be sure it is the worker's own.
                 "Sid": "ReadEventSourceMappings",
                 "Effect": "Allow",

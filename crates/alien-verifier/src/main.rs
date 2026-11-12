@@ -140,6 +140,10 @@ impl Aws {
                     http.clone(),
                     credentials.clone(),
                 )),
+                eventbridge: Box::new(alien_aws_clients::eventbridge::EventBridgeClient::new(
+                    http.clone(),
+                    credentials.clone(),
+                )),
                 microvms: Box::new(
                     alien_aws_clients::lambda_microvms::LambdaMicrovmsClient::new(
                         http.clone(),

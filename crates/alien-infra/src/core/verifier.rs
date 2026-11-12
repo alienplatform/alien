@@ -505,6 +505,12 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: serde_json::Value,
     },
+    /// EventBridge PutTargets of one of a worker's schedule rules.
+    #[serde(rename_all = "camelCase")]
+    PutScheduleTargets {
+        rule: String,
+        targets: serde_json::Value,
+    },
     /// Lambda CreateEventSourceMapping.
     #[serde(rename_all = "camelCase")]
     CreateEventSourceMapping { request: serde_json::Value },
