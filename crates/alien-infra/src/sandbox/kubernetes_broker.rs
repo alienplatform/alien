@@ -50,6 +50,10 @@ pub struct ClaimedSession {
     pub tenant_key: Option<String>,
     /// Whether this call created the session, as opposed to finding it
     pub created: bool,
+    /// Unix seconds at which the session ends, when it has a lifetime. Anything minted for the
+    /// session (the egress gateway's identity token) lives exactly this long, not as long as one
+    /// capability.
+    pub deadline: Option<i64>,
 }
 
 /// What a pod records about its session.
@@ -208,6 +212,7 @@ async fn claim_session_with_scope(
             generation: 1,
             tenant_key: tenant_key.map(str::to_string),
             created: true,
+            deadline: crate::sandbox::session_deadline(&claimed),
         });
     }
 
@@ -398,6 +403,7 @@ async fn cold_create(
                 generation: 1,
                 tenant_key: tenant_key.map(str::to_string),
                 created: true,
+                deadline: crate::sandbox::session_deadline(&pod),
             });
         }
         if started.elapsed() >= COLD_CREATE_TIMEOUT {
@@ -578,6 +584,7 @@ pub(crate) async fn reattach_session_for_deployment(
         generation,
         tenant_key,
         created: false,
+        deadline: crate::sandbox::session_deadline(&pod),
     }))
 }
 
@@ -989,21 +996,22 @@ pub(crate) async fn list_sessions_for_deployment(
     Ok(found.iter().filter_map(session_name).collect())
 }
 
-/// Puts a pod claimed a moment ago back in the pool.
+/// Ends a pod claimed a moment ago that the caller will never receive.
 ///
-/// Best effort on purpose: if this write loses or fails, the pod is one leaked slot that the
-/// health tick replaces, which is strictly better than aborting a claim a later candidate could
-/// have satisfied. Failing loudly here would trade a recoverable leak for a failed request.
+/// Best effort on purpose: if this fails, the pod is a session nobody holds and it ends at its
+/// own deadline (the Operator, or the kubelet's backstop); the health tick replaces the pool slot.
+/// It is deleted rather than returned to the pool because the claim set the kubelet's
+/// `activeDeadlineSeconds`, which cannot be removed again: an idle pod carrying it would be
+/// killed with the pool never knowing why.
 async fn release_claim(pods: &Arc<dyn PodApi>, namespace: &str, name: &str, claimed: &Pod) {
-    let mut restored = claimed.clone();
-    if let Some(labels) = restored.metadata.labels.as_mut() {
-        labels.insert(
-            crate::sandbox::LABEL_POOL_STATE.to_string(),
-            crate::sandbox::POOL_STATE_IDLE.to_string(),
-        );
-        labels.remove(crate::sandbox::LABEL_SESSION);
+    match claimed.metadata.uid.as_deref() {
+        Some(uid) => {
+            let _ = pods.delete_pod_if_uid(namespace, name, uid).await;
+        }
+        None => {
+            let _ = pods.delete_pod(namespace, name).await;
+        }
     }
-    let _ = pods.update_pod(namespace, name, &restored).await;
 }
 
 /// Reads the sandbox's signing key out of the Secret the controller provisioned.
@@ -1553,6 +1561,38 @@ mod tests {
 
         assert!(crate::sandbox::session_deadline_passed(&by_default, 4_600));
         assert!(!crate::sandbox::session_deadline_passed(&by_default, 4_599));
+    }
+
+    /// The kubelet's own deadline backstops the Operator's, counted from when the pod started: a
+    /// pod that waited idle for an hour still gives its session the whole lifetime, and one
+    /// without a lifetime gets none.
+    #[test]
+    fn a_claim_sets_the_kubelet_backstop_from_the_pods_start() {
+        let started = |start: i64| {
+            let mut pod = idle_pod("pool-0", "10.1.2.3");
+            pod.metadata.annotations = Some(BTreeMap::from([(
+                crate::sandbox::ANNOTATION_MAX_LIFETIME.to_string(),
+                "3600".to_string(),
+            )]));
+            pod.spec = Some(Default::default());
+            pod.status.get_or_insert_with(Default::default).start_time =
+                Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    chrono::DateTime::from_timestamp(start, 0).unwrap(),
+                ));
+            pod
+        };
+        let mut waited = started(1_000);
+        crate::sandbox::annotate_claim(&mut waited, 4_600, None, None).unwrap();
+        // deadline 8_200; the pod started at 1_000; plus the grace.
+        assert_eq!(
+            waited.spec.unwrap().active_deadline_seconds,
+            Some(8_200 - 1_000 + crate::sandbox::KUBELET_BACKSTOP_GRACE_SECONDS)
+        );
+
+        let mut unlimited = started(1_000);
+        unlimited.metadata.annotations = Some(BTreeMap::new());
+        crate::sandbox::annotate_claim(&mut unlimited, 4_600, None, None).unwrap();
+        assert_eq!(unlimited.spec.unwrap().active_deadline_seconds, None);
     }
 
     /// A pod a failed claim returned to the pool keeps that claim's tenant; the next claim, which
@@ -2461,15 +2501,24 @@ mod tests {
         .expect("an unknown session is not an error");
     }
 
-    /// A pod claimed before the kubelet gave it an address is put back, not abandoned.
+    /// A pod claimed before the kubelet gave it an address is ended, not abandoned.
     ///
     /// Pool pods are labelled idle at creation, so a claim can win one that has no `pod_ip` yet.
     /// The label write has already committed and no session exists to release it, so returning an
     /// error there strands the pod in `claimed` forever and fails a request a later candidate
-    /// could have served.
+    /// could have served. The claim also set the kubelet's deadline, which cannot be unset, so the
+    /// pod is deleted (the pool refills) instead of going back to the idle pool.
     #[tokio::test]
-    async fn a_pod_claimed_before_it_has_an_address_is_returned_to_the_pool() {
+    async fn a_pod_claimed_before_it_has_an_address_is_ended_and_the_next_one_is_used() {
         let mut pods = MockPodApi::new();
+        pods.expect_delete_pod_if_uid()
+            .withf(|_, name, _| name == "pool-0")
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        pods.expect_delete_pod()
+            .withf(|_, name| name == "pool-0")
+            .times(0..=1)
+            .returning(|_, _| Ok(()));
         pods.expect_list_pods().returning(|_, _, _| {
             Ok(List {
                 items: vec![

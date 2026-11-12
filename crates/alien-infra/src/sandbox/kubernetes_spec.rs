@@ -184,7 +184,8 @@ pub(crate) fn sandbox_pod_with_labels(
             // No `activeDeadlineSeconds`: the kubelet counts it from the pod's start, and an idle
             // pool pod can wait for hours, so a session would inherit whatever time the pod had
             // already spent waiting. The ceiling is recorded on the pod instead and the deadline
-            // starts at the claim (see `annotate_claim`); the Operator deletes a session at it.
+            // starts at the claim (see `annotate_claim`); the Operator deletes a session at it, and
+            // the claim also sets the kubelet's `activeDeadlineSeconds` as a backstop.
             enable_service_links: Some(false),
             // The image's own USER runs the sandbox. `runAsNonRoot` makes the kubelet refuse an
             // image that would start as root, so root stays refused without choosing a uid for

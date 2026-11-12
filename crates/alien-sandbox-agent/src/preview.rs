@@ -136,39 +136,46 @@ pub async fn forward(
         );
     }
 
-    // Read the response head.
+    // Read the response head. Interim `1xx` responses (100 Continue, 103 Early Hints) are not the
+    // answer: they are skipped, and the real status and body follow them. `101` is the answer to
+    // an upgrade and is kept.
     let mut buffer = Vec::with_capacity(8192);
     let (status, headers, head_len) = loop {
+        if !buffer.is_empty() {
+            let mut storage = [httparse::EMPTY_HEADER; 96];
+            let mut parsed = httparse::Response::new(&mut storage);
+            match parsed.parse(&buffer) {
+                Ok(httparse::Status::Complete(len)) => {
+                    let status = parsed.code.unwrap_or(502);
+                    if (100..200).contains(&status) && status != 101 {
+                        buffer.drain(..len);
+                        continue;
+                    }
+                    let headers: Vec<(String, Vec<u8>)> = parsed
+                        .headers
+                        .iter()
+                        .map(|header| (header.name.to_string(), header.value.to_vec()))
+                        .collect();
+                    break (status, headers, len);
+                }
+                Ok(httparse::Status::Partial) if buffer.len() < MAX_RESPONSE_HEAD => {}
+                _ => {
+                    return fail(
+                        StatusCode::BAD_GATEWAY,
+                        "the sandbox's server sent a bad response",
+                    )
+                }
+            }
+        }
         let mut chunk = [0u8; 8192];
-        let read = match tokio::time::timeout(HEAD_TIMEOUT, upstream.read(&mut chunk)).await {
+        match tokio::time::timeout(HEAD_TIMEOUT, upstream.read(&mut chunk)).await {
             Ok(Ok(0)) | Ok(Err(_)) | Err(_) => {
                 return fail(
                     StatusCode::BAD_GATEWAY,
                     "the sandbox's server sent no response",
                 )
             }
-            Ok(Ok(read)) => read,
-        };
-        buffer.extend_from_slice(&chunk[..read]);
-        let mut storage = [httparse::EMPTY_HEADER; 96];
-        let mut parsed = httparse::Response::new(&mut storage);
-        match parsed.parse(&buffer) {
-            Ok(httparse::Status::Complete(len)) => {
-                let status = parsed.code.unwrap_or(502);
-                let headers: Vec<(String, Vec<u8>)> = parsed
-                    .headers
-                    .iter()
-                    .map(|header| (header.name.to_string(), header.value.to_vec()))
-                    .collect();
-                break (status, headers, len);
-            }
-            Ok(httparse::Status::Partial) if buffer.len() < MAX_RESPONSE_HEAD => continue,
-            _ => {
-                return fail(
-                    StatusCode::BAD_GATEWAY,
-                    "the sandbox's server sent a bad response",
-                )
-            }
+            Ok(Ok(read)) => buffer.extend_from_slice(&chunk[..read]),
         }
     };
     let leftover = buffer.split_off(head_len);
@@ -293,12 +300,14 @@ async fn read_chunked<R: tokio::io::AsyncRead + Unpin>(
         };
         let size_text = std::str::from_utf8(&buffer[..line_end]).ok()?;
         let size_text = size_text.split(';').next()?.trim();
+        // The size is checked against the cap before any arithmetic on it: a hostile server can
+        // announce a chunk as large as a `usize`, and adding to that overflows.
         let size = usize::from_str_radix(size_text, 16).ok()?;
         buffer.drain(..line_end + 2);
         if size == 0 {
             return Some(decoded);
         }
-        if decoded.len() + size > MAX_CHUNKED_BODY {
+        if size > MAX_CHUNKED_BODY || decoded.len().checked_add(size)? > MAX_CHUNKED_BODY {
             return None;
         }
         while buffer.len() < size + 2 {
@@ -339,6 +348,71 @@ mod tests {
         let mut stream: &[u8] = b"\r\n6\r\n world\r\n0\r\n\r\n";
         let decoded = read_chunked(&mut stream, b"5\r\nhello".to_vec()).await;
         assert_eq!(decoded.as_deref(), Some(&b"hello world"[..]));
+    }
+
+    /// An upstream that answers every connection with `reply`, then closes.
+    async fn upstream_replying(reply: &'static [u8]) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(reply).await;
+            }
+        });
+        port
+    }
+
+    /// `100 Continue` and `103 Early Hints` come before the answer; the caller gets the answer's
+    /// status and body, not the interim one.
+    #[tokio::test]
+    async fn interim_responses_are_skipped_before_the_real_status_and_body() {
+        let port = upstream_replying(
+            b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </a.css>\r\n\r\nHTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+        )
+        .await;
+        let request = Request::builder().uri("/").body(Body::empty()).unwrap();
+        let response = forward(request, port, "/".to_string(), i64::MAX).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"hello");
+    }
+
+    /// A chunk size near `usize::MAX` is refused; it must not overflow the arithmetic that checks
+    /// the cap, and a size over the cap is refused before anything is read for it.
+    #[tokio::test]
+    async fn an_oversized_chunk_is_refused_without_panicking() {
+        for size in [
+            "ffffffffffffffff",
+            "fffffffffffffff0",
+            "7fffffffffffffff",
+            "100001",
+        ] {
+            let mut source: &[u8] = b"";
+            let framing = format!("{size}\r\n");
+            assert!(
+                read_chunked(&mut source, framing.into_bytes())
+                    .await
+                    .is_none(),
+                "{size} is refused"
+            );
+        }
+        // The same size after a chunk was already decoded: adding it to the length overflows.
+        let mut source: &[u8] = b"";
+        assert!(
+            read_chunked(&mut source, b"1\r\na\r\nffffffffffffffff\r\n".to_vec())
+                .await
+                .is_none()
+        );
+        // A size that fits the cap alone but not on top of what was already decoded.
+        let mut source: &[u8] = b"";
+        let mut first = format!("{:x}\r\n", MAX_CHUNKED_BODY - 1).into_bytes();
+        first.extend(vec![b'a'; MAX_CHUNKED_BODY - 1]);
+        first.extend_from_slice(b"\r\n2\r\nbb\r\n0\r\n\r\n");
+        assert!(read_chunked(&mut source, first).await.is_none());
     }
 
     #[test]

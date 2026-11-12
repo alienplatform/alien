@@ -78,6 +78,10 @@ pub struct LifetimeTooLong {
     pub max_seconds: u64,
 }
 
+/// How long after a session's deadline the kubelet ends the pod if the Operator has not. The
+/// Operator ends it at the deadline itself; this only covers an Operator that is down.
+pub const KUBELET_BACKSTOP_GRACE_SECONDS: i64 = 300;
+
 /// Records on the pod what the broker later answers about the session, so no process memory is
 /// the source of truth for it.
 ///
@@ -107,11 +111,27 @@ pub fn annotate_claim(
     // deadline; this claim owns these annotations, so it starts from none.
     annotations.remove(ANNOTATION_SESSION_DEADLINE);
     annotations.remove(ANNOTATION_SESSION_TENANT);
-    if let Some(seconds) = lifetime {
+    let deadline = lifetime.map(|seconds| now_unix + seconds as i64);
+    if let Some(deadline) = deadline {
         annotations.insert(
             ANNOTATION_SESSION_DEADLINE.to_string(),
-            (now_unix + seconds as i64).to_string(),
+            deadline.to_string(),
         );
+    }
+    // The kubelet's own backstop, in case the Operator is down at the deadline. The kubelet counts
+    // it from the pod's start, so it is set here at the claim, when the session's deadline is
+    // known: a pod that waited idle in the pool for hours has not lost any of its session. A pod
+    // that is not started yet counts from now.
+    let started = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.start_time.as_ref())
+        .map(|time| time.0.timestamp())
+        .unwrap_or(now_unix)
+        .min(now_unix);
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.active_deadline_seconds =
+            deadline.map(|deadline| (deadline - started).max(1) + KUBELET_BACKSTOP_GRACE_SECONDS);
     }
     annotations.insert(
         ANNOTATION_SESSION_CREATED_AT.to_string(),
@@ -126,12 +146,16 @@ pub fn annotate_claim(
 
 /// Whether a claimed pod's session deadline has passed.
 pub fn session_deadline_passed(pod: &Pod, now_unix: i64) -> bool {
+    session_deadline(pod).is_some_and(|deadline| deadline <= now_unix)
+}
+
+/// The Unix second the claimed pod's session ends, when it has a lifetime.
+pub fn session_deadline(pod: &Pod) -> Option<i64> {
     pod.metadata
         .annotations
         .as_ref()
         .and_then(|annotations| annotations.get(ANNOTATION_SESSION_DEADLINE))
         .and_then(|value| value.parse::<i64>().ok())
-        .is_some_and(|deadline| deadline <= now_unix)
 }
 
 /// Labels an idle pod: it belongs to the sandbox but to no session yet.

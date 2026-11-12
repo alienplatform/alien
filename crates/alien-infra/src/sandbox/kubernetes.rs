@@ -166,68 +166,20 @@ impl KubernetesSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
 
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
-        self.broker_url = Some(broker_url(&config.id)?);
-        let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
-        self.deployment_label_key = Some(deployment_label_key);
-        self.deployment_label_value = Some(deployment_label_value);
-        self.capability_public_key =
-            Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
-        self.egress = Some(
-            super::kubernetes_egress::configure(
-                ctx,
-                config,
-                &namespace,
-                &mut self.egress_public_key,
-                &mut self.egress_config_digest,
-                &mut self.egress_replica_secret_sourced,
-            )
-            .await?,
-        );
-        let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
+        // Ending sessions at their deadline comes first and depends on nothing else in this tick:
+        // a failure anywhere below must not leave an expired session running.
+        reap_expired_sessions_of(ctx, config).await;
 
-        let pool = replenish_warm_pool(
-            ctx,
-            &config,
-            &namespace,
-            self.runtime_class
-                .as_deref()
-                .unwrap_or(LEGACY_RUNTIME_CLASS),
-            self.warm_pool_size
-                .or_else(chart_warm_pool_size)
-                .unwrap_or(DEFAULT_WARM_POOL_SIZE),
-            self.capability_public_key.as_deref(),
-        )
-        .await?;
-
-        let created = pool.created;
-        debug!(sandbox_id = %config.id, sessions, created, "Sandbox health check passed");
-
-        // Counts of pods, never anything inside one. `sessions` covers every pod carrying the
-        // sandbox label, the idle pool included, so what an application is actually running is
-        // what is left once the idle pods are taken out.
-        ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
-            deployment_id: None,
-            resource_id: config.id.clone(),
-            resource_type: Sandbox::RESOURCE_TYPE,
-            controller_platform: alien_core::Platform::Kubernetes,
-            backend: alien_core::HeartbeatBackend::Kubernetes,
-            observed_at: chrono::Utc::now(),
-            data: alien_core::ResourceHeartbeatData::Sandbox(
-                alien_core::SandboxHeartbeatData::KubernetesPods(
-                    alien_core::KubernetesSandboxHeartbeatData {
-                        status: alien_core::SandboxHeartbeatStatus::default(),
-                        namespace,
-                        active_sessions: sessions.saturating_sub(pool.idle) as u32,
-                        idle_pods: (pool.idle + pool.created) as u32,
-                    },
-                ),
-            ),
-            raw: vec![],
-        });
-
+        match self.health_tick(ctx, config).await {
+            Ok(()) => {}
+            // The cluster being briefly unreachable is not a reason to stop watching sessions:
+            // `RefreshFailed` is terminal, and the next tick reaps and tries again.
+            Err(error) if error.retryable => {
+                warn!(sandbox_id = %config.id, error = %error, "Sandbox health check failed; trying again on the next tick");
+            }
+            Err(error) => return Err(error),
+        }
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -470,6 +422,79 @@ impl KubernetesSandboxController {
     }
 }
 
+impl KubernetesSandboxController {
+    /// The health tick: confirms the cluster still matches the declaration and refills the pool.
+    async fn health_tick(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Result<()> {
+        confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
+
+        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        self.broker_url = Some(broker_url(&config.id)?);
+        let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
+        self.deployment_label_key = Some(deployment_label_key);
+        self.deployment_label_value = Some(deployment_label_value);
+        self.capability_public_key =
+            Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
+        self.egress = Some(
+            super::kubernetes_egress::configure(
+                ctx,
+                config,
+                &namespace,
+                &mut self.egress_public_key,
+                &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
+            )
+            .await?,
+        );
+        let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
+
+        let pool = replenish_warm_pool(
+            ctx,
+            &config,
+            &namespace,
+            self.runtime_class
+                .as_deref()
+                .unwrap_or(LEGACY_RUNTIME_CLASS),
+            self.warm_pool_size
+                .or_else(chart_warm_pool_size)
+                .unwrap_or(DEFAULT_WARM_POOL_SIZE),
+            self.capability_public_key.as_deref(),
+        )
+        .await?;
+
+        let created = pool.created;
+        debug!(sandbox_id = %config.id, sessions, created, "Sandbox health check passed");
+
+        // Counts of pods, never anything inside one. `sessions` covers every pod carrying the
+        // sandbox label, the idle pool included, so what an application is actually running is
+        // what is left once the idle pods are taken out.
+        ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
+            deployment_id: None,
+            resource_id: config.id.clone(),
+            resource_type: Sandbox::RESOURCE_TYPE,
+            controller_platform: alien_core::Platform::Kubernetes,
+            backend: alien_core::HeartbeatBackend::Kubernetes,
+            observed_at: chrono::Utc::now(),
+            data: alien_core::ResourceHeartbeatData::Sandbox(
+                alien_core::SandboxHeartbeatData::KubernetesPods(
+                    alien_core::KubernetesSandboxHeartbeatData {
+                        status: alien_core::SandboxHeartbeatStatus::default(),
+                        namespace,
+                        active_sessions: sessions.saturating_sub(pool.idle) as u32,
+                        idle_pods: (pool.idle + pool.created) as u32,
+                    },
+                ),
+            ),
+            raw: vec![],
+        });
+
+        Ok(())
+    }
+}
+
 /// Idle pods kept ready when the operator has not chosen a size.
 const DEFAULT_WARM_POOL_SIZE: usize = 2;
 
@@ -537,7 +562,6 @@ async fn replenish_warm_pool(
     })?;
 
     let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
-    let selector_scope = format!("{deployment_label_key}={deployment_label_value}");
     let idle = client
         .list_pods(
             namespace,
@@ -554,8 +578,6 @@ async fn replenish_warm_pool(
             message: "Failed to list idle sandbox pods".to_string(),
             resource_id: Some(sandbox.id.clone()),
         })?;
-
-    reap_expired_sessions(client.as_ref(), sandbox, namespace, &selector_scope).await;
 
     let mut created = 0;
     let Some(egress_environment) =
@@ -697,17 +719,61 @@ async fn ensure_image_pull_secret(
 ///
 /// A session's deadline starts at its claim, which a pod-level deadline cannot express, so the
 /// Operator ends the session instead. Best effort per pod, retried on the next tick.
+/// Ends the sessions of this sandbox whose deadline has passed. Never fails the caller: any step
+/// that cannot be done now is logged and the next tick does it again.
+async fn reap_expired_sessions_of(ctx: &ResourceControllerContext<'_>, sandbox: &Sandbox) {
+    let prepared = async {
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let namespace = deployment_namespace(kubernetes_config)?;
+        let client = ctx
+            .service_provider
+            .get_kubernetes_pod_client(kubernetes_config)
+            .await?;
+        Result::Ok((namespace, client))
+    }
+    .await;
+    let (namespace, client) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            warn!(sandbox_id = %sandbox.id, error = %error, "Could not reach the cluster to end expired sessions; trying again on the next tick");
+            return;
+        }
+    };
+    let (key, value) = kubernetes_deployment_scope_label(ctx);
+    let scope = format!("{key}={value}");
+    if let Err(error) = reap_expired_sessions(
+        client.as_ref(),
+        &sandbox.id,
+        &namespace,
+        &scope,
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+    {
+        warn!(sandbox_id = %sandbox.id, error = %error, "Could not list sessions to end expired ones; trying again on the next tick");
+    }
+}
+
+/// Deletes each claimed pod of the sandbox whose session deadline is at or before `now`.
+///
+/// A failure to list is returned, not hidden, and changes nothing: the caller runs this again on
+/// the next tick. A failure to delete one pod is logged and the others are still ended.
 async fn reap_expired_sessions(
     client: &dyn alien_k8s_clients::PodApi,
-    sandbox: &Sandbox,
+    sandbox_id: &str,
     namespace: &str,
     scope: &str,
-) {
-    let selector = format!("{LABEL_SANDBOX}={},{LABEL_SESSION},{scope}", sandbox.id);
-    let Ok(claimed) = client.list_pods(namespace, Some(selector), None).await else {
-        return;
-    };
-    let now = chrono::Utc::now().timestamp();
+    now: i64,
+) -> Result<usize> {
+    let selector = format!("{LABEL_SANDBOX}={sandbox_id},{LABEL_SESSION},{scope}");
+    let claimed = client
+        .list_pods(namespace, Some(selector), None)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to list claimed sandbox pods".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    let mut ended = 0;
     for pod in claimed.items {
         if !session_deadline_passed(&pod, now) {
             continue;
@@ -719,13 +785,15 @@ async fn reap_expired_sessions(
         // Only this pod: a name another session reuses later is a different uid.
         match client.delete_pod_if_uid(namespace, name, uid).await {
             Ok(()) => {
-                info!(sandbox_id = %sandbox.id, pod = %name, "Ended a session at its deadline")
+                ended += 1;
+                info!(sandbox_id = %sandbox_id, pod = %name, "Ended a session at its deadline")
             }
             Err(error) => {
-                warn!(sandbox_id = %sandbox.id, pod = %name, error = %error, "Failed to end an expired session")
+                warn!(sandbox_id = %sandbox_id, pod = %name, error = %error, "Failed to end an expired session")
             }
         }
     }
+    Ok(ended)
 }
 
 /// Annotation holding the digest of the template an idle pool pod was built from.
@@ -975,6 +1043,55 @@ mod tests {
                 Some([(ANNOTATION_TEMPLATE_HASH.to_string(), hash.to_string())].into());
         }
         pod
+    }
+
+    fn claimed_with_deadline(name: &str, deadline: i64) -> Pod {
+        let mut pod = idle_with_hash(name, None);
+        pod.metadata.uid = Some(format!("uid-{name}"));
+        pod.metadata.annotations = Some(
+            [(
+                crate::sandbox::ANNOTATION_SESSION_DEADLINE.to_string(),
+                deadline.to_string(),
+            )]
+            .into(),
+        );
+        pod
+    }
+
+    /// A list that fails once does not stop the sweep for good: the sweep reports the error and
+    /// changes nothing, and the next one ends the expired session and spares the live one.
+    #[tokio::test]
+    async fn a_failed_list_is_followed_by_a_sweep_that_ends_the_expired_session() {
+        let mut calls = 0;
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_list_pods().returning(move |_, _, _| {
+            calls += 1;
+            if calls == 1 {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::HttpRequestFailed {
+                        message: "connection reset".to_string(),
+                    },
+                ));
+            }
+            Ok(k8s_openapi::List {
+                items: vec![
+                    claimed_with_deadline("expired", 900),
+                    claimed_with_deadline("live", 5_000),
+                ],
+                ..Default::default()
+            })
+        });
+        pods.expect_delete_pod_if_uid()
+            .withf(|_, name, uid| name == "expired" && uid == "uid-expired")
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+
+        let first = reap_expired_sessions(&pods, "sbx", "ns", "scope=x", 1_000).await;
+        assert!(first.is_err(), "a failed list is reported, not hidden");
+        let second = reap_expired_sessions(&pods, "sbx", "ns", "scope=x", 1_000)
+            .await
+            .expect("the next sweep lists again");
+        assert_eq!(second, 1, "only the expired session ends");
     }
 
     /// A release that changes a Live sandbox's image or limits changes the pod template, and the

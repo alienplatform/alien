@@ -141,12 +141,14 @@ mod tests {
             ),
         ))
         .await;
+        // Far longer than one capability (the broker's is a few minutes here, 15 in production).
+        let session_deadline = chrono::Utc::now().timestamp() + 4 * 3600;
         let released = Arc::new(Mutex::new(0));
         let releases = released.clone();
         let (broker, broker_task) = serve(Router::new()
             .route("/v1/sandbox/sessions", post(move || {
                 let agent = agent.clone();
-                async move { Json(serde_json::json!({"sessionId":"logical-id", "agentSessionId":"pod-uid", "endpoint":agent, "capability":"pod-capability", "expiresAt":chrono::Utc::now().timestamp()+300})) }
+                async move { Json(serde_json::json!({"sessionId":"logical-id", "agentSessionId":"pod-uid", "endpoint":agent, "capability":"pod-capability", "expiresAt":chrono::Utc::now().timestamp()+300, "deadline": session_deadline})) }
             }))
             .route("/v1/sandbox/box/sessions/logical-id", get(|| async { StatusCode::NOT_FOUND }).delete(move || {
                 let releases = releases.clone();
@@ -188,6 +190,22 @@ mod tests {
             let delivered = deliveries.lock().unwrap();
             assert_eq!(delivered.len(), 2);
             assert!(delivered[0]["token"].is_string());
+            // The gateway identity lasts as long as the session. Tied to the agent capability it
+            // would end after one capability lifetime and cut the session off from the gateway.
+            let identity: serde_json::Value = serde_json::from_slice(
+                &URL_SAFE_NO_PAD
+                    .decode(
+                        delivered[0]["token"]
+                            .as_str()
+                            .unwrap()
+                            .split('.')
+                            .nth(1)
+                            .unwrap(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(identity["exp"], session_deadline);
             assert!(
                 delivered[1].get("token").is_none(),
                 "updates retain the identity token"

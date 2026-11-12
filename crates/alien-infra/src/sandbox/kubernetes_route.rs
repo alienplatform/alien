@@ -155,6 +155,9 @@ pub struct ClaimResponse {
     pub tenant_key: Option<String>,
     /// Whether this request created the session
     pub created: bool,
+    /// Unix seconds at which the session ends; absent when it has no lifetime
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<i64>,
 }
 
 impl From<crate::sandbox::kubernetes_broker::ClaimedSession> for ClaimResponse {
@@ -169,6 +172,7 @@ impl From<crate::sandbox::kubernetes_broker::ClaimedSession> for ClaimResponse {
             generation: claimed.generation,
             tenant_key: claimed.tenant_key,
             created: claimed.created,
+            deadline: claimed.deadline,
         }
     }
 }

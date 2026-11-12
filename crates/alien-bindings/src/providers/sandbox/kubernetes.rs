@@ -60,7 +60,15 @@ struct ClaimResponse {
     /// The tenant key the session was created with.
     #[serde(default)]
     tenant_key: Option<String>,
+    /// Unix seconds at which the session ends; absent when it has no lifetime (or the broker
+    /// predates the field).
+    #[serde(default)]
+    deadline: Option<i64>,
 }
+
+/// How long the gateway identity of a session without a lifetime is issued for. The issuer caps
+/// every identity at this length anyway.
+const GATEWAY_IDENTITY_FALLBACK_SECONDS: i64 = 86_400;
 
 fn yes() -> bool {
     true
@@ -419,7 +427,14 @@ impl KubernetesSandbox {
         if let Some(manager) = &self.egress_manager {
             let installation = async {
                 let identity = Self::egress_identity(&claim)?;
-                let delivery = manager.create(identity, &policy, claim.expires_at).await?;
+                // The identity token lives as long as the session. `claim.expires_at` is when
+                // the agent capability needs renewing (15 minutes), not when the session ends:
+                // using it here would cut off the session's internet access after one capability.
+                let session_ends_at = match claim.deadline {
+                    Some(deadline) => deadline,
+                    None => crate::sandbox_egress::now_unix()? + GATEWAY_IDENTITY_FALLBACK_SECONDS,
+                };
+                let delivery = manager.create(identity, &policy, session_ends_at).await?;
                 self.deliver_egress(&claim.session_id, Some(&delivery.token), &delivery.policy)
                     .await
             }
@@ -1241,6 +1256,7 @@ mod tests {
             generation: 1,
             created: false,
             tenant_key: None,
+            deadline: None,
         };
         let agent = SessionAgent {
             client: reqwest::Client::new(),
