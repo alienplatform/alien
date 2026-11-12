@@ -1223,6 +1223,49 @@ mod tests {
         assert_eq!(*lookups.lock().unwrap(), 3, "one lookup per call");
     }
 
+    /// Agent requests reuse the capability this process holds, and replace it before it ends.
+    #[tokio::test]
+    async fn an_agent_request_refreshes_a_capability_near_its_expiry() {
+        use axum::routing::get;
+        let lookups = Arc::new(Mutex::new(0_u32));
+        let counted = Arc::clone(&lookups);
+        let broker = serve(Router::new().route(
+            BROKER_RELEASE_ROUTE,
+            get(move |Path((_, session)): Path<(String, String)>| {
+                let counted = Arc::clone(&counted);
+                async move {
+                    *counted.lock().expect("no panic holds this lock") += 1;
+                    Json(session_body(&session, false, None))
+                }
+            }),
+        ))
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        let sandbox = sandbox_over(broker, &token);
+        sandbox.remember(serde_json::from_value(session_body("s1", false, None)).unwrap());
+
+        // A capability with time left is reused without asking the broker.
+        let _ = sandbox
+            .request("s1", reqwest::Method::GET, "/v1/health")
+            .await
+            .expect("a request is built");
+        assert_eq!(*lookups.lock().unwrap(), 0, "served from the held capability");
+
+        // Close to expiry, building the next request asks the broker again.
+        sandbox
+            .claims
+            .lock()
+            .unwrap()
+            .get_mut("s1")
+            .unwrap()
+            .expires_at = chrono::Utc::now().timestamp() + 10;
+        let _ = sandbox
+            .request("s1", reqwest::Method::GET, "/v1/health")
+            .await
+            .expect("a request is built");
+        assert_eq!(*lookups.lock().unwrap(), 1, "refreshed before it expired");
+    }
+
     fn session_body(session: &str, pending: bool, deadline: Option<i64>) -> serde_json::Value {
         let mut body = serde_json::json!({
             "agentSessionId": "uid-1", "sessionId": session,
