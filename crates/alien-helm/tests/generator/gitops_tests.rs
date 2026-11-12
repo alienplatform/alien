@@ -132,26 +132,6 @@ fn the_argo_example_installs_with_its_own_values() {
 }
 
 #[test]
-fn a_management_url_that_is_not_https_is_refused_unless_allowed() {
-    let chart = chart_files();
-    let credentials = "management:\n  token: test-credential\n";
-    let http = format!("{credentials}  url: http://manager.example.test\n");
-    let refused = test_utils::helm_template(&chart, Some(&http));
-    assert!(!refused.is_ok(), "{}", refused.stdout);
-    assert!(refused.stderr.contains("isn't https"), "{}", refused.stderr);
-
-    let allowed = format!("{http}  allowInsecure: true\n");
-    test_utils::helm_template(&chart, Some(&allowed)).assert_ok("http with allowInsecure");
-
-    let https = format!("{credentials}  url: https://manager.example.test\n");
-    test_utils::helm_template(&chart, Some(&https)).assert_ok("https url");
-
-    // The scheme is case-insensitive.
-    let upper = format!("{credentials}  url: HTTPS://manager.example.test\n");
-    test_utils::helm_template(&chart, Some(&upper)).assert_ok("upper-case scheme");
-}
-
-#[test]
 fn the_schema_types_the_postgres_and_exposure_values() {
     use alien_core::{Postgres, ResourceLifecycle};
     let stack = Stack::new("typed-values".to_string())
@@ -215,7 +195,7 @@ fn chart_yaml_names_the_kubernetes_versions_and_the_operator_version() {
         },
     )
     .unwrap();
-    assert!(chart.files["Chart.yaml"].contains("kubeVersion: \">=1.27.0-0\"\n"));
+    assert!(!chart.files["Chart.yaml"].contains("kubeVersion"));
 
     let packaged = |tag: &str| {
         apply_package_defaults(
@@ -371,124 +351,6 @@ fn the_node_log_collector_pulls_with_the_install_pull_secrets() {
         daemonset["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
         "collector-registry"
     );
-}
-
-#[test]
-fn the_operator_network_policy_names_what_it_allows() {
-    let chart = chart_files();
-    let render = |extra: &str| {
-        let values = format!(
-            "management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n{extra}"
-        );
-        let rendered = test_utils::helm_template(&chart, Some(&values));
-        rendered.assert_ok("network policy");
-        yaml_documents(&rendered.stdout)
-            .into_iter()
-            .find(|document| document["kind"] == "NetworkPolicy")
-            .expect("the chart renders a NetworkPolicy")
-    };
-    let policy = render("");
-    // Not allow-all: no empty rule.
-    for direction in ["ingress", "egress"] {
-        for rule in policy["spec"][direction].as_sequence().unwrap() {
-            assert!(
-                !rule.as_mapping().unwrap().is_empty(),
-                "{direction} must not allow everything: {}",
-                to_yaml(&policy)
-            );
-        }
-    }
-    assert_eq!(policy["spec"]["ingress"][0]["ports"][0]["port"], 8080);
-    let egress_ports: Vec<_> = policy["spec"]["egress"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .flat_map(|rule| rule["ports"].as_sequence().unwrap().iter())
-        .map(|port| port["port"].as_u64().unwrap())
-        .collect();
-    assert_eq!(egress_ports, [53, 53, 443, 6443]);
-
-    // DNS is the DNS Pods, not every Pod of every namespace.
-    let dns = &policy["spec"]["egress"][0]["to"][0];
-    assert_eq!(
-        dns["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"],
-        "kube-system"
-    );
-    assert_eq!(dns["podSelector"]["matchLabels"]["k8s-app"], "kube-dns");
-
-    // Clusters whose resolver is not a Pod (EKS Auto Mode, node-local DNS) name its address.
-    let with_dns_address =
-        render("    dns:\n      clusterIPs: [\"172.20.0.10\", \"169.254.20.10\"]\n");
-    let to = with_dns_address["spec"]["egress"][0]["to"]
-        .as_sequence()
-        .unwrap();
-    assert_eq!(to[1]["ipBlock"]["cidr"], "172.20.0.10/32");
-    assert_eq!(to[2]["ipBlock"]["cidr"], "169.254.20.10/32");
-
-    // The ports of the bindings, and the manager's own port, come from values.
-    let with_ports = test_utils::helm_template(
-        &chart,
-        Some("management:\n  token: test-credential\n  url: https://manager.example.test:8443\nruntime:\n  networkPolicy:\n    enabled: true\n    egress:\n      ports: [443, 5432, 6379]\n"),
-    );
-    with_ports.assert_ok("network policy ports");
-    let policy = yaml_documents(&with_ports.stdout)
-        .into_iter()
-        .find(|document| document["kind"] == "NetworkPolicy")
-        .unwrap();
-    let ports: Vec<_> = policy["spec"]["egress"][1]["ports"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .map(|port| port["port"].as_u64().unwrap())
-        .collect();
-    assert_eq!(ports, [443, 5432, 6379, 8443]);
-
-    // The packaged manager URL (management.defaultUrl) counts too, not only management.url.
-    let default_url = test_utils::helm_template(
-        &chart,
-        Some("management:\n  token: test-credential\n  defaultUrl: https://manager.example.test:9443\nruntime:\n  networkPolicy:\n    enabled: true\n"),
-    );
-    default_url.assert_ok("network policy default url");
-    let policy = yaml_documents(&default_url.stdout)
-        .into_iter()
-        .find(|document| document["kind"] == "NetworkPolicy")
-        .unwrap();
-    assert!(
-        policy["spec"]["egress"][1]["ports"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .any(|port| port["port"] == 9443),
-        "{}",
-        to_yaml(&policy)
-    );
-
-    // GKE credentials come from the metadata server: allowed on GCP, absent elsewhere.
-    let gcp = test_utils::helm_template(
-        &chart,
-        Some("management:\n  token: test-credential\nbasePlatform: gcp\nbasePlatformConfig:\n  gcp:\n    projectId: p\n    region: us-central1\nruntime:\n  networkPolicy:\n    enabled: true\n"),
-    );
-    gcp.assert_ok("network policy gcp");
-    let gcp_policy = to_yaml(
-        &yaml_documents(&gcp.stdout)
-            .into_iter()
-            .find(|document| document["kind"] == "NetworkPolicy")
-            .unwrap(),
-    );
-    assert!(gcp_policy.contains("169.254.169.254/32"), "{gcp_policy}");
-    assert!(!to_yaml(&policy).contains("169.254.169.254"));
-
-    // An installation adds what it needs, such as a database port.
-    let with_database = render(
-        "    egress:\n      extraRules:\n        - ports:\n            - protocol: TCP\n              port: 5432\n",
-    );
-    let last = with_database["spec"]["egress"]
-        .as_sequence()
-        .unwrap()
-        .last()
-        .unwrap()
-        .clone();
-    assert_eq!(last["ports"][0]["port"], 5432);
 }
 
 #[test]

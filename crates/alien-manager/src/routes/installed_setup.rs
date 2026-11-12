@@ -1376,7 +1376,6 @@ pub(super) mod tests {
             .arg(&archive)
             .args(["--namespace", "apps"])
             .args(["--set", "management.token=ax_dg_example"])
-            .args(["--set", "management.allowInsecure=true"])
             .args([
                 "--set",
                 "runtime.encryption.key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -1670,11 +1669,9 @@ pub(super) mod tests {
         report_from_manifests(&String::from_utf8_lossy(&output.stdout), release_id)
     }
 
-    const KIND_INSTALL_ARGS: [&str; 6] = [
+    const KIND_INSTALL_ARGS: [&str; 4] = [
         "--set",
         "management.token=ax_dg_example",
-        "--set",
-        "management.allowInsecure=true",
         "--set",
         "runtime.encryption.key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ];

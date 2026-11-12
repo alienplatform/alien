@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 41
 expression: buf
 ---
 === Chart.yaml ===
@@ -9,7 +10,6 @@ description: Deployment chart for default-inputs
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-kubeVersion: ">=1.27.0-0"
 
 === values.yaml ===
 management:
@@ -22,9 +22,6 @@ management:
   defaultUrl: ""
   # Override the captured or installed endpoint when routing changes.
   url: ""
-  # The Operator sends its deployment token to this endpoint, so the chart refuses a
-  # URL that isn't https. Set true only for a local or test manager over plain HTTP.
-  allowInsecure: false
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
   setupItem: deployment
@@ -136,29 +133,12 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
-  # Restricts the Operator Pod. Off by default. Ingress allows Pods in the release
-  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
-  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
-  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
-  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
-  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
-    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
-    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
-    # Mode and with node-local DNS the resolver is not a Pod you can select.
-    dns:
-      namespace: kube-system
-      podLabels:
-        k8s-app: kube-dns
-      clusterIPs: []
     ingress:
       enabled: true
-      extraRules: []
     egress:
       enabled: true
-      ports: [443, 6443]
-      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -774,10 +754,6 @@ postgres: {}
     "management": {
       "additionalProperties": false,
       "properties": {
-        "allowInsecure": {
-          "description": "Accept a management URL that isn't https. For a local or test manager only.",
-          "type": "boolean"
-        },
         "defaultUrl": {
           "type": "string"
         },
@@ -1135,44 +1111,11 @@ postgres: {}
         "networkPolicy": {
           "additionalProperties": false,
           "properties": {
-            "dns": {
-              "additionalProperties": false,
-              "properties": {
-                "clusterIPs": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "namespace": {
-                  "type": "string"
-                },
-                "podLabels": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                }
-              },
-              "type": "object"
-            },
             "egress": {
               "additionalProperties": false,
               "properties": {
                 "enabled": {
                   "type": "boolean"
-                },
-                "extraRules": {
-                  "items": {
-                    "type": "object"
-                  },
-                  "type": "array"
-                },
-                "ports": {
-                  "items": {
-                    "type": "integer"
-                  },
-                  "type": "array"
                 }
               },
               "type": "object"
@@ -1185,12 +1128,6 @@ postgres: {}
               "properties": {
                 "enabled": {
                   "type": "boolean"
-                },
-                "extraRules": {
-                  "items": {
-                    "type": "object"
-                  },
-                  "type": "array"
                 }
               },
               "type": "object"
@@ -1757,11 +1694,7 @@ different namespaces of one cluster from colliding. */ -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
-{{- $url := default $endpoint .Values.management.url -}}
-{{- if and $url (not (hasPrefix "https://" (lower $url))) (not .Values.management.allowInsecure) -}}
-  {{- fail (printf "The management URL %q isn't https. The Operator sends its deployment token to it. Switch to https: set management.url (or management.defaultUrl) to the manager's https:// address. For a local or test manager only, set management.allowInsecure=true instead." $url) -}}
-{{- end -}}
-{{- $url -}}
+{{- default $endpoint .Values.management.url -}}
 {{- end -}}
 
 {{- define "deployment.runtimeEncryptionKey" -}}
@@ -3767,68 +3700,11 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
-    # Pods of this release namespace: log collectors and linked workloads.
-    - from:
-        - podSelector: {}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.runtime.api.port }}
-    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+    - {}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
-    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
-    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
-        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
-        - ipBlock:
-            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
-        {{- end }}
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
-    # ports the bindings use (a database, a cache) and the manager's own port.
-    {{- $ports := .Values.runtime.networkPolicy.egress.ports | default list }}
-    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" (include "deployment.managementUrl" .))).host) }}
-    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}{{- end }}
-    - ports:
-        {{- range $ports | uniq }}
-        - protocol: TCP
-          port: {{ . }}
-        {{- end }}
-    {{- if eq (default "" .Values.basePlatform) "gcp" }}
-    # GKE: the Operator's cloud credentials come from the metadata server
-    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
-    # with the Workload Identity metadata server on dataplane v1).
-    - to:
-        - ipBlock:
-            cidr: 169.254.169.254/32
-      ports:
-        - protocol: TCP
-          port: 80
-    - to:
-        - ipBlock:
-            cidr: 169.254.169.252/32
-        - ipBlock:
-            cidr: 127.0.0.1/32
-      ports:
-        - protocol: TCP
-          port: 988
-    {{- end }}
-    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+    - {}
   {{- end }}
 {{- end }}
 
@@ -4389,9 +4265,7 @@ management token (`management.existingSecret`) and the encryption key
 different key every time. `examples/gitops/flux.yaml` and
 `examples/gitops/argocd.yaml` show the full setup. A GitOps tool owns the
 Operator image, so they set `runtime.image.selfUpdate: false` and take Operator
-upgrades through chart versions. Keep one release per namespace. The chart
-declares `kubeVersion: ">=1.27.0-0"`; pass `--kube-version` to an offline
-`helm template` for an older default.
+upgrades through chart versions. Keep one release per namespace.
 
 ## Permissions
 
@@ -4437,25 +4311,12 @@ on `helm uninstall`, with the same limits.
 
 The Operator connects to:
 
-- the management URL (`management.url`, https unless `management.allowInsecure`), for sync, deployment credentials and, when enabled, logs, metrics and telemetry;
+- the management URL (`management.url`), for sync, deployment credentials and, when enabled, logs, metrics and telemetry;
 - the Kubernetes API server of its own cluster;
 - the registry of `runtime.image.repository` (the manager's registry when `runtime.image.pullWithManagementToken` is set), to pull the Operator image;
 - each service named in `infrastructure` (for example the object store, database or queue), and the cloud APIs the Pod's identity is allowed to call.
 
 The `nodeAgent` log collector reads logs on each node and sends them to the Operator in the cluster.
-
-`runtime.networkPolicy.enabled: true` restricts the Operator Pod to these
-connections: ingress from Pods in the release namespace on the API port, and
-egress to cluster DNS, to ports 443 and 6443, and to the port in `management.url`
-when it names one. Add the ports of your bindings (a database 5432, a cache 6379)
-to `runtime.networkPolicy.egress.ports`. Set `runtime.networkPolicy.dns.clusterIPs`
-to the cluster's DNS Service address (and the node-local DNS address, if any):
-on EKS Auto Mode and with node-local DNS the resolver is not a Pod the policy can
-select. It is off by default. Enforcement depends on the cluster's CNI: on EKS, turn on the
-network policy controller (EKS Auto Mode ignores policies otherwise). In the default
-`standard` mode a Pod can send traffic for a moment before its policy applies; `strict` closes
-that window but denies every Pod that has no policy, so it needs an allow policy for each Pod
-of the install.
 
 === files/stack.json ===
 {

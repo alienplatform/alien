@@ -1984,7 +1984,7 @@ pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
     // it also includes grow-only disk planning introduced in 7.4.
     ("google", "hashicorp/google", ">= 7.37"),
     ("google-beta", "hashicorp/google-beta", ">= 6.0"),
-    ("azurerm", "hashicorp/azurerm", ">= 4.78, < 5.0"),
+    ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
     ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),
     ("time", "hashicorp/time", ">= 0.9"),
     ("kubernetes", "hashicorp/kubernetes", ">= 2.30"),
