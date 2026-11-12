@@ -299,20 +299,7 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
-        let mut restricted_hint = None;
-        if let (Some(namespace), Some((selector, template))) = (
-            self.namespace.as_deref(),
-            self.read_daemonset(ctx).await?.and_then(|daemonset| {
-                let spec = daemonset.spec?;
-                Some((spec.selector.match_labels?, spec.template))
-            }),
-        ) {
-            let config = ctx.desired_resource_config::<Daemon>()?;
-            restricted_hint = crate::core::fail_if_root_image_blocked(
-                ctx, namespace, &selector, &template, &config.id,
-            )
-            .await?;
-        }
+        let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
         if self.workload_failure.is_none() {
             self.workload_failure = restricted_hint;
@@ -693,7 +680,11 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
+        if self.workload_failure.is_none() {
+            self.workload_failure = restricted_hint;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -1095,6 +1086,27 @@ impl KubernetesDaemonController {
     }
 
     /// Remember why pods cannot be created, when the mapped PriorityClass is missing.
+    /// Fails the rollout with the opt-out message when pods of the desired
+    /// template are blocked by the restricted profile; otherwise a hint for a
+    /// read-only crash loop, if any.
+    async fn root_image_hint(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
+        let mut restricted_hint = None;
+        if let (Some(namespace), Some((selector, template))) = (
+            self.namespace.as_deref(),
+            self.read_daemonset(ctx).await?.and_then(|daemonset| {
+                let spec = daemonset.spec?;
+                Some((spec.selector.match_labels?, spec.template))
+            }),
+        ) {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            restricted_hint = crate::core::fail_if_root_image_blocked(
+                ctx, namespace, &selector, &template, &config.id,
+            )
+            .await?;
+        }
+        Ok(restricted_hint)
+    }
+
     async fn record_workload_failure(&mut self, ctx: &ResourceControllerContext<'_>) {
         self.workload_failure = match (
             ctx.desired_resource_config::<Daemon>(),

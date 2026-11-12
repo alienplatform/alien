@@ -20,7 +20,9 @@ pub fn strip_registry_host(image_uri: &str) -> Option<String> {
     // OCI image reference format: [host[:port]/]path[:tag|@digest]
     // The host always contains a dot or colon (to distinguish from a path component).
     let parts: Vec<&str> = image_uri.splitn(2, '/').collect();
-    if parts.len() == 2 && (parts[0].contains('.') || parts[0].contains(':')) {
+    if parts.len() == 2
+        && (parts[0].contains('.') || parts[0].contains(':') || parts[0] == "localhost")
+    {
         Some(parts[1].to_string())
     } else {
         // No registry host prefix — return as-is
@@ -263,6 +265,14 @@ mod site_registry_tests {
         assert_eq!(
             rewrite_to_site_registry("localhost:5000/app", "mirror.local"),
             "mirror.local/app"
+        );
+    }
+
+    #[test]
+    fn bare_localhost_is_a_registry_host() {
+        assert_eq!(
+            rewrite_to_site_registry("localhost/team/app:1", "mirror.local"),
+            "mirror.local/team/app:1"
         );
     }
 

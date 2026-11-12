@@ -4384,6 +4384,46 @@ pub(in crate::routes) mod tests {
         assert!(!super::downgrade_container_security(&mut stack));
     }
 
+    #[test]
+    fn older_operators_get_daemons_and_workers_without_security() {
+        use alien_core::{ContainerSecurity, Daemon, DaemonCode, Worker, WorkerCode};
+        let security = ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        let mut daemon = Daemon::new("d".to_string())
+            .permissions("p".to_string())
+            .code(DaemonCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        daemon.security = Some(security.clone());
+        let mut worker = Worker::new("w".to_string())
+            .permissions("p".to_string())
+            .code(WorkerCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        worker.security = Some(security);
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        assert!(super::downgrade_container_security(&mut stack));
+        for (_, entry) in stack.resources() {
+            if let Some(d) = entry.config.downcast_ref::<Daemon>() {
+                assert!(d.security.is_none());
+            }
+            if let Some(w) = entry.config.downcast_ref::<Worker>() {
+                assert!(w.security.is_none());
+            }
+        }
+        assert!(!super::downgrade_container_security(&mut stack));
+    }
+
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
             image_registry: None,
@@ -5780,6 +5820,11 @@ fn downgrade_container_security(stack: &mut alien_core::Stack) -> bool {
                 container.security = None;
                 removed = true;
             }
+        } else if let Some(daemon) = entry.config.downcast_mut::<alien_core::Daemon>() {
+            // Older Operators have no `security` field on daemons or workers.
+            removed |= daemon.security.take().is_some();
+        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
+            removed |= worker.security.take().is_some();
         }
     }
     removed
