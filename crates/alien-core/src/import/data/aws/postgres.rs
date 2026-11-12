@@ -20,7 +20,10 @@ pub struct AwsPostgresImportData {
     /// Secrets Manager ARN of the master password (never the password itself).
     pub password_secret_arn: String,
     /// True when RDS owns the JSON username/password secret and its rotation.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string"
+    )]
     pub managed_password: bool,
     /// Cluster writer endpoint (the binding host).
     pub cluster_endpoint: String,

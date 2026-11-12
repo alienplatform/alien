@@ -22,12 +22,16 @@ pub struct AwsRedisImportData {
     /// Primary endpoint (the binding host).
     pub endpoint: String,
     /// Listening port.
+    #[serde(deserialize_with = "crate::import::data::deserialize_u16_from_number_or_string")]
     pub port: u16,
     /// Node type the group runs.
     pub node_type: String,
     /// Engine version the group reports.
     pub engine_version: String,
     /// Whether the group has a replica.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string"
+    )]
     pub high_availability: bool,
 }
