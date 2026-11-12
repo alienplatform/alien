@@ -643,12 +643,16 @@ const GCP_VERIFIER_DATABASE_PERMISSIONS: &[&str] =
 /// takes the `actAs` the verifier already holds on each runtime service account.
 const GCP_VERIFIER_SCHEDULE_PERMISSIONS: &[&str] = &["cloudscheduler.jobs.create"];
 
+/// Creating a topic or subscription names a resource that doesn't exist yet, and Pub/Sub does not
+/// evaluate a name condition for that request (a real project refused it), so the verifier holds
+/// the create permissions unconditioned; it checks every name itself.
+const GCP_VERIFIER_QUEUE_CREATE_PERMISSIONS: &[&str] =
+    &["pubsub.topics.create", "pubsub.subscriptions.create"];
+
 const GCP_VERIFIER_QUEUE_PERMISSIONS: &[&str] = &[
-    "pubsub.topics.create",
     "pubsub.topics.getIamPolicy",
     "pubsub.topics.setIamPolicy",
     "pubsub.topics.attachSubscription",
-    "pubsub.subscriptions.create",
     "pubsub.subscriptions.getIamPolicy",
     "pubsub.subscriptions.setIamPolicy",
 ];
@@ -774,6 +778,12 @@ fn gcp_verifier_blocks(
             "verifier_queues",
             "verifier: the install's queues",
             GCP_VERIFIER_QUEUE_PERMISSIONS,
+        ),
+        custom_role(
+            "signing_verifier_queue_create",
+            "verifier_queue_create",
+            "verifier: create the install's queues",
+            GCP_VERIFIER_QUEUE_CREATE_PERMISSIONS,
         ),
         custom_role(
             "signing_verifier_sandboxes",
@@ -916,6 +926,22 @@ fn gcp_verifier_blocks(
                     expr::traversal([
                         "google_project_iam_custom_role",
                         "signing_verifier_databases",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_queue_create",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_queue_create",
                         "name",
                     ]),
                 ),

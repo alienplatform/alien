@@ -414,22 +414,26 @@ fn the_verifier_holds_its_pubsub_permissions_only_on_the_installs_own_queues() {
     };
     let text = module_text(&render(&stack, TerraformTarget::Gcp, settings));
     let (roles, bindings) = verifier_custom_roles(&text);
-    for permission in [
-        "pubsub.topics.create",
-        "pubsub.topics.setIamPolicy",
-        "pubsub.subscriptions.create",
-        "pubsub.subscriptions.setIamPolicy",
+    for (permission, role) in [
+        ("pubsub.topics.create", "signing_verifier_queue_create"),
+        ("pubsub.subscriptions.create", "signing_verifier_queue_create"),
+        ("pubsub.topics.setIamPolicy", "signing_verifier_queues"),
+        ("pubsub.subscriptions.setIamPolicy", "signing_verifier_queues"),
     ] {
         let holders: Vec<&String> = roles
             .iter()
             .filter(|(_, permissions)| permissions.iter().any(|held| held == permission))
             .map(|(label, _)| label)
             .collect();
-        assert_eq!(holders, ["signing_verifier_queues"], "{permission}");
+        assert_eq!(holders, [role], "{permission}");
     }
     assert!(
         bindings.contains(&("signing_verifier_queues".to_string(), true)),
-        "the queue role is bound without a name condition: {bindings:?}"
+        "the IAM role is bound under a name condition: {bindings:?}"
+    );
+    assert!(
+        bindings.contains(&("signing_verifier_queue_create".to_string(), false)),
+        "creates are bound without a condition, which Pub/Sub does not evaluate for a new name: {bindings:?}"
     );
     assert!(
         text.contains(r#"resource.name.startsWith(\"projects/${var.gcp_project}/topics/${local.resource_prefix}-\")"#),
