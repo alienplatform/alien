@@ -600,14 +600,11 @@ async fn replenish_warm_pool(
         .annotations
         .get_or_insert_default()
         .insert(ANNOTATION_TEMPLATE_HASH.to_string(), template_hash.clone());
-    let mut waiting = 0;
-    retire_stale_idle_pods(
-        &client,
-        namespace,
-        &sandbox.id,
-        stale_idle_pods(idle.items, &template_hash, &mut waiting),
-    )
-    .await;
+    let (stale, fresh) = split_idle_pods(idle.items, &template_hash);
+    let excess = excess_idle_pods(fresh.clone(), target);
+    let waiting = fresh.len() - excess.len();
+    retire_stale_idle_pods(&client, namespace, &sandbox.id, stale).await;
+    retire_stale_idle_pods(&client, namespace, &sandbox.id, excess).await;
     let deficit = pool_deficit(target, waiting);
 
     // The broker builds a pod from this when a create finds the pool empty, so a create never
@@ -746,13 +743,16 @@ fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
         .collect()
 }
 
-/// Idle pods built from a template other than `current`. Counts the others in `fresh`.
-pub(crate) fn stale_idle_pods(
+/// Splits idle pods into those built from a template other than `current` and those built from it.
+pub(crate) fn split_idle_pods(
     idle: Vec<k8s_openapi::api::core::v1::Pod>,
     current: &str,
-    fresh: &mut usize,
-) -> Vec<k8s_openapi::api::core::v1::Pod> {
+) -> (
+    Vec<k8s_openapi::api::core::v1::Pod>,
+    Vec<k8s_openapi::api::core::v1::Pod>,
+) {
     let mut stale = Vec::new();
+    let mut fresh = Vec::new();
     for pod in idle {
         let built_from = pod
             .metadata
@@ -760,12 +760,44 @@ pub(crate) fn stale_idle_pods(
             .as_ref()
             .and_then(|annotations| annotations.get(ANNOTATION_TEMPLATE_HASH));
         match built_from {
-            Some(hash) if hash == current => *fresh += 1,
+            Some(hash) if hash == current => fresh.push(pod),
             _ if pod.metadata.name.is_some() => stale.push(pod),
             _ => {}
         }
     }
+    (stale, fresh)
+}
+
+/// Idle pods built from a template other than `current`. Counts the others in `fresh`.
+pub(crate) fn stale_idle_pods(
+    idle: Vec<k8s_openapi::api::core::v1::Pod>,
+    current: &str,
+    fresh: &mut usize,
+) -> Vec<k8s_openapi::api::core::v1::Pod> {
+    let (stale, current_pods) = split_idle_pods(idle, current);
+    *fresh += current_pods.len();
     stale
+}
+
+/// The idle pods beyond `target`. Lowering the pool size (or setting it to zero) does not change
+/// the pod template, so without this the extra idle pods would run, and be paid for, forever.
+/// Pods that are not Running yet go first: they have served nobody.
+pub(crate) fn excess_idle_pods(
+    mut fresh: Vec<k8s_openapi::api::core::v1::Pod>,
+    target: usize,
+) -> Vec<k8s_openapi::api::core::v1::Pod> {
+    if fresh.len() <= target {
+        return Vec::new();
+    }
+    let running = |pod: &k8s_openapi::api::core::v1::Pod| {
+        pod.status
+            .as_ref()
+            .and_then(|status| status.phase.as_deref())
+            == Some("Running")
+    };
+    fresh.sort_by_key(|pod| (running(pod), pod.metadata.name.clone()));
+    fresh.truncate(fresh.len() - target);
+    fresh
 }
 
 /// Takes idle pods built from an older template out of the pool and deletes them.
@@ -989,6 +1021,33 @@ mod tests {
         assert_eq!(names, ["old", "from-before-the-hash-existed"]);
     }
 
+    /// Lowering the pool size, including to zero, retires the extra idle pods; those not Running
+    /// yet go first, and a pool at or under its target loses none.
+    #[test]
+    fn idle_pods_beyond_the_target_are_retired() {
+        let running = |name: &str| {
+            let mut pod = idle_with_hash(name, Some("new"));
+            pod.status = Some(k8s_openapi::api::core::v1::PodStatus {
+                phase: Some("Running".to_string()),
+                ..Default::default()
+            });
+            pod
+        };
+        let pods = || {
+            vec![
+                running("a"),
+                idle_with_hash("pending", Some("new")),
+                running("b"),
+            ]
+        };
+        let names = |pods: Vec<Pod>| -> Vec<String> {
+            pods.into_iter().filter_map(|p| p.metadata.name).collect()
+        };
+        assert!(excess_idle_pods(pods(), 3).is_empty());
+        assert_eq!(names(excess_idle_pods(pods(), 2)), ["pending"]);
+        assert_eq!(names(excess_idle_pods(pods(), 0)).len(), 3);
+    }
+
     fn pool_pod(image: &str, memory: &str) -> Pod {
         use alien_core::{SandboxCode, SandboxEgress, SandboxLimits};
         let sandbox = Sandbox::new("agent".to_string())
@@ -1117,8 +1176,7 @@ mod tests {
             "alien.dev/sandbox=sbx,alien.dev/sandbox-pool=idle,alien.dev/deployment=release-a"
         );
         assert_eq!(
-            params["tokenPath"],
-            "/var/run/secrets/alien.dev/sandbox-broker/token",
+            params["tokenPath"], "/var/run/secrets/alien.dev/sandbox-broker/token",
             "the token a linking pod has projected for the broker, not the default one"
         );
         // A path the kubelet writes, never a secret of ours.

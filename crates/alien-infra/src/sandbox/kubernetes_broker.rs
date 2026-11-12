@@ -358,6 +358,21 @@ async fn cold_create(
 
     let started = std::time::Instant::now();
     loop {
+        // The deadline started at the claim. A pod that comes up after it is not a session: the
+        // Operator would end it at once, and the caller's first command would fail.
+        if crate::sandbox::session_deadline_passed(
+            &pod,
+            now_unix + started.elapsed().as_secs() as i64,
+        ) {
+            let _ = pods.delete_pod(namespace, &name).await;
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "the sandbox pod for '{sandbox_id}' was not running before the session's lifetime ended; create it again with a longer timeout"
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+            .into());
+        }
         let current = pods.get_pod(namespace, &name).await.ok();
         if let Some(address) = current
             .as_ref()
@@ -466,7 +481,9 @@ async fn claimed_pods(
 fn session_is_live(pod: &Pod, now_unix: i64) -> bool {
     pod.metadata.deletion_timestamp.is_none()
         && !matches!(
-            pod.status.as_ref().and_then(|status| status.phase.as_deref()),
+            pod.status
+                .as_ref()
+                .and_then(|status| status.phase.as_deref()),
             Some("Succeeded" | "Failed")
         )
         && !crate::sandbox::session_deadline_passed(pod, now_unix)
@@ -499,8 +516,16 @@ pub(crate) async fn reattach_session_for_deployment(
         Some((deployment_label_key, deployment_label_value)),
     )
     .await?;
-    let mut found =
-        claimed_pods(pods, namespace, sandbox_id, now_unix, Some(session_id), &key, &value).await?;
+    let mut found = claimed_pods(
+        pods,
+        namespace,
+        sandbox_id,
+        now_unix,
+        Some(session_id),
+        &key,
+        &value,
+    )
+    .await?;
     // Two processes creating one new id at the same moment can each end up with a pod. Every
     // lookup answers with the same one (the earliest claim, then the name), so the callers
     // converge on it and the other ends at its deadline or at terminate.
@@ -624,9 +649,17 @@ pub(crate) async fn preview_session_for_deployment(
     )
     .await
     .map_err(unavailable)?;
-    let mut found = claimed_pods(pods, namespace, sandbox_id, now_unix, Some(session_id), &key, &value)
-        .await
-        .map_err(unavailable)?;
+    let mut found = claimed_pods(
+        pods,
+        namespace,
+        sandbox_id,
+        now_unix,
+        Some(session_id),
+        &key,
+        &value,
+    )
+    .await
+    .map_err(unavailable)?;
     found.sort_by_key(|pod| {
         (
             recorded(pod, i64::MAX).0,
@@ -746,7 +779,11 @@ const ANNOTATION_RESERVED_AT: &str = "alien.dev/reserved-at";
 fn reservation_name(sandbox_id: &str, session_id: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(format!("{sandbox_id}\0{session_id}"));
-    let hex: String = digest.iter().take(12).map(|byte| format!("{byte:02x}")).collect();
+    let hex: String = digest
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     format!("alien-session-claim-{hex}")
 }
 
@@ -871,9 +908,15 @@ pub(crate) async fn find_or_create_session_for_deployment(
             return require_same_tenant(found, tenant_key);
         }
         let elapsed = started.elapsed().as_secs() as i64;
-        match reserve(secrets, namespace, sandbox_id, session_id, now_unix + elapsed)
-            .await
-            .map_err(unavailable)?
+        match reserve(
+            secrets,
+            namespace,
+            sandbox_id,
+            session_id,
+            now_unix + elapsed,
+        )
+        .await
+        .map_err(unavailable)?
         {
             Reservation::Held => {
                 // The previous holder labels its pod before it lets go, so a session that was
@@ -1519,7 +1562,10 @@ mod tests {
         crate::sandbox::annotate_claim(&mut pod, 1_000, Some("old"), None).unwrap();
         crate::sandbox::annotate_claim(&mut pod, 2_000, None, None).unwrap();
         let annotations = pod.metadata.annotations.as_ref().unwrap();
-        assert_eq!(annotations.get(crate::sandbox::ANNOTATION_SESSION_TENANT), None);
+        assert_eq!(
+            annotations.get(crate::sandbox::ANNOTATION_SESSION_TENANT),
+            None
+        );
     }
 
     /// The pod is the only record of a session: its creation time, generation and tenant come
@@ -1706,7 +1752,12 @@ mod tests {
                 ..Default::default()
             })
         }
-        async fn update_pod(&self, _: &str, name: &str, pod: &Pod) -> alien_client_core::Result<Pod> {
+        async fn update_pod(
+            &self,
+            _: &str,
+            name: &str,
+            pod: &Pod,
+        ) -> alien_client_core::Result<Pod> {
             tokio::task::yield_now().await;
             let mut pods = self.pods.lock().unwrap();
             let current = pods
@@ -1742,7 +1793,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SecretsApi for FakeCluster {
-        async fn create_secret(&self, _: &str, secret: &Secret) -> alien_client_core::Result<Secret> {
+        async fn create_secret(
+            &self,
+            _: &str,
+            secret: &Secret,
+        ) -> alien_client_core::Result<Secret> {
             tokio::task::yield_now().await;
             let name = secret.metadata.name.clone().unwrap_or_default();
             let mut secrets = self.secrets.lock().unwrap();
@@ -1764,7 +1819,11 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| conflict(name))
         }
-        async fn get_secret_metadata(&self, _: &str, name: &str) -> alien_client_core::Result<ObjectMeta> {
+        async fn get_secret_metadata(
+            &self,
+            _: &str,
+            name: &str,
+        ) -> alien_client_core::Result<ObjectMeta> {
             tokio::task::yield_now().await;
             self.secrets
                 .lock()
@@ -1781,7 +1840,12 @@ mod tests {
         ) -> alien_client_core::Result<List<Secret>> {
             Ok(List::default())
         }
-        async fn update_secret(&self, _: &str, _: &str, secret: &Secret) -> alien_client_core::Result<Secret> {
+        async fn update_secret(
+            &self,
+            _: &str,
+            _: &str,
+            secret: &Secret,
+        ) -> alien_client_core::Result<Secret> {
             Ok(secret.clone())
         }
         async fn delete_secret(&self, _: &str, name: &str) -> alien_client_core::Result<()> {
@@ -2116,6 +2180,53 @@ mod tests {
 
         assert_eq!(session.endpoint, format!("http://10.9.9.9:{AGENT_PORT}"));
         assert_eq!(session.agent_session_id, "uid-cold-0");
+    }
+
+    /// A pod that comes up after the session's lifetime is not returned: the Operator would end
+    /// it at once. The create reports it and removes the pod.
+    #[tokio::test(start_paused = true)]
+    async fn a_cold_create_that_outlives_its_lifetime_is_an_error_and_removes_the_pod() {
+        let mut template = idle_pod("ignored", "0.0.0.0");
+        template.metadata.name = None;
+        template.metadata.uid = None;
+        template.status = None;
+        let mut pods = pods_returning(Vec::new());
+        pods.expect_create_pod().times(1).returning(|_, pod| {
+            let mut created = pod.clone();
+            created.metadata.name = Some("cold-0".to_string());
+            created.metadata.uid = Some("uid-cold-0".to_string());
+            Ok(created)
+        });
+        // The pod reaches Running only after the 3 s lifetime is over.
+        let started = std::time::Instant::now();
+        pods.expect_get_pod().returning(move |_, _| {
+            let mut pod = idle_pod("cold-0", "10.9.9.9");
+            let up = started.elapsed() >= std::time::Duration::from_secs(10);
+            pod.status = Some(PodStatus {
+                phase: Some(if up { "Running" } else { "Pending" }.to_string()),
+                pod_ip: up.then(|| "10.9.9.9".to_string()),
+                ..Default::default()
+            });
+            Ok(pod)
+        });
+        pods.expect_delete_pod().times(1).returning(|_, _| Ok(()));
+        let pods: Arc<dyn PodApi> = Arc::new(pods);
+
+        let error = cold_create(
+            &pods,
+            &ed25519_compact::KeyPair::generate().sk,
+            "ns",
+            "sbx",
+            "s1",
+            "k",
+            1_000,
+            template,
+            None,
+            Some(3),
+        )
+        .await
+        .expect_err("the pod was not running before the lifetime ended");
+        assert!(format!("{error:?}").contains("lifetime ended"));
     }
 
     /// Before the controller's first tick there is no template; the caller is told to retry.
