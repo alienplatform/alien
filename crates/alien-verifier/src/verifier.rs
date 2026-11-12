@@ -719,7 +719,8 @@ mod tests {
                 ResourceWrite::PutPublicAccessBlock { configuration, .. } => {
                     configuration.to_string()
                 }
-                ResourceWrite::PutBucketNotification { configuration, .. } => {
+                ResourceWrite::PutBucketNotification { configuration, .. }
+                | ResourceWrite::PutWorkerBucketNotification { configuration, .. } => {
                     configuration.to_string()
                 }
                 ResourceWrite::CreateEventSourceMapping { request }

@@ -83,6 +83,15 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: Value,
     },
+    /// S3 PutBucketNotificationConfiguration of the signed storage `storage`'s bucket, written
+    /// for the worker the write is about: the document may add only that worker's own function
+    /// entry for its signed storage trigger.
+    #[serde(rename_all = "camelCase")]
+    PutWorkerBucketNotification {
+        storage: String,
+        bucket: String,
+        configuration: Value,
+    },
     /// Lambda CreateEventSourceMapping, with the request as the cloud client serialises it.
     #[serde(rename_all = "camelCase")]
     CreateEventSourceMapping { request: Value },
@@ -206,6 +215,7 @@ impl ResourceWrite {
             ResourceWrite::PutBucketPolicy { .. } => "PutBucketPolicy",
             ResourceWrite::PutPublicAccessBlock { .. } => "PutPublicAccessBlock",
             ResourceWrite::PutBucketNotification { .. } => "PutBucketNotification",
+            ResourceWrite::PutWorkerBucketNotification { .. } => "PutWorkerBucketNotification",
             ResourceWrite::CreateEventSourceMapping { .. } => "CreateEventSourceMapping",
             ResourceWrite::UpdateEventSourceMapping { .. } => "UpdateEventSourceMapping",
             ResourceWrite::CreateQueue { .. } => "CreateQueue",
@@ -376,6 +386,22 @@ pub fn check_aws_write(
             configuration,
         } => {
             own_bucket(facts, bucket, "PutBucketNotification")?;
+            notification_document(configuration)?;
+            Ok(())
+        }
+        ResourceWrite::PutWorkerBucketNotification {
+            storage,
+            bucket,
+            configuration,
+        } => {
+            worker_trigger_storage(facts, storage)?;
+            let own = aws_resource_policies::aws_prefixed_resource_name(&facts.place.prefix, storage);
+            if *bucket != own {
+                return Err(refused(format!(
+                    "PutWorkerBucketNotification names bucket {bucket}, not {own}, the bucket of \
+                     storage '{storage}'"
+                )));
+            }
             notification_document(configuration)?;
             Ok(())
         }
@@ -664,16 +690,43 @@ pub async fn check_notification_state(
     if let ResourceWrite::UpdateEventSourceMapping { uuid, .. } = write {
         return check_mapping_is_own(lambda, facts, uuid).await;
     }
-    let ResourceWrite::PutBucketNotification {
-        bucket,
-        configuration,
-    } = write
-    else {
-        return Ok(());
+    let (bucket, configuration, desired, desired_functions) = match write {
+        ResourceWrite::PutBucketNotification {
+            bucket,
+            configuration,
+        } => {
+            let (account, region) = aws_account_and_region(facts)?;
+            (
+                bucket,
+                configuration,
+                desired_queue_entries(facts, &region, &account)?,
+                Vec::new(),
+            )
+        }
+        ResourceWrite::PutWorkerBucketNotification {
+            storage,
+            bucket,
+            configuration,
+        } => {
+            let (account, region) = aws_account_and_region(facts)?;
+            let events = worker_trigger_storage(facts, storage)?;
+            let function = facts.place.function_name(facts.resource_id)?;
+            let entry = alien_aws_clients::s3::LambdaFunctionConfiguration {
+                id: Some(alien_core::storage_notifications::aws_trigger_notification_id(
+                    &function, storage,
+                )),
+                lambda_function_arn: format!(
+                    "arn:{}:lambda:{region}:{account}:function:{function}",
+                    aws_partition(&region)
+                ),
+                events,
+                filter: None,
+            };
+            (bucket, configuration, Vec::new(), vec![entry])
+        }
+        _ => return Ok(()),
     };
     use alien_error::Context;
-    let (account, region) = aws_account_and_region(facts)?;
-    let desired = desired_queue_entries(facts, &region, &account)?;
     let current = s3
         .get_bucket_notification_configuration(bucket)
         .await
@@ -684,8 +737,32 @@ pub async fn check_notification_state(
         &notification_document(configuration)?,
         &current,
         &desired,
+        &desired_functions,
         facts.resource_id,
     )
+}
+
+/// The events of the signed worker's storage trigger on `storage`; refused if it has none.
+fn worker_trigger_storage(facts: &ResourceFacts<'_>, storage: &str) -> Result<Vec<String>> {
+    facts
+        .worker()?
+        .triggers
+        .iter()
+        .find_map(|trigger| match trigger {
+            alien_core::WorkerTrigger::Storage {
+                storage: reference,
+                events,
+            } if reference.id == storage => {
+                Some(alien_core::storage_notifications::aws_trigger_events(events))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            refused(format!(
+                "the signed stack has no storage trigger of worker '{}' on '{storage}'",
+                facts.resource_id
+            ))
+        })
 }
 
 /// An update may only change a mapping that already reads from a queue the signed stack triggers
@@ -730,6 +807,7 @@ fn check_notification_document(
     new: &NotificationConfiguration,
     current: &NotificationConfiguration,
     desired: &[QueueConfiguration],
+    desired_functions: &[alien_aws_clients::s3::LambdaFunctionConfiguration],
     resource_id: &str,
 ) -> Result<()> {
     let allowed_queue = |entry: &QueueConfiguration| {
@@ -744,7 +822,10 @@ fn check_notification_document(
     if let Some(entry) = new
         .lambda_function_configurations
         .iter()
-        .find(|entry| !current.lambda_function_configurations.contains(entry))
+        .find(|entry| {
+            !current.lambda_function_configurations.contains(entry)
+                && !desired_functions.contains(entry)
+        })
     {
         return Err(refused(format!(
             "PutBucketNotification adds a function destination {}",
@@ -820,6 +901,11 @@ pub async fn forward_aws_write(
         ResourceWrite::PutBucketNotification {
             bucket,
             configuration,
+        }
+        | ResourceWrite::PutWorkerBucketNotification {
+            bucket,
+            configuration,
+            ..
         } => {
             let document = notification_document(configuration)?;
             s3.put_bucket_notification_configuration(bucket, &document)
@@ -2265,7 +2351,51 @@ mod notification_tests {
         current: &NotificationConfiguration,
         desired: &[QueueConfiguration],
     ) -> Result<()> {
-        check_notification_document(new, current, desired, "assets")
+        check_notification_document(new, current, desired, &[], "assets")
+    }
+
+    #[test]
+    fn only_the_workers_own_function_entry_is_added() {
+        let own = LambdaFunctionConfiguration {
+            id: Some("acme-worker-s3-assets".into()),
+            lambda_function_arn: "arn:aws:lambda:us-east-1:1:function:acme-worker".into(),
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: None,
+        };
+        let current = NotificationConfiguration::default();
+        let with = |entry: LambdaFunctionConfiguration| NotificationConfiguration {
+            lambda_function_configurations: vec![entry],
+            ..Default::default()
+        };
+        let run = |new: &NotificationConfiguration| {
+            check_notification_document(new, &current, &[], std::slice::from_ref(&own), "worker")
+        };
+        run(&with(own.clone())).expect("the worker's own entry is accepted");
+        for (name, entry) in [
+            (
+                "other function",
+                LambdaFunctionConfiguration {
+                    lambda_function_arn: "arn:aws:lambda:us-east-1:9:function:evil".into(),
+                    ..own.clone()
+                },
+            ),
+            (
+                "other events",
+                LambdaFunctionConfiguration {
+                    events: vec!["s3:ObjectRemoved:*".into()],
+                    ..own.clone()
+                },
+            ),
+            (
+                "other id",
+                LambdaFunctionConfiguration {
+                    id: Some("x".into()),
+                    ..own.clone()
+                },
+            ),
+        ] {
+            assert!(run(&with(entry)).is_err(), "{name} was accepted");
+        }
     }
 
     #[test]

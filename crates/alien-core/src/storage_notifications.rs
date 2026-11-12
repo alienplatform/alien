@@ -237,6 +237,24 @@ pub fn aws_notification_id(prefix: &str, storage_id: &str, index: usize) -> Stri
     format!("{}{index}", aws_notification_id_prefix(prefix, storage_id))
 }
 
+/// The S3 event names a worker's storage trigger subscribes to.
+pub fn aws_trigger_events(events: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event.as_str() {
+            "created" => "s3:ObjectCreated:*".to_string(),
+            "deleted" => "s3:ObjectRemoved:*".to_string(),
+            other => format!("s3:{other}"),
+        })
+        .collect()
+}
+
+/// Id of the S3 function configuration (and of the Lambda permission statement) a worker's
+/// storage trigger installs.
+pub fn aws_trigger_notification_id(function_name: &str, storage_id: &str) -> String {
+    format!("{function_name}-s3-{storage_id}")
+}
+
 /// Every [`aws_notification_id`] of one Storage starts with this.
 pub fn aws_notification_id_prefix(prefix: &str, storage_id: &str) -> String {
     let hash = format!("{:x}", Sha256::digest(storage_id.as_bytes()));

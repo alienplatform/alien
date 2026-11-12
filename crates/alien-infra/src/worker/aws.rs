@@ -290,6 +290,60 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    /// Write a bucket's notification document for this worker's storage trigger. On a protected
+    /// install the verifier checks it against the signed stack and sends it unchanged.
+    async fn put_storage_trigger_notification(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_id: &str,
+        storage_id: &str,
+        bucket: &str,
+        document: &NotificationConfiguration,
+        bucket_may_be_gone: bool,
+    ) -> Result<()> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let lambda = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, worker_id)? {
+            let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            let configuration = serde_json::to_value(document)
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: "The bucket notification document does not serialize".to_string(),
+                    resource_id: Some(worker_id.to_string()),
+                })?;
+            crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                worker_id,
+                vec![crate::core::verifier::ResourceWrite::PutWorkerBucketNotification {
+                    storage: storage_id.to_string(),
+                    bucket: bucket.to_string(),
+                    configuration,
+                }],
+            )
+            .await?;
+            return Ok(());
+        }
+        ctx.service_provider
+            .get_aws_s3_client(aws_cfg)
+            .await?
+            .put_bucket_notification_configuration(bucket, document)
+            .await
+            .or_else(|error| {
+                if bucket_may_be_gone && is_remote_not_found(&error) {
+                    Ok(())
+                } else {
+                    Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to put notification configuration for bucket '{bucket}'"
+                        ),
+                        resource_id: Some(worker_id.to_string()),
+                    }))
+                }
+            })
+    }
+
     /// Remove exactly this Worker's entry, preserving all other destinations and filters.
     /// Repeated calls after a lost response are harmless; failures retain ownership.
     async fn remove_storage_notification(
@@ -344,14 +398,15 @@ impl AwsWorkerController {
                     .lambda_function_configurations
                     .retain(|entry| entry.id.as_deref() != Some(statement_id.as_str()));
                 if config.lambda_function_configurations.len() != count {
-                    match client.put_bucket_notification_configuration(bucket, &config).await {
-                        Ok(()) => {}
-                        Err(error) if is_remote_not_found(&error) => {}
-                        Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to remove notification '{statement_id}' from bucket '{bucket}'"),
-                            resource_id: Some(worker.id.clone()),
-                        })),
-                    }
+                    self.put_storage_trigger_notification(
+                        ctx,
+                        &worker.id,
+                        &storage.id,
+                        bucket,
+                        &config,
+                        true,
+                    )
+                    .await?;
                 }
             }
             Err(error) if is_remote_not_found(&error) => {}
@@ -2720,14 +2775,7 @@ impl AwsWorkerController {
                     })?;
 
                 // Map alien event types to S3 event types
-                let s3_events: Vec<String> = events
-                    .iter()
-                    .map(|e| match e.as_str() {
-                        "created" => "s3:ObjectCreated:*".to_string(),
-                        "deleted" => "s3:ObjectRemoved:*".to_string(),
-                        other => format!("s3:{}", other),
-                    })
-                    .collect();
+                let s3_events = alien_core::storage_notifications::aws_trigger_events(events);
 
                 replace_lambda_notification_config(
                     &mut notification_config,
@@ -2739,16 +2787,15 @@ impl AwsWorkerController {
                     },
                 );
 
-                s3_client
-                    .put_bucket_notification_configuration(bucket_name, &notification_config)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to put notification configuration for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                self.put_storage_trigger_notification(
+                    ctx,
+                    &config.id,
+                    &storage_ref.id,
+                    bucket_name,
+                    &notification_config,
+                    false,
+                )
+                .await?;
 
                 if !self.s3_permission_statement_ids.contains(&statement_id) {
                     self.s3_permission_statement_ids.push(statement_id.clone());
@@ -4442,14 +4489,7 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    let s3_events: Vec<String> = events
-                        .iter()
-                        .map(|e| match e.as_str() {
-                            "created" => "s3:ObjectCreated:*".to_string(),
-                            "deleted" => "s3:ObjectRemoved:*".to_string(),
-                            other => format!("s3:{}", other),
-                        })
-                        .collect();
+                    let s3_events = alien_core::storage_notifications::aws_trigger_events(events);
 
                     replace_lambda_notification_config(
                         &mut notification_config,
@@ -4461,16 +4501,15 @@ impl AwsWorkerController {
                         },
                     );
 
-                    s3_client
-                        .put_bucket_notification_configuration(bucket_name, &notification_config)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to put notification configuration for bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    self.put_storage_trigger_notification(
+                        ctx,
+                        &current_config.id,
+                        &storage_ref.id,
+                        bucket_name,
+                        &notification_config,
+                        false,
+                    )
+                    .await?;
 
                     if !self.s3_permission_statement_ids.contains(&statement_id) {
                         self.s3_permission_statement_ids.push(statement_id);

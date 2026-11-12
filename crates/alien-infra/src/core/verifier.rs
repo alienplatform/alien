@@ -497,6 +497,14 @@ pub enum ResourceWrite {
         bucket: String,
         configuration: serde_json::Value,
     },
+    /// S3 PutBucketNotificationConfiguration of a signed storage's bucket, written by a worker
+    /// whose signed storage trigger names `storage`.
+    #[serde(rename_all = "camelCase")]
+    PutWorkerBucketNotification {
+        storage: String,
+        bucket: String,
+        configuration: serde_json::Value,
+    },
     /// Lambda CreateEventSourceMapping.
     #[serde(rename_all = "camelCase")]
     CreateEventSourceMapping { request: serde_json::Value },
