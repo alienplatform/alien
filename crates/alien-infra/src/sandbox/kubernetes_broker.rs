@@ -358,8 +358,15 @@ async fn cold_create(
 
     let started = std::time::Instant::now();
     loop {
-        // The deadline started at the claim. A pod that comes up after it is not a session: the
-        // Operator would end it at once, and the caller's first command would fail.
+        let current = pods.get_pod(namespace, &name).await.ok();
+        let address = current
+            .as_ref()
+            .and_then(|pod| pod.status.as_ref())
+            .filter(|status| status.phase.as_deref() == Some("Running"))
+            .and_then(|status| status.pod_ip.clone());
+        // The deadline started at the claim. It is checked after the pod is read, so a pod that
+        // is Running only after it is not returned: the Operator would end it at once, and the
+        // caller's first command would fail.
         if crate::sandbox::session_deadline_passed(
             &pod,
             now_unix + started.elapsed().as_secs() as i64,
@@ -373,13 +380,7 @@ async fn cold_create(
             })
             .into());
         }
-        let current = pods.get_pod(namespace, &name).await.ok();
-        if let Some(address) = current
-            .as_ref()
-            .and_then(|pod| pod.status.as_ref())
-            .filter(|status| status.phase.as_deref() == Some("Running"))
-            .and_then(|status| status.pod_ip.clone())
-        {
+        if let Some(address) = address {
             let (capability, expires_at) = mint_capability(
                 signing_key,
                 &agent_session_id,
