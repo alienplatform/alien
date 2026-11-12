@@ -132,8 +132,7 @@ pub enum HeartbeatCollectionIssueReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(tag = "resourceType", content = "data")]
+#[serde(tag = "resourceType", content = "data", remote = "Self")]
 pub enum ResourceHeartbeatData {
     #[serde(rename = "storage")]
     Storage(StorageHeartbeatData),
@@ -183,6 +182,194 @@ pub enum ResourceHeartbeatData {
     Key(KeyHeartbeatData),
     #[serde(rename = "sandbox")]
     Sandbox(SandboxHeartbeatData),
+    /// A heartbeat from a resource type an extension defines. It serializes to the same
+    /// `{resourceType, data}` object as the variants above, with the extension's type as the tag.
+    #[serde(skip)]
+    Custom(CustomHeartbeat),
+}
+
+// `remote = "Self"` turns the derived impls into inherent fns, which these two call for the
+// built-in variants.
+impl Serialize for ResourceHeartbeatData {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ResourceHeartbeatData::Custom(custom) => custom.serialize(serializer),
+            built_in => ResourceHeartbeatData::serialize(built_in, serializer),
+        }
+    }
+}
+
+/// Only a tag that names an extension's type reads as `Custom`. A built-in tag takes its own
+/// variant's shape and any other tag is refused, so a malformed built-in heartbeat never loads as
+/// custom.
+impl<'de> Deserialize<'de> for ResourceHeartbeatData {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = JsonValue::deserialize(deserializer)?;
+        let is_custom = value
+            .get("resourceType")
+            .and_then(JsonValue::as_str)
+            .is_some_and(crate::custom_resource::is_custom_resource_type);
+        if is_custom {
+            serde_json::from_value::<CustomHeartbeat>(value)
+                .map(ResourceHeartbeatData::Custom)
+                .map_err(serde::de::Error::custom)
+        } else {
+            ResourceHeartbeatData::deserialize(value).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+// Utoipa drops a variant marked `#[serde(skip)]`, as `Custom` is, so the schema lists the
+// built-in variants by hand, each with the shape the derive would give it.
+#[cfg(feature = "openapi")]
+macro_rules! heartbeat_data_schema {
+    ($($tag:literal => $data:ty),* $(,)?) => {
+        impl utoipa::PartialSchema for ResourceHeartbeatData {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                use utoipa::openapi::{ObjectBuilder, OneOfBuilder, Ref, Type};
+                use utoipa::ToSchema as _;
+                OneOfBuilder::new()
+                    $(.item(
+                        ObjectBuilder::new()
+                            .schema_type(Type::Object)
+                            .property("data", Ref::from_schema_name(<$data>::name()))
+                            .required("data")
+                            .property(
+                                "resourceType",
+                                ObjectBuilder::new()
+                                    .schema_type(Type::String)
+                                    .enum_values(Some([$tag])),
+                            )
+                            .required("resourceType"),
+                    ))*
+                    // Inline like the built-in variants, not a `$ref`: generators that sort a
+                    // union's members by kind would otherwise move a reference first, and a
+                    // union that tries the custom variant before the built-ins can take a
+                    // built-in heartbeat's fields and lose them.
+                    .item(
+                        ObjectBuilder::new()
+                            .schema_type(Type::Object)
+                            .description(Some(
+                                "The heartbeat of a resource whose type an extension defines.",
+                            ))
+                            .property(
+                                "data",
+                                Ref::from_schema_name(CustomHeartbeatData::name()),
+                            )
+                            .required("data")
+                            .property(
+                                "resourceType",
+                                Ref::from_schema_name(CustomResourceType::name()),
+                            )
+                            .required("resourceType"),
+                    )
+                    .into()
+            }
+        }
+
+        impl utoipa::ToSchema for ResourceHeartbeatData {
+            fn schemas(
+                schemas: &mut Vec<(
+                    String,
+                    utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+                )>,
+            ) {
+                use utoipa::PartialSchema as _;
+                $(
+                    schemas.push((<$data>::name().into_owned(), <$data>::schema()));
+                    <$data>::schemas(schemas);
+                )*
+                schemas.push((CustomHeartbeat::name().into_owned(), CustomHeartbeat::schema()));
+                CustomHeartbeat::schemas(schemas);
+            }
+        }
+    };
+}
+
+#[cfg(feature = "openapi")]
+heartbeat_data_schema! {
+    "storage" => StorageHeartbeatData,
+    "worker" => WorkerHeartbeatData,
+    "container" => ContainerHeartbeatData,
+    "daemon" => DaemonHeartbeatData,
+    "compute-cluster" => ComputeClusterHeartbeatData,
+    "kubernetes-cluster" => KubernetesClusterHeartbeatData,
+    "queue" => QueueHeartbeatData,
+    "kv" => KvHeartbeatData,
+    "postgres" => PostgresHeartbeatData,
+    "redis" => RedisHeartbeatData,
+    "vault" => VaultHeartbeatData,
+    "service-account" => ServiceAccountHeartbeatData,
+    "network" => NetworkHeartbeatData,
+    "remote-stack-management" => RemoteStackManagementHeartbeatData,
+    "artifact-registry" => ArtifactRegistryHeartbeatData,
+    "build" => BuildHeartbeatData,
+    "service_activation" => ServiceActivationHeartbeatData,
+    "azure_resource_group" => AzureResourceGroupHeartbeatData,
+    "azure_storage_account" => AzureStorageAccountHeartbeatData,
+    "azure_container_apps_environment" => AzureContainerAppsEnvironmentHeartbeatData,
+    "azure_service_bus_namespace" => AzureServiceBusNamespaceHeartbeatData,
+    "ai" => AiHeartbeatData,
+    "key" => KeyHeartbeatData,
+    "sandbox" => SandboxHeartbeatData,
+}
+
+/// The heartbeat of a resource whose type an extension defines.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CustomHeartbeat {
+    #[cfg_attr(feature = "openapi", schema(value_type = CustomResourceType))]
+    pub resource_type: ResourceType,
+    pub data: CustomHeartbeatData,
+}
+
+/// The schema of `CustomHeartbeat.resource_type`. The pattern repeats `is_custom_resource_type`:
+/// without it, a union validator that tries the custom variant first reads a built-in heartbeat
+/// as custom and drops its fields. The TypeScript generators (`kubb.config.ts`) map this schema
+/// name to a `${string}/${string}` template literal, so a check like `resourceType === "ai"`
+/// still narrows the union.
+#[cfg(feature = "openapi")]
+pub(crate) struct CustomResourceType;
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for CustomResourceType {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::Type::String)
+            .pattern(Some("^(?!(?:alien|experimental)/)[^/]+/.+$"))
+            .description(Some(
+                "The type of a resource an extension defines, such as `acme/dns-zone`.",
+            ))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for CustomResourceType {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CustomHeartbeatData {
+    pub status: CustomHeartbeatStatus,
+    /// Type-specific fields the extension's controller reports, which Alien does not read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub details: BTreeMap<String, JsonValue>,
+}
+
+/// The status fields every heartbeat carries, so a custom heartbeat's health reads like a
+/// built-in one's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CustomHeartbeatStatus {
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    pub message: Option<String>,
+    pub stale: bool,
+    pub partial: bool,
+    pub collection_issues: Vec<HeartbeatCollectionIssue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3335,6 +3522,124 @@ mod tests {
         assert_eq!(
             azure["data"]["endpoint"],
             "https://my-ai-account.openai.azure.com/"
+        );
+    }
+
+    fn status_json() -> JsonValue {
+        json!({
+            "health": "healthy", "lifecycle": "unknown", "message": null,
+            "stale": false, "partial": false, "collectionIssues": []
+        })
+    }
+
+    #[test]
+    fn custom_heartbeat_round_trips_and_built_in_heartbeats_stay_typed() {
+        let custom = json!({
+            "deploymentId": null,
+            "resourceId": "zone",
+            "resourceType": "acme/dns-zone",
+            "controllerPlatform": "aws",
+            "backend": "aws",
+            "observedAt": "2026-11-06T00:00:00Z",
+            "data": {
+                "resourceType": "acme/dns-zone",
+                "data": { "status": status_json(), "details": { "records": 12 } }
+            },
+            "raw": []
+        });
+        let heartbeat: ResourceHeartbeat = serde_json::from_value(custom.clone()).unwrap();
+        let ResourceHeartbeatData::Custom(data) = &heartbeat.data else {
+            panic!("expected Custom, got {:?}", heartbeat.data);
+        };
+        assert_eq!(data.resource_type.as_ref(), "acme/dns-zone");
+        assert_eq!(data.data.status.health, ObservedHealth::Healthy);
+        assert_eq!(data.data.details["records"], 12);
+        assert_eq!(serde_json::to_value(&heartbeat).unwrap(), custom);
+
+        let built_in: ResourceHeartbeatData = serde_json::from_value(json!({
+            "resourceType": "service-account",
+            "data": {
+                "backend": "local",
+                "status": status_json(),
+                "identity": "sa",
+                "configured": true
+            }
+        }))
+        .unwrap();
+        assert!(
+            matches!(built_in, ResourceHeartbeatData::ServiceAccount(_)),
+            "{built_in:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_built_in_heartbeat_is_refused() {
+        // The body is a valid custom heartbeat body, so only the tag keeps it from loading.
+        let err = serde_json::from_value::<ResourceHeartbeatData>(json!({
+            "resourceType": "service-account",
+            "data": { "status": status_json() }
+        }))
+        .expect_err("a service-account heartbeat needs its backend");
+        assert!(err.to_string().contains("backend"), "{err}");
+    }
+
+    #[test]
+    fn unknown_heartbeat_type_outside_an_extension_namespace_is_refused() {
+        for tag in ["not-a-resource", "alien/dns-zone", "experimental/dns-zone"] {
+            let err = serde_json::from_value::<ResourceHeartbeatData>(json!({
+                "resourceType": tag,
+                "data": { "status": status_json() }
+            }))
+            .expect_err(tag);
+            assert!(err.to_string().contains("unknown variant"), "{err}");
+        }
+    }
+
+    /// The schema lists the built-in variants by hand. A variant added to the enum and not to
+    /// the schema, or the other way round, fails here.
+    #[cfg(feature = "openapi")]
+    #[test]
+    fn heartbeat_schema_lists_every_built_in_variant_and_custom() {
+        use utoipa::PartialSchema as _;
+
+        let refusal = serde_json::from_value::<ResourceHeartbeatData>(json!({
+            "resourceType": "not-a-resource",
+            "data": {}
+        }))
+        .expect_err("an unknown tag is refused")
+        .to_string();
+        let mut variants: Vec<&str> = refusal
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|tag| *tag != "not-a-resource")
+            .collect();
+        variants.sort_unstable();
+
+        let schema = serde_json::to_value(ResourceHeartbeatData::schema()).unwrap();
+        let items = schema["oneOf"].as_array().expect("a oneOf");
+        // The custom variant comes last, inline like the others, so a generator that sorts a
+        // union's references first or tries members in order reaches it after the built-ins.
+        let (custom, built_in) = items.split_last().expect("at least the custom variant");
+        let mut schema_tags: Vec<&str> = built_in
+            .iter()
+            .map(|item| {
+                item["properties"]["resourceType"]["enum"][0]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect();
+        schema_tags.sort_unstable();
+
+        assert_eq!(schema_tags, variants);
+        assert_eq!(custom.get("$ref"), None, "{custom}");
+        assert_eq!(
+            custom["properties"]["resourceType"]["$ref"],
+            "#/components/schemas/CustomResourceType"
+        );
+        assert_eq!(
+            custom["properties"]["data"]["$ref"],
+            "#/components/schemas/CustomHeartbeatData"
         );
     }
 }

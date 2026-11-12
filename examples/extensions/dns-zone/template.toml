@@ -1,0 +1,3 @@
+name = "extensions/dns-zone"
+description = "An extension that adds a DNS zone, a custom resource with its own controllers."
+language = "Rust"

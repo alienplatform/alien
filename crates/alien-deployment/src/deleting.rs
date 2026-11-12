@@ -2,11 +2,11 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ownership_policy_for_resource_type, DeletionPolicy, InitialSetupAuthority, Platform,
-    ResourceLifecycle, ResourceStatus, SetupManagement, StackState, StackStatus,
+    ownership_policy_for_resource_type, CustomResource, DeletionPolicy, InitialSetupAuthority,
+    Platform, ResourceLifecycle, ResourceStatus, SetupManagement, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_infra::{PlatformServiceProvider, StackExecutor};
+use alien_infra::{PlatformServiceProvider, ResourceRegistry, StackExecutor};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use tracing::info;
@@ -23,6 +23,12 @@ pub async fn handle_delete_pending(
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeletePending status");
+    // Built before the switch below: the registry holds both releases' controllers, which only
+    // the provider that loaded both releases can give.
+    let registry = crate::helpers::resource_registry(&current, &service_provider)?;
+    // The deployment's resources belong to its current release, so they are deleted with its
+    // extensions, also while an update to another release is unfinished.
+    let service_provider = crate::helpers::current_release_provider(&current, &service_provider)?;
 
     let mut next = current.clone();
     let mut stack_state = current.stack_state.ok_or_else(|| {
@@ -96,6 +102,7 @@ pub async fn handle_delete_pending(
         &config,
         client_config,
         service_provider,
+        registry,
     )?;
     let prepared = executor.prepare_for_deletion(&mut stack_state).context(
         ErrorData::StackExecutionFailed {
@@ -133,6 +140,10 @@ pub async fn handle_deleting(
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Deleting status");
+    let registry = crate::helpers::resource_registry(&current, &service_provider)?;
+    // The deployment's resources belong to its current release, so they are deleted with its
+    // extensions, also while an update to another release is unfinished.
+    let service_provider = crate::helpers::current_release_provider(&current, &service_provider)?;
 
     let mut current_cloned = current.clone();
     let stack_state = current.stack_state.ok_or_else(|| {
@@ -169,6 +180,7 @@ pub async fn handle_deleting(
         &config,
         client_config,
         service_provider,
+        registry,
     )?;
 
     let step_result =
@@ -617,7 +629,28 @@ pub(crate) fn retained_resource_ids(current: &DeploymentState, state: &StackStat
     if deletion_policy(current) == DeletionPolicy::Erase {
         return Vec::new();
     }
-    installed_durable_resource_ids(state)
+    installed_durable_resource_ids(state, &deployment_stacks(current))
+}
+
+/// Every stack the deployment carries. A resource left by an interrupted update or a first
+/// install finds its type's descriptor in one of them.
+fn deployment_stacks(current: &DeploymentState) -> Vec<&Stack> {
+    let metadata = current.runtime_metadata.as_ref();
+    [
+        current
+            .current_release
+            .as_ref()
+            .map(|release| &release.stack),
+        current
+            .target_release
+            .as_ref()
+            .map(|release| &release.stack),
+        metadata.and_then(|metadata| metadata.prepared_stack.as_ref()),
+        metadata.and_then(|metadata| metadata.pending_prepared_stack.as_ref()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// The persisted deletion policy. Records without one keep their data.
@@ -638,7 +671,10 @@ pub(crate) fn deletion_policy(current: &DeploymentState) -> DeletionPolicy {
 ///
 /// Nor is a resource recorded as adopted from a binding: whoever supplied it keeps it, and
 /// Alien can neither recover nor erase it.
-pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
+///
+/// A resource of an extension's type is durable when its descriptor in `stacks` says it holds
+/// data. With no descriptor, Alien cannot tell what deleting it loses, so it keeps it.
+pub fn installed_durable_resource_ids(state: &StackState, stacks: &[&Stack]) -> Vec<String> {
     state
         .resources
         .iter()
@@ -655,6 +691,17 @@ pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
                 | "key"
                 | "experimental/aws-opensearch" => true,
                 "artifact-registry" => platform != Platform::Aws,
+                _ if resource.downcast_ref::<CustomResource>().is_some() => {
+                    // Kept when any release's descriptor says it holds data, or none describes
+                    // it: a release that stops saying so doesn't make its data disposable.
+                    let resource_type = resource.resource_type();
+                    let mut descriptors = stacks
+                        .iter()
+                        .filter_map(|stack| stack.descriptor(&resource_type))
+                        .peekable();
+                    descriptors.peek().is_none()
+                        || descriptors.any(|descriptor| descriptor.holds_data)
+                }
                 _ => false,
             };
             // A failed storage create can save a controller before it owns a bucket.
@@ -687,12 +734,15 @@ pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
         .collect()
 }
 
+/// The executor that deletes `current`'s resources: with `service_provider`, the current
+/// release's, and the controllers in `registry`, both releases'.
 fn deletion_executor(
     current: &DeploymentState,
     state: &StackState,
     config: &DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn PlatformServiceProvider>,
+    registry: std::sync::Arc<ResourceRegistry>,
 ) -> Result<StackExecutor> {
     let config = &DeploymentConfig {
         deletion_policy: deletion_policy(current),
@@ -716,6 +766,7 @@ fn deletion_executor(
         message: "Failed to create runtime cleanup executor".to_string(),
     })?;
     executor
+        .with_resource_registry(registry)
         .preserving_resources(state, retained_resource_ids(current, state))
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to preserve installed data and dependencies".to_string(),
@@ -2491,7 +2542,7 @@ mod tests {
             .unwrap();
         assert_eq!(state.resources["database"].status, ResourceStatus::Running);
 
-        assert!(super::installed_durable_resource_ids(&state).is_empty());
+        assert!(super::installed_durable_resource_ids(&state, &[]).is_empty());
 
         state
             .resources
@@ -2499,8 +2550,114 @@ mod tests {
             .unwrap()
             .external_binding = false;
         assert_eq!(
-            super::installed_durable_resource_ids(&state),
+            super::installed_durable_resource_ids(&state, &[]),
             vec!["database".to_string()]
         );
+    }
+
+    /// An extension's resource is kept on a retaining delete when its type's descriptor says it
+    /// holds data, as a bucket is, and deleted when it says it doesn't. A type no stack of the
+    /// deployment describes is kept, since nothing says deleting it is safe.
+    #[test]
+    fn an_extension_resource_is_retained_when_its_descriptor_says_it_holds_data() {
+        let mut stack_state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        stack_state.resources.insert(
+            "bucket".to_string(),
+            resource_state(
+                Resource::new(Storage::new("bucket".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+            ),
+        );
+        let zone = alien_core::CustomResource::from_untagged(
+            "acme/dns-zone",
+            serde_json::json!({ "id": "zone", "domain": "internal.acme.dev" }),
+        )
+        .unwrap();
+        stack_state.resources.insert(
+            "zone".to_string(),
+            resource_state(
+                Resource::new(zone),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+            ),
+        );
+        let acme_stack = |holds_data: bool| {
+            let mut stack = Stack::new("app".to_string()).build();
+            stack.extensions = vec![serde_json::from_value(serde_json::json!({
+                "name": "acme",
+                "version": "0.1.0",
+                "digest": "sha256:4ff931a2",
+                "resourceTypes": { "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": holds_data,
+                    "setup": {
+                        "cloudformation": ["aws"], "terraform": [], "helm": [], "importers": ["aws"]
+                    },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }}
+            }))
+            .unwrap()];
+            stack
+        };
+        let release = |stack: Stack| alien_core::ReleaseInfo {
+            release_id: Some("release".to_string()),
+            version: None,
+            description: None,
+            stack,
+        };
+        let deployment = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state.clone()),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let retained = |deployment: DeploymentState| {
+            let mut ids = super::retained_resource_ids(&deployment, &stack_state);
+            ids.sort();
+            ids
+        };
+        let in_current_release = |holds_data: bool| DeploymentState {
+            current_release: Some(release(acme_stack(holds_data))),
+            ..deployment.clone()
+        };
+
+        assert_eq!(retained(in_current_release(true)), ["bucket", "zone"]);
+        assert_eq!(retained(in_current_release(false)), ["bucket"]);
+        assert_eq!(retained(deployment.clone()), ["bucket", "zone"]);
+
+        // An update that adds the extension describes the type only in its target release, and a
+        // first install only in its prepared stack.
+        let in_target_release = DeploymentState {
+            current_release: Some(release(Stack::new("app".to_string()).build())),
+            target_release: Some(release(acme_stack(false))),
+            ..deployment.clone()
+        };
+        assert_eq!(retained(in_target_release), ["bucket"]);
+        let in_prepared_stack = DeploymentState {
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(acme_stack(false)),
+                ..Default::default()
+            }),
+            ..deployment.clone()
+        };
+        assert_eq!(retained(in_prepared_stack), ["bucket"]);
+
+        // Releases that disagree keep the resource, whichever one is read first.
+        let flipped = DeploymentState {
+            current_release: Some(release(acme_stack(false))),
+            target_release: Some(release(acme_stack(true))),
+            ..deployment.clone()
+        };
+        assert_eq!(retained(flipped), ["bucket", "zone"]);
     }
 }

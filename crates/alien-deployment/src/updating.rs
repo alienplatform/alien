@@ -603,12 +603,19 @@ pub async fn handle_updating(
         debug!("Secrets already synced, continuing with update");
     }
 
+    // Resources the target release removes belong to the current release, so they are deleted
+    // with its interceptors.
+    let removed_resources_service_provider =
+        crate::helpers::current_release_provider(&next, &service_provider)?;
+    let registry = crate::helpers::resource_registry(&next, &service_provider)?;
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .resource_registry(registry)
         .resume_unchanged_failed_resources(true)
         .running_resource_policy(RunningResourcePolicy::OptIn)
         .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
         .service_provider(service_provider)
+        .removed_resources_service_provider(removed_resources_service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to create stack executor for update".to_string(),
@@ -2055,5 +2062,104 @@ mod aws_handoff_tests {
             );
             assert_eq!(prepared.resources["execution-sa"].config, before.config);
         }
+    }
+}
+
+#[cfg(test)]
+mod removed_resources_tests {
+    use super::*;
+    use alien_infra::{DefaultPlatformServiceProvider, LoadedExtensions, PlatformServiceProvider};
+    use std::sync::Arc;
+
+    fn stack(extensions: &[&str]) -> Stack {
+        serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {},
+            "extensions": extensions
+                .iter()
+                .map(|name| serde_json::json!({
+                    "name": name,
+                    "version": "1.0.0",
+                    "digest": format!("sha256:{name}"),
+                    "resourceTypes": {}
+                }))
+                .collect::<Vec<_>>()
+        }))
+        .unwrap()
+    }
+
+    /// What a process loaded for `extensions`: a hooks module for each, declaring no hooks.
+    fn loaded(extensions: &[&str]) -> Arc<LoadedExtensions> {
+        Arc::new(
+            extensions
+                .iter()
+                .fold(LoadedExtensions::default(), |loaded, name| {
+                    loaded.with_hooks(*name, crate::testing::no_hooks(name))
+                }),
+        )
+    }
+
+    fn provider(stack: &Stack, loaded: &Arc<LoadedExtensions>) -> DefaultPlatformServiceProvider {
+        DefaultPlatformServiceProvider::default()
+            .with_extensions(stack, loaded.clone())
+            .unwrap()
+    }
+
+    fn state(current: &Stack, target: &Stack) -> DeploymentState {
+        let release = |id: &str, stack: &Stack| ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: stack.clone(),
+        };
+        DeploymentState {
+            status: DeploymentStatus::Updating,
+            platform: Platform::Aws,
+            current_release: Some(release("rel_1", current)),
+            target_release: Some(release("rel_2", target)),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            error: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    #[test]
+    fn the_current_release_deletes_what_the_target_release_removes() {
+        use crate::helpers::current_release_provider;
+        let (acme, backups) = (stack(&["acme"]), stack(&["backups"]));
+        let acme_loaded = loaded(&["acme"]);
+        let target_loaded = loaded(&["backups"]);
+        let current_loaded = loaded(&["acme"]);
+
+        let same: Arc<dyn PlatformServiceProvider> = Arc::new(provider(&acme, &acme_loaded));
+        let chosen = current_release_provider(&state(&acme, &acme), &same).unwrap();
+        assert!(
+            Arc::ptr_eq(&chosen, &same),
+            "the same extensions share the provider"
+        );
+
+        let updating: Arc<dyn PlatformServiceProvider> = Arc::new(
+            provider(&backups, &target_loaded)
+                .with_current_release(&acme, current_loaded.clone())
+                .unwrap(),
+        );
+        let chosen = current_release_provider(&state(&acme, &backups), &updating).unwrap();
+        assert!(Arc::ptr_eq(&chosen.extensions().unwrap(), &current_loaded));
+
+        let chosen = current_release_provider(&state(&stack(&[]), &backups), &updating).unwrap();
+        assert!(
+            chosen.extensions().is_none(),
+            "a current release without extensions deletes with none"
+        );
+
+        let target_only: Arc<dyn PlatformServiceProvider> =
+            Arc::new(provider(&backups, &target_loaded));
+        let error = current_release_provider(&state(&acme, &backups), &target_only)
+            .err()
+            .expect("no provider for the current release's extensions");
+        assert_eq!(error.code, "MISSING_CONFIGURATION", "{error}");
     }
 }

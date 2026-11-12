@@ -745,6 +745,8 @@ fn generate_auto_management_profile(
     ) -> Vec<PermissionSetReference> {
         let mut valid_permission_refs = Vec::new();
         for permission_set_id in permission_set_ids {
+            // Alien's sets only. A custom resource derives its extension's ids here, such as
+            // `acme/dns-zone/provision`, and those belong to the extension's own identity.
             if get_permission_set(&permission_set_id).is_some() {
                 valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
             } else {
@@ -1814,6 +1816,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2264,6 +2267,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2333,6 +2337,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2440,6 +2445,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2552,6 +2558,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2614,6 +2621,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2679,6 +2687,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2752,6 +2761,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2808,6 +2818,7 @@ mod tests {
         let stack_gcp = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack-gcp".to_string(),
             resources: {
@@ -2896,6 +2907,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -2967,6 +2979,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -3039,6 +3052,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

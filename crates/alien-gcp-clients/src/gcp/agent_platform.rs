@@ -485,6 +485,8 @@ pub struct AgentPlatformClient {
     base: GcpClientBase,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(AgentPlatformClient);
+
 impl AgentPlatformClient {
     /// Build a client against the region's `aiplatform` host. The regional endpoint is injected as a
     /// service override only when the config does not already carry one, so a test override wins.

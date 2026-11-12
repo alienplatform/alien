@@ -35,6 +35,8 @@ pub struct AzureComputeUsagesClient {
     token_cache: AzureTokenCache,
 }
 
+crate::azure::common::impl_with_interceptors!(AzureComputeUsagesClient);
+
 impl AzureComputeUsagesClient {
     const API_VERSION: &'static str = "2024-07-01";
 
@@ -148,5 +150,54 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<ComputeUsagesPage>(body).is_err());
         }
+    }
+
+    /// A response interceptor that points `nextLink` at another host makes the next page fail:
+    /// the token never leaves for it.
+    #[tokio::test]
+    async fn a_rewritten_next_link_does_not_get_the_token() {
+        use alien_client_core::interceptor::{CallInterceptor, Cloud, InterceptorChain};
+        use alien_client_core::testing::TestInterceptor;
+        use std::sync::Arc;
+
+        let server = MockServer::start_async().await;
+        let elsewhere = MockServer::start_async().await;
+        let first = server.mock_async(|when, then| {
+            when.method(GET).path("/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.Compute/locations/eastus/usages");
+            then.status(200).header("content-type", "application/json")
+                .json_body(json!({"value":[],"nextLink":format!("{}/second",server.base_url())}));
+        }).await;
+        let stolen = elsewhere
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).json_body(json!({"value":[]}));
+            })
+            .await;
+        let target = format!("{}/second", elsewhere.base_url());
+        let rewrite = TestInterceptor::new("acme", Cloud::Azure, "management").on_response(
+            move |_, response| {
+                let mut page: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+                if page.get("nextLink").is_some() {
+                    page["nextLink"] = json!(target);
+                }
+                response.body = page.to_string();
+                Ok(())
+            },
+        );
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".into(), server.base_url())]),
+        });
+        let client = AzureComputeUsagesClient::new(Client::new(), AzureTokenCache::new(config))
+            .with_interceptors(InterceptorChain::new(vec![
+                Arc::new(rewrite) as Arc<dyn CallInterceptor>
+            ]));
+
+        let error = client.list_compute_usages("eastus").await.unwrap_err();
+        assert!(
+            matches!(error.error, Some(ErrorData::DestinationRefused { .. })),
+            "{error}"
+        );
+        first.assert_async().await;
+        stolen.assert_hits_async(0).await;
     }
 }

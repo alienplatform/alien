@@ -208,12 +208,13 @@ async fn make_fixture_with_group_inputs(
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
         ),
-        import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        host_registrations: alien_infra::HostRegistrations::NONE,
         tunnels: None,
         charts: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,
+        extension_bundles: None,
         log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),
         values: None,
         value_access: None,
@@ -3952,6 +3953,9 @@ mod protocol;
 #[path = "stack_import/reservation.rs"]
 mod reservation;
 
+#[path = "stack_import/hook_panics.rs"]
+mod hook_panics;
+
 #[tokio::test]
 async fn import_preserves_answers_controlled_by_group_inputs() {
     for (required, enabled) in [(false, true), (true, true), (false, false), (true, false)] {
@@ -4357,4 +4361,52 @@ async fn create_requires_deployer_answers_and_validates_present_developer_answer
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert_eq!(status, expected, "{}", String::from_utf8_lossy(&bytes));
     }
+}
+
+/// A source stack with a Frozen zone whose extension imports it on `importers` only.
+fn stack_with_zone(importers: serde_json::Value) -> Stack {
+    serde_json::from_value(serde_json::json!({
+        "id": "zone-app",
+        "resources": { "zone": {
+            "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+            "lifecycle": "frozen", "dependencies": []
+        } },
+        "permissions": { "profiles": {}, "management": "auto" },
+        "extensions": [{
+            "name": "acme", "version": "1.0.0", "digest": "sha256:0",
+            "resourceTypes": { "acme/dns-zone": {
+                "lifecycles": ["frozen"], "holdsData": false,
+                "setup": { "cloudformation": [], "terraform": ["aws", "gcp"], "helm": ["kubernetes"], "importers": importers },
+                "controllerPlatforms": [], "permissionSets": [],
+                "link": { "permissionSets": [] },
+                "schemas": { "config": {}, "outputs": {} }
+            } }
+        }]
+    }))
+    .unwrap()
+}
+
+/// An eks setup imports a zone that can only be Frozen with its AWS importer. One whose extension
+/// has none is refused at the import's preflights, which know the cluster runs in AWS, though the
+/// zone would run on gke or on a cluster in no cloud. With the importer, the preflights pass and
+/// the import goes on to ask for the zone among the setup's resources.
+#[tokio::test]
+async fn an_eks_import_of_a_custom_zone_needs_its_aws_importer() {
+    let mut outcomes = Vec::new();
+    for importers in [serde_json::json!(["gcp"]), serde_json::json!(["aws"])] {
+        let fixture =
+            make_fixture_for_platform(Platform::Kubernetes, Some(stack_with_zone(importers))).await;
+        let body = eks_cluster_import_request("acme-k8s", "us-east-1");
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+        outcomes.push(json["message"].as_str().unwrap_or_default().to_string());
+    }
+    assert!(
+        outcomes[0].contains("Source stack failed setup import preflights"),
+        "{outcomes:?}"
+    );
+    assert!(
+        outcomes[1].contains("Setup registration is missing setup-owned resources: zone"),
+        "{outcomes:?}"
+    );
 }

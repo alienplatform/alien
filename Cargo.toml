@@ -1,5 +1,10 @@
 [workspace]
-exclude = ["vendor/oci-client"]
+# Each extension example is its own Cargo workspace.
+exclude = [
+  "vendor/oci-client",
+  "examples/extensions",
+  "examples/dataplane-with-extension",
+]
 members = [
   "crates/alien-commands",
   "crates/alien-commands-client",
@@ -49,6 +54,14 @@ members = [
   "crates/alien-manager",
   "crates/alien-operator",
   "crates/alien-deploy-cli",
+  "crates/alien-hooks-runtime",
+  "crates/alien-extension-sdk",
+  "crates/alien-extension-sdk/tests/guests/acme",
+  "crates/alien-extension-sdk/tests/guests/acme-controller",
+  "crates/alien-extension-sdk/tests/guests/acme-types",
+  "crates/alien-extension-sdk/tests/guests/backups",
+  "crates/alien-extension-sdk/tests/guests/order",
+  "crates/alien-extension-sdk/tests/guests/steered",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
   "crates/workspace-hack",
@@ -127,6 +140,8 @@ alien-local = { path = "crates/alien-local", version = "3.3.59" }
 alien-cloudformation = { path = "crates/alien-cloudformation", version = "3.3.59" }
 alien-terraform = { path = "crates/alien-terraform", version = "3.3.59" }
 alien-helm = { path = "crates/alien-helm", version = "3.3.59" }
+alien-hooks-runtime = { path = "crates/alien-hooks-runtime", version = "3.3.59" }
+alien-extension-sdk = { path = "crates/alien-extension-sdk", version = "3.3.59" }
 alien-manager = { path = "crates/alien-manager", version = "3.3.59" }
 alien-observer = { path = "crates/alien-observer", version = "3.3.59" }
 alien-tunnel = { path = "crates/alien-tunnel", version = "3.3.59" }
@@ -214,6 +229,7 @@ serde = "1.0.219"
 serde_json = "1.0.140"
 serde_path_to_error = "0.1"
 serde_yaml = "0.9"
+yaml-rust2 = "0.11"
 snapbox = "0.6"
 tar = "0.4"
 toml = "0.9"
@@ -255,6 +271,7 @@ workspace_root = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 pem = "3.0"
 oci-tar-builder = "0.4"
+sha1 = "0.10"
 sha2 = "0.10"
 slatedb = { version = "=0.13.0", default-features = false, features = ["moka"] }
 oauth2 = { version = "5.0", default-features = false, features = ["reqwest"] }
@@ -289,6 +306,10 @@ httpmock = { version = "0.7" }
 mockall = { version = "0.15.0" }
 hcl-rs = "0.19"
 crossterm = "0.29"
+# Extension hooks run in wasmtime with WASI defined by alien-hooks-runtime itself, so neither
+# wasmtime's default features nor wasmtime-wasi are needed.
+wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "parallel-compilation", "runtime", "std"] }
+wat = "1.263"
 
 # --- Patched dependencies ---
 # oci-client with chunked uploads that work against Amazon ECR; vendor/oci-client/Cargo.toml

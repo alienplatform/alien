@@ -5,6 +5,8 @@ edition = "2021"
 license-file.workspace = true
 [features]
 openapi = ["dep:utoipa"]
+# Hand-written hooks modules for tests of deployments with extensions.
+test-utils = ["dep:wat", "dep:alien-hooks-runtime"]
 
 [dependencies]
 # Core Alien crates
@@ -12,6 +14,8 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "kubernetes", "test", "local"] }
+alien-hooks-runtime = { workspace = true, optional = true }
+wat = { workspace = true, optional = true }
 alien-observer = { workspace = true, features = ["aws", "azure", "gcp", "kubernetes"] }
 alien-preflights = { workspace = true, features = ["runtime-checks"] }
 
@@ -52,6 +56,7 @@ utoipa = { version = "5", optional = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-deployment = { path = ".", features = ["test-utils"] }
 alien-client-core = { workspace = true }
 alien-local = { workspace = true }
 alien-permissions = { workspace = true }

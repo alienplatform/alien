@@ -2,7 +2,7 @@
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::{RequestBuilderExt, Result};
+use alien_client_core::Result;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -78,6 +78,7 @@ impl BedrockClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 

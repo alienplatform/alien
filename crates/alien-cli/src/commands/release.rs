@@ -129,6 +129,11 @@ pub struct ReleaseArgs {
     #[arg(long, value_delimiter = ',')]
     pub targets: Option<Vec<String>>,
 
+    /// Release an extension whose bundle lacks a controller binary the setup CLI package ships.
+    /// Direct setup on a machine of a missing target then fails, naming the target.
+    #[arg(long)]
+    pub allow_missing_controller_targets: bool,
+
     /// Override the Worker runtime base image used for source-built cloud Workers.
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
     pub override_base_image: Option<String>,
@@ -330,6 +335,8 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
 
 /// Resolved release configuration shared across human and JSON output paths.
 struct ReleaseConfig {
+    /// The project directory, under which the stack's generated extension modules are found.
+    project_dir: PathBuf,
     output_dir: PathBuf,
     /// Manager context — used for release creation in standalone/dev mode.
     /// In platform mode, releases are created directly on the platform API.
@@ -355,12 +362,17 @@ async fn load_source_stack_for_release(
         return Ok(None);
     }
 
-    crate::config::load_configuration(current_dir.to_path_buf())
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to load configuration".to_string(),
-        })
-        .map(Some)
+    // The extensions the stack lists build first, so the stack pins the bundles the release
+    // ships. A stack without extensions evaluates once and builds nothing.
+    crate::commands::extensions::release::evaluate_building_extensions(current_dir, &[], || async {
+        crate::config::load_configuration(current_dir.to_path_buf())
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to load configuration".to_string(),
+            })
+    })
+    .await
+    .map(Some)
 }
 
 /// Load and validate all release configuration from args + execution context.
@@ -537,6 +549,7 @@ async fn load_release_config(
     );
 
     Ok(ReleaseConfig {
+        project_dir: current_dir,
         output_dir,
         manager,
         workspace_name,
@@ -596,6 +609,7 @@ async fn release_task_core(
 ) -> Result<ReleaseResult> {
     let release_started = Instant::now();
     let ReleaseConfig {
+        project_dir,
         output_dir,
         manager,
         project_link,
@@ -613,6 +627,18 @@ async fn release_task_core(
         local: None,
         test: None,
     };
+    let release_platforms = platforms_to_release
+        .iter()
+        .filter_map(|platform| Platform::from_str(platform).ok())
+        .collect::<Vec<_>>();
+    let extension_checks = crate::commands::extensions::release::ReleaseChecks {
+        platforms: &release_platforms,
+        allow_missing_controller_targets: args.allow_missing_controller_targets,
+    };
+    // Found once a built stack lists an extension, so a stack without extensions walks nothing.
+    let mut extension_module_dirs: Option<Vec<PathBuf>> = None;
+    let mut checked_extensions = std::collections::HashSet::new();
+    let mut extension_uploads = Vec::new();
 
     for platform_str in &platforms_to_release {
         let platform_started = Instant::now();
@@ -630,6 +656,25 @@ async fn release_task_core(
         let mut built_stack = load_built_stack(&output_dir, platform_str)?;
         if args.prebuilt {
             check_prebuilt_stack(&built_stack, platform).await?;
+        }
+        let unchecked: Vec<_> = built_stack
+            .extensions
+            .iter()
+            .filter(|extension| checked_extensions.insert(extension.digest.clone()))
+            .cloned()
+            .collect();
+        if !unchecked.is_empty() {
+            let module_dirs = extension_module_dirs.get_or_insert_with(|| {
+                crate::commands::extensions::release::local_module_dirs(&project_dir)
+            });
+            extension_uploads.extend(
+                crate::commands::extensions::release::check_listed(
+                    &unchecked,
+                    module_dirs,
+                    &extension_checks,
+                )
+                .await?,
+            );
         }
 
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
@@ -690,6 +735,13 @@ async fn release_task_core(
                 commit_message: inner.commit_message.map(|s| s.to_string()),
             })
         });
+        crate::commands::extensions::upload::upload_to_manager(
+            &manager.http_client,
+            &manager.manager_url,
+            &project_link.project_id,
+            &extension_uploads,
+        )
+        .await?;
         create_manager_release(
             manager,
             &project_link.project_id,
@@ -703,6 +755,17 @@ async fn release_task_core(
         #[cfg(feature = "platform")]
         {
             let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+            if !extension_uploads.is_empty() {
+                let http = ctx.auth_http().await?;
+                crate::commands::extensions::upload::upload_to_platform(
+                    http.reqwest_client(),
+                    &http.base_url,
+                    workspace_query.as_deref(),
+                    &project_link.project_id,
+                    &extension_uploads,
+                )
+                .await?;
+            }
             create_platform_release(
                 ctx,
                 &project_link.project_id,
@@ -2852,6 +2915,7 @@ mod tests {
         ])
         .unwrap();
         let config = ReleaseConfig {
+            project_dir: output.path().to_path_buf(),
             output_dir,
             manager: None,
             workspace_name: "sample-workspace".to_string(),
@@ -2885,6 +2949,70 @@ mod tests {
         );
         built.assert_async().await;
         declared.assert_async().await;
+    }
+
+    // The extension checks run before any push or request, and only for a stack that lists an
+    // extension: the test above releases a stack without one, request for request as before.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_prebuilt_stack_whose_extension_bundle_is_missing_is_refused_before_any_request() {
+        let server = httpmock::MockServer::start_async().await;
+        let created = server
+            .mock_async(|when, then| {
+                when.method("POST").path("/v1/releases");
+                then.status(201);
+            })
+            .await;
+        let mut stack = Stack::new("prebuilt-app".to_string())
+            .add(test_container("writer", "registry.example.com/writer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()), ResourceLifecycle::Live)
+            .build();
+        stack.extensions.push(alien_core::ExtensionManifest {
+            name: "acme".to_string(),
+            version: "0.1.0".to_string(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            resource_types: Default::default(),
+        });
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().join(".alien");
+        let build_dir = output_dir.join("build/test");
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write(
+            build_dir.join("stack.json"),
+            serde_json::to_vec(&stack).unwrap(),
+        )
+        .unwrap();
+        let ctx = ExecutionMode::Platform {
+            base_url: server.base_url(),
+            api_key: Some("test-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let args = ReleaseArgs::try_parse_from(["release", "--prebuilt", "--no-promote"]).unwrap();
+        let config = ReleaseConfig {
+            project_dir: output.path().to_path_buf(),
+            output_dir,
+            manager: None,
+            workspace_name: "sample-workspace".to_string(),
+            project_link: crate::project_link::ProjectLink::new(
+                "sample-workspace".to_string(),
+                "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "sample".to_string(),
+            ),
+            git_metadata: None,
+            platforms: vec!["test".to_string()],
+            onboarding_inputs: vec![],
+        };
+        let error = release_task_core(args, config, &ctx)
+            .await
+            .expect_err("the bundle is missing");
+        assert!(
+            error
+                .to_string()
+                .contains("no generated module's folder has its bundle"),
+            "{error}"
+        );
+        created.assert_hits_async(0).await;
     }
 
     #[tokio::test]

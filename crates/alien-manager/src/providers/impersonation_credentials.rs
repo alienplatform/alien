@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use super::credential_errors::classify_credential_error;
 use crate::error::ErrorData;
 use crate::traits::{
-    CredentialResolver, DeploymentRecord, ManagementExternalIdSource,
+    CredentialResolver, DeploymentRecord, ExtensionIdentity, ManagementExternalIdSource,
     RemoteStorageCredentialSource, ResolvedCredentials,
 };
 
@@ -74,7 +74,7 @@ impl ImpersonationCredentialResolver {
 
     /// The ExternalId for an AWS deployment. Other platforms have no
     /// equivalent, so they never trigger a lookup.
-    async fn management_external_id(
+    async fn aws_external_id(
         &self,
         deployment: &DeploymentRecord,
     ) -> Result<Option<ManagementExternalId>, AlienError> {
@@ -161,7 +161,7 @@ impl ImpersonationCredentialResolver {
                     deployment.management_config.as_ref(),
                 )
                 .await?;
-                let external_id = self.management_external_id(deployment).await?;
+                let external_id = self.aws_external_id(deployment).await?;
                 resolver
                     .resolve(
                         base_config,
@@ -191,6 +191,13 @@ impl ImpersonationCredentialResolver {
 
 #[async_trait]
 impl CredentialResolver for ImpersonationCredentialResolver {
+    async fn management_external_id(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<Option<ManagementExternalId>, AlienError> {
+        self.aws_external_id(deployment).await
+    }
+
     async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         self.resolve_from_env(deployment, std::env::vars().collect())
             .await
@@ -313,7 +320,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                 deployment.management_config.as_ref(),
             )
             .await?;
-            let external_id = self.management_external_id(deployment).await?;
+            let external_id = self.aws_external_id(deployment).await?;
             resolver
                 .resolve_remote_bindings(
                     base,
@@ -366,6 +373,59 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         })?;
 
         Ok(Some(management_config_from_info(info, &self.environment)?))
+    }
+
+    async fn resolve_extension_credentials(
+        &self,
+        deployment: &DeploymentRecord,
+        identity: &ExtensionIdentity,
+    ) -> Result<alien_infra::step_protocol::protocol::Credentials, AlienError> {
+        use super::extension_credentials::{check_identity, mint, MintSource};
+
+        let platform = deployment.platform;
+        if !self.management_binding_platforms.contains(&platform) {
+            return Err(AlienError::new(GenericError {
+                message: format!(
+                    "Extension '{}' runs as its own identity, which trusts the manager's management identity, and this manager has none for {platform}",
+                    identity.extension
+                ),
+            }));
+        }
+        // Before the managing role is assumed for it, or anything else is asked of the cloud.
+        check_identity(deployment, identity)?;
+        let provider = self.provider_for_target(platform);
+        let external_id = self.aws_external_id(deployment).await?;
+        let source = match platform {
+            Platform::Aws => MintSource::Aws {
+                base: impersonate_management_sa_trusted_by(
+                    &**provider,
+                    platform,
+                    &deployment.id,
+                    deployment.management_config.as_ref(),
+                )
+                .await?,
+                external_id: external_id.as_ref(),
+            },
+            Platform::Gcp => MintSource::Gcp {
+                source: super::gcp_federation::assertion_source(&**provider, &self.environment)
+                    .await?,
+            },
+            Platform::Azure => MintSource::Azure {
+                environment: &self.environment,
+                management: self
+                    .resolve_from_env(deployment, self.environment.clone())
+                    .await?,
+            },
+            other => {
+                return Err(AlienError::new(GenericError {
+                    message: format!(
+                        "Extension '{}' has no identity on {other}",
+                        identity.extension
+                    ),
+                }))
+            }
+        };
+        mint(deployment, identity, source).await
     }
 }
 
@@ -1495,5 +1555,680 @@ mod tests {
             &aws.credentials,
             AwsCredentials::SessionCredentials { access_key_id, .. } if access_key_id == "ASIACUSTOMER"
         ));
+    }
+
+    use crate::traits::ExtensionIdentity;
+    use alien_infra::step_protocol::protocol::Credentials;
+
+    const AWS_EXTENSION_ROLE: &str = "arn:aws:iam::210987654321:role/test-prefix-acme-ext";
+
+    fn acme(identity: &str) -> ExtensionIdentity {
+        ExtensionIdentity {
+            extension: "acme".to_string(),
+            id: "acme-ext".to_string(),
+            identity: identity.to_string(),
+        }
+    }
+
+    /// The service account setup creates for acme in [`gcp_handoff_deployment`]'s project.
+    fn acme_gcp_account() -> String {
+        format!(
+            "{}@target-project.iam.gserviceaccount.com",
+            alien_core::extension_identity_gcp_account_id("test-prefix", "acme-ext")
+        )
+    }
+
+    /// The extension's role is assumed from the managing role, which its trust names, for STS's
+    /// 900-second minimum and with the deployment's ExternalId. The customer's management role
+    /// takes no part.
+    #[tokio::test]
+    async fn an_extension_role_is_assumed_from_the_managing_role_with_the_external_id() {
+        let server = httpmock::MockServer::start_async().await;
+        let managing = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).body_contains(format!(
+                    "RoleArn={}",
+                    urlencoding::encode(AWS_MANAGEMENT_ROLE)
+                ));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_MANAGEMENT_ROLE, "ASIAMANAGER"));
+            })
+            .await;
+        let extension = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains(format!(
+                        "RoleArn={}",
+                        urlencoding::encode(AWS_EXTENSION_ROLE)
+                    ))
+                    .body_contains("DurationSeconds=900")
+                    .body_contains(format!("ExternalId={AWS_EXTERNAL_ID}"));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_EXTENSION_ROLE, "ASIAEXTENSION"));
+            })
+            .await;
+        let customer = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains(format!("RoleArn={}", urlencoding::encode(AWS_TARGET_ROLE)));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_TARGET_ROLE, "ASIACUSTOMER"));
+            })
+            .await;
+
+        let credentials = aws_resolver(
+            server.base_url(),
+            FixedExternalId(Some(ManagementExternalId::new(AWS_EXTERNAL_ID).unwrap())),
+        )
+        .resolve_extension_credentials(&aws_running_deployment(), &acme(AWS_EXTENSION_ROLE))
+        .await
+        .unwrap();
+
+        managing.assert_async().await;
+        extension.assert_async().await;
+        customer.assert_hits_async(0).await;
+        assert_eq!(
+            credentials,
+            Credentials::Aws {
+                account_id: "210987654321".to_string(),
+                region: "us-east-2".to_string(),
+                access_key_id: "ASIAEXTENSION".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: Some("token".to_string()),
+                expires_at: Some("2026-05-27T11:00:00Z".to_string()),
+            }
+        );
+    }
+
+    /// A role ARN in the deployment's state names a role in the deployment's own account, or
+    /// nothing is assumed, not even the managing role.
+    #[tokio::test]
+    async fn an_extension_role_in_another_account_is_never_assumed() {
+        const ELSEWHERE: &str = "arn:aws:iam::999999999999:role/test-prefix-acme-ext";
+        let server = httpmock::MockServer::start_async().await;
+        let managing = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).body_contains(format!(
+                    "RoleArn={}",
+                    urlencoding::encode(AWS_MANAGEMENT_ROLE)
+                ));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_MANAGEMENT_ROLE, "ASIAMANAGER"));
+            })
+            .await;
+        let elsewhere = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains(format!("RoleArn={}", urlencoding::encode(ELSEWHERE)));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(ELSEWHERE, "ASIAELSEWHERE"));
+            })
+            .await;
+
+        let error = aws_resolver(server.base_url(), FixedExternalId(None))
+            .resolve_extension_credentials(&aws_running_deployment(), &acme(ELSEWHERE))
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("not in the deployment's account"),
+            "{error}"
+        );
+        managing.assert_hits_async(0).await;
+        elsewhere.assert_hits_async(0).await;
+    }
+
+    /// The extension's service account is impersonated with the management pool's federated
+    /// token, which its workload identity binding trusts, for at most an hour.
+    #[tokio::test]
+    async fn an_extension_service_account_is_impersonated_through_the_management_pool() {
+        let extension_sa = acme_gcp_account();
+        let extension_sa = extension_sa.as_str();
+        let server = httpmock::MockServer::start_async().await;
+        let assertion = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path_contains(
+                    "management%40managing-project.iam.gserviceaccount.com:generateIdToken",
+                );
+                then.status(200)
+                    .json_body(serde_json::json!({ "token": "manager-assertion" }));
+            })
+            .await;
+        let exchange = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/token")
+                    .body_contains("subject_token=manager-assertion");
+                then.status(200).json_body(serde_json::json!({
+                    "access_token": "federated-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                    "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"
+                }));
+            })
+            .await;
+        let expires = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let impersonation = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path_contains(format!(
+                        "{}:generateAccessToken",
+                        urlencoding::encode(extension_sa)
+                    ))
+                    .header("authorization", "Bearer federated-token")
+                    .body_contains("3600s");
+                then.status(200).json_body(serde_json::json!({
+                    "accessToken": "extension-token",
+                    "expireTime": expires
+                }));
+            })
+            .await;
+        let base_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "source-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([
+                    ("iamcredentials".to_string(), server.url("/v1/")),
+                    ("sts".to_string(), server.url("/v1/token")),
+                ]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(
+                base_config,
+                HashMap::from([(
+                    "management".to_string(),
+                    serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                        "management@managing-project.iam.gserviceaccount.com",
+                        "123456789012345678901",
+                    ))
+                    .unwrap(),
+                )]),
+            )
+            .unwrap(),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        )
+        .with_environment(HashMap::new());
+
+        let credentials = resolver
+            .resolve_extension_credentials(&gcp_handoff_deployment(), &acme(extension_sa))
+            .await
+            .unwrap_or_else(|error| panic!("{error:?}"));
+
+        assertion.assert_async().await;
+        exchange.assert_async().await;
+        impersonation.assert_async().await;
+        let Credentials::Gcp {
+            project_id,
+            access_token,
+            expires_at,
+            ..
+        } = credentials
+        else {
+            panic!("{credentials:?}");
+        };
+        assert_eq!(project_id, "target-project");
+        assert_eq!(access_token, "extension-token");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(&expires_at).unwrap(),
+            chrono::DateTime::parse_from_rfc3339(&expires).unwrap()
+        );
+    }
+
+    /// A manager without the management identity for a deployment's cloud mints nothing, so
+    /// the step fails instead of running with other credentials.
+    #[tokio::test]
+    async fn a_cloud_without_a_management_identity_mints_nothing() {
+        let error = aws_resolver("http://127.0.0.1:9".to_string(), FixedExternalId(None))
+            .resolve_extension_credentials(&gcp_handoff_deployment(), &acme("sa@x"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("has none for gcp"), "{error}");
+    }
+
+    /// A deployment's AWS, GCP and Azure resolvers whose every cloud call goes to `server`.
+    fn resolvers(server: &httpmock::MockServer) -> [ImpersonationCredentialResolver; 3] {
+        let gcp_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "source-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([
+                    ("iamcredentials".to_string(), server.url("/v1/")),
+                    ("sts".to_string(), server.url("/v1/token")),
+                ]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let gcp: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(
+                gcp_config,
+                HashMap::from([(
+                    "management".to_string(),
+                    serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                        "management@managing-project.iam.gserviceaccount.com",
+                        "123456789012345678901",
+                    ))
+                    .unwrap(),
+                )]),
+            )
+            .unwrap(),
+        );
+        let azure: Arc<dyn BindingsProviderApi> =
+            Arc::new(BindingsProvider::new(ClientConfig::Test, HashMap::new()).unwrap());
+        [
+            aws_resolver(server.base_url(), FixedExternalId(None)),
+            ImpersonationCredentialResolver::new(
+                gcp.clone(),
+                HashMap::from([(Platform::Gcp, gcp)]),
+                HashSet::from([Platform::Gcp]),
+            )
+            .with_environment(HashMap::new()),
+            ImpersonationCredentialResolver::new(
+                azure.clone(),
+                HashMap::from([(Platform::Azure, azure)]),
+                HashSet::from([Platform::Azure]),
+            )
+            .with_environment(HashMap::from([
+                (
+                    "AZURE_FEDERATED_TOKEN_FILE".to_string(),
+                    "/nonexistent/token".to_string(),
+                ),
+                ("AZURE_AUTHORITY_HOST".to_string(), server.base_url()),
+            ])),
+        ]
+    }
+
+    /// An Azure deployment in tenant `customer-tenant` whose management access names `tenant`.
+    fn azure_deployment(tenant: &str) -> DeploymentRecord {
+        let mut deployment = gcp_handoff_deployment();
+        deployment.platform = Platform::Azure;
+        deployment.environment_info = Some(EnvironmentInfo::Azure(AzureEnvironmentInfo {
+            tenant_id: "customer-tenant".to_string(),
+            subscription_id: "customer-subscription".to_string(),
+            location: "eastus".to_string(),
+        }));
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("management")
+            .unwrap()
+            .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            management_resource_id: "management-identity".to_string(),
+            access_configuration: serde_json::json!({
+                "uamiClientId": "management-client-id",
+                "tenantId": tenant
+            })
+            .to_string(),
+            legacy_remote_bindings_access: None,
+        }));
+        deployment
+    }
+
+    /// Refuses `identity` in `deployment` through `resolver`, with nothing asked of any cloud.
+    async fn refused_without_a_call(
+        server: &httpmock::MockServer,
+        resolver: &ImpersonationCredentialResolver,
+        deployment: &DeploymentRecord,
+        identity: &str,
+    ) -> String {
+        let any = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500);
+            })
+            .await;
+        let error = resolver
+            .resolve_extension_credentials(deployment, &acme(identity))
+            .await
+            .expect_err(identity)
+            .to_string();
+        any.assert_hits_async(0).await;
+        any.delete_async().await;
+        error
+    }
+
+    /// An identity whose outputs name the deployment's management role, service account or
+    /// managed identity is refused on every cloud before anything is assumed, so management
+    /// credentials never reach a controller.
+    #[tokio::test]
+    async fn the_management_identity_is_never_minted_for_an_extension() {
+        let server = httpmock::MockServer::start_async().await;
+        let [aws, gcp, azure] = resolvers(&server);
+        for (resolver, deployment, identity) in [
+            (&aws, aws_running_deployment(), AWS_TARGET_ROLE),
+            (
+                &gcp,
+                gcp_handoff_deployment(),
+                "deployment@target-project.iam.gserviceaccount.com",
+            ),
+            (
+                &azure,
+                azure_deployment("customer-tenant"),
+                "management-client-id",
+            ),
+        ] {
+            let error = refused_without_a_call(&server, resolver, &deployment, identity).await;
+            assert!(
+                error.contains("is the deployment's management identity"),
+                "{identity}: {error}"
+            );
+        }
+    }
+
+    /// A role or service account other than the one setup names after the deployment's prefix
+    /// is never assumed, even in the deployment's own account or project.
+    #[tokio::test]
+    async fn an_identity_setup_did_not_name_is_never_minted() {
+        let server = httpmock::MockServer::start_async().await;
+        let [aws, gcp, _] = resolvers(&server);
+        let error = refused_without_a_call(
+            &server,
+            &aws,
+            &aws_running_deployment(),
+            "arn:aws:iam::210987654321:role/admin",
+        )
+        .await;
+        assert!(
+            error.contains("not the role setup creates for it"),
+            "{error}"
+        );
+        let error = refused_without_a_call(
+            &server,
+            &gcp,
+            &gcp_handoff_deployment(),
+            "owner@target-project.iam.gserviceaccount.com",
+        )
+        .await;
+        assert!(
+            error.contains("not the one setup creates for it"),
+            "{error}"
+        );
+    }
+
+    /// A service account in another project, or a deployment whose project number isn't the
+    /// management access's, is never impersonated.
+    #[tokio::test]
+    async fn an_extension_service_account_in_another_project_is_never_impersonated() {
+        let server = httpmock::MockServer::start_async().await;
+        let [_, gcp, _] = resolvers(&server);
+        let elsewhere = acme_gcp_account().replace("@target-project.", "@other-project.");
+        let error =
+            refused_without_a_call(&server, &gcp, &gcp_handoff_deployment(), &elsewhere).await;
+        assert!(error.contains("not in the deployment's project"), "{error}");
+
+        let mut renumbered = gcp_handoff_deployment();
+        if let Some(EnvironmentInfo::Gcp(environment)) = &mut renumbered.environment_info {
+            environment.project_number = "111111111".to_string();
+        }
+        let error = refused_without_a_call(&server, &gcp, &renumbered, &acme_gcp_account()).await;
+        assert!(error.contains("not in the deployment's project"), "{error}");
+    }
+
+    /// A management access in another tenant than the deployment's sends no token request, and
+    /// the refusal names both tenants.
+    #[tokio::test]
+    async fn an_azure_identity_in_another_tenant_is_never_minted() {
+        let server = httpmock::MockServer::start_async().await;
+        let [_, _, azure] = resolvers(&server);
+        let error = refused_without_a_call(
+            &server,
+            &azure,
+            &azure_deployment("other-tenant"),
+            "extension-client-id",
+        )
+        .await;
+        assert!(
+            error.contains("other-tenant") && error.contains("customer-tenant"),
+            "{error}"
+        );
+    }
+
+    const AZURE_TENANT: &str = "6c1b1a8e-1f2b-4a5e-9d3c-0a1b2c3d4e5f";
+    const ACME_CLIENT_ID: &str = "0a7d6c8e-3b1f-4c2a-8e9d-111111111111";
+    const OTHER_MANAGEMENT_CLIENT_ID: &str = "0a7d6c8e-3b1f-4c2a-8e9d-222222222222";
+    const BILLING_CLIENT_ID: &str = "0a7d6c8e-3b1f-4c2a-8e9d-333333333333";
+
+    /// An Azure deployment with prefix `test-prefix`, resource group `rg-a` and its management
+    /// identity, in tenant [`AZURE_TENANT`].
+    fn azure_pinned_deployment() -> DeploymentRecord {
+        let mut deployment = azure_deployment(AZURE_TENANT);
+        deployment.environment_info = Some(EnvironmentInfo::Azure(AzureEnvironmentInfo {
+            tenant_id: AZURE_TENANT.to_string(),
+            subscription_id: "customer-subscription".to_string(),
+            location: "eastus".to_string(),
+        }));
+        let group =
+            alien_core::AzureResourceGroup::new("default-resource-group".to_string()).build();
+        deployment.stack_state.as_mut().unwrap().resources.insert(
+            "default-resource-group".to_string(),
+            StackResourceState::builder()
+                .resource_type(alien_core::AzureResourceGroup::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(group))
+                .outputs(ResourceOutputs::new(
+                    alien_core::AzureResourceGroupOutputs {
+                        name: "rg-a".to_string(),
+                        resource_id: "/subscriptions/customer-subscription/resourceGroups/rg-a"
+                            .to_string(),
+                        location: "eastus".to_string(),
+                    },
+                ))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+        deployment
+    }
+
+    /// Mints `identity` for [`azure_pinned_deployment`], where ARM says acme's managed identity
+    /// `test-prefix-acme-ext` has client id [`ACME_CLIENT_ID`]. Returns the result and how many
+    /// token requests reached the authority host.
+    async fn mint_pinned_azure(identity: &str) -> (Result<Credentials, AlienError>, usize) {
+        mint_pinned_azure_in(identity, AZURE_TENANT, 200).await
+    }
+
+    /// [`mint_pinned_azure`], where ARM puts the identity in `arm_tenant`.
+    async fn mint_pinned_azure_in(
+        identity: &str,
+        arm_tenant: &str,
+        arm_status: u16,
+    ) -> (Result<Credentials, AlienError>, usize) {
+        mint_pinned_azure_after(identity, arm_tenant, arm_status, std::time::Duration::ZERO).await
+    }
+
+    /// [`mint_pinned_azure_in`], where ARM answers after `arm_delay`.
+    async fn mint_pinned_azure_after(
+        identity: &str,
+        arm_tenant: &str,
+        arm_status: u16,
+        arm_delay: std::time::Duration,
+    ) -> (Result<Credentials, AlienError>, usize) {
+        use base64::Engine as _;
+        let server = httpmock::MockServer::start_async().await;
+        let arm = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/subscriptions/customer-subscription/resourceGroups/rg-a/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-prefix-acme-ext")
+                    .header("authorization", "Bearer management-token");
+                let then = then.delay(arm_delay);
+                if arm_status != 200 {
+                    then.status(arm_status)
+                        .json_body(serde_json::json!({ "error": { "code": "Failed", "message": "synthetic" } }));
+                    return;
+                }
+                then.status(200).json_body(serde_json::json!({
+                    "id": "/subscriptions/customer-subscription/resourceGroups/rg-a/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-prefix-acme-ext",
+                    "name": "test-prefix-acme-ext",
+                    "location": "eastus",
+                    "properties": {
+                        "clientId": ACME_CLIENT_ID,
+                        "principalId": "9f9f9f9f-0000-4000-8000-000000000001",
+                        "tenantId": arm_tenant
+                    }
+                }));
+            })
+            .await;
+        let exp = (Utc::now() + chrono::Duration::minutes(75)).timestamp();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::json!({ "exp": exp }).to_string());
+        let token = format!("header.{payload}.signature");
+        let exchange = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path(format!("/{AZURE_TENANT}/oauth2/v2.0/token"))
+                    .body_contains("client_assertion=manager-federated-token");
+                then.status(200).json_body(serde_json::json!({
+                    "access_token": token,
+                    "expires_in": 4500,
+                    "token_type": "Bearer"
+                }));
+            })
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let token_file = directory.path().join("token");
+        std::fs::write(&token_file, "manager-federated-token").unwrap();
+        let environment = HashMap::from([
+            (
+                "AZURE_FEDERATED_TOKEN_FILE".to_string(),
+                token_file.to_string_lossy().to_string(),
+            ),
+            ("AZURE_AUTHORITY_HOST".to_string(), server.base_url()),
+        ]);
+        let management = ClientConfig::Azure(Box::new(AzureClientConfig {
+            subscription_id: "customer-subscription".to_string(),
+            tenant_id: AZURE_TENANT.to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "management-token".to_string(),
+            },
+            service_overrides: Some(alien_core::AzureServiceOverrides {
+                endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+            }),
+        }));
+        let minted = super::super::extension_credentials::mint(
+            &azure_pinned_deployment(),
+            &acme(identity),
+            super::super::extension_credentials::MintSource::Azure {
+                environment: &environment,
+                management,
+            },
+        )
+        .await;
+        assert!(arm.hits_async().await >= 1, "ARM is asked");
+        (minted, exchange.hits_async().await)
+    }
+
+    /// The managed identity ARM names `test-prefix-acme-ext`, read as the deployment's
+    /// management identity, is the one minted for, by exchanging the manager's federated token.
+    #[tokio::test]
+    async fn the_managed_identity_arm_names_for_the_extension_is_minted() {
+        let (minted, exchanges) = mint_pinned_azure(ACME_CLIENT_ID).await;
+        let Credentials::Azure {
+            subscription_id,
+            tenant_id,
+            expires_at,
+            ..
+        } = minted.unwrap_or_else(|error| panic!("{error:?}"))
+        else {
+            panic!("Azure credentials")
+        };
+        assert_eq!(exchanges, 1);
+        assert_eq!(subscription_id, "customer-subscription");
+        assert_eq!(tenant_id, AZURE_TENANT);
+        assert!(chrono::DateTime::parse_from_rfc3339(&expires_at).is_ok());
+    }
+
+    /// Another deployment's management identity, which trusts the same federated token in the
+    /// tenant, is refused: ARM says acme's identity has another client id, and no token is
+    /// requested.
+    #[tokio::test]
+    async fn another_deployments_management_identity_is_never_minted_on_azure() {
+        let (minted, exchanges) = mint_pinned_azure(OTHER_MANAGEMENT_CLIENT_ID).await;
+        let error = minted.expect_err("refused").to_string();
+        assert!(
+            error.contains("is not the client id of its managed identity"),
+            "{error}"
+        );
+        assert_eq!(exchanges, 0);
+    }
+
+    /// Another extension's identity in the same deployment is refused the same way.
+    #[tokio::test]
+    async fn another_extensions_identity_is_never_minted_on_azure() {
+        let (minted, exchanges) = mint_pinned_azure(BILLING_CLIENT_ID).await;
+        let error = minted.expect_err("refused").to_string();
+        assert!(
+            error.contains("is not the client id of its managed identity"),
+            "{error}"
+        );
+        assert_eq!(exchanges, 0);
+    }
+
+    /// An identity ARM places in another tenant than the deployment's is refused, naming both.
+    #[tokio::test]
+    async fn an_identity_arm_places_in_another_tenant_is_never_minted() {
+        let (minted, exchanges) =
+            mint_pinned_azure_in(ACME_CLIENT_ID, "7d2c2b9f-2a3c-4b6f-8e4d-1b2c3d4e5f60", 200).await;
+        let error = minted.expect_err("refused").to_string();
+        assert!(
+            error.contains("7d2c2b9f-2a3c-4b6f-8e4d-1b2c3d4e5f60") && error.contains(AZURE_TENANT),
+            "{error}"
+        );
+        assert_eq!(exchanges, 0);
+    }
+
+    /// ARM throttling or an ARM outage fails the step for a retry; ARM refusing the read, or
+    /// having no such identity, fails it for good. No token is requested either way.
+    #[tokio::test]
+    async fn an_arm_throttle_or_outage_is_retried_and_a_refusal_is_not() {
+        for (status, retryable) in [(429, true), (503, true), (403, false), (404, false)] {
+            let (minted, exchanges) =
+                mint_pinned_azure_in(ACME_CLIENT_ID, AZURE_TENANT, status).await;
+            let error = minted.expect_err("the read failed");
+            assert_eq!(error.retryable, retryable, "ARM {status}: {error}");
+            assert_eq!(exchanges, 0, "ARM {status}");
+        }
+    }
+
+    /// An ARM read that stalls fails the step for a retry once the read's limit passes, retries
+    /// included, before the step's own deadline.
+    #[tokio::test]
+    async fn a_stalled_arm_read_times_out() {
+        let started = std::time::Instant::now();
+        let (minted, exchanges) = mint_pinned_azure_after(
+            ACME_CLIENT_ID,
+            AZURE_TENANT,
+            200,
+            std::time::Duration::from_secs(60),
+        )
+        .await;
+        let error = minted.expect_err("the read timed out");
+        assert!(error.retryable, "a stalled read is retried: {error}");
+        assert_eq!(exchanges, 0);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(55),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }

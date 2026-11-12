@@ -20,7 +20,9 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, PermissionSet, Result, ServiceAccount};
+use alien_core::{
+    import::EmitContext, ErrorData, PermissionSet, RemoteStackManagement, Result, ServiceAccount,
+};
 use alien_error::AlienError;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
@@ -47,19 +49,59 @@ impl TfEmitter for GcpServiceAccountEmitter {
                 attr("account_id", account_id_template),
                 attr(
                     "display_name",
-                    expr::template(format!(
-                        "${{local.deployment_name}}: Runtime service account ({})",
-                        service_account.id
-                    )),
+                    expr::template(match &service_account.extension {
+                        Some(extension) => format!(
+                            "${{local.deployment_name}}: {}",
+                            alien_core::extension_identity_display_name(extension)
+                        ),
+                        None => format!(
+                            "${{local.deployment_name}}: Runtime service account ({})",
+                            service_account.id
+                        ),
+                    }),
                 ),
                 attr(
                     "description",
-                    expr::template(format!(
-                        "Runtime cloud identity for ${{local.deployment_name}}. Resource prefix: ${{local.resource_prefix}}. Resource: {label}."
-                    )),
+                    expr::template(match &service_account.extension {
+                        Some(extension) => format!(
+                            "{} for ${{local.deployment_name}}. Resource prefix: ${{local.resource_prefix}}. Resource: {label}.",
+                            alien_core::extension_identity_display_name(extension)
+                        ),
+                        None => format!(
+                            "Runtime cloud identity for ${{local.deployment_name}}. Resource prefix: ${{local.resource_prefix}}. Resource: {label}."
+                        ),
+                    }),
                 ),
             ],
         ));
+
+        // On Kubernetes the Kubernetes identity overlay lets the pod of the extension's
+        // controller impersonate it instead.
+        if let Some(extension) = service_account
+            .extension
+            .as_ref()
+            .filter(|_| !ctx.targets_kubernetes)
+        {
+            let management = ctx
+                .stack
+                .resources()
+                .find(|(_, entry)| {
+                    entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+                })
+                .and_then(|(id, _)| ctx.name_for(id))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "the identity of the extension '{extension}' trusts the manager through the management identity's federation, and the stack has no management identity"
+                        ),
+                    })
+                })?;
+            super::federation::trust_manager(
+                &mut fragment,
+                label,
+                &super::federation::pool_label(management),
+            );
+        }
 
         // Member expression for re-use by all bindings.
         let member = service_account_member_for_label(label);

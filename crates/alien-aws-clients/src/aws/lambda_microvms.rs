@@ -560,6 +560,7 @@ impl LambdaMicrovmsClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 
@@ -1785,7 +1786,10 @@ mod live_image_create {
             .sign_aws_request(&client.sign_config())
             .expect("signing");
 
-        let response = signed.send().await.expect("the request should reach AWS");
+        let response = signed
+            .send_raw()
+            .await
+            .expect("the request should reach AWS");
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         println!("STATUS: {status}");
@@ -1832,7 +1836,10 @@ mod live_image_create {
             .sign_aws_request(&client.sign_config())
             .expect("signing");
 
-        let response = signed.send().await.expect("the request should reach AWS");
+        let response = signed
+            .send_raw()
+            .await
+            .expect("the request should reach AWS");
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         println!("STATUS: {status}");

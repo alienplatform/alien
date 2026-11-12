@@ -18,7 +18,7 @@ use alien_core::{
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
     KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
-    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    ServiceAccount, ServiceAccountOutputs, SetupFormat, Stack, StackSettings, Worker, WorkerCode,
     ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -250,7 +250,7 @@ fn generate_helm_chart_internal(
     );
     let stack = &platform_stack;
     let chart_name = sanitize_chart_name(&options.chart_name);
-    let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
+    let analysis = ChartAnalysis::from_stack(stack, Some(options.registry))?;
 
     let stack_json = to_stable_pretty_json(stack).context(ErrorData::JsonSerializationFailed {
         reason: "failed to serialize stack into chart metadata".to_string(),
@@ -2230,8 +2230,8 @@ fn generate_operator_manifest_inner(
 pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
     validate_runtime_encryption_key(options.runtime_encryption_key)?;
 
-    let registry = HelmRegistry::built_in();
-    let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
+    // These values name no infrastructure, so no emitter runs.
+    let analysis = ChartAnalysis::from_stack(options.stack, None)?;
     let mut yaml = String::new();
 
     yaml.push_str("management:\n");
@@ -3772,7 +3772,10 @@ struct KubernetesRoleRule {
 }
 
 impl ChartAnalysis {
-    fn from_stack(stack: &Stack, registry: &HelmRegistry) -> Result<Self> {
+    /// Reads what a chart needs from `stack`. With `registry`, it also runs each frozen
+    /// resource's Helm emitter; without one, it skips them, for callers that read only the
+    /// stack's service accounts and services.
+    fn from_stack(stack: &Stack, registry: Option<&HelmRegistry>) -> Result<Self> {
         let mut analysis = Self {
             postgres: crate::postgres::values(stack),
             ..Self::default()
@@ -3781,6 +3784,12 @@ impl ChartAnalysis {
             analysis
                 .extra_templates
                 .insert("sandbox-gateway-access.yaml".into(), access);
+        }
+        if !stack.extensions.is_empty() {
+            analysis.extra_templates.insert(
+                "extension-controllers-networkpolicy.yaml".into(),
+                crate::emitters::extension_controllers::network_policy(),
+            );
         }
 
         let mut service_accounts = stack
@@ -3831,6 +3840,16 @@ impl ChartAnalysis {
             if let Some(build) = entry.config.downcast_ref::<alien_core::Build>() {
                 service_accounts.insert(build.permissions.clone());
             }
+            // An extension's controller runs in a pod of its own, as the extension's identity.
+            if let Some(identity) = entry
+                .config
+                .downcast_ref::<ServiceAccount>()
+                .filter(|account| account.extension.is_some())
+            {
+                service_accounts.insert(alien_core::permission_profile_from_service_account_id(
+                    identity.id(),
+                ));
+            }
             if entry.config.downcast_ref::<alien_core::Sandbox>().is_some() {
                 analysis.sandbox_broker = true;
             }
@@ -3845,7 +3864,22 @@ impl ChartAnalysis {
             }
 
             let resource_type = entry.config.resource_type();
-            let Some(emitter) = registry.emitter(&resource_type, Platform::Kubernetes) else {
+            stack.check_setup_format(
+                resource_id,
+                &resource_type,
+                SetupFormat::Helm,
+                Platform::Kubernetes,
+            )?;
+            let Some(registry) = registry else {
+                continue;
+            };
+            // A custom type whose descriptor lists Helm must have its emitter.
+            let emitter = if stack.descriptor(&resource_type).is_some() {
+                Some(registry.require(&resource_type, Platform::Kubernetes)?)
+            } else {
+                registry.emitter(&resource_type, Platform::Kubernetes)
+            };
+            let Some(emitter) = emitter else {
                 continue;
             };
 

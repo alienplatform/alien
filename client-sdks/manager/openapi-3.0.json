@@ -7321,6 +7321,96 @@
           }
         }
       },
+      "CustomExternalBinding": {
+        "type": "object",
+        "description": "A binding to an existing resource of a type an extension defines, such as a DNS zone the\ncustomer already has. Its fields are the resource's outputs, as the type's descriptor declares\nthem in `schemas.outputs`.",
+        "required": [
+          "type",
+          "service"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "The service the existing resource lives in, such as `route53`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/CustomResourceType",
+            "description": "The extension's type, such as `acme/dns-zone`."
+          }
+        },
+        "additionalProperties": {
+          "description": "The resource's outputs, such as its `zoneId`."
+        }
+      },
+      "CustomHeartbeat": {
+        "type": "object",
+        "description": "The heartbeat of a resource whose type an extension defines.",
+        "required": [
+          "resourceType",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CustomHeartbeatData"
+          },
+          "resourceType": {
+            "$ref": "#/components/schemas/CustomResourceType"
+          }
+        }
+      },
+      "CustomHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "details": {
+            "type": "object",
+            "description": "Type-specific fields the extension's controller reports, which Alien does not read.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/CustomHeartbeatStatus"
+          }
+        }
+      },
+      "CustomHeartbeatStatus": {
+        "type": "object",
+        "description": "The status fields every heartbeat carries, so a custom heartbeat's health reads like a\nbuilt-in one's.",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
       "CustomPluginOperationsConfig": {
         "allOf": [
           {
@@ -7346,6 +7436,11 @@
           }
         ],
         "description": "A published custom plugin at an exact version."
+      },
+      "CustomResourceType": {
+        "type": "string",
+        "description": "The type of a resource an extension defines, such as `acme/dns-zone`.",
+        "pattern": "^(?!(?:alien|experimental)/)[^/]+/.+$"
       },
       "DaemonHeartbeatData": {
         "oneOf": [
@@ -8346,6 +8441,9 @@
               }
             ],
             "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+          },
+          {
+            "$ref": "#/components/schemas/CustomExternalBinding"
           }
         ],
         "description": "Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor."
@@ -17423,6 +17521,22 @@
                 "enum": [
                   "sandbox"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The heartbeat of a resource whose type an extension defines.",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CustomHeartbeatData"
+              },
+              "resourceType": {
+                "$ref": "#/components/schemas/CustomResourceType"
               }
             }
           }

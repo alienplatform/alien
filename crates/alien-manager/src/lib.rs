@@ -38,6 +38,8 @@ pub mod commands;
 pub mod config;
 mod credential_materialization;
 pub mod error;
+pub mod extension_bundles;
+pub mod extension_controllers;
 pub(crate) mod generated_inputs;
 pub(crate) mod ids;
 pub mod registry;

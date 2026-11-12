@@ -47,6 +47,10 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use tracing::{debug, error, info, warn};
 
+/// The `Symbol.for` key of the global list each generated extension module adds itself to when
+/// it is imported, as `{ name, url }`. `alien extensions build` writes the module that adds to it.
+pub const EXTENSION_MODULES_KEY: &str = "alien.extensionModules";
+
 /// JavaScript runtime for executing TypeScript configurations
 #[derive(Debug, Clone)]
 pub enum JavaScriptRuntime {
@@ -74,8 +78,108 @@ impl JavaScriptRuntime {
 /// Searches for configuration files in directories.
 ///
 /// Resolution order: `alien.ts`, `alien.js`, `alien.json`, `alien.toml`.
-#[alien_event(AlienEvent::LoadingConfiguration)]
 pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
+    Ok(load_configuration_and_extension_modules(config_path)
+        .await?
+        .stack)
+}
+
+/// A stack configuration, and the extension modules evaluating it imported.
+#[derive(Debug)]
+pub struct LoadedConfiguration {
+    pub stack: Stack,
+    /// The file the stack was loaded from: alien.ts, alien.js, alien.json or alien.toml.
+    pub config_file: PathBuf,
+    /// Each generated extension module the configuration imported, in import order. A JSON or
+    /// TOML configuration imports none.
+    pub extension_modules: Vec<ExtensionModule>,
+}
+
+/// A module `alien extensions build` generated, which recorded where it sits when it was
+/// imported.
+#[derive(Debug, serde::Deserialize)]
+pub struct ExtensionModule {
+    /// The extension's name.
+    pub name: String,
+    /// The module's URL, as `import.meta.url` gives it.
+    pub url: String,
+}
+
+/// What the configuration script prints: the stack, and the extension modules it imported.
+/// `stack` is absent when the configuration has no default export.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluatedConfiguration {
+    stack: Option<Stack>,
+    extension_modules: Vec<ExtensionModule>,
+}
+
+/// The script the JavaScript runtime runs: it imports the configuration and prints an
+/// [`EvaluatedConfiguration`]. It keeps only well-formed entries of the extension modules list,
+/// so a list something else wrote can't fail a stack that lists no extensions.
+fn configuration_script(config_file: &Path) -> Result<String> {
+    let config_file = config_file.to_str().ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::FileOperationFailed {
+            operation: "read".to_string(),
+            file_path: config_file.display().to_string(),
+            reason: "Path contains invalid UTF-8 characters".to_string(),
+        })
+    })?;
+    Ok(format!(
+        "
+        import {{ pathToFileURL }} from 'node:url';
+        import path from 'node:path';
+        const configPath = path.resolve('{config_file}');
+        const config = await import(pathToFileURL(configPath));
+        const registered = globalThis[Symbol.for('{EXTENSION_MODULES_KEY}')];
+        const extensionModules = (Array.isArray(registered) ? registered : [])
+            .filter((module) => typeof module?.name === 'string' && typeof module?.url === 'string')
+            .map(({{ name, url }}) => ({{ name, url }}));
+        console.log(JSON.stringify({{ stack: config.default, extensionModules }}, null, 2));
+        "
+    ))
+}
+
+/// Reads what [`configuration_script`] printed.
+fn evaluated_configuration(
+    stdout: Vec<u8>,
+    runtime: &JavaScriptRuntime,
+    config_file: PathBuf,
+) -> Result<LoadedConfiguration> {
+    let stack_str =
+        String::from_utf8(stdout)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to parse {} output as UTF-8", runtime.name()),
+            })?;
+    let evaluated: EvaluatedConfiguration = serde_json::from_str(&stack_str)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parsing".to_string(),
+            reason: "Invalid stack configuration format from JavaScript/TypeScript output"
+                .to_string(),
+        })?;
+    let stack = evaluated.stack.ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "{} has no default export. Export the stack with `export default`",
+                config_file.display()
+            ),
+        })
+    })?;
+    Ok(LoadedConfiguration {
+        stack,
+        config_file,
+        extension_modules: evaluated.extension_modules,
+    })
+}
+
+/// Like [`load_configuration`], and also the generated extension modules the configuration
+/// imported.
+#[alien_event(AlienEvent::LoadingConfiguration)]
+pub async fn load_configuration_and_extension_modules(
+    config_path: PathBuf,
+) -> Result<LoadedConfiguration> {
     info!("Loading configuration from: {}", config_path.display());
 
     let config_file = if config_path.is_dir() {
@@ -139,11 +243,19 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
         }
         Some("json") => {
             info!("Loading JSON configuration");
-            load_json_config(config_file).await
+            Ok(LoadedConfiguration {
+                stack: load_json_config(config_file.clone()).await?,
+                config_file,
+                extension_modules: Vec::new(),
+            })
         }
         Some("toml") => {
             info!("Loading TOML configuration");
-            load_toml_config(config_file).await
+            Ok(LoadedConfiguration {
+                stack: load_toml_config(config_file.clone()).await?,
+                config_file,
+                extension_modules: Vec::new(),
+            })
         }
         _ => {
             error!("Unsupported config file format: {:?}", extension);
@@ -179,12 +291,12 @@ pub async fn discover_javascript_runtime() -> Result<JavaScriptRuntime> {
 }
 
 /// Load a TypeScript configuration file using Bun or Node.js.
-async fn load_typescript_config(config_file: PathBuf) -> Result<Stack> {
+async fn load_typescript_config(config_file: PathBuf) -> Result<LoadedConfiguration> {
     load_javascript_or_typescript_config(config_file).await
 }
 
 /// Load a JavaScript configuration file using Bun or Node.js.
-async fn load_javascript_config(config_file: PathBuf) -> Result<Stack> {
+async fn load_javascript_config(config_file: PathBuf) -> Result<LoadedConfiguration> {
     load_javascript_or_typescript_config(config_file).await
 }
 
@@ -340,7 +452,7 @@ async fn install_core_into(dir: &Path, version: &str, executable: &Path) -> Resu
 }
 
 /// Load a TypeScript or JavaScript configuration file using Bun or Node.js.
-async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<Stack> {
+async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<LoadedConfiguration> {
     info!(
         "Loading JavaScript/TypeScript configuration from: {}",
         config_file.display()
@@ -368,23 +480,7 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
     let temp_path = temp_file.path();
     debug!("Temporary script file created at: {}", temp_path.display());
 
-    // Create script content - works for both Bun and Node.js
-    let script_content = format!(
-        "
-        import {{ pathToFileURL }} from 'node:url';
-        import path from 'node:path';
-        const configPath = path.resolve('{}');
-        const config = await import(pathToFileURL(configPath));
-        console.log(JSON.stringify(config.default, null, 2));
-        ",
-        config_file.to_str().ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: config_file.display().to_string(),
-                reason: "Path contains invalid UTF-8 characters".to_string(),
-            })
-        })?
-    );
+    let script_content = configuration_script(&config_file)?;
     debug!("Script content created, writing to temporary file...");
 
     // `tokio::fs::write` returns only once the bytes are written. A
@@ -449,27 +545,9 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
 
     debug!("{} execution completed successfully", runtime.name());
 
-    debug!("Parsing {} output as UTF-8...", runtime.name());
-    let stack_str = String::from_utf8(output.stdout)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to parse {} output as UTF-8", runtime.name()),
-        })?;
-
-    debug!(
-        "Parsing JSON configuration from {} output...",
-        runtime.name()
-    );
-    let stack: Stack = serde_json::from_str(&stack_str)
-        .into_alien_error()
-        .context(ErrorData::JsonError {
-            operation: "parsing".to_string(),
-            reason: "Invalid stack configuration format from JavaScript/TypeScript output"
-                .to_string(),
-        })?;
-
+    let loaded = evaluated_configuration(output.stdout, &runtime, config_file)?;
     info!("Successfully loaded configuration using {}", runtime.name());
-    Ok(stack)
+    Ok(loaded)
 }
 
 #[cfg(test)]
@@ -487,23 +565,7 @@ pub async fn test_with_specific_runtime(
             })?;
     let temp_path = temp_file.path();
 
-    // Create script content - works for both Bun and Node.js
-    let script_content = format!(
-        "
-        import {{ pathToFileURL }} from 'node:url';
-        import path from 'node:path';
-        const configPath = path.resolve('{}');
-        const config = await import(pathToFileURL(configPath));
-        console.log(JSON.stringify(config.default, null, 2));
-        ",
-        config_file.to_str().ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: config_file.display().to_string(),
-                reason: "Path contains invalid UTF-8 characters".to_string(),
-            })
-        })?
-    );
+    let script_content = configuration_script(&config_file)?;
 
     // `tokio::fs::write` returns only once the bytes are written. A
     // `tokio::fs::File` write can still be in flight when the runtime starts,
@@ -540,21 +602,7 @@ pub async fn test_with_specific_runtime(
         ));
     }
 
-    let stack_str = String::from_utf8(output.stdout)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to parse {} output as UTF-8", runtime.name()),
-        })?;
-
-    let stack: Stack = serde_json::from_str(&stack_str)
-        .into_alien_error()
-        .context(ErrorData::JsonError {
-            operation: "parsing".to_string(),
-            reason: "Invalid stack configuration format from JavaScript/TypeScript output"
-                .to_string(),
-        })?;
-
-    Ok(stack)
+    Ok(evaluated_configuration(output.stdout, &runtime, config_file)?.stack)
 }
 
 /// Load a JSON configuration file directly.

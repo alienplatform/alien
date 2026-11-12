@@ -434,6 +434,44 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// An extension's hooks module or controller did not build.
+    #[error(
+        code = "EXTENSION_BUILD_FAILED",
+        message = "The extension did not build: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionBuildFailed {
+        /// What failed, with the build's own output when there is one
+        message: String,
+    },
+
+    /// An extension's tests or checks failed.
+    #[error(
+        code = "EXTENSION_TEST_FAILED",
+        message = "The extension's checks failed: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionTestFailed {
+        /// Every check that failed
+        message: String,
+    },
+
+    /// A stack's extension has no bundle this CLI can run.
+    #[error(
+        code = "EXTENSION_BUNDLE_REFUSED",
+        message = "The bundle of extension '{extension}' can't be used: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionBundleRefused {
+        /// The extension's name, as the stack lists it
+        extension: String,
+        /// What is wrong with the bundle, and how to fix it
+        message: String,
+    },
+
     /// Generic error for uncommon cases.
     #[error(
         code = "GENERIC_ERROR",

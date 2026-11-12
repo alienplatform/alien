@@ -51,6 +51,8 @@ impl StsClient {
             region: config.region.clone(),
             credentials: config.get_credentials(),
             signing_region: None,
+            // Calls that get credentials are never intercepted.
+            interceptors: Default::default(),
         })
     }
 

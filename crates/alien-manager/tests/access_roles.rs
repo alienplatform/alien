@@ -36,9 +36,11 @@ use alien_core::{
     CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
+use alien_infra::extension_bundle::testing::TestBundle;
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
-use alien_manager::providers::OssAuthz;
+use alien_manager::extension_bundles::ExtensionBundles;
+use alien_manager::providers::{OssAuthz, StateDirExtensionBundles};
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
 };
@@ -48,7 +50,7 @@ use alien_manager::stores::sqlite::{
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams, CredentialResolver,
-    DeploymentRecord, DeploymentStore, ReleaseStore, TokenStore,
+    DeploymentRecord, DeploymentStore, ExtensionBundleStore, ReleaseStore, TokenStore,
 };
 use alien_tunnel::manager::TunnelRegistry;
 use alien_tunnel::operator::{self, TunnelClientConfig, TunnelTargets};
@@ -77,6 +79,13 @@ struct NoCredentials;
 
 #[async_trait]
 impl CredentialResolver for NoCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         unreachable!("these routes resolve no credentials")
     }
@@ -213,12 +222,13 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
-        import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        host_registrations: alien_infra::HostRegistrations::NONE,
         tunnels: Some(TunnelRegistry::new()),
         charts: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,
+        extension_bundles: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
         values: None,
         value_access: None,
@@ -336,15 +346,164 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
     }
 }
 
+/// Gives `state` a bundle store holding `bundle`'s core zip, so its releases load the extension.
+async fn store_bundle(state: &mut AppState, directory: &tempfile::TempDir, bundle: &TestBundle) {
+    let store = Arc::new(StateDirExtensionBundles::new(directory.path()));
+    store
+        .put(
+            &Subject::system(),
+            bundle.manifest.digest.trim_start_matches("sha256:"),
+            bundle.zip.clone(),
+        )
+        .await
+        .unwrap();
+    state.extension_bundles = Some(Arc::new(ExtensionBundles::new(store)));
+}
+
+/// The chart the manager serves runs the release's Helm modifiers: a modifier whose module answers
+/// nothing a chart can use fails the pull with the extension named, and the chart of a stack
+/// without extensions is served.
+#[tokio::test]
+async fn a_served_chart_runs_the_stack_s_helm_modifiers() {
+    let (mut state, _, directory) = state().await;
+    state.charts = Some(Arc::new(alien_manager::routes::charts::ChartSettings::new(
+        None, false,
+    )));
+    let bundle = TestBundle::with_hooks(
+        "acme",
+        "1.0.0",
+        r#"[{"name":"labels","kind":"helmModifier"}]"#,
+        &[],
+    );
+    store_bundle(&mut state, &directory, &bundle).await;
+    let plain = Stack::new("plain-chart".to_string()).build();
+    let mut extended = Stack::new("extended-chart".to_string()).build();
+    extended.extensions = vec![bundle.manifest.clone()];
+    for stack in [plain, extended] {
+        state
+            .release_store
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        // Chart versions follow release order.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let (status, body) = pull(
+        &state,
+        Role::ProjectDeveloper,
+        "charts/plain-chart/manifests/1.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = pull(
+        &state,
+        Role::ProjectDeveloper,
+        "charts/extended-chart/manifests/1.0.2",
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains("the Helm modifier `labels` of extension 'acme' failed"),
+        "{body}"
+    );
+}
+
 struct LocalVaultCredentials(String);
 
 #[async_trait]
 impl CredentialResolver for LocalVaultCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(ClientConfig::Local {
             state_directory: self.0.clone(),
         })
     }
+}
+
+/// A served chart renders the stack's custom type through the extension's Helm emitter: with a
+/// module that answers nothing a chart can use, the render fails naming the extension's hook,
+/// not a missing registration in Alien's built-in registry.
+#[tokio::test]
+async fn a_served_chart_renders_a_custom_type_through_the_extension() {
+    let (mut state, _, directory) = state().await;
+    let bundle = TestBundle::with_hooks(
+        "acme",
+        "1.0.0",
+        r#"[{"name":"zone","kind":"helmEmitter","resourceType":"acme/dns-zone","platform":"kubernetes"}]"#,
+        &[],
+    );
+    store_bundle(&mut state, &directory, &bundle).await;
+    state.charts = Some(Arc::new(alien_manager::routes::charts::ChartSettings::new(
+        None, false,
+    )));
+    let stack: Stack = serde_json::from_value(json!({
+        "id": "acme-chart",
+        "resources": {
+            "zone": {
+                "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                "lifecycle": "frozen",
+                "dependencies": []
+            }
+        },
+        "extensions": [{
+            "name": "acme",
+            "version": "1.0.0",
+            "digest": bundle.manifest.digest,
+            "resourceTypes": {
+                "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": false,
+                    "setup": { "cloudformation": ["aws"], "terraform": ["aws"], "helm": ["kubernetes"], "importers": ["aws"] },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }
+            }
+        }]
+    }))
+    .unwrap();
+    state
+        .release_store
+        .create_release(
+            &Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+    let (status, body) = pull(
+        &state,
+        Role::ProjectDeveloper,
+        "charts/acme-chart/manifests/1.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains("the Helm emitter of extension 'acme'"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -498,6 +657,13 @@ struct VaultCredentials(ClientConfig);
 
 #[async_trait]
 impl CredentialResolver for VaultCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(self.0.clone())
     }

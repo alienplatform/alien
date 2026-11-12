@@ -1,14 +1,15 @@
 //! Azure Service Activation mutation that enables required Azure services.
 
 use crate::error::Result;
-use crate::mutations::runs_on_platform_or_base;
+use crate::mutations::activation::azure::*;
+use crate::mutations::{required_activations, runs_on_platform_or_base};
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
     StackState,
 };
 use async_trait::async_trait;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info};
 
 /// Mutation that adds ServiceActivation resources for required Azure services.
@@ -22,6 +23,7 @@ use tracing::{debug, info};
 /// - queue: Microsoft.ServiceBus
 /// - postgres: Microsoft.DBforPostgreSQL + Microsoft.Network (private endpoint)
 /// - redis: Microsoft.Cache + Microsoft.Network (private endpoint)
+/// - an extension's type: the providers its descriptor lists for Azure
 pub struct AzureServiceActivationMutation;
 
 #[async_trait]
@@ -40,8 +42,11 @@ impl StackMutation for AzureServiceActivationMutation {
             return false;
         }
 
-        // Check what resource types exist in the stack that need service activation
-        let required_services = self.get_required_services(stack, stack_state.platform);
+        // Check what resource types exist in the stack that need service activation. An
+        // error is `mutate`'s to report.
+        let Ok(required_services) = self.get_required_services(stack, stack_state.platform) else {
+            return true;
+        };
 
         if required_services.is_empty() {
             return false;
@@ -74,7 +79,7 @@ impl StackMutation for AzureServiceActivationMutation {
     ) -> Result<Stack> {
         info!("Adding Azure ServiceActivation resources");
 
-        let required_services = self.get_required_services(&stack, stack_state.platform);
+        let required_services = self.get_required_services(&stack, stack_state.platform)?;
 
         for (service_id, service_name) in required_services {
             // Check if this service activation already exists
@@ -119,15 +124,19 @@ impl StackMutation for AzureServiceActivationMutation {
 impl AzureServiceActivationMutation {
     /// Get the mapping of service activation ID to service name based on resources in the stack.
     /// Ordered, because `mutate` inserts in this order and setup renders the stack in it.
-    fn get_required_services(&self, stack: &Stack, platform: Platform) -> BTreeMap<String, String> {
-        let mut services = BTreeMap::new();
+    fn get_required_services(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut providers = BTreeSet::new();
         let include_azure_workload_scaffolding = platform == Platform::Azure;
 
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
                 "worker" | "build" if include_azure_workload_scaffolding => {
-                    services.insert("enable-app".to_string(), "Microsoft.App".to_string());
+                    providers.insert(APP);
                     if entry
                         .config
                         .downcast_ref::<alien_core::Worker>()
@@ -137,91 +146,52 @@ impl AzureServiceActivationMutation {
                             })
                         })
                     {
-                        services.insert(
-                            "enable-eventgrid".to_string(),
-                            "Microsoft.EventGrid".to_string(),
-                        );
-                        services.insert(
-                            "enable-servicebus".to_string(),
-                            "Microsoft.ServiceBus".to_string(),
-                        );
+                        providers.insert(EVENT_GRID);
+                        providers.insert(SERVICE_BUS);
                     }
                 }
                 // A sandbox group is a `Microsoft.App` resource, and a bindings-only sandbox stack
                 // has no worker to carry the signal. Shares the `worker` arm's key so they dedupe.
                 "sandbox" if include_azure_workload_scaffolding => {
-                    services.insert("enable-app".to_string(), "Microsoft.App".to_string());
+                    providers.insert(APP);
                 }
                 "storage" | "kv" => {
-                    services.insert(
-                        "enable-storage".to_string(),
-                        "Microsoft.Storage".to_string(),
-                    );
+                    providers.insert(STORAGE);
                 }
                 "vault" => {
-                    services.insert(
-                        "enable-keyvault".to_string(),
-                        "Microsoft.KeyVault".to_string(),
-                    );
+                    providers.insert(KEY_VAULT);
                 }
                 "artifact-registry" => {
-                    services.insert(
-                        "enable-container-registry".to_string(),
-                        "Microsoft.ContainerRegistry".to_string(),
-                    );
+                    providers.insert(CONTAINER_REGISTRY);
                 }
                 "queue" => {
-                    services.insert(
-                        "enable-servicebus".to_string(),
-                        "Microsoft.ServiceBus".to_string(),
-                    );
+                    providers.insert(SERVICE_BUS);
                 }
                 "postgres" => {
-                    services.insert(
-                        "enable-postgresql".to_string(),
-                        "Microsoft.DBforPostgreSQL".to_string(),
-                    );
+                    providers.insert(POSTGRESQL);
                     // The server is private-only: a Private Endpoint, a dedicated subnet, and a
                     // `privatelink.postgres.database.azure.com` private DNS zone — all
                     // `Microsoft.Network`. Shares the `network` arm's key so they dedupe.
-                    services.insert(
-                        "enable-network".to_string(),
-                        "Microsoft.Network".to_string(),
-                    );
+                    providers.insert(NETWORK);
                 }
                 "redis" => {
-                    services.insert(
-                        "enable-cache".to_string(),
-                        "Microsoft.Cache".to_string(),
-                    );
+                    providers.insert(CACHE);
                     // Private-only: a private endpoint and the `privatelink.redis.azure.net`
                     // zone are `Microsoft.Network`. Shares the `network` arm's key.
-                    services.insert(
-                        "enable-network".to_string(),
-                        "Microsoft.Network".to_string(),
-                    );
+                    providers.insert(NETWORK);
                 }
                 "kubernetes-cluster" => {
-                    services.insert(
-                        "enable-container-service".to_string(),
-                        "Microsoft.ContainerService".to_string(),
-                    );
-                    services.insert(
-                        "enable-network".to_string(),
-                        "Microsoft.Network".to_string(),
-                    );
+                    providers.insert(CONTAINER_SERVICE);
+                    providers.insert(NETWORK);
                 }
                 "network" => {
-                    services.insert(
-                        "enable-network".to_string(),
-                        "Microsoft.Network".to_string(),
-                    );
+                    providers.insert(NETWORK);
                 }
                 _ => {}
             }
         }
 
-        services
+        required_activations(stack, Platform::Azure, providers, self.description())
     }
 }
 
@@ -248,8 +218,9 @@ mod tests {
             .add(worker, ResourceLifecycle::Live)
             .build();
 
-        let services =
-            AzureServiceActivationMutation.get_required_services(&stack, Platform::Azure);
+        let services = AzureServiceActivationMutation
+            .get_required_services(&stack, Platform::Azure)
+            .unwrap();
 
         assert_eq!(
             services.get("enable-eventgrid").map(String::as_str),
@@ -270,8 +241,9 @@ mod tests {
             )
             .build();
 
-        let services =
-            AzureServiceActivationMutation.get_required_services(&stack, Platform::Azure);
+        let services = AzureServiceActivationMutation
+            .get_required_services(&stack, Platform::Azure)
+            .unwrap();
 
         assert_eq!(
             services.get("enable-cache").map(String::as_str),
@@ -303,8 +275,9 @@ mod tests {
             .add(sandbox, ResourceLifecycle::Frozen)
             .build();
 
-        let services =
-            AzureServiceActivationMutation.get_required_services(&stack, Platform::Azure);
+        let services = AzureServiceActivationMutation
+            .get_required_services(&stack, Platform::Azure)
+            .unwrap();
 
         assert_eq!(
             services.get("enable-app").map(String::as_str),
@@ -313,6 +286,7 @@ mod tests {
         // On AWS the same stack must ask Azure for nothing at all.
         assert!(AzureServiceActivationMutation
             .get_required_services(&stack, Platform::Aws)
+            .unwrap()
             .is_empty());
     }
 

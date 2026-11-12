@@ -57,6 +57,17 @@ pub mod sandbox_signal;
 #[cfg(feature = "sandbox-process")]
 pub mod sandbox_process;
 pub use resource::*;
+mod custom_resource;
+pub use custom_resource::{CustomResource, CustomResourceOutputs, RESERVED_TYPE_PREFIXES};
+mod extension;
+pub use extension::{
+    extension_identity_aws_role_name, extension_identity_display_name,
+    extension_identity_gcp_account_id, extension_name_problem, is_cloud_service_name,
+    is_extension_name_segment, ControllerBinary, ExtensionBundleManifest, ExtensionManifest,
+    ExtensionProtocols, LinkDescriptor, ResourceTypeDescriptor, ResourceTypeSchemas, SetupFormat,
+    SetupSupport, EXTENSION_BUNDLE_MANIFEST, EXTENSION_HOOKS_MODULE, MAX_EXTENSION_NAME_LENGTH,
+    TERRAFORM_MODULE_FILE_STEMS,
+};
 
 mod ownership;
 pub use ownership::*;
@@ -110,6 +121,7 @@ pub mod ai_catalog;
 pub mod bindings;
 pub use bindings::*;
 
+pub mod binding_schema;
 mod external_bindings;
 pub use external_bindings::*;
 
@@ -158,3 +170,4 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod setup_package;
 pub use setup_package::*;
 pub mod gar_repository;
+pub mod hooks;

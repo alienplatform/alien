@@ -9,7 +9,9 @@ use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{
     self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
 };
-use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackStateExt};
+use alien_infra::{
+    DeploymentRegistries, HostRegistrations, RunningResourcePolicy, StackExecutor, StackStateExt,
+};
 use tracing::{debug, info};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
@@ -151,7 +153,9 @@ pub async fn handle_initial_setup(
             &client_config_for_scaffolding,
             service_provider.as_ref(),
             &runtime_metadata,
-        ) {
+        )
+        .await
+        {
             return Ok(failed_keeping_record(
                 current_cloned,
                 step_result.next_state,
@@ -386,7 +390,7 @@ async fn reconcile_setup_scaffolding(
 }
 
 /// Hands each scaffolded resource the facts a template setup would have registered for it.
-fn seed_setup_scaffolding(
+async fn seed_setup_scaffolding(
     target_stack: &Stack,
     stack_state: &mut StackState,
     config: &DeploymentConfig,
@@ -407,20 +411,37 @@ fn seed_setup_scaffolding(
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to resolve setup scaffolding seeds".to_string(),
     })?;
-    let registry = ImporterRegistry::built_in();
-    setup_scaffolding::apply_seeds(
-        &SeedContext {
-            registry: &registry,
-            stack_settings: &config.stack_settings,
-            management_config: config.management_config.as_ref(),
-        },
-        target_stack,
-        stack_state,
-        seeds,
-    )
+    let extensions = alien_infra::LoadedExtensions::from_provider(target_stack, service_provider)
+        .context(ErrorData::StackExecutionFailed {
+        message: "Failed to load the stack's extensions for setup scaffolding".to_string(),
+    })?;
+    let (stack, settings, management_config, mut seeded) = (
+        target_stack.clone(),
+        config.stack_settings.clone(),
+        config.management_config.clone(),
+        stack_state.clone(),
+    );
+    *stack_state = alien_infra::run_hooks(move || {
+        let registries =
+            DeploymentRegistries::for_stack(&stack, &HostRegistrations::NONE, &extensions);
+        setup_scaffolding::apply_seeds(
+            &SeedContext {
+                registry: &registries.importers,
+                stack_settings: &settings,
+                management_config: management_config.as_ref(),
+            },
+            &stack,
+            &mut seeded,
+            seeds,
+        )
+        .map(|()| seeded)
+    })
+    .await
+    .and_then(|seeded| seeded)
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to seed resources from setup scaffolding".to_string(),
-    })
+    })?;
+    Ok(())
 }
 
 fn compute_lifecycle_status(
@@ -776,7 +797,7 @@ mod tests {
         registered.platform = Platform::Aws;
         registered.resources.insert(
             "key".to_string(),
-            ImporterRegistry::built_in()
+            alien_infra::ImporterRegistry::built_in()
                 .run(
                     &alien_core::Key::RESOURCE_TYPE,
                     Platform::Aws,

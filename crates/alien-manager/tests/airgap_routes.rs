@@ -91,6 +91,13 @@ struct NoCredentials;
 
 #[async_trait]
 impl CredentialResolver for NoCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         unreachable!("the air-gapped exchange resolves no credentials")
     }
@@ -282,12 +289,13 @@ async fn fixture_with_site(delay: Duration, site: Site) -> Fixture {
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
-        import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        host_registrations: alien_infra::HostRegistrations::NONE,
         tunnels: None,
         charts: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,
+        extension_bundles: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
         values: None,
         value_access: None,

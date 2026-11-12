@@ -6,6 +6,7 @@ pub mod charts;
 pub mod commands;
 pub mod deployment_groups;
 pub mod deployments;
+pub mod extension_bundles;
 pub mod health;
 pub mod image_repositories;
 pub mod install;
@@ -82,13 +83,10 @@ pub struct AppState {
     pub pull_validation_cache: Arc<registry_proxy::PullValidationCache>,
     /// Routing table mapping repo path prefixes to upstream registries.
     pub registry_routing_table: Arc<registry_proxy::RegistryRoutingTable>,
-    /// Registry of per-`(ResourceType, Platform)` importers used by the
-    /// stack-import endpoint to translate setup-artifact payloads
-    /// (CFN Custom Resource, Terraform provider, Helm chart) into typed
-    /// `StackResourceState`. Built once at startup with
-    /// [`alien_infra::ImporterRegistry::built_in`], so the per-request path
-    /// is a `Arc` clone and a hash-map lookup.
-    pub import_registry: Arc<alien_infra::ImporterRegistry>,
+    /// The embedder's registrations, layered over Alien's built-ins in every
+    /// registry the manager builds for a stack, such as the stack-import
+    /// endpoint's importers.
+    pub host_registrations: alien_infra::HostRegistrations,
     /// Open tunnel connections. `None` when tunnels are not enabled; the
     /// tunnel routes are mounted only when this is `Some`.
     pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
@@ -101,6 +99,9 @@ pub struct AppState {
     /// Where bundles' charts and Operator images come from, for managers
     /// that don't serve charts themselves.
     pub bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    /// The extension bundles releases pin. `None` for a manager that stores none, whose
+    /// bundle routes answer 404 and whose deployments can't run a stack with extensions.
+    pub extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     /// Recent deployment logs kept by the manager (see `providers::recent_logs`).
     pub log_buffer: Arc<crate::dev::LogBuffer>,
     /// Deployment values this manager holds. `None` when it has no place to
@@ -110,6 +111,47 @@ pub struct AppState {
     pub value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
     /// Limits `/v1/values/{scope}/verify`.
     pub verify_limiter: Arc<crate::values::VerifyLimiter>,
+}
+
+impl AppState {
+    /// The registries for `stack`, a stack of a release of `project_id` that `caller` read:
+    /// Alien's built-ins, the embedder's registrations, then the stack's extensions with their
+    /// hooks modules, fetched as `caller`. Fails, naming the extension, when a bundle the stack
+    /// pins can't be loaded, with the status the store answered.
+    pub async fn registries(
+        &self,
+        caller: &Subject,
+        project_id: &str,
+        stack: &Stack,
+    ) -> Result<alien_infra::DeploymentRegistries, AlienError<ErrorData>> {
+        let extensions = if stack.extensions.is_empty() {
+            std::sync::Arc::default()
+        } else {
+            let bundles = self.extension_bundles.as_ref().ok_or_else(|| {
+                ErrorData::bad_request(
+                    "The release uses extensions, and this manager stores no extension bundles",
+                )
+            })?;
+            bundles
+                .loaded_extensions(caller, project_id, stack)
+                .await
+                .map_err(|error| {
+                    let message = error.message.clone();
+                    let data = match error.http_status_code {
+                        Some(400) => ErrorData::BadRequest { reason: message },
+                        Some(403) => ErrorData::Forbidden { reason: message },
+                        Some(404) => ErrorData::ExtensionBundleMissing { message },
+                        _ => ErrorData::InternalError { message },
+                    };
+                    alien_error::ContextError::context(error, data)
+                })?
+        };
+        Ok(alien_infra::DeploymentRegistries::for_stack(
+            stack,
+            &self.host_registrations,
+            &extensions,
+        ))
+    }
 }
 
 impl HasCommandServer for AppState {
@@ -203,6 +245,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(deployments::router())
         // Releases
         .merge(releases::router())
+        .merge(extension_bundles::router())
         // Stack import (setup artifacts: CloudFormation, Terraform, Helm)
         .merge(stack::router())
         // Deployment groups

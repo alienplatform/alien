@@ -1023,7 +1023,7 @@ async fn release(
 }
 
 #[cfg(test)]
-pub(in crate::routes) mod tests {
+pub(crate) mod tests {
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{
         dispatchers::NullCommandDispatcher,
@@ -1355,7 +1355,7 @@ pub(in crate::routes) mod tests {
     }
 
     /// The sync routes' state over `deployment_store`, with local command storage.
-    pub(in crate::routes) async fn test_app_state(
+    pub(crate) async fn test_app_state(
         directory: &std::path::Path,
         deployment_store: Arc<dyn crate::traits::DeploymentStore>,
         release_store: Arc<SqliteReleaseStore>,
@@ -1398,12 +1398,13 @@ pub(in crate::routes) mod tests {
             registry_routing_table: Arc::new(
                 RegistryRoutingTable::new(vec![]).expect("empty routing table"),
             ),
-            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            host_registrations: alien_infra::HostRegistrations::NONE,
             tunnels: None,
             charts: None,
             release_channels: None,
             bundle_signing_key: None,
             bundle_sources: None,
+            extension_bundles: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
             values: None,
             value_access: None,
@@ -1415,6 +1416,13 @@ pub(in crate::routes) mod tests {
 
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for UnresolvableManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -1445,6 +1453,13 @@ pub(in crate::routes) mod tests {
 
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for ResolvedManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -1767,6 +1782,47 @@ pub(in crate::routes) mod tests {
                 "Failed to resolve the azure management identity for deployment dep_test"
             );
             assert_eq!(sync.released.len(), 1, "{status}: the claim is given back");
+        }
+    }
+
+    /// The sync response of a running pull deployment without extensions. With
+    /// `ALIEN_PARITY_DIR` set it is written there, with its times and release id replaced, so a
+    /// run on another revision of the manager can be compared byte for byte.
+    #[tokio::test]
+    async fn a_pull_sync_without_extensions_is_written_for_comparison() {
+        let sync = sync_with_management_resolver(
+            deployment_record_with_state("running", None),
+            Arc::new(ResolvedManagementIdentity),
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        fn timeless(value: Value) -> Value {
+            match value {
+                Value::String(text) if chrono::DateTime::parse_from_rfc3339(&text).is_ok() => {
+                    Value::String("<time>".into())
+                }
+                // Each run creates its release with a new id.
+                Value::String(text) if text.starts_with("rel_") => {
+                    Value::String("<release>".into())
+                }
+                Value::Array(items) => Value::Array(items.into_iter().map(timeless).collect()),
+                Value::Object(fields) => Value::Object(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key, timeless(value)))
+                        .collect(),
+                ),
+                other => other,
+            }
+        }
+        let response = timeless(sync.response);
+        assert!(response["target"].get("extensions").is_none(), "{response}");
+        if let Ok(dir) = std::env::var("ALIEN_PARITY_DIR") {
+            std::fs::write(
+                std::path::Path::new(&dir).join("sync.json"),
+                serde_json::to_vec_pretty(&response).unwrap(),
+            )
+            .unwrap();
         }
     }
 
@@ -3007,6 +3063,7 @@ pub(in crate::routes) mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),

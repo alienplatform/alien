@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Container in the Operator Deployment that runs the Operator.
-const OPERATOR_CONTAINER: &str = "operator";
+pub(crate) const OPERATOR_CONTAINER: &str = "operator";
 
 /// Move the Operator's own Deployment to `target_image` if it runs another.
 pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {

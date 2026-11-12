@@ -16,6 +16,7 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 anstyle-parse = { version = "1" }
+anyhow = { version = "1" }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1", default-features = false, features = ["test-util"] }
 aws-sigv4 = { version = "1", features = ["http0-compat"] }
@@ -26,7 +27,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "http2"
 base64 = { version = "0.23" }
 bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
 bon = { version = "3", features = ["experimental-overwritable"] }
-bumpalo = { version = "3", features = ["collections"] }
+bumpalo = { version = "3", features = ["allocator-api2", "collections"] }
 bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 cipher = { version = "0.4", default-features = false, features = ["alloc", "block-padding"] }
@@ -34,7 +35,9 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 concurrent-queue = { version = "2" }
 console = { version = "0.16" }
+cranelift-bitset = { version = "0.137", default-features = false, features = ["enable-serde"] }
 crc32fast = { version = "1" }
+crossbeam-epoch = { version = "0.9" }
 crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2", default-features = false, features = ["getrandom"] }
 crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", default-features = false, features = ["getrandom", "std"] }
 ctutils = { version = "0.4", default-features = false, features = ["subtle"] }
@@ -45,6 +48,7 @@ either = { version = "1", features = ["use_std"] }
 event-listener = { version = "5" }
 fastrand = { version = "2" }
 flate2 = { version = "1", features = ["zlib-rs"] }
+fnv = { version = "1" }
 form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["bilock", "unstable"] }
 futures-channel = { version = "0.3", features = ["sink", "unstable"] }
@@ -58,7 +62,8 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-f
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
-hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
+hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", features = ["serde"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hmac = { version = "0.12", default-features = false, features = ["reset"] }
 http-body-util = { version = "0.1", features = ["full"] }
 httparse = { version = "1" }
@@ -101,6 +106,7 @@ predicates = { version = "3" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1" }
 prost = { version = "0.13", features = ["prost-derive"] }
+pulley-interpreter = { version = "50", default-features = false, features = ["disas", "interp", "std"] }
 quote = { version = "1" }
 rand-274715c4dabd11b0 = { package = "rand", version = "0.9" }
 rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
@@ -111,6 +117,7 @@ regex-automata = { version = "0.4", default-features = false, features = ["dfa",
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 ring = { version = "0.17", features = ["std"] }
+rustc-hash = { version = "2" }
 rustls = { version = "0.23", default-features = false, features = ["logging", "prefer-post-quantum", "ring", "std", "tls12"] }
 rustls-pemfile = { version = "2" }
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -125,7 +132,7 @@ sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11" }
 simd-adler32 = { version = "0.3", default-features = false, features = ["std"] }
 similar = { version = "2", features = ["inline"] }
 slab = { version = "0.4" }
-smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
+smallvec = { version = "1", default-features = false, features = ["const_new", "serde", "union"] }
 stable_deref_trait = { version = "1", default-features = false, features = ["alloc"] }
 strum-2f80eeee3b1b6c7e = { package = "strum", version = "0.26", features = ["derive"] }
 strum-754bda37e0fb3874 = { package = "strum", version = "0.27", features = ["derive"] }
@@ -153,6 +160,7 @@ typenum = { version = "1", default-features = false, features = ["const-generics
 url = { version = "2", features = ["serde"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono", "indexmap"] }
 uuid = { version = "1", features = ["js", "serde", "v4", "v5", "v7"] }
+wasmtime-internal-core = { version = "50", default-features = false, features = ["serde", "std"] }
 whoami = { version = "2" }
 winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
 winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
@@ -166,6 +174,7 @@ zerovec = { version = "0.11", default-features = false, features = ["alloc", "de
 
 [build-dependencies]
 anstyle-parse = { version = "1" }
+anyhow = { version = "1" }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1", default-features = false, features = ["test-util"] }
 aws-sigv4 = { version = "1", features = ["http0-compat"] }
@@ -177,7 +186,7 @@ base64 = { version = "0.23" }
 bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
 bon = { version = "3", features = ["experimental-overwritable"] }
 bon-macros = { version = "3", features = ["alloc", "experimental-overwritable", "std"] }
-bumpalo = { version = "3", features = ["collections"] }
+bumpalo = { version = "3", features = ["allocator-api2", "collections"] }
 bytes = { version = "1", features = ["serde"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -186,7 +195,9 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 concurrent-queue = { version = "2" }
 console = { version = "0.16" }
+cranelift-bitset = { version = "0.137", default-features = false, features = ["enable-serde"] }
 crc32fast = { version = "1" }
+crossbeam-epoch = { version = "0.9" }
 crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2", default-features = false, features = ["getrandom"] }
 crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", default-features = false, features = ["getrandom", "std"] }
 ctutils = { version = "0.4", default-features = false, features = ["subtle"] }
@@ -198,6 +209,7 @@ either = { version = "1", features = ["use_std"] }
 event-listener = { version = "5" }
 fastrand = { version = "2" }
 flate2 = { version = "1", features = ["zlib-rs"] }
+fnv = { version = "1" }
 form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["bilock", "unstable"] }
 futures-channel = { version = "0.3", features = ["sink", "unstable"] }
@@ -211,7 +223,8 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-f
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
-hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
+hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", features = ["serde"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 heck = { version = "0.4" }
 hmac = { version = "0.12", default-features = false, features = ["reset"] }
 http-body-util = { version = "0.1", features = ["full"] }
@@ -255,6 +268,7 @@ predicates = { version = "3" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1" }
 prost = { version = "0.13", features = ["prost-derive"] }
+pulley-interpreter = { version = "50", default-features = false, features = ["disas", "interp", "std"] }
 quote = { version = "1" }
 rand-274715c4dabd11b0 = { package = "rand", version = "0.9" }
 rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
@@ -265,6 +279,7 @@ regex-automata = { version = "0.4", default-features = false, features = ["dfa",
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 ring = { version = "0.17", features = ["std"] }
+rustc-hash = { version = "2" }
 rustls = { version = "0.23", default-features = false, features = ["logging", "prefer-post-quantum", "ring", "std", "tls12"] }
 rustls-pemfile = { version = "2" }
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -279,7 +294,7 @@ sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11" }
 simd-adler32 = { version = "0.3", default-features = false, features = ["std"] }
 similar = { version = "2", features = ["inline"] }
 slab = { version = "0.4" }
-smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
+smallvec = { version = "1", default-features = false, features = ["const_new", "serde", "union"] }
 stable_deref_trait = { version = "1", default-features = false, features = ["alloc"] }
 strum-2f80eeee3b1b6c7e = { package = "strum", version = "0.26", features = ["derive"] }
 strum-754bda37e0fb3874 = { package = "strum", version = "0.27", features = ["derive"] }
@@ -311,6 +326,7 @@ url = { version = "2", features = ["serde"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono", "indexmap"] }
 utoipa-gen = { version = "5", default-features = false, features = ["axum_extras", "chrono", "indexmap"] }
 uuid = { version = "1", features = ["js", "serde", "v4", "v5", "v7"] }
+wasmtime-internal-core = { version = "50", default-features = false, features = ["serde", "std"] }
 whoami = { version = "2" }
 winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
 winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
@@ -334,7 +350,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -353,7 +369,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -372,7 +388,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -391,7 +407,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -410,7 +426,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -429,7 +445,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -448,7 +464,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -467,7 +483,7 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
@@ -488,7 +504,7 @@ mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 security-framework-sys = { version = "2", features = ["OSX_10_10", "OSX_10_11", "OSX_10_12", "OSX_10_9"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
@@ -509,7 +525,7 @@ mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 security-framework-sys = { version = "2", features = ["OSX_10_10", "OSX_10_11", "OSX_10_12", "OSX_10_9"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
@@ -530,7 +546,7 @@ mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 security-framework-sys = { version = "2", features = ["OSX_10_10", "OSX_10_11", "OSX_10_12", "OSX_10_9"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
@@ -551,7 +567,7 @@ mio = { version = "1", features = ["net", "os-ext"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFData", "CFDictionary", "CFError", "CFNumber", "CFPlugInCOM", "CFRunLoop", "CFString", "CFURL", "CFUUID", "std"] }
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
-rustix = { version = "1", features = ["io_uring", "pipe", "process", "stdio", "termios", "time"] }
+rustix = { version = "1", features = ["io_uring", "mm", "param", "pipe", "process", "stdio", "termios", "time"] }
 security-framework-sys = { version = "2", features = ["OSX_10_10", "OSX_10_11", "OSX_10_12", "OSX_10_9"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", features = ["oid"] }
 spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
@@ -575,7 +591,7 @@ tower-http = { version = "0.6", default-features = false, features = ["follow-re
 winapi = { version = "0.3", default-features = false, features = ["cfg", "consoleapi", "errhandlingapi", "evntrace", "fileapi", "handleapi", "impl-default", "in6addr", "inaddr", "knownfolders", "minwinbase", "minwindef", "ntsecapi", "objbase", "processenv", "processthreadsapi", "profileapi", "shlobj", "std", "synchapi", "sysinfoapi", "winbase", "wincon", "windef", "winerror", "winioctl", "winnt", "winuser"] }
 windows-result = { version = "0.4" }
 windows-sys-b21d60becc0929df = { package = "windows-sys", version = "0.52", features = ["Win32_Foundation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Environment", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
-windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Power", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Power", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.x86_64-pc-windows-msvc.build-dependencies]
 const-oid = { version = "0.10", default-features = false, features = ["db"] }
@@ -594,6 +610,6 @@ tower-http = { version = "0.6", default-features = false, features = ["follow-re
 winapi = { version = "0.3", default-features = false, features = ["cfg", "consoleapi", "errhandlingapi", "evntrace", "fileapi", "handleapi", "impl-default", "in6addr", "inaddr", "knownfolders", "minwinbase", "minwindef", "ntsecapi", "objbase", "processenv", "processthreadsapi", "profileapi", "shlobj", "std", "synchapi", "sysinfoapi", "winbase", "wincon", "windef", "winerror", "winioctl", "winnt", "winuser"] }
 windows-result = { version = "0.4" }
 windows-sys-b21d60becc0929df = { package = "windows-sys", version = "0.52", features = ["Win32_Foundation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Environment", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
-windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Power", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Power", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 ### END HAKARI SECTION

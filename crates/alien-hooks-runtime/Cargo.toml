@@ -1,0 +1,21 @@
+[package]
+name = "alien-hooks-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Runs an Alien extension's hooks module in a WebAssembly sandbox"
+license-file.workspace = true
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+wasmtime = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt"] }
+wat = { workspace = true }

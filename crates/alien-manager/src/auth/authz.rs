@@ -145,4 +145,16 @@ pub trait Authz: Send + Sync {
     fn can_call_tunnel(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
         self.can_dispatch_command(subject, deployment)
     }
+
+    // -- Extension bundles -------------------------------------------------
+    /// Upload an object of an extension bundle, which a release then pins. Defaults to deny so
+    /// an embedder decides explicitly.
+    fn can_upload_extension_bundle(&self, _subject: &Subject) -> bool {
+        false
+    }
+    /// Download an object of an extension bundle by its digest. Defaults to deny so an embedder
+    /// decides explicitly.
+    fn can_read_extension_bundle(&self, _subject: &Subject) -> bool {
+        false
+    }
 }

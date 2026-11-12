@@ -1,5 +1,6 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
+use alien_client_core::interceptor::keep_interceptor_failure_final;
 use alien_client_core::Result;
 use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
@@ -56,19 +57,22 @@ impl KmsClient {
             .header("Content-Type", "application/x-amz-json-1.1")
             .content_sha256(&body)
             .body(body);
-        crate::aws::aws_request_utils::sign_send_json(
-            request,
-            &AwsSignConfig {
-                service_name: "kms".to_string(),
-                region: region.to_string(),
-                credentials: self.credentials.get_credentials(),
-                signing_region: None,
-            },
+        keep_interceptor_failure_final(
+            crate::aws::aws_request_utils::sign_send_json(
+                request,
+                &AwsSignConfig {
+                    service_name: "kms".to_string(),
+                    region: region.to_string(),
+                    credentials: self.credentials.get_credentials(),
+                    signing_region: None,
+                    interceptors: self.credentials.interceptors().clone(),
+                },
+            )
+            .await
+            .context(alien_client_core::ErrorData::GenericError {
+                message: format!("AWS KMS {target} failed for key '{key_id}'"),
+            }),
         )
-        .await
-        .context(alien_client_core::ErrorData::GenericError {
-            message: format!("AWS KMS {target} failed for key '{key_id}'"),
-        })
     }
 }
 

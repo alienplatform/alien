@@ -7,6 +7,13 @@ struct RemoteAwsCredentialResolver {
 
 #[async_trait]
 impl CredentialResolver for RemoteAwsCredentialResolver {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(ClientConfig::Aws(Box::new(self.source.clone())))
     }
@@ -700,6 +707,13 @@ struct FirstHopAwsResolver {
 
 #[async_trait]
 impl CredentialResolver for FirstHopAwsResolver {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         alien_manager::providers::impersonation_credentials::impersonate_management_sa(
             self.provider.as_ref(),
@@ -774,6 +788,13 @@ struct AzureTokenResolver {
 
 #[async_trait]
 impl CredentialResolver for AzureTokenResolver {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         use alien_azure_clients::AzureClientConfigExt;
         self.config

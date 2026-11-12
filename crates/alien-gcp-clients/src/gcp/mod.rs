@@ -6,7 +6,6 @@ pub mod artifactregistry;
 pub mod cloud_kms;
 pub mod cloud_quotas;
 pub mod cloud_sql;
-pub mod memorystore;
 pub mod cloudasset;
 pub mod cloudbuild;
 pub mod cloudrun;
@@ -18,7 +17,10 @@ pub mod gcp_request_utils;
 pub mod gcs;
 pub mod iam;
 mod iam_workload_identity;
+#[cfg(test)]
+mod interceptor_tests;
 pub mod longrunning;
+pub mod memorystore;
 pub mod model_garden;
 pub mod monitoring;
 pub mod pubsub;

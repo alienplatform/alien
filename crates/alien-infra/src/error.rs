@@ -247,6 +247,22 @@ pub enum ErrorData {
         platform: Platform,
     },
 
+    /// A custom resource's extension ships a controller that this process has not loaded.
+    #[error(
+        code = "EXTENSION_CONTROLLER_NOT_LOADED",
+        message = "The controller of extension '{extension}' for {resource_type} on {platform} can't run: this process has not loaded the extension's controller",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionControllerNotLoaded {
+        /// The extension that ships the controller
+        extension: String,
+        /// The custom resource type
+        resource_type: ResourceType,
+        /// The platform the controller is for
+        platform: Platform,
+    },
+
     /// Stack execution reached maximum steps without completing.
     #[error(
         code = "EXECUTION_MAX_STEPS_REACHED",
@@ -782,6 +798,85 @@ pub enum ErrorData {
         reason: String,
         /// Provider human-readable failure detail.
         message: String,
+    },
+
+    /// A step of an extension's controller failed, or the controller could not be reached or
+    /// understood. The error's `code` and `retryable` are replaced with the step's own: the
+    /// controller's for a `failed` reply, or one of the step protocol's codes.
+    #[error(
+        code = "EXTENSION_STEP_FAILED",
+        message = "{message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionStepFailed {
+        /// Alien resource ID of the custom resource.
+        resource_id: String,
+        /// What the controller or the transport reported.
+        message: String,
+    },
+
+    /// A stack lists extensions the process running it has not loaded, so its controllers would
+    /// run without the extensions' interceptors and controllers.
+    #[error(
+        code = "EXTENSIONS_NOT_LOADED",
+        message = "Stack '{stack_id}' uses extensions {extensions:?} this process has not loaded: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionsNotLoaded {
+        /// ID of the stack.
+        stack_id: String,
+        /// Names of the extensions the process has not loaded, in the order the stack lists them.
+        extensions: Vec<String>,
+        /// What is missing.
+        message: String,
+    },
+
+    /// An object of an extension's bundle failed its check, so nothing in it runs: its sha256 is
+    /// not the one pinned for it, the core zip is not a bundle, or the bundle has no controller
+    /// for the machine.
+    #[error(
+        code = "EXTENSION_BUNDLE_REFUSED",
+        message = "Extension '{extension}': its bundle's {object} was refused: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ExtensionBundleRefused {
+        /// Name of the extension.
+        extension: String,
+        /// Which object: the core zip, or a controller binary for a target.
+        object: String,
+        /// Why it was refused.
+        reason: String,
+    },
+
+    /// An object of an extension's bundle could not be downloaded or stored.
+    #[error(
+        code = "EXTENSION_BUNDLE_UNAVAILABLE",
+        message = "Extension '{extension}': its bundle's {object} is unavailable: {message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    ExtensionBundleUnavailable {
+        /// Name of the extension.
+        extension: String,
+        /// Which object: the core zip, or a controller binary for a target.
+        object: String,
+        /// What failed.
+        message: String,
+    },
+
+    /// Work that runs an extension's hooks panicked, or the runtime shut down before it ran.
+    #[error(
+        code = "HOOKS_STOPPED",
+        message = "The work running the stack's extension hooks stopped before it finished: {reason}",
+        retryable = "false",
+        internal = "true"
+    )]
+    HooksStopped {
+        /// The panic's message, or why the work never ran.
+        reason: String,
     },
 }
 

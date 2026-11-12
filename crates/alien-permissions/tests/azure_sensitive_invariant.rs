@@ -1,55 +1,9 @@
-use alien_permissions::{list_permission_set_ids, AZURE_SANDBOX_DATA_PLANE_ROLE};
-
-const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
-    "Microsoft.Storage/storageAccounts/listKeys/action",
-    // The account API key, which is the whole inference surface. Azure spells it `listkeys` in
-    // the role definition and `listKeys` in its docs, which is why every comparison below is
-    // case-insensitive.
-    "Microsoft.CognitiveServices/accounts/listKeys/action",
-    "Microsoft.App/containerApps/listSecrets/action",
-    "Microsoft.App/managedEnvironments/listSecrets/action",
-];
-
-const SENSITIVE_IMPLICIT_DATA_ACTIONS: &[&str] = &[
-    // Reaching inside a live sandbox session: running a command, or moving its files. Session
-    // lifecycle is separate on Azure and is not listed here.
-    "Microsoft.App/sandboxGroups/sandboxes/executeCommand/action",
-    "Microsoft.App/sandboxGroups/sandboxes/executeShellCommand/action",
-    "Microsoft.App/sandboxGroups/sandboxes/exec/stream/action",
-    "Microsoft.App/sandboxGroups/sandboxes/files/read",
-    "Microsoft.App/sandboxGroups/sandboxes/files/write",
-    "Microsoft.App/sandboxGroups/sandboxes/files/delete",
-    "Microsoft.App/sandboxGroups/sandboxes/downloadContentPackage/action",
-    // Each turns a live session's filesystem into an object outside it: a disk image another
-    // sandbox can boot, or a snapshot.
-    "Microsoft.App/sandboxGroups/sandboxes/commit/action",
-    "Microsoft.App/sandboxGroups/sandboxes/snapshot/action",
-    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
-    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
-    "Microsoft.KeyVault/vaults/secrets/read",
-    "Microsoft.ServiceBus/namespaces/queues/messages/receive/action",
-    "Microsoft.ServiceBus/namespaces/topics/subscriptions/messages/receive/action",
-    "Microsoft.ServiceBus/namespaces/queues/messages/peek/action",
-    "Microsoft.ServiceBus/namespaces/topics/subscriptions/messages/peek/action",
-];
-
-const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
-    "AcrPull",
-    "AcrPush",
-    // Carries `Microsoft.CognitiveServices/accounts/listkeys/action` and a
-    // `Microsoft.CognitiveServices/*` dataAction, so it hands over the account key.
-    "Cognitive Services User",
-    // Carries the whole sandbox data plane, session contents included, so it belongs only to sets
-    // meant to reach inside a session — `sandbox/execute` and `sandbox/remote-execute`. Named
-    // from the shared constant so this list and the reach predicate cannot disagree.
-    AZURE_SANDBOX_DATA_PLANE_ROLE,
-    "Azure Service Bus Data Receiver",
-    "Key Vault Secrets User",
-    "Storage Blob Data Contributor",
-    "Storage Blob Data Reader",
-    "Storage Table Data Contributor",
-    "Storage Table Data Reader",
-];
+use alien_permissions::sensitive_content::{
+    AZURE_SENSITIVE_CONTENT_ACTIONS as SENSITIVE_IMPLICIT_ACTIONS,
+    AZURE_SENSITIVE_CONTENT_DATA_ACTIONS as SENSITIVE_IMPLICIT_DATA_ACTIONS,
+    AZURE_SENSITIVE_CONTENT_ROLES as SENSITIVE_IMPLICIT_ROLES,
+};
+use alien_permissions::list_permission_set_ids;
 
 #[test]
 fn azure_implicit_management_sets_do_not_grant_sensitive_content() {

@@ -52,10 +52,14 @@ async fn collect_heartbeats(state: &OperatorState) -> Result<()> {
         return Ok(());
     };
     let deployment_id = state.db.get_deployment_id().await?;
-    let service_provider = state
-        .service_provider
-        .clone()
-        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+    // Heartbeats are reads outside Alien's controllers, which the deployment's interceptors
+    // never see.
+    let service_provider = match &state.service_provider {
+        Some(provider) => provider
+            .without_interceptors()
+            .unwrap_or_else(|| provider.clone()),
+        None => Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+    };
     let mut heartbeats = Vec::new();
     for (resource_id, resource) in &stack.resources {
         let Some((namespace, name, is_stateful)) = workload_identity(resource) else {
@@ -266,6 +270,98 @@ fn unknown_container(
 mod tests {
     use super::*;
     use alien_core::{DeploymentState, DeploymentStatus};
+
+    const TEST_ENCRYPTION_KEY: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// The deployment's provider hands out no client here: heartbeats read only through the
+    /// provider without interceptors, whose refusal becomes an unknown-health heartbeat.
+    #[tokio::test]
+    async fn heartbeats_read_without_the_deployments_interceptors() {
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().to_str().unwrap();
+        let db = crate::db::OperatorDb::new(data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_1").await.unwrap();
+        let release = alien_core::ReleaseInfo {
+            release_id: Some("rel_1".to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("site".to_string()).build(),
+        };
+        let mut deployment: DeploymentState = serde_json::from_value(serde_json::json!({
+            "platform": "kubernetes", "status": "running", "protocolVersion": 1,
+            "currentRelease": release, "targetRelease": release,
+        }))
+        .unwrap();
+        let container = Container::new("web".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "example:latest".to_string(),
+            })
+            .permissions("container".to_string())
+            .cpu(alien_core::ResourceSpec {
+                min: "100m".to_string(),
+                desired: "100m".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "128Mi".to_string(),
+            })
+            .build();
+        let mut web = alien_core::StackResourceState::new_pending(
+            "container".to_string(),
+            alien_core::Resource::new(container),
+            None,
+            vec![],
+        );
+        web.status = alien_core::ResourceStatus::Running;
+        web.internal_state = Some(serde_json::json!({
+            "type": "KubernetesContainerController", "namespace": "site",
+            "workloadName": "web", "isStateful": false
+        }));
+        let mut stack =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "site".to_string());
+        stack.resources.insert("web".to_string(), web);
+        deployment.stack_state = Some(stack);
+        db.set_deployment_state(&deployment).await.unwrap();
+
+        let mut without = alien_infra::MockPlatformServiceProvider::new();
+        without
+            .expect_get_kubernetes_deployment_client()
+            .returning(|_| {
+                Err(alien_error::AlienError::new(
+                    alien_infra::ErrorData::CloudPlatformError {
+                        message: "no cluster".to_string(),
+                        resource_id: None,
+                    },
+                ))
+            });
+        let without: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(without);
+        let mut deployment_provider = alien_infra::MockPlatformServiceProvider::new();
+        deployment_provider
+            .expect_without_interceptors()
+            .times(1)
+            .returning(move || Some(without.clone()));
+        let state = OperatorState {
+            config: crate::OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: Some(Arc::new(deployment_provider)),
+            extension_controllers: Default::default(),
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        collect_heartbeats(&state).await.unwrap();
+        let heartbeats = state.db.get_pending_heartbeats().await.unwrap();
+        assert_eq!(heartbeats.len(), 1);
+        assert_eq!(heartbeats[0].resource_id, "web");
+    }
 
     #[test]
     fn passive_collection_continues_during_same_release_maintenance() {

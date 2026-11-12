@@ -29,12 +29,17 @@ const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
 pub fn stack_requires_network(stack: &Stack) -> bool {
     stack
         .resources()
-        .any(|(_, entry)| resource_requires_network(entry))
+        .any(|(_, entry)| resource_requires_network(stack, entry))
 }
 
-pub(crate) fn resource_requires_network(entry: &ResourceEntry) -> bool {
-    RESOURCE_TYPES_REQUIRING_NETWORK.contains(&entry.config.resource_type().as_ref())
+/// An extension's type joins the list through its descriptor's `requires_network`.
+pub(crate) fn resource_requires_network(stack: &Stack, entry: &ResourceEntry) -> bool {
+    let resource_type = entry.config.resource_type();
+    RESOURCE_TYPES_REQUIRING_NETWORK.contains(&resource_type.as_ref())
         || sandbox_requires_connector(entry)
+        || stack
+            .descriptor(&resource_type)
+            .is_some_and(|descriptor| descriptor.requires_network)
 }
 
 /// Gateway-backed and restricted sandboxes need connector subnets.
@@ -269,6 +274,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

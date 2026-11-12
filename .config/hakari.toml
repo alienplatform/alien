@@ -32,9 +32,12 @@ platforms = [
 
 # The SDK crates' opt-in `native-tls` feature would otherwise be unified into every
 # member (hakari also evaluates all-features), pulling OpenSSL into builds that only
-# use rustls.
+# use rustls: alien-manager-api and alien-platform-api.
+# The rest build for wasm32-wasip1, where the hack crate's native dependencies (tokio's
+# net, hyper, socket2) don't compile: alien-core and the crates it needs, and the crates an
+# extension's hooks and controller module build against, with their test guests.
 [traversal-excludes]
-workspace-members = ["alien-manager-api", "alien-platform-api", "alien-permissions", "alien-permission-types", "alien-error", "alien-error-derive", "alien-core", "alien-macros"]
+workspace-members = ["alien-manager-api", "alien-platform-api", "alien-permissions", "alien-permission-types", "alien-error", "alien-error-derive", "alien-core", "alien-macros", "alien-cloudformation", "alien-terraform", "alien-operations-sdk", "alien-helm", "alien-extension-sdk", "acme-hooks", "acme-controller", "acme-types", "backups-hooks", "order-hooks", "steered-hooks"]
 
 # alien-sdk's default features must not depend on oci-client (and through it jwt); CI
 # checks that. Keeping these out of the hack crate leaves them enabled only where a

@@ -57,6 +57,9 @@ impl AwsVaultController {
         let account_id = aws_cfg.account_id.to_string();
 
         let vault_prefix = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
+        // Recorded before the grants, which can wait on a role that isn't ready yet: the
+        // permissions boundary names this vault by its recorded prefix while it waits.
+        self.vault_prefix = Some(vault_prefix.clone());
 
         ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
             ctx,
@@ -72,9 +75,6 @@ impl AwsVaultController {
         if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
             self.permissions_revision = Some(super::permissions_revision(ctx)?);
         }
-
-        // Store the vault prefix using resource_prefix-config.id pattern
-        self.vault_prefix = Some(vault_prefix);
 
         info!(
             vault_id = %config.id,
@@ -813,6 +813,49 @@ mod permission_update_tests {
             .unwrap()
             .updates
             .contains_key("secrets"));
+    }
+
+    /// A new vault whose grants wait on a role that isn't ready yet: the management controller
+    /// rebuilds the permissions boundary on that wait, and the boundary names the vault by the
+    /// prefix it recorded.
+    #[tokio::test]
+    async fn a_vault_waiting_on_its_consumer_role_records_its_prefix() {
+        let (executor, mut state, _iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::None,
+            &[],
+        );
+        state.resources.insert(
+            "secrets".to_string(),
+            StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new("secrets".to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            ),
+        );
+        // The consumer's role has not recorded its name yet, as when it is still being created.
+        let account = state.resources.get_mut("consumer-sa").unwrap();
+        let mut role = account
+            .get_internal_controller_typed::<AwsServiceAccountController>()
+            .unwrap();
+        role.role_name = None;
+        account
+            .set_internal_controller(Some(Box::new(role)))
+            .unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        let vault = &state.resources["secrets"];
+        assert_ne!(
+            vault.status,
+            ResourceStatus::Running,
+            "the vault should still wait"
+        );
+        assert!(vault.error.is_none(), "{:?}", vault.error);
+        let controller = vault
+            .get_internal_controller_typed::<AwsVaultController>()
+            .unwrap();
+        assert_eq!(controller.vault_prefix.as_deref(), Some("test-secrets"));
     }
 
     #[tokio::test]

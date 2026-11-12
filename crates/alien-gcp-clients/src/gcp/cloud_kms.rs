@@ -51,6 +51,8 @@ pub struct CloudKmsClient {
     base: GcpClientBase,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(CloudKmsClient);
+
 impl CloudKmsClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         Self {

@@ -42,7 +42,18 @@ impl StackMutation for AzureResourceGroupMutation {
                 "storage" | "vault" | "kv" | "artifact-registry" | "queue" | "postgres"
                 | "network" | "compute-cluster" | "kubernetes-cluster" => true,
                 "container" | "daemon" => include_azure_workload_scaffolding,
-                _ => false,
+                // An extension's type with anything for Azure creates its resources there too.
+                _ => stack.descriptor(&resource_type).is_some_and(|descriptor| {
+                    [
+                        &descriptor.setup.cloudformation,
+                        &descriptor.setup.terraform,
+                        &descriptor.setup.helm,
+                        &descriptor.setup.importers,
+                        &descriptor.controller_platforms,
+                    ]
+                    .into_iter()
+                    .any(|platforms| platforms.contains(&Platform::Azure))
+                }),
             }
         });
 

@@ -1,0 +1,13 @@
+# The docs' backups example (Keep Postgres backups longer): a hooks crate with a CloudFormation
+# and a Terraform modifier. Tests build it into a module and run it on Alien's templates.
+[package]
+name = "backups-hooks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alien-extension-sdk = { workspace = true }

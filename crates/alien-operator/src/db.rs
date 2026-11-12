@@ -13,6 +13,7 @@ use alien_core::{
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::{Context, IntoAlienError};
+use base64::Engine as _;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -84,6 +85,21 @@ pub struct DurableSyncExecution {
     pub session: String,
     pub claim: Option<SyncExecutionClaim>,
     pub target: Option<TargetDeployment>,
+}
+
+/// A target whose extension bundle failed its check. The Operator never accepts it, and reports
+/// it to the manager as a failed update while the manager sends this target under this claim.
+/// A new claim for the same target is a new attempt, which downloads the bundle again; a manager
+/// that issues no claims gets the refusal until it sends another target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedTarget {
+    /// The target's approved-target hash, as `approved_target_hash` computes it
+    pub target_hash: String,
+    /// The claim the target came with, if the manager issues claims
+    pub claim: Option<SyncExecutionClaim>,
+    /// The refusal
+    pub error: alien_error::AlienError,
 }
 
 // =============================================================================
@@ -988,6 +1004,82 @@ impl OperatorDb {
     }
 
     // =========================================================================
+    // Refused Target
+    // =========================================================================
+
+    const KEY_REFUSED_TARGET: &str = "refused_target";
+
+    /// The last target whose extension bundle failed its check.
+    pub async fn get_refused_target(&self) -> Result<Option<RefusedTarget>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = ?",
+                (Self::KEY_REFUSED_TARGET,),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query refused_target".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch refused_target row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read refused_target value".to_string(),
+            })?;
+        serde_json::from_str(&value)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to parse refused_target".to_string(),
+            })
+            .map(Some)
+    }
+
+    /// Records `refused`, or forgets the last refused target when it is `None`.
+    pub async fn set_refused_target(&self, refused: Option<&RefusedTarget>) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let result = match refused {
+            Some(refused) => {
+                let value = serde_json::to_string(refused).into_alien_error().context(
+                    ErrorData::DatabaseError {
+                        message: "Failed to serialize refused_target".to_string(),
+                    },
+                )?;
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (Self::KEY_REFUSED_TARGET, value),
+                )
+                .await
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM state WHERE key = ?",
+                    (Self::KEY_REFUSED_TARGET,),
+                )
+                .await
+            }
+        };
+        result
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to set refused_target".to_string(),
+            })?;
+        Ok(())
+    }
+
+    // =========================================================================
     // Deployment Config
     // =========================================================================
 
@@ -1863,6 +1955,37 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// The Operator's key for the step tokens it signs to its controller pods, base64, made the
+    /// first time it is asked for. It stays the same across restarts, so the pods that pin its
+    /// public half keep taking this Operator's steps.
+    pub async fn step_signing_key(&self) -> Result<String> {
+        let conn = self.conn.lock().await;
+        let failed = || ErrorData::DatabaseError {
+            message: "Failed to read or store step_signing_key".to_string(),
+        };
+
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'step_signing_key'", ())
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        if let Some(row) = rows.next().await.into_alien_error().context(failed())? {
+            return row.get(0).into_alien_error().context(failed());
+        }
+        drop(rows);
+
+        let key = base64::engine::general_purpose::STANDARD
+            .encode(ed25519_compact::KeyPair::generate().as_ref());
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('step_signing_key', ?, datetime('now'))",
+            (key.clone(),),
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        Ok(key)
+    }
+
     /// Monotonic credential revision. Older manifests must not restore a revoked token.
     pub async fn get_sync_token_revision(&self) -> Result<u64> {
         let conn = self.conn.lock().await;
@@ -1935,7 +2058,10 @@ impl OperatorDb {
         })?;
 
         let mut rows = conn
-            .query("SELECT value FROM state WHERE key = 'secrets_digest_key'", ())
+            .query(
+                "SELECT value FROM state WHERE key = 'secrets_digest_key'",
+                (),
+            )
             .await
             .into_alien_error()
             .context(ErrorData::DatabaseError {

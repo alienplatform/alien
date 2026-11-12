@@ -86,6 +86,23 @@ impl OssAuthz {
 }
 
 impl Authz for OssAuthz {
+    // -- Extension bundles -------------------------------------------------
+
+    /// Whoever creates releases uploads the bundles they pin.
+    fn can_upload_extension_bundle(&self, s: &Subject) -> bool {
+        self.can_create_release(s, crate::traits::default_string().as_str())
+    }
+
+    /// Whoever reads releases reads the bundles they pin: the Operator and the setup CLI with
+    /// their deployment's token included.
+    fn can_read_extension_bundle(&self, s: &Subject) -> bool {
+        !matches!(
+            s.scope,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. }
+        ) && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
+            && Self::project_reader(s)
+    }
+
     // -- Releases ----------------------------------------------------------
 
     fn can_create_release(&self, s: &Subject, _project_id: &str) -> bool {

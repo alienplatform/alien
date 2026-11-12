@@ -1,14 +1,15 @@
 use crate::error::Result;
-use crate::{CheckResult, CompileTimeCheck};
+use crate::{CheckResult, ClusterCloud, CompileTimeCheck};
 use alien_core::{
-    ownership_policy_for_resource_type, Container, Daemon, Key, Platform, Postgres,
+    ownership_policy_for_resource_type, Container, CustomResource, Daemon, Key, Platform, Postgres,
     ResourceLifecycle, Sandbox, SandboxCode, Stack, Storage, Worker,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
 ///
 /// The policy is intentionally centralized in `alien-core` so preflights,
-/// template emitters, importers, and permissions agree on ownership.
+/// template emitters, importers, and permissions agree on ownership. A custom resource's
+/// lifecycles come from its type's descriptor instead.
 pub struct FrozenResourceLifecycleCheck;
 
 #[async_trait::async_trait]
@@ -22,6 +23,15 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
+        self.check_on(stack, platform, ClusterCloud::Unknown).await
+    }
+
+    async fn check_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        cloud: ClusterCloud,
+    ) -> Result<CheckResult> {
         let mut errors = Vec::new();
         let encrypted_azure_storage_count = stack
             .resources()
@@ -56,6 +66,20 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     resource_type,
                     resource_entry.lifecycle,
                     policy.allowed_lifecycles()
+                ));
+            }
+
+            if resource_entry
+                .config
+                .downcast_ref::<CustomResource>()
+                .is_some()
+            {
+                errors.extend(custom_lifecycle_errors(
+                    stack,
+                    resource_id,
+                    resource_entry,
+                    platform,
+                    cloud,
                 ));
             }
 
@@ -188,6 +212,117 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
     }
 }
 
+/// The clusters one Kubernetes chart serves: one in no cloud, and eks, gke and aks.
+const CHART_CLUSTERS: [(ClusterCloud, &str); 4] = [
+    (ClusterCloud::NoCloud, "a cluster in no cloud"),
+    (ClusterCloud::Cloud(Platform::Aws), "eks"),
+    (ClusterCloud::Cloud(Platform::Gcp), "gke"),
+    (ClusterCloud::Cloud(Platform::Azure), "aks"),
+];
+
+/// A custom resource may use only the lifecycles its type declares, and must be able to run where
+/// it is deployed (see [`target_refusals`]). Where the cluster is unknown, as for a release or the
+/// one chart every Kubernetes target installs, it must run on at least one cluster that chart
+/// serves; the deployment's own preflights apply the rule for its cluster. Alien's own types
+/// follow the same split: the executor picks a built-in resource's controller by the deployment's
+/// base platform.
+fn custom_lifecycle_errors(
+    stack: &Stack,
+    resource_id: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    platform: Platform,
+    cloud: ClusterCloud,
+) -> Vec<String> {
+    let resource_type = resource_entry.config.resource_type();
+    // AllowedUserResourcesCheck refuses a type no extension declares.
+    let Some(descriptor) = stack.descriptor(&resource_type) else {
+        return Vec::new();
+    };
+    let resource = format!("Resource '{resource_id}' of type '{resource_type}'");
+    if !descriptor.lifecycles.contains(&resource_entry.lifecycle) {
+        return vec![format!(
+            "{resource} has lifecycle {:?}, but its extension allows only {:?}",
+            resource_entry.lifecycle, descriptor.lifecycles
+        )];
+    }
+    let lifecycle = resource_entry.lifecycle;
+    if platform != Platform::Kubernetes || cloud != ClusterCloud::Unknown {
+        return target_refusals(descriptor, lifecycle, platform, cloud)
+            .into_iter()
+            .map(|refusal| format!("{resource} {refusal}"))
+            .collect();
+    }
+    let mut refusals = Vec::new();
+    for (cluster, name) in CHART_CLUSTERS {
+        let refused = target_refusals(descriptor, lifecycle, platform, cluster);
+        if refused.is_empty() {
+            return Vec::new();
+        }
+        refusals.push(format!("on {name} it {}", refused.join(", and ")));
+    }
+    vec![format!(
+        "{resource} can run on none of the Kubernetes clusters its chart serves: {}",
+        refusals.join("; ")
+    )]
+}
+
+/// Why a resource of a type described by `descriptor` can't run on `platform` in `cloud`, which is
+/// known. Without a controller for the platform it runs on it can only be Frozen, and a type that
+/// can only be Frozen there needs the platform's setup path:
+///
+/// - On a cloud, and on a Kubernetes cluster in one, setup's template creates the resource in the
+///   cloud and only the cloud's importer reads it back. A custom resource on such a cluster also
+///   runs on the cloud's controller, since that is the API it calls.
+/// - On a cluster in no cloud, setup creates nothing: the chart asks the customer for an existing
+///   resource through the type's Helm emitter, and the Operator binds the resource to it.
+/// - `alien dev` builds no setup template, so Local needs neither.
+fn target_refusals(
+    descriptor: &alien_core::ResourceTypeDescriptor,
+    lifecycle: ResourceLifecycle,
+    platform: Platform,
+    cloud: ClusterCloud,
+) -> Vec<String> {
+    let (runs_on, target) = match (platform, cloud) {
+        (Platform::Kubernetes, ClusterCloud::Cloud(cloud)) => (
+            cloud,
+            format!(
+                "platform '{}', the cloud its Kubernetes cluster runs in",
+                cloud.as_str()
+            ),
+        ),
+        _ => (platform, format!("platform '{}'", platform.as_str())),
+    };
+    let mut refusals = Vec::new();
+    if lifecycle == ResourceLifecycle::Live && !descriptor.controller_platforms.contains(&runs_on) {
+        refusals.push(format!(
+            "has lifecycle Live, but its extension has no controller for {target}; without one the resource can only be Frozen"
+        ));
+    }
+    let frozen_only = !descriptor.lifecycles.contains(&ResourceLifecycle::Live)
+        || !descriptor.controller_platforms.contains(&runs_on);
+    if !frozen_only {
+        return refusals;
+    }
+    match (platform, cloud) {
+        (Platform::Local, _) => {}
+        (Platform::Kubernetes, ClusterCloud::NoCloud) => {
+            if !descriptor.setup.helm.contains(&Platform::Kubernetes) {
+                refusals.push(
+                    "can only be Frozen on platform 'kubernetes', but its extension has no Helm emitter, so the chart cannot ask for an existing one to bind".to_string(),
+                );
+            }
+        }
+        _ => {
+            if !descriptor.setup.importers.contains(&runs_on) {
+                refusals.push(format!(
+                    "can only be Frozen on {target}, but its extension has no importer for it, so Alien cannot read the resource setup creates"
+                ));
+            }
+        }
+    }
+    refusals
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +369,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -270,6 +406,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -310,6 +447,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -359,6 +497,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -405,6 +544,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -440,6 +580,7 @@ mod tests {
             let stack = Stack {
                 dynamic_container_repositories: Vec::new(),
                 dynamic_container_image_resources: Vec::new(),
+                extensions: Vec::new(),
                 operations: None,
                 id: "test-stack".to_string(),
                 resources,
@@ -482,6 +623,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -870,6 +1012,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

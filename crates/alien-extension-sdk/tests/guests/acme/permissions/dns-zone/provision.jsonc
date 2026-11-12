@@ -1,0 +1,52 @@
+{
+  "id": "acme/dns-zone/provision",
+  "description": "Create, read and delete the zone",
+  "platforms": {
+    "aws": [
+      {
+        "description": "Create and find zones; neither takes a resource",
+        "grant": {
+          "actions": [
+            "route53:CreateHostedZone",
+            "ec2:DescribeVpcs"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "*"
+            ]
+          }
+        }
+      },
+      {
+        "description": "Read, change and delete a zone and its records",
+        "grant": {
+          "actions": [
+            "route53:GetHostedZone",
+            "route53:ListResourceRecordSets",
+            "route53:ChangeResourceRecordSets",
+            "route53:DeleteHostedZone"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:route53:::hostedzone/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:route53:::hostedzone/*"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

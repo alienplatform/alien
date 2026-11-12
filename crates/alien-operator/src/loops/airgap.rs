@@ -515,6 +515,7 @@ mod tests {
                     .unwrap(),
             ),
             service_provider: None,
+            extension_controllers: Default::default(),
             operations_sync_handler: None,
             pod_log_collection: false,
             cancel: CancellationToken::new(),

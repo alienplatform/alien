@@ -355,8 +355,7 @@ async fn run_step_loop_body(
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
     if !state.has_desired() {
-        let service_provider = service_provider
-            .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+        let service_provider = crate::helpers::service_provider_for(state, service_provider)?;
         let observe_report = run_observe_pass(
             state.platform,
             client_config,
@@ -1684,6 +1683,7 @@ mod tests {
             inputs: Vec::new(),
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
         }
     }
@@ -2115,6 +2115,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),

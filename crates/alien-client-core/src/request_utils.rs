@@ -1,4 +1,5 @@
 use crate::error::{ErrorData, Result};
+use crate::interceptor::{apply_response_hook, ResponseHook};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
@@ -373,6 +374,8 @@ pub struct RetriableRequestBuilder {
     inner: reqwest::RequestBuilder,
     backoff: ExponentialBuilder,
     retry_if: fn(&AlienError<ErrorData>) -> bool,
+    /// Runs on every response before it is read, for a request an interceptor matched.
+    response_hook: Option<ResponseHook>,
 }
 
 impl RetriableRequestBuilder {
@@ -399,9 +402,11 @@ impl RetriableRequestBuilder {
         let backoff = self.backoff;
         let retry_if = self.retry_if;
         let builder = self.inner;
+        let response_hook = self.response_hook;
 
         let retryable = move || {
             let attempt_builder = builder.try_clone();
+            let response_hook = response_hook.clone();
             async move {
                 let attempt_builder = attempt_builder.ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
@@ -419,6 +424,7 @@ impl RetriableRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_json_response(resp, body_string).await
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -428,6 +434,7 @@ impl RetriableRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_json_response(resp, body_string).await
                 }
             }
@@ -441,9 +448,11 @@ impl RetriableRequestBuilder {
         let backoff = self.backoff;
         let retry_if = self.retry_if;
         let builder = self.inner;
+        let response_hook = self.response_hook;
 
         let retryable = move || {
             let attempt_builder = builder.try_clone();
+            let response_hook = response_hook.clone();
             async move {
                 let attempt_builder = attempt_builder.ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
@@ -461,6 +470,7 @@ impl RetriableRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_xml_response(resp, body_string).await
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -470,6 +480,7 @@ impl RetriableRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_xml_response(resp, body_string).await
                 }
             }
@@ -483,9 +494,11 @@ impl RetriableRequestBuilder {
         let backoff = self.backoff;
         let retry_if = self.retry_if;
         let builder = self.inner;
+        let response_hook = self.response_hook;
 
         let retryable = move || {
             let attempt_builder = builder.try_clone();
+            let response_hook = response_hook.clone();
             async move {
                 let attempt_builder = attempt_builder.ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
@@ -503,6 +516,7 @@ impl RetriableRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_no_response(resp, body_string).await
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -512,6 +526,7 @@ impl RetriableRequestBuilder {
                             message: "Network error during HTTP request".to_string(),
                         },
                     )?;
+                    let resp = apply_response_hook(response_hook.as_ref(), resp).await?;
                     handle_no_response(resp, body_string).await
                 }
             }
@@ -525,9 +540,11 @@ impl RetriableRequestBuilder {
         let backoff = self.backoff;
         let retry_if = self.retry_if;
         let builder = self.inner;
+        let response_hook = self.response_hook;
 
         let retryable = move || {
             let attempt_builder = builder.try_clone();
+            let response_hook = response_hook.clone();
             async move {
                 let attempt_builder = attempt_builder.ok_or_else(|| {
                     AlienError::new(ErrorData::GenericError {
@@ -540,19 +557,21 @@ impl RetriableRequestBuilder {
 
                 #[cfg(target_arch = "wasm32")]
                 {
-                    new_builder.send().await.into_alien_error().context(
+                    let resp = new_builder.send().await.into_alien_error().context(
                         ErrorData::HttpRequestFailed {
                             message: "Network error during HTTP request".to_string(),
                         },
-                    )
+                    )?;
+                    apply_response_hook(response_hook.as_ref(), resp).await
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    new_builder.send().await.into_alien_error().context(
+                    let resp = new_builder.send().await.into_alien_error().context(
                         ErrorData::HttpRequestFailed {
                             message: "Network error during HTTP request".to_string(),
                         },
-                    )
+                    )?;
+                    apply_response_hook(response_hook.as_ref(), resp).await
                 }
             }
         };
@@ -569,6 +588,7 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
             inner: self,
             backoff: default_retry_backoff(),
             retry_if: RetriableRequestBuilder::is_retryable_error,
+            response_hook: None,
         }
     }
 
@@ -686,6 +706,67 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
                     message: "Network error during HTTP request".to_string(),
                 })
         }
+    }
+}
+
+/// A request that passed the interceptor hook, carrying the hook its response goes through. It
+/// sends like a `reqwest::RequestBuilder` with [`RequestBuilderExt`].
+pub struct InterceptedRequestBuilder {
+    inner: reqwest::RequestBuilder,
+    response_hook: Option<ResponseHook>,
+}
+
+impl InterceptedRequestBuilder {
+    pub fn new(inner: reqwest::RequestBuilder, response_hook: Option<ResponseHook>) -> Self {
+        Self {
+            inner,
+            response_hook,
+        }
+    }
+
+    pub fn with_retry(self) -> RetriableRequestBuilder {
+        RetriableRequestBuilder {
+            response_hook: self.response_hook,
+            ..self.inner.with_retry()
+        }
+    }
+
+    pub async fn send_json<T: DeserializeOwned + 'static>(self) -> Result<T> {
+        let (resp, body_string) = self.send_once().await?;
+        handle_json_response(resp, body_string).await
+    }
+
+    pub async fn send_xml<T: DeserializeOwned + 'static>(self) -> Result<T> {
+        let (resp, body_string) = self.send_once().await?;
+        handle_xml_response(resp, body_string).await
+    }
+
+    pub async fn send_no_response(self) -> Result<()> {
+        let (resp, body_string) = self.send_once().await?;
+        handle_no_response(resp, body_string).await
+    }
+
+    pub async fn send_raw(self) -> Result<reqwest::Response> {
+        let (resp, _body_string) = self.send_once().await?;
+        Ok(resp)
+    }
+
+    /// The request without its response hook, for a caller that sends it another way.
+    pub fn build(self) -> reqwest::Result<reqwest::Request> {
+        self.inner.build()
+    }
+
+    async fn send_once(self) -> Result<(reqwest::Response, Option<String>)> {
+        let (client, request, body_string) = build_and_extract_body(self.inner)?;
+        let resp = reqwest::RequestBuilder::from_parts(client, request)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Network error during HTTP request".to_string(),
+            })?;
+        let resp = apply_response_hook(self.response_hook.as_ref(), resp).await?;
+        Ok((resp, body_string))
     }
 }
 

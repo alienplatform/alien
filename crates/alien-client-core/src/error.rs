@@ -238,6 +238,37 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// An extension's interceptor failed, or made a change Alien refuses. The same request fails
+    /// the same way again, so it is final, unless the interceptor marked a failure before the
+    /// call was sent retryable, as a hook stopped at its deadline is.
+    #[error(
+        code = "INTERCEPTOR_FAILED",
+        message = "Extension '{extension}' failed the call: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    InterceptorFailed {
+        /// The extension whose interceptor failed
+        extension: String,
+        /// What the interceptor did wrong
+        message: String,
+    },
+
+    /// A client with interceptors refused to send its credential to an origin other than its
+    /// own endpoint, such as one a rewritten response named.
+    #[error(
+        code = "DESTINATION_REFUSED",
+        message = "Refused to send a signed request to {url}: this client signs only for {endpoint}",
+        retryable = "false",
+        internal = "false"
+    )]
+    DestinationRefused {
+        /// Origin the request was addressed to
+        url: String,
+        /// Origin of the client's configured endpoint
+        endpoint: String,
+    },
+
     /// Catch-all error
     #[error(
         code = "GENERIC_ERROR",

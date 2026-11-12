@@ -45,7 +45,8 @@ pub struct AwsServiceAccountController {
     pub(crate) runtime_created: bool,
     /// Whether stack-level permissions have been applied
     pub(crate) stack_permissions_applied: bool,
-    /// Last trust policy installed by privileged setup; absent in older checkpoints.
+    /// Last trust policy installed by privileged setup, with its `sts:ExternalId` as the
+    /// value's SHA-256 (see [`redacted_trust`]); absent in older checkpoints.
     #[serde(default)]
     pub(crate) assume_role_policy: Option<String>,
 }
@@ -71,9 +72,14 @@ impl AwsServiceAccountController {
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
-        let role_name = get_aws_role_name(ctx.resource_prefix, &config.id);
+        let role_name = match &config.extension {
+            Some(_) => {
+                alien_core::extension_identity_aws_role_name(ctx.resource_prefix, &config.id)
+            }
+            None => get_aws_role_name(ctx.resource_prefix, &config.id),
+        };
         let assume_role_policy =
-            Self::generate_assume_role_policy_for_service_account(config, ctx)?;
+            Self::generate_assume_role_policy_for_service_account(config, ctx, None)?;
 
         info!(
             role_name = %role_name,
@@ -84,16 +90,24 @@ impl AwsServiceAccountController {
         let role_request = CreateRoleRequest::builder()
             .role_name(role_name.clone())
             .assume_role_policy_document(assume_role_policy.clone())
-            .description(match ctx.deployment_name_for_metadata() {
-                Some(deployment_name) => format!(
-                    "Runtime IAM role for {deployment_name}. Resource prefix: {}. Resource: {}.",
-                    ctx.resource_prefix, config.id
-                ),
-                None => format!(
-                    "Runtime IAM role. Resource prefix: {}. Resource: {}.",
-                    ctx.resource_prefix, config.id
-                ),
-            })
+            .description(
+                match (&config.extension, ctx.deployment_name_for_metadata()) {
+                    (Some(extension), _) => format!(
+                        "{}. Resource prefix: {}. Resource: {}.",
+                        alien_core::extension_identity_display_name(extension),
+                        ctx.resource_prefix,
+                        config.id
+                    ),
+                    (None, Some(deployment_name)) => format!(
+                        "Runtime IAM role for {deployment_name}. Resource prefix: {}. Resource: {}.",
+                        ctx.resource_prefix, config.id
+                    ),
+                    (None, None) => format!(
+                        "Runtime IAM role. Resource prefix: {}. Resource: {}.",
+                        ctx.resource_prefix, config.id
+                    ),
+                },
+            )
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()
@@ -123,7 +137,7 @@ impl AwsServiceAccountController {
 
         self.runtime_created = ctx.deployment_config.stack_settings.setup_management
             == alien_core::SetupManagement::Automatic;
-        self.assume_role_policy = Some(assume_role_policy);
+        self.assume_role_policy = Some(redacted_trust(&assume_role_policy)?);
         self.role_name = Some(role_name);
         self.role_arn = Some(role_arn);
 
@@ -280,12 +294,70 @@ impl AwsServiceAccountController {
             }));
         }
         self.generate_stack_policy_document(config, ctx)?;
-        let policy = Self::generate_assume_role_policy_for_service_account(config, ctx)?;
         let client = ctx
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
         let role_name = self.role_name.as_ref().unwrap();
+        // State keeps only the ExternalId's hash, so a run without the ExternalId reads the
+        // value the role's trust checks from the role itself. When state recorded one, the role
+        // must still check it; when state recorded none, as for an imported role, the role's own
+        // ExternalId is kept. Either way the update never writes a trust without the ExternalId
+        // the role checks now.
+        let live_trust = match (
+            &config.extension,
+            &ctx.deployment_config.management_external_id,
+        ) {
+            (Some(_), None) => {
+                let recorded = self
+                    .assume_role_policy
+                    .as_deref()
+                    .map(redacted_trust)
+                    .transpose()?
+                    .and_then(|trust| trusted_external_id(&trust));
+                let kept = |message: String| {
+                    AlienError::new(ErrorData::InfrastructureError {
+                        message,
+                        operation: Some("update the extension identity's trust".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    })
+                };
+                let live = client
+                    .get_role(role_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read the trust policy of IAM role '{role_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?
+                    .get_role_result
+                    .role
+                    .assume_role_policy_document
+                    .and_then(|encoded| urlencoding::decode(&encoded).ok().map(String::from))
+                    .ok_or_else(|| {
+                        kept(format!(
+                            "IAM role '{role_name}' returned no trust policy to keep its ExternalId from; run setup with the deployment's ExternalId"
+                        ))
+                    })?;
+                // Parsed on every path: a trust that doesn't parse names no ExternalId to keep.
+                let live_external_id = trusted_external_id(&redacted_trust(&live)?);
+                if let Some(recorded) = recorded {
+                    if live_external_id.as_deref() != Some(recorded.as_str()) {
+                        return Err(kept(format!(
+                            "IAM role '{role_name}' no longer trusts the ExternalId this deployment set up, and this run has none to write; run setup with the deployment's ExternalId"
+                        )));
+                    }
+                }
+                Some(live)
+            }
+            _ => None,
+        };
+        let policy = Self::generate_assume_role_policy_for_service_account(
+            config,
+            ctx,
+            live_trust.as_deref(),
+        )?;
         IamRoleWriter::new(
             client.as_ref(),
             ctx.aws_permissions_boundary_arn()?.as_deref(),
@@ -303,7 +375,7 @@ impl AwsServiceAccountController {
                 message: format!("Failed to update trust policy for IAM role '{role_name}'"),
                 resource_id: Some(config.id.clone()),
             })?;
-        self.assume_role_policy = Some(policy);
+        self.assume_role_policy = Some(redacted_trust(&policy)?);
         Ok(HandlerAction::Continue {
             state: UpdatingStackPermissions,
             suggested_delay: None,
@@ -659,8 +731,19 @@ impl AwsServiceAccountController {
             return Ok(false);
         }
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
-        Ok(self.assume_role_policy.as_deref()
-            != Some(Self::generate_assume_role_policy_for_service_account(config, ctx)?.as_str()))
+        // Compared with the ExternalId as its hash on both sides: a run without the ExternalId
+        // takes the stored hash in its place.
+        let wanted = Self::generate_assume_role_policy_for_service_account(
+            config,
+            ctx,
+            self.assume_role_policy.as_deref(),
+        )?;
+        Ok(self
+            .assume_role_policy
+            .as_deref()
+            .map(redacted_trust)
+            .transpose()?
+            != Some(redacted_trust(&wanted)?))
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -862,7 +945,7 @@ impl AwsServiceAccountController {
             .and_then(|name| ctx.desired_stack.permissions.profiles.get(name));
         let desired = config
             .concrete_permission_sets(desired_profile, |name| {
-                alien_permissions::get_permission_set(name).cloned()
+                alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
             })
             .context(ErrorData::ResourceConfigInvalid {
                 message: "Cannot resolve the service account's resource grants".to_string(),
@@ -1007,10 +1090,38 @@ impl AwsServiceAccountController {
     /// corresponding profile by stripping the "-sa" suffix. If the ServiceAccount
     /// was created directly (not from a profile), or uses a non-standard name, it falls back to
     /// using the full ServiceAccount ID as the profile name.
+    ///
+    /// `applied` is the trust the role has now, if any. For the extension identity, a run without
+    /// the ExternalId keeps the one `applied` checks; when `applied` is the stored trust, that is
+    /// the value's hash, and the policy is fit only to compare with another redacted one.
     fn generate_assume_role_policy_for_service_account(
         service_account: &ServiceAccount,
         ctx: &ResourceControllerContext<'_>,
+        applied: Option<&str>,
     ) -> Result<String> {
+        if let Some(extension) = &service_account.extension {
+            let management = ctx.get_aws_management_config()?.ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "AWS management configuration is required for the identity of the extension '{extension}'"
+                    ),
+                    operation: Some("generate_assume_role_policy".to_string()),
+                    resource_id: Some(service_account.id.clone()),
+                })
+            })?;
+            // The setup run passes the ExternalId the control plane issued; a later run that has
+            // none keeps the one the trust already checks, so an update never drops it.
+            let external_id = ctx
+                .deployment_config
+                .management_external_id
+                .as_ref()
+                .map(|id| id.expose().to_string())
+                .or_else(|| applied.and_then(trusted_external_id));
+            return Ok(crate::remote_bindings::managing_role_trust_policy(
+                &management.managing_role_arn,
+                external_id.as_deref(),
+            ));
+        }
         let mut services = Vec::new();
         let mut role_arns = Vec::new();
 
@@ -1458,6 +1569,45 @@ mod trust_tests {
             })
         );
     }
+}
+
+/// `policy` with each `sts:ExternalId` it requires replaced by `sha256:<hex>` of the value. The
+/// ExternalId is the one secret that guards the trust, so controller state, which reaches the
+/// deployment's stored and synced state, keeps only its hash. A hash already in place stays.
+/// A policy that isn't JSON is an error: kept as it is, it could hold the ExternalId in plain.
+fn redacted_trust(policy: &str) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut parsed = serde_json::from_str::<serde_json::Value>(policy)
+        .into_alien_error()
+        .context(ErrorData::InfrastructureError {
+            message: "An IAM trust policy is not valid JSON".to_string(),
+            operation: Some("redact the trust policy's ExternalId".to_string()),
+            resource_id: None,
+        })?;
+    for statement in parsed["Statement"].as_array_mut().into_iter().flatten() {
+        let Some(id) = statement
+            .pointer_mut("/Condition/StringEquals/sts:ExternalId")
+            .filter(|id| id.as_str().is_some_and(|id| !id.starts_with("sha256:")))
+        else {
+            continue;
+        };
+        let hash = format!(
+            "sha256:{:x}",
+            Sha256::digest(id.as_str().unwrap_or_default())
+        );
+        *id = serde_json::Value::String(hash);
+    }
+    Ok(parsed.to_string())
+}
+
+/// The `sts:ExternalId` a trust policy's statements require, if any.
+fn trusted_external_id(policy: &str) -> Option<String> {
+    let policy: serde_json::Value = serde_json::from_str(policy).ok()?;
+    policy["Statement"]
+        .as_array()?
+        .iter()
+        .find_map(|statement| statement["Condition"]["StringEquals"]["sts:ExternalId"].as_str())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -2266,6 +2416,416 @@ mod tests {
             .build()
     }
 
+    /// Direct setup creates an extension's identity as the setup template does: only the managing
+    /// role may assume it, and it holds the extension's sets.
+    #[tokio::test]
+    async fn direct_setup_creates_the_extension_identity_trusted_by_the_managing_role() {
+        let set = serde_json::from_value(serde_json::json!({
+            "id": "acme/dns-zone/provision", "description": "Create the zone",
+            "platforms": {"aws": [{"grant": {"actions": ["route53:CreateHostedZone"]},
+                "binding": {"stack": {"resources": ["*"]}}}]}
+        }))
+        .unwrap();
+        let account = ServiceAccount::new("acme-ext".into())
+            .stack_permission_set(set)
+            .extension("acme".into())
+            .build();
+        let mut iam = MockIamApi::new();
+        let mut sequence = mockall::Sequence::new();
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|request| {
+                assert_eq!(request.role_name, "test-acme-ext");
+                let manager = "arn:aws:iam::111122223333:role/alien-test-manager";
+                let trust: serde_json::Value =
+                    serde_json::from_str(&request.assume_role_policy_document).unwrap();
+                assert_eq!(
+                    trust["Statement"],
+                    serde_json::json!([{
+                        "Sid": "AllowOnlySpecificSourceRole",
+                        "Effect": "Allow",
+                        "Principal": { "AWS": manager },
+                        "Action": "sts:AssumeRole",
+                        "Condition": { "StringEquals": { "aws:PrincipalArn": manager } },
+                    }])
+                );
+                let mut role = role();
+                role["RoleName"] = "test-acme-ext".into();
+                role["Arn"] = "arn:aws:iam::123456789012:role/test-acme-ext".into();
+                Ok(
+                    serde_json::from_value(serde_json::json!({"CreateRoleResult": {"Role": role}}))
+                        .unwrap(),
+                )
+            });
+        iam.expect_put_role_policy()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|role, name, document| {
+                let policy: serde_json::Value = serde_json::from_str(document).unwrap();
+                role == "test-acme-ext"
+                    && name == MANAGED_POLICY_NAME
+                    && policy["Statement"][0]["Action"]
+                        == serde_json::json!(["route53:CreateHostedZone"])
+            })
+            .returning(|_, _, _| Ok(()));
+        let mut executor = executor_with_controller(
+            iam,
+            AwsServiceAccountController {
+                state: AwsServiceAccountState::CreatingRole,
+                ..Default::default()
+            },
+            false,
+            account,
+        )
+        .await;
+        executor.step().await.unwrap();
+        executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap();
+        assert_eq!(
+            controller.state,
+            AwsServiceAccountState::ApplyingResourcePermissions
+        );
+        let outputs = controller.build_outputs().unwrap();
+        assert_eq!(
+            outputs
+                .downcast_ref::<alien_core::ServiceAccountOutputs>()
+                .unwrap()
+                .identity,
+            "arn:aws:iam::123456789012:role/test-acme-ext"
+        );
+    }
+
+    /// With the ExternalId the control plane issued, direct setup makes the managing role send it
+    /// to assume the extension's identity, so the managing role can't be pointed at this role for
+    /// another deployment; a later run without the value keeps the trust as it is.
+    #[tokio::test]
+    async fn the_extension_identity_trust_requires_the_deployments_external_id() {
+        const ID: &str = "0123456789abcdef0123456789ABCDEF";
+        let account = ServiceAccount::new("acme-ext".into())
+            .extension("acme".into())
+            .build();
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().times(1).returning(|request| {
+            let manager = "arn:aws:iam::111122223333:role/alien-test-manager";
+            let trust: serde_json::Value =
+                serde_json::from_str(&request.assume_role_policy_document).unwrap();
+            assert_eq!(
+                trust["Statement"][0]["Condition"],
+                serde_json::json!({ "StringEquals": {
+                    "aws:PrincipalArn": manager, "sts:ExternalId": ID
+                }})
+            );
+            let mut role = role();
+            role["RoleName"] = "test-acme-ext".into();
+            role["Arn"] = "arn:aws:iam::123456789012:role/test-acme-ext".into();
+            Ok(
+                serde_json::from_value(serde_json::json!({"CreateRoleResult": {"Role": role}}))
+                    .unwrap(),
+            )
+        });
+        iam.expect_put_role_policy().returning(|_, _, _| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(account)
+            .controller(AwsServiceAccountController {
+                state: AwsServiceAccountState::CreatingRole,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .management_external_id(alien_core::ManagementExternalId::new(ID).unwrap())
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                    "test-management",
+                ),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        let stored = executor
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap()
+            .assume_role_policy
+            .clone()
+            .unwrap();
+        assert!(!stored.contains(ID), "state keeps only the hash: {stored}");
+        assert!(stored.contains("sha256:"), "{stored}");
+
+        executor.set_management_external_id(None);
+        assert!(
+            !executor.needs_update().unwrap(),
+            "the trust keeps its ExternalId"
+        );
+    }
+
+    /// State keeps only the ExternalId's hash, so an update that runs without the ExternalId
+    /// reads the value from the role's trust, and keeps it.
+    #[tokio::test]
+    async fn an_update_without_the_external_id_keeps_the_one_the_role_trusts() {
+        const ID: &str = "0123456789abcdef0123456789ABCDEF";
+        let manager = "arn:aws:iam::111122223333:role/alien-test-manager";
+        let live = crate::remote_bindings::managing_role_trust_policy(manager, Some(ID));
+        let account = ServiceAccount::new("acme-ext".into())
+            .extension("acme".into())
+            .build();
+        let stored_trust = redacted_trust(&live).unwrap();
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().times(1).returning(move |_| {
+            let mut role = role();
+            role["RoleName"] = "test-acme-ext".into();
+            role["AssumeRolePolicyDocument"] = urlencoding::encode(&live).into_owned().into();
+            Ok(
+                serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role}}))
+                    .unwrap(),
+            )
+        });
+        iam.expect_update_assume_role_policy()
+            .times(1)
+            .withf(|_, policy| trusted_external_id(policy).as_deref() == Some(ID))
+            .returning(|_, _| Ok(()));
+        iam.expect_list_role_policies().returning(|_| {
+            Ok(serde_json::from_value(serde_json::json!({
+                "ListRolePoliciesResult": { "PolicyNames": [], "IsTruncated": false }
+            }))
+            .unwrap())
+        });
+        iam.expect_list_attached_role_policies().returning(|_| {
+            Ok(serde_json::from_value(serde_json::json!({
+                "ListAttachedRolePoliciesResult": { "AttachedPolicies": [], "IsTruncated": false }
+            }))
+            .unwrap())
+        });
+        iam.expect_put_role_policy().returning(|_, _, _| Ok(()));
+        iam.expect_delete_role_policy().returning(|_, _| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut controller = AwsServiceAccountController::mock_ready("acme-ext");
+        controller.role_name = Some("test-acme-ext".into());
+        controller.assume_role_policy = Some(stored_trust);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(account.clone())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                    "test-management",
+                ),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.update(account).unwrap();
+        executor.step().await.unwrap();
+        let stored = executor
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap()
+            .assume_role_policy
+            .clone()
+            .unwrap();
+        assert!(!stored.contains(ID), "{stored}");
+    }
+
+    /// An update without the ExternalId never writes a trust without it: when the role's trust
+    /// no longer checks the value state recorded, the update fails and leaves the trust alone.
+    #[tokio::test]
+    async fn an_update_without_the_external_id_refuses_a_trust_it_cannot_keep() {
+        const ID: &str = "0123456789abcdef0123456789ABCDEF";
+        let manager = "arn:aws:iam::111122223333:role/alien-test-manager";
+        let recorded = redacted_trust(&crate::remote_bindings::managing_role_trust_policy(
+            manager,
+            Some(ID),
+        ))
+        .unwrap();
+        let account = ServiceAccount::new("acme-ext".into())
+            .extension("acme".into())
+            .build();
+        for live in [
+            Some(crate::remote_bindings::managing_role_trust_policy(
+                manager, None,
+            )),
+            Some(crate::remote_bindings::managing_role_trust_policy(
+                manager,
+                Some("ffffffffffffffffffffffffffffffff"),
+            )),
+            None,
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role().times(1).returning(move |_| {
+                let mut role = role();
+                role["RoleName"] = "test-acme-ext".into();
+                role["AssumeRolePolicyDocument"] = match &live {
+                    Some(live) => urlencoding::encode(live).into_owned().into(),
+                    None => serde_json::Value::Null,
+                };
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role}}))
+                        .unwrap(),
+                )
+            });
+            iam.expect_update_assume_role_policy().times(0);
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let mut controller = AwsServiceAccountController::mock_ready("acme-ext");
+            controller.role_name = Some("test-acme-ext".into());
+            controller.assume_role_policy = Some(recorded.clone());
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(account.clone())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+                .with_dependency(
+                    alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                    crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                        "test-management",
+                    ),
+                )
+                .service_provider(Arc::new(provider))
+                .build()
+                .await
+                .unwrap();
+            executor.update(account.clone()).unwrap();
+            let error = executor.step().await.unwrap_err();
+            assert!(error.message.contains("ExternalId"), "{}", error.message);
+        }
+    }
+
+    /// A role state holds no ExternalId for, such as one an import recorded without its trust,
+    /// keeps the ExternalId its live trust checks when an update runs without one. A live trust
+    /// that doesn't parse names none to keep, so the update fails without writing.
+    #[tokio::test]
+    async fn an_update_without_the_external_id_keeps_the_live_one_state_never_recorded() {
+        const ID: &str = "0123456789abcdef0123456789ABCDEF";
+        let manager = "arn:aws:iam::111122223333:role/alien-test-manager";
+        let account = ServiceAccount::new("acme-ext".into())
+            .extension("acme".into())
+            .build();
+        let live = crate::remote_bindings::managing_role_trust_policy(manager, Some(ID));
+        for (recorded, live, writes) in [
+            (None, live.clone(), true),
+            (
+                Some(crate::remote_bindings::managing_role_trust_policy(
+                    manager, None,
+                )),
+                live,
+                true,
+            ),
+            (None, format!("{{\"sts:ExternalId\": \"{ID}\""), false),
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role().times(1).returning(move |_| {
+                let mut role = role();
+                role["RoleName"] = "test-acme-ext".into();
+                role["AssumeRolePolicyDocument"] = urlencoding::encode(&live).into_owned().into();
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role}}))
+                        .unwrap(),
+                )
+            });
+            iam.expect_update_assume_role_policy()
+                .times(usize::from(writes))
+                .withf(|_, policy| trusted_external_id(policy).as_deref() == Some(ID))
+                .returning(|_, _| Ok(()));
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let mut controller = AwsServiceAccountController::mock_ready("acme-ext");
+            controller.role_name = Some("test-acme-ext".into());
+            controller.assume_role_policy = recorded;
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(account.clone())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+                .with_dependency(
+                    alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                    crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                        "test-management",
+                    ),
+                )
+                .service_provider(Arc::new(provider))
+                .build()
+                .await
+                .unwrap();
+            executor.update(account.clone()).unwrap();
+            assert_eq!(executor.step().await.is_ok(), writes);
+        }
+    }
+
+    /// A trust that isn't JSON can't have its ExternalId replaced, so it never reaches state.
+    #[test]
+    fn a_trust_that_is_not_json_is_never_kept() {
+        let trust = r#"{"Statement": [{"Condition": {"StringEquals": {"sts:ExternalId": "0123456789abcdef0123456789ABCDEF"}}}"#;
+        assert!(redacted_trust(trust).is_err());
+    }
+
+    /// A long extension identity's role name is cut to IAM's limit as the template cuts it.
+    #[tokio::test]
+    async fn direct_setup_names_a_long_extension_identity_as_the_template_does() {
+        let id = "contoso-backup-and-restore-for-postgres-mysql-and-sqlserver-ext";
+        let expected = alien_core::extension_identity_aws_role_name("test", id);
+        assert_eq!(expected.len(), 64);
+        let mut iam = MockIamApi::new();
+        let name = expected.clone();
+        iam.expect_create_role().times(1).returning(move |request| {
+            assert_eq!(request.role_name, name);
+            assert!(
+                request.description.as_deref().is_some_and(
+                    |description| description.starts_with("Extension identity (contoso)")
+                ),
+                "{:?}",
+                request.description
+            );
+            let mut role = role();
+            role["RoleName"] = name.clone().into();
+            role["Arn"] = format!("arn:aws:iam::123456789012:role/{name}").into();
+            Ok(
+                serde_json::from_value(serde_json::json!({"CreateRoleResult": {"Role": role}}))
+                    .unwrap(),
+            )
+        });
+        let mut executor = executor_with_controller(
+            iam,
+            AwsServiceAccountController {
+                state: AwsServiceAccountState::CreatingRole,
+                ..Default::default()
+            },
+            false,
+            ServiceAccount::new(id.into())
+                .extension("contoso".into())
+                .build(),
+        )
+        .await;
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap()
+                .role_name,
+            Some(expected)
+        );
+    }
+
     #[tokio::test]
     async fn oversized_inline_policy_rejects_create_and_update_before_iam() {
         for state in [
@@ -2639,6 +3199,54 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    /// A stack-wide grant of an extension's permission set resolves from the stack: Alien's own
+    /// registry has no set by that id.
+    #[tokio::test]
+    async fn a_stack_wide_extension_grant_resolves_from_the_stack() {
+        let (extension, profile) = crate::service_account::extension_with_a_stack_wide_set();
+        let account = ServiceAccount::new("app-sa".to_string()).build();
+        let mut iam = alien_aws_clients::iam::MockIamApi::new();
+        iam.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: vec!["deployment-permissions".to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(account.clone())
+            .previous_resource(account)
+            .controller(AwsServiceAccountController {
+                state: AwsServiceAccountState::UpdatingResourcePermissions,
+                role_arn: Some("arn:aws:iam::123456789012:role/test-app-sa".to_string()),
+                role_name: Some("test-app-sa".to_string()),
+                stack_permissions_applied: true,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .permission_profile("app", profile)
+            .extension(extension)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
     }
 
     /// The executor replaces a ProvisionFailed resource whose config changed.

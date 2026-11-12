@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use alien_client_core::interceptor::Cloud;
 use alien_core::{
     kubernetes_service_account_name, permission_profile_from_service_account_id,
     KubernetesClientConfig, Platform, ResourceOutputs, ResourceStatus, ServiceAccount,
@@ -123,12 +124,13 @@ impl KubernetesServiceAccountController {
         let name = kubernetes_service_account_name(ctx.resource_prefix, &profile);
         let kubernetes_config = ctx.get_kubernetes_config()?.clone();
         let namespace = namespace(&kubernetes_config, config.id())?;
-        let client = KubernetesClient::new(kubernetes_config).await.context(
-            ErrorData::CloudPlatformError {
+        let client = KubernetesClient::new(kubernetes_config)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to configure Kubernetes ServiceAccount read".to_string(),
                 resource_id: Some(config.id().to_string()),
-            },
-        )?;
+            })?
+            .with_interceptors(ctx.service_provider.interceptors(Cloud::Kubernetes, None));
         let url = format!(
             "{}/api/v1/namespaces/{namespace}/serviceaccounts/{name}",
             client.get_base_url()

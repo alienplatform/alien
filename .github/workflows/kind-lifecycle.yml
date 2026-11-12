@@ -72,6 +72,7 @@ jobs:
       - name: Build the Kind test binaries
         run: |
           cargo test --locked -p alien-operator --test dynamic_containers_kind --no-run
+          cargo test --locked -p alien-operator --test controller_pods_kind --no-run
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
           cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
 
@@ -94,6 +95,18 @@ jobs:
           docker tag "$image" docker.io/library/memcached:alien-kind-test
           kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
           cargo test --locked -p alien-operator --test dynamic_containers_kind -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: Extension controller pods on a real API server
+        env:
+          ALIEN_CONTROLLER_PODS_KIND_CONTEXT: kind-alien-product-lifecycle
+          ALIEN_CONTROLLER_PODS_KIND_NAMESPACE: alien-controller-pods-ci
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/controller-pods.kubeconfig"
+          kind get kubeconfig --name alien-product-lifecycle > "$KUBECONFIG"
+          kubectl create namespace "$ALIEN_CONTROLLER_PODS_KIND_NAMESPACE"
+          trap 'kubectl delete namespace "$ALIEN_CONTROLLER_PODS_KIND_NAMESPACE" --ignore-not-found; rm -f "$KUBECONFIG"' EXIT
+          cargo test --locked -p alien-operator --test controller_pods_kind -- \
             --ignored --nocapture --test-threads=1
 
       - name: Sandbox chart RBAC on a real API server

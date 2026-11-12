@@ -9,14 +9,15 @@ license-file.workspace = true
 [features]
 default = []  # Minimal default, let consumers choose
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["dep:alien-bindings", "alien-bindings/aws", "dep:base64", "dep:zip", "dep:ed25519-compact", "dep:alien-aws-clients", "dep:alien-preflights", "alien-preflights/runtime-checks", "dep:urlencoding", "alien-client-config/aws"]
+aws = ["dep:alien-bindings", "alien-bindings/aws", "dep:zip", "dep:alien-aws-clients", "dep:alien-preflights", "alien-preflights/runtime-checks", "dep:urlencoding", "alien-client-config/aws"]
 gcp = ["dep:alien-preflights", "dep:alien-gcp-clients", "alien-client-config/gcp"]
-azure = ["dep:alien-bindings", "alien-bindings/azure", "dep:ed25519-compact", "dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
-kubernetes = ["dep:alien-k8s-clients", "dep:alien-bindings", "alien-bindings/kubernetes", "dep:axum", "dep:base64", "dep:dirs", "dep:ed25519-compact", "alien-core/sandbox-capability", "alien-client-config/kubernetes"]
-local = ["dep:base64", "dep:ed25519-compact", "dep:alien-local", "dep:alien-bindings"]  # Local platform support
+azure = ["dep:alien-bindings", "alien-bindings/azure", "dep:alien-azure-clients", "alien-client-config/azure"]
+kubernetes = ["dep:alien-k8s-clients", "dep:alien-bindings", "alien-bindings/kubernetes", "dep:axum", "dep:dirs", "alien-core/sandbox-capability", "alien-client-config/kubernetes"]
+local = ["dep:alien-local", "dep:alien-bindings"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
 test-utils = [
+    "dep:wat",
     "alien-core/test-utils",
     "alien-aws-clients/test-utils",
     "alien-gcp-clients/test-utils", 
@@ -29,6 +30,14 @@ test-utils = [
 [lib]
 crate-type = ["rlib"]
 
+# A controller process that speaks the step protocol, for alien-infra's own tests.
+[[bin]]
+name = "step-protocol-test-controller"
+path = "src/bin/step_protocol_test_controller.rs"
+required-features = ["test-utils"]
+test = false
+doc = false
+
 [dependencies]
 alien-core = { workspace = true }
 alien-error = { workspace = true }
@@ -39,6 +48,8 @@ alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
 alien-k8s-clients = { workspace = true, optional = true }
 alien-helm = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-terraform = { workspace = true }
 alien-local = { workspace = true, optional = true }
 alien-bindings = { workspace = true, optional = true }
 alien-macros = { workspace = true }
@@ -51,7 +62,7 @@ serde_json = { workspace = true }
 petgraph = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["sync", "macros", "io-util", "process", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "process", "rt", "rt-multi-thread", "time", "fs"] }
 async-trait = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
@@ -68,14 +79,28 @@ mockall = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
 pem = { workspace = true }
 p12 = "0.6"
+# Step protocol tokens
+base64 = { workspace = true }
+ed25519-compact = { workspace = true }
 
 # Kubeconfig dependencies
 axum = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
-ed25519-compact = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+# Extension hooks run in wasmtime, which does not build for wasm32.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+alien-hooks-runtime = { workspace = true }
+zip = { workspace = true }
+wat = { workspace = true, optional = true }
+hcl-rs = { workspace = true }
+# `public_host` resolves a host before it connects.
+tokio = { workspace = true, features = ["net"] }
+
+# Controller processes: their own process group, and stdout kept for replies.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

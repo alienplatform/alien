@@ -6,7 +6,7 @@
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::{ErrorData, RequestBuilderExt, Result};
+use alien_client_core::{ErrorData, Result};
 use alien_error::ContextError;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -475,6 +475,7 @@ impl RdsClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 

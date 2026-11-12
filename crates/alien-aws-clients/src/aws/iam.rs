@@ -135,6 +135,7 @@ impl IamClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: Some("us-east-1".into()),
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 
@@ -215,10 +216,12 @@ impl IamClient {
             .post(&url)
             .host("iam.amazonaws.com")
             .content_type_form()
-            .body(body.clone());
+            .body(body);
 
         let sign_config = self.sign_config();
-        let result = match retry {
+        // IAM request bodies carry trust policies, which can hold an `sts:ExternalId`. An error
+        // chain is persisted and returned to API callers, so it must not keep the body.
+        let result = alien_client_core::redact_request_body(match retry {
             XmlRetry::Retryable => {
                 crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await
             }
@@ -237,7 +240,7 @@ impl IamClient {
                 )
                 .await
             }
-        };
+        });
 
         match result {
             Ok(v) => Ok(v),
@@ -251,7 +254,7 @@ impl IamClient {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) =
-                        Self::map_iam_error(status, text, operation_name, resource_name, &body)
+                        Self::map_iam_error(status, text, operation_name, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -323,11 +326,12 @@ impl IamClient {
             .post(&url)
             .host("iam.amazonaws.com")
             .content_type_form()
-            .body(body.clone());
+            .body(body);
 
-        let result =
+        let result = alien_client_core::redact_request_body(
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+                .await,
+        );
 
         match result {
             Ok(_) => Ok(()),
@@ -341,7 +345,7 @@ impl IamClient {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) =
-                        Self::map_iam_error(status, text, operation_name, resource_name, &body)
+                        Self::map_iam_error(status, text, operation_name, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -360,7 +364,6 @@ impl IamClient {
         error_body: &str,
         operation: &str,
         resource_name: &str,
-        request_body: &str,
     ) -> Option<ErrorData> {
         // Attempt to parse the canonical AWS error XML.
         let parsed_error: std::result::Result<IamErrorResponse, _> =
@@ -457,7 +460,7 @@ impl IamClient {
                     url: "iam.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),
-                    http_request_text: Some(request_body.into()),
+                    http_request_text: None,
                 },
             },
         })

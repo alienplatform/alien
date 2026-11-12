@@ -10,6 +10,7 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod compute_cluster;
+pub(crate) mod extension_controllers;
 pub mod kv;
 pub mod queue;
 pub mod sandbox;

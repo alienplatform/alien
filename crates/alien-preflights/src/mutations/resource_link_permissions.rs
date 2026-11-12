@@ -2,9 +2,10 @@
 //!
 //! Resource links and triggers are dependency edges. They provide default
 //! data-access grants only when the consumer's profile has no entry for the
-//! resource. Explicit resource grants take precedence over those defaults, and
-//! a permission set the profile already grants stack-wide (`*`) is not added
-//! again for the one resource.
+//! resource. A link to a custom resource grants the permission sets its type's
+//! descriptor lists for links. Explicit resource grants take precedence over
+//! those defaults, and a permission set the profile already grants stack-wide
+//! (`*`) is not added again for the one resource.
 
 use std::collections::HashSet;
 
@@ -59,16 +60,21 @@ impl StackMutation for ResourceLinkPermissionsMutation {
         let mut grants = Vec::new();
         for entry in stack.resources.values() {
             if let Some(worker) = entry.config.downcast_ref::<Worker>() {
-                collect_link_grants(&mut grants, &worker.permissions, &worker.links);
+                collect_link_grants(&mut grants, &stack, &worker.permissions, &worker.links);
                 collect_worker_trigger_grants(&mut grants, &worker.permissions, &worker.triggers);
             } else if let Some(container) = entry.config.downcast_ref::<Container>() {
-                collect_link_grants(&mut grants, &container.permissions, &container.links);
+                collect_link_grants(
+                    &mut grants,
+                    &stack,
+                    &container.permissions,
+                    &container.links,
+                );
             } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
                 if let Some(profile) = &daemon.permissions {
-                    collect_link_grants(&mut grants, profile, &daemon.links);
+                    collect_link_grants(&mut grants, &stack, profile, &daemon.links);
                 }
             } else if let Some(build) = entry.config.downcast_ref::<Build>() {
-                collect_link_grants(&mut grants, &build.permissions, &build.links);
+                collect_link_grants(&mut grants, &stack, &build.permissions, &build.links);
             }
         }
 
@@ -105,10 +111,9 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             // for Live resources. An inline set that reuses the id may grant less, so only a
             // reference to the built-in set counts.
             let stack_wide = profile.0.get("*");
-            let missing: Vec<&str> = grant
+            let missing: Vec<String> = grant
                 .permission_set_ids
-                .iter()
-                .copied()
+                .into_iter()
                 .filter(|permission_set_id| {
                     !stack_wide.is_some_and(|permissions| {
                         permissions.iter().any(|permission| {
@@ -128,7 +133,7 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             for permission_set_id in missing {
                 if permissions
                     .iter()
-                    .any(|permission| permission.id() == permission_set_id)
+                    .any(|permission| permission.id() == permission_set_id.as_str())
                 {
                     continue;
                 }
@@ -154,17 +159,22 @@ impl StackMutation for ResourceLinkPermissionsMutation {
 struct ResourcePermissionGrant {
     profile_name: String,
     resource_id: String,
-    permission_set_ids: &'static [&'static str],
+    permission_set_ids: Vec<String>,
 }
 
 fn collect_link_grants(
     grants: &mut Vec<ResourcePermissionGrant>,
+    stack: &Stack,
     profile_name: &str,
     links: &[ResourceRef],
 ) {
     for link in links {
-        let Some(permission_set_ids) = permission_sets_for_link(link) else {
-            continue;
+        let permission_set_ids = match permission_sets_for_link(link) {
+            Some(ids) => ids.iter().map(|id| id.to_string()).collect(),
+            None => match stack.descriptor(link.resource_type()) {
+                Some(descriptor) => descriptor.link.permission_sets.clone(),
+                None => continue,
+            },
         };
 
         grants.push(ResourcePermissionGrant {
@@ -186,14 +196,14 @@ fn collect_worker_trigger_grants(
                 grants.push(ResourcePermissionGrant {
                     profile_name: profile_name.to_string(),
                     resource_id: queue.id().to_string(),
-                    permission_set_ids: &["queue/data-read"],
+                    permission_set_ids: vec!["queue/data-read".to_string()],
                 });
             }
             WorkerTrigger::Storage { storage, .. } => {
                 grants.push(ResourcePermissionGrant {
                     profile_name: profile_name.to_string(),
                     resource_id: storage.id().to_string(),
-                    permission_set_ids: &["storage/data-write"],
+                    permission_set_ids: vec!["storage/data-write".to_string()],
                 });
             }
             WorkerTrigger::Schedule { .. } => {}
@@ -327,6 +337,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

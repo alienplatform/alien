@@ -2,6 +2,7 @@ pub mod auth_validator;
 pub mod bundle_sources;
 pub mod credential_resolver;
 pub mod deployment_store;
+pub mod extension_bundle_store;
 pub mod project_store;
 pub mod release_channel_store;
 pub mod release_store;
@@ -23,8 +24,8 @@ pub use bundle_sources::{
     ToolDownload,
 };
 pub use credential_resolver::{
-    CredentialResolver, ManagementExternalIdSource, RemoteStorageCredentialSource,
-    ResolvedCredentials,
+    CredentialResolver, ExtensionIdentity, ManagementExternalIdSource,
+    RemoteStorageCredentialSource, ResolvedCredentials,
 };
 pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{
@@ -35,6 +36,7 @@ pub use deployment_store::{
     ReconcileInputBuilder, ReconcileOutcome, SetupReservation, SuppliedStacks,
     UnacquiredDeployment, UpdateImportedDeploymentParams,
 };
+pub use extension_bundle_store::{BundleObject, ExtensionBundleStore};
 pub use project_store::{ProjectRecord, ProjectStore};
 pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,

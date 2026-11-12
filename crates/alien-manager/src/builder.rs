@@ -48,12 +48,8 @@ pub struct AlienManagerBuilder {
             Arc<dyn alien_bindings::BindingsProviderApi>,
         >,
     >,
-    /// Optional override for the `/v1/stack/import` dispatch registry.
-    /// Defaults to [`alien_infra::ImporterRegistry::built_in`] (OSS resources
-    /// only). Platform-mode embedders extend the OSS registry with
-    /// proprietary controllers (`container`, `compute-cluster`) before
-    /// passing it in here.
-    import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
+    /// The embedder's importers, layered over Alien's in every stack's importer registry.
+    host_importers: fn(&mut alien_infra::ImporterRegistry),
     /// Open tunnel connections; `Some` mounts the tunnel routes.
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts from the registry.
@@ -64,12 +60,18 @@ pub struct AlienManagerBuilder {
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from.
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    /// Where extension bundles are stored.
+    extension_bundle_store: Option<Arc<dyn crate::traits::ExtensionBundleStore>>,
     /// Where deployment values are kept; `None` serves no values.
     value_store: Option<Arc<crate::values::ValueStore>>,
     /// Who may use the value endpoints; the standalone rules when unset.
     value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
     /// The state directory is lost when the process restarts.
     ephemeral_state_dir: bool,
+    /// Signs the tokens of extension controller steps.
+    step_token_key: Option<Arc<ed25519_compact::KeyPair>>,
+    /// Where the controllers of extensions are found on this machine, for `alien dev`.
+    local_extension_controllers: Option<crate::extension_bundles::LocalControllers>,
 }
 
 impl AlienManagerBuilder {
@@ -93,16 +95,40 @@ impl AlienManagerBuilder {
             skip_install: false,
             bindings_provider_override: None,
             target_bindings_providers_override: None,
-            import_registry: None,
+            host_importers: alien_infra::HostRegistrations::NONE.importers,
             tunnels: None,
             charts: None,
             release_channels: None,
             bundle_signing_key: None,
             bundle_sources: None,
+            extension_bundle_store: None,
             value_store: None,
             value_access: None,
             ephemeral_state_dir: false,
+            step_token_key: None,
+            local_extension_controllers: None,
         }
+    }
+
+    /// Sign the token of each extension controller step with the key of `seed`. Controller servers trust its
+    /// public key, which the manager publishes, so it must stay the same across restarts and
+    /// replicas. Without it, a custom resource whose controller runs on the developer's server
+    /// can't be stepped.
+    pub fn step_token_key(mut self, seed: [u8; 32]) -> Self {
+        self.step_token_key = Some(Arc::new(ed25519_compact::KeyPair::from_seed(
+            ed25519_compact::Seed::new(seed),
+        )));
+        self
+    }
+
+    /// Keep extension bundles in `store`. Without it, a manager with a state directory keeps
+    /// them under it, and one without stores none.
+    pub fn extension_bundle_store(
+        mut self,
+        store: Arc<dyn crate::traits::ExtensionBundleStore>,
+    ) -> Self {
+        self.extension_bundle_store = Some(store);
+        self
     }
 
     /// Say that the state directory does not survive a restart (see
@@ -130,6 +156,16 @@ impl AlienManagerBuilder {
         authorizer: Arc<dyn crate::values::ValueAccessAuthorizer>,
     ) -> Self {
         self.value_access = Some(authorizer);
+        self
+    }
+
+    /// Run each extension's controller as a process on this machine, as `alien dev` does.
+    /// Without it, a manager runs no controller process.
+    pub fn local_extension_controllers(
+        mut self,
+        local: crate::extension_bundles::LocalControllers,
+    ) -> Self {
+        self.local_extension_controllers = Some(local);
         self
     }
 
@@ -273,20 +309,14 @@ impl AlienManagerBuilder {
         self
     }
 
-    /// Inject a custom `/v1/stack/import` dispatch registry. Defaults to
-    /// [`alien_infra::ImporterRegistry::built_in`].
-    ///
-    /// Platform-mode embedders use this to layer proprietary importers
-    /// (`container`, `compute-cluster`) on top of the OSS resource set
-    /// without forking the OSS registration helpers:
+    /// Registers the embedder's importers. The manager layers them over Alien's built-in
+    /// importers, and a stack's extensions over both, each time it imports a stack's setup.
     ///
     /// ```ignore
-    /// let mut registry = alien_infra::ImporterRegistry::built_in();
-    /// alien_platform_controllers::register_platform_importers(&mut registry);
-    /// builder.import_registry(Arc::new(registry));
+    /// builder.host_importers(my_controllers::register_importers);
     /// ```
-    pub fn import_registry(mut self, registry: Arc<alien_infra::ImporterRegistry>) -> Self {
-        self.import_registry = Some(registry);
+    pub fn host_importers(mut self, register: fn(&mut alien_infra::ImporterRegistry)) -> Self {
+        self.host_importers = register;
         self
     }
 
@@ -871,6 +901,21 @@ impl AlienManagerBuilder {
             .log_buffer
             .unwrap_or_else(|| Arc::new(crate::dev::LogBuffer::new()));
 
+        let extension_bundles = self
+            .extension_bundle_store
+            .or_else(|| {
+                self.config.state_dir.as_ref().map(|dir| {
+                    Arc::new(crate::providers::StateDirExtensionBundles::new(dir))
+                        as Arc<dyn crate::traits::ExtensionBundleStore>
+                })
+            })
+            .map(|store| {
+                let bundles = crate::extension_bundles::ExtensionBundles::new(store);
+                Arc::new(match self.local_extension_controllers {
+                    Some(local) => bundles.with_local_controllers(local),
+                    None => bundles,
+                })
+            });
         let config = Arc::new(self.config);
         let value_access = self.value_store.as_ref().map(|_| {
             self.value_access.clone().unwrap_or_else(|| {
@@ -901,14 +946,16 @@ impl AlienManagerBuilder {
             self.extra_routes,
             self.platform_routes,
             self.dev_status_tx,
-            self.import_registry,
+            self.host_importers,
             self.tunnels,
             self.charts,
             self.release_channels,
             self.bundle_signing_key,
             self.bundle_sources,
+            extension_bundles,
             self.value_store,
             value_access,
+            self.step_token_key,
         )
         .await
     }
@@ -1117,14 +1164,16 @@ async fn finalize(
     extra_routes: Option<axum::Router<crate::routes::AppState>>,
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
-    import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
+    host_importers: fn(&mut alien_infra::ImporterRegistry),
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     values: Option<Arc<crate::values::ValueStore>>,
     value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
+    step_token_key: Option<Arc<ed25519_compact::KeyPair>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -1157,19 +1206,16 @@ async fn finalize(
         credential_cache: Arc::new(crate::routes::registry_proxy::CredentialCache::new()),
         pull_validation_cache: Arc::new(crate::routes::registry_proxy::PullValidationCache::new()),
         registry_routing_table: server_bindings.registry_routing_table.clone(),
-        // Built-in importer registry covers every OSS `(ResourceType,
-        // Platform)` pair across AWS / GCP / Azure (see
-        // `alien_infra::ImporterRegistry::built_in`). Embedders that need
-        // to layer platform-only resource importers (e.g. `container` /
-        // `compute-cluster`) inject an extended registry through
-        // [`AlienManagerBuilder::import_registry`].
-        import_registry: import_registry_override
-            .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
+        host_registrations: alien_infra::HostRegistrations {
+            importers: host_importers,
+            ..alien_infra::HostRegistrations::NONE
+        },
         tunnels,
         charts,
         release_channels: release_channels.clone(),
         bundle_signing_key,
         bundle_sources,
+        extension_bundles: extension_bundles.clone(),
         log_buffer: log_buffer.clone(),
         values: values.clone(),
         value_access,
@@ -1194,6 +1240,16 @@ async fn finalize(
                 .layer(crate::routes::cors_layer(&config)),
         );
     }
+    if let Some(key) = &step_token_key {
+        router = router.merge(crate::extension_controllers::jwks_router(key));
+    }
+    let extension_controllers = step_token_key.map(|key| {
+        Arc::new(crate::extension_controllers::ExtensionControllers::new(
+            config.base_url(),
+            key,
+            credential_resolver.clone(),
+        ))
+    });
 
     info!(
         port = config.port,
@@ -1211,7 +1267,9 @@ async fn finalize(
         dev_status_tx,
         log_buffer,
         command_server,
+        extension_bundles,
         values,
+        extension_controllers,
         release_channels,
     })
 }

@@ -22,12 +22,14 @@ pub mod data_protection;
 pub mod disks;
 pub mod event_grid;
 pub mod flexible_server;
+#[cfg(test)]
+mod interceptor_tests;
 pub mod keyvault;
 pub mod load_balancers;
 pub mod long_running_operation;
 pub mod managed_clusters;
-pub mod managed_redis;
 pub mod managed_identity;
+pub mod managed_redis;
 pub mod models;
 pub mod monitor;
 pub mod network;

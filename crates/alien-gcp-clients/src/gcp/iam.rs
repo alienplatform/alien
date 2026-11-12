@@ -191,6 +191,8 @@ pub struct IamClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(IamClient);
+
 impl IamClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

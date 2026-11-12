@@ -227,8 +227,14 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+    /// The bundles of the extensions deployments' releases list. `None` for a manager that
+    /// stores none, which can't run a stack with extensions.
+    extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
+    /// How deployments reach the servers their extensions' controllers run on. `None` for a
+    /// manager with no step-token key, whose deployments can't step those resources.
+    extension_controllers: Option<Arc<crate::extension_controllers::ExtensionControllers>>,
     /// Release channels, when the manager has them; see `ReleaseTargeting`.
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
 }
@@ -319,9 +325,20 @@ impl DeploymentLoop {
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            extension_bundles: None,
             values: None,
+            extension_controllers: None,
             release_channels: None,
         }
+    }
+
+    /// Load the extensions of deployments' releases from `bundles`.
+    pub fn with_extension_bundles(
+        mut self,
+        bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
+    ) -> Self {
+        self.extension_bundles = bundles;
+        self
     }
 
     /// Send a deployment that finishes Running on a release other than the one
@@ -337,6 +354,16 @@ impl DeploymentLoop {
     /// Load deployments' held values from `values` before they step.
     pub fn with_value_store(mut self, values: Option<Arc<crate::values::ValueStore>>) -> Self {
         self.values = values;
+        self
+    }
+
+    /// Step the custom resources of deployments' extensions on the servers their releases pin,
+    /// through `controllers`.
+    pub fn with_extension_controllers(
+        mut self,
+        controllers: Option<Arc<crate::extension_controllers::ExtensionControllers>>,
+    ) -> Self {
+        self.extension_controllers = controllers;
         self
     }
 
@@ -1207,9 +1234,7 @@ impl DeploymentLoop {
 
         // 6. Build service provider.
         // Use LocalBindingsProvider for local platform, default provider for cloud platforms.
-        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> = match deployment
-            .platform
-        {
+        let service_provider = match deployment.platform {
             alien_core::Platform::Local => {
                 let state_dir = self.config.state_dir.as_ref().ok_or_else(|| {
                     AlienError::new(GenericError {
@@ -1226,11 +1251,35 @@ impl DeploymentLoop {
                     local_bindings.queue_manager().clone(),
                     &self.config.base_url(),
                 );
-                Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
-                    local_bindings,
-                ))
+                DefaultPlatformServiceProvider::with_local_bindings(local_bindings)
             }
-            _ => Arc::new(DefaultPlatformServiceProvider::default()),
+            _ => DefaultPlatformServiceProvider::default(),
+        };
+        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> = match self
+            .with_extensions(service_provider, &deployment, &state)
+            .await
+        {
+            Ok(provider) => Arc::new(provider),
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    error = %error,
+                    "Extension bundles could not be loaded"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
+                        status,
+                        deployment_stack: deployment_stack.as_ref(),
+                        target_release_id,
+                        current_release,
+                        had_credential_retry,
+                        error,
+                        session,
+                        execution_claim,
+                    })
+                    .await;
+            }
         };
 
         // 7. Step loop — use the shared runner with ManagerTransport for
@@ -1361,6 +1410,36 @@ impl DeploymentLoop {
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
         runner_result.map(|_| None).map_err(|e| e.into_generic())
+    }
+
+    /// `provider` with the extensions of the releases `state` names, from this manager's bundles,
+    /// each reaching its controller server for `deployment`.
+    async fn with_extensions(
+        &self,
+        provider: DefaultPlatformServiceProvider,
+        deployment: &DeploymentRecord,
+        state: &DeploymentState,
+    ) -> Result<DefaultPlatformServiceProvider, AlienError> {
+        if alien_infra::extension_bundle::release_extensions(state).is_empty() {
+            return Ok(provider);
+        }
+        let bundles = self.extension_bundles.as_ref().ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: "The deployment's releases use extensions, and this manager stores no extension bundles".to_string(),
+            })
+        })?;
+        bundles
+            .provider_for(
+                provider,
+                &deployment.project_id,
+                &deployment.id,
+                state,
+                |extension, bundle| match &self.extension_controllers {
+                    Some(controllers) => controllers.factory(deployment, extension, bundle),
+                    None => crate::extension_controllers::unsigned_factory(deployment, bundle),
+                },
+            )
+            .await
     }
 
     /// Saves `failure` as the deployment's error in its phase's failed status and backs off
@@ -1718,7 +1797,14 @@ impl RunnerConfigSources<'_> {
         let gcp_federation_scope = (deployment.base_platform.unwrap_or(deployment.platform)
             == alien_core::Platform::Gcp)
             .then(|| deployment.gcp_federation_scope());
+        // Never stored or serialized; a lookup failure fails the step rather than create an
+        // extension identity whose trust lacks the ExternalId.
+        let management_external_id = self
+            .credential_resolver
+            .management_external_id(deployment)
+            .await?;
         let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            config.management_external_id = management_external_id;
             // Stored installer configuration cannot choose the broker's authorization namespace.
             config.gcp_federation_scope = gcp_federation_scope;
             config.environment_variables = environment_variables;
@@ -1756,6 +1842,7 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                management_external_id,
                 gcp_federation_scope,
                 stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),
@@ -2310,6 +2397,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for RuntimeOnlyCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -2339,6 +2433,198 @@ mod tests {
                 has_provision_capability: false,
             })
         }
+    }
+
+    /// Credentials that can run every phase, for a test platform deployment.
+    struct TestCredentials;
+
+    #[async_trait]
+    impl CredentialResolver for TestCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_with_capability(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<ResolvedCredentials, AlienError> {
+            Ok(ResolvedCredentials {
+                client_config: self.resolve(deployment).await?,
+                has_provision_capability: true,
+            })
+        }
+    }
+
+    /// The status and error a push deployment of a release listing `extension` saves after one
+    /// tick of a manager whose bundles are `bundles`.
+    #[cfg(feature = "sqlite")]
+    async fn tick_with_extension(
+        extension: alien_core::ExtensionManifest,
+        bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
+    ) -> (String, String) {
+        // A manager's builder sets the key; this loop runs without one.
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let caller = Subject::system();
+        let deployment = store
+            .create_deployment(
+                &caller,
+                CreateDeploymentParams {
+                    name: "extended".to_string(),
+                    deployment_group_id: "dg_test".to_string(),
+                    platform: Platform::Test,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings {
+                        deployment_model: alien_core::DeploymentModel::Push,
+                        ..Default::default()
+                    },
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        let filter = DeploymentFilter {
+            deployment_ids: Some(vec![deployment.id.clone()]),
+            ..Default::default()
+        };
+        let mut item = store
+            .acquire(&caller, "manager-session", &filter, 1)
+            .await
+            .unwrap()
+            .remove(0);
+        item.deployment.desired_release_id = Some("rel_ext".to_string());
+        let mut stack = Stack::new("extended".to_string()).build();
+        stack.extensions = vec![extension];
+        item.deployment.supplied_stacks = Some(SuppliedStacks {
+            desired: Some(stack),
+            current: None,
+        });
+        let bindings = Arc::new(ServerBindings {
+            local_queues: Arc::new(alien_local::LocalQueueService::default()),
+            kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+            command_storage: Arc::new(
+                LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                    .unwrap(),
+            ),
+            command_dispatcher: Arc::new(NullCommandDispatcher),
+            command_registry: Arc::new(InMemoryCommandRegistry::default()),
+            artifact_registry: None,
+            bindings_provider: None,
+            target_bindings_providers: Default::default(),
+            registry_routing_table: Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+            ),
+        });
+        DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(TestCredentials),
+            bindings,
+            None,
+        )
+        .with_extension_bundles(bundles)
+        .process_deployment(
+            item.deployment,
+            item.execution_claim,
+            "manager-session",
+            ProcessOptions::deployment_tick(),
+        )
+        .await;
+        let stored = store
+            .get_deployment(&caller, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            stored.status,
+            stored
+                .error
+                .map(|error| error.to_string())
+                .unwrap_or_default(),
+        )
+    }
+
+    /// The manager loads a release's extensions before the release's first step: a bundle it
+    /// can't load fails the deployment naming the extension, and one it loads runs.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_push_deployment_runs_only_with_its_extensions_loaded() {
+        use crate::traits::ExtensionBundleStore;
+        use alien_infra::extension_bundle::testing::TestBundle;
+        let bundle = TestBundle::new("acme", "1.0.0", &[]);
+        let objects = tempfile::tempdir().unwrap();
+        let store = Arc::new(crate::providers::StateDirExtensionBundles::new(
+            objects.path(),
+        ));
+        let bundles = Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+            store.clone(),
+        )));
+        let message = |(_, error): (String, String)| error;
+
+        let unstored = message(tick_with_extension(bundle.manifest.clone(), None).await);
+        let missing = message(tick_with_extension(bundle.manifest.clone(), bundles.clone()).await);
+        let mut tampered = bundle.zip.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let hex = bundle.manifest.digest.strip_prefix("sha256:").unwrap();
+        store.put(&Subject::system(), hex, tampered).await.unwrap();
+        let refused = message(
+            tick_with_extension(
+                bundle.manifest.clone(),
+                Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+                    store.clone(),
+                ))),
+            )
+            .await,
+        );
+        store
+            .put(&Subject::system(), hex, bundle.zip.clone())
+            .await
+            .unwrap();
+        let (loaded_status, loaded) = tick_with_extension(
+            bundle.manifest.clone(),
+            Some(Arc::new(crate::extension_bundles::ExtensionBundles::new(
+                store.clone(),
+            ))),
+        )
+        .await;
+
+        assert!(
+            unstored.contains("stores no extension bundles"),
+            "{unstored}"
+        );
+        assert!(
+            missing.contains("Extension 'acme'") && missing.contains("no such bundle"),
+            "{missing}"
+        );
+        assert!(
+            refused.contains("Extension 'acme'") && refused.contains("sha256"),
+            "{refused}"
+        );
+        assert_eq!(loaded_status, "provisioning", "{loaded}");
+        assert!(loaded.is_empty(), "{loaded}");
     }
 
     #[cfg(feature = "sqlite")]
@@ -3025,6 +3311,13 @@ mod tests {
 
         #[async_trait]
         impl CredentialResolver for Credentials {
+            async fn management_external_id(
+                &self,
+                _: &DeploymentRecord,
+            ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+                Ok(None)
+            }
+
             async fn resolve(
                 &self,
                 _: &DeploymentRecord,
@@ -5145,6 +5438,13 @@ mod tests {
     #[cfg(feature = "sqlite")]
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for NoRuntimeCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -5657,6 +5957,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for UnresolvableManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -5674,10 +5981,85 @@ mod tests {
         }
     }
 
+    struct IssuesExternalId;
+
+    #[async_trait]
+    impl CredentialResolver for IssuesExternalId {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(Some(
+                alien_core::ManagementExternalId::new("0123456789abcdef0123456789ABCDEF").unwrap(),
+            ))
+        }
+    }
+
+    /// A setup the manager runs, as in automatic setup, creates the extension identities, so it
+    /// writes the ExternalId the control plane issued into their trust, as a setup the installer
+    /// runs does. The value stays off the config any other runner gets.
+    #[tokio::test]
+    async fn the_runner_config_carries_the_issued_external_id_and_never_serializes_it() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let mut deployment = deployment_record(DeploymentStatus::Pending, None);
+        deployment.stack_settings = Some(StackSettings::default());
+        for supplied in [false, true] {
+            if supplied {
+                deployment.deployment_config = Some(
+                    DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(EnvironmentVariablesSnapshot {
+                            variables: vec![],
+                            hash: "h".to_string(),
+                            created_at: "2026-01-01T00:00:00Z".to_string(),
+                        })
+                        .allow_frozen_changes(false)
+                        .external_bindings(Default::default())
+                        .build(),
+                );
+            }
+            let config = RunnerConfigSources {
+                config: &manager_config,
+                credential_resolver: &IssuesExternalId,
+                bindings_provider: &None,
+                target_bindings_providers: &HashMap::new(),
+            }
+            .deployment_config(&deployment, None, None)
+            .await
+            .expect("runner config");
+            assert_eq!(
+                config.management_external_id.as_ref().map(|id| id.expose()),
+                Some("0123456789abcdef0123456789ABCDEF"),
+                "supplied config: {supplied}"
+            );
+            assert!(!serde_json::to_string(&config)
+                .unwrap()
+                .contains("0123456789abcdef0123456789ABCDEF"));
+        }
+    }
+
     struct ResolvedManagementIdentity;
 
     #[async_trait]
     impl CredentialResolver for ResolvedManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6394,3 +6776,11 @@ fn parse_status(status: &str) -> DeploymentStatus {
         }
     }
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "deployment_extension_tests.rs"]
+mod extension_controller_tests;
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "deployment_parity_tests.rs"]
+mod parity_tests;

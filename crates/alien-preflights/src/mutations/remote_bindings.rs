@@ -7,7 +7,9 @@ use alien_core::{
     Stack, StackState,
 };
 use alien_error::AlienError;
-use alien_permissions::{get_permission_set, permission_set_reaches_a_sandbox};
+use alien_permissions::{
+    get_permission_set, get_stack_permission_set, permission_set_reaches_a_sandbox,
+};
 use async_trait::async_trait;
 
 pub const REMOTE_BINDINGS_ID: &str = "access";
@@ -234,7 +236,8 @@ fn validate_remote_sandboxes_are_single_tenant(
 
 /// How the deployment's own workloads can reach `sandbox_id`, if any can.
 ///
-/// Four routes: a compute link, a permission profile, a stack permission set on a user-declared
+/// Five routes: a compute link, a link to a custom resource whose type grants linking workloads a
+/// set that reaches sessions, a permission profile, a stack permission set on a user-declared
 /// ServiceAccount, and a resource-scoped entry in the author's management profile — never by set
 /// id, since an inline set can be named anything.
 ///
@@ -254,6 +257,30 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Opt
         return Some(format!("resource '{consumer_id}' links it"));
     }
 
+    // `ResourceLinkPermissionsMutation` adds these grants after this gate runs.
+    let by_custom_link = stack.resources().find_map(|(consumer_id, entry)| {
+        links_of(&entry.config).iter().find_map(|link| {
+            let descriptor = stack.descriptor(link.resource_type())?;
+            descriptor
+                .link
+                .permission_sets
+                .iter()
+                .find(|id| {
+                    get_stack_permission_set(stack, id)
+                        .is_some_and(permission_set_reaches_a_sandbox)
+                })
+                .map(|id| {
+                    format!(
+                        "resource '{consumer_id}' links '{}', and that link grants '{id}', which reaches it",
+                        link.id()
+                    )
+                })
+        })
+    });
+    if by_custom_link.is_some() {
+        return by_custom_link;
+    }
+
     let by_profile = stack
         .permissions
         .profiles
@@ -264,7 +291,7 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Opt
                 .iter()
                 .any(|(target, permission_sets)| {
                     permission_sets.iter().any(|reference| {
-                        reaches_this_sandbox(reference, target, sandbox_id, platform)
+                        reaches_this_sandbox(stack, reference, target, sandbox_id, platform)
                     })
                 })
                 .then(|| format!("permission profile '{profile_name}' grants access to it"))
@@ -297,7 +324,9 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Opt
             .find_map(|(target, permission_sets)| {
                 permission_sets
                     .iter()
-                    .find(|reference| reaches_this_sandbox(reference, target, sandbox_id, platform))
+                    .find(|reference| {
+                        reaches_this_sandbox(stack, reference, target, sandbox_id, platform)
+                    })
                     .map(|reference| {
                         format!(
                             "the management profile grants '{}' on '{target}', which reaches it",
@@ -313,22 +342,30 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Opt
 /// carries its own scope and can name this sandbox's group from under any key.
 ///
 /// On GCP a named set is read as inline too: the reach scan reads no binding scope, and GCP has no
-/// counterpart to the `${resourceName}` invariant that lets a key scope an AWS or Azure set.
+/// counterpart to the `${resourceName}` invariant that lets a key scope an AWS or Azure set. So is
+/// an extension's set, which nothing holds to that invariant.
 fn reaches_this_sandbox(
+    stack: &Stack,
     reference: &PermissionSetReference,
     target: &str,
     sandbox_id: &str,
     platform: Platform,
 ) -> bool {
     match reference {
-        // An unresolvable name is no reach: the manager rejects an unknown set before it grants
-        // anything. The key scopes a named set because every session-reaching set interpolates
+        // The key scopes a named set because every session-reaching set interpolates
         // `${resourceName}`, which `every_session_reaching_set_is_resource_scoped_by_resource_name`
         // pins in the registry — for the two platforms it covers.
-        PermissionSetReference::Name(name) => {
-            (platform == Platform::Gcp || target == sandbox_id || target == "*")
-                && get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox)
-        }
+        PermissionSetReference::Name(name) => match get_permission_set(name) {
+            Some(set) => {
+                (platform == Platform::Gcp || target == sandbox_id || target == "*")
+                    && permission_set_reaches_a_sandbox(set)
+            }
+            // An unresolvable name is no reach: the manager rejects an unknown set before it
+            // grants anything.
+            None => {
+                get_stack_permission_set(stack, name).is_some_and(permission_set_reaches_a_sandbox)
+            }
+        },
         PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox(set),
     }
 }
@@ -344,6 +381,7 @@ mod tests {
 
     fn config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             gcp_federation_scope: None,
             deployment_name: None,
             stack_settings: StackSettings::default(),
@@ -941,6 +979,100 @@ mod tests {
                 .to_string()
                 .contains("service account 'runner' can start sessions in it"),
             "the refusal must name the service account, got: {error}"
+        );
+    }
+
+    /// A remote sandbox beside an extension's DNS zone, whose `records-write` set can start
+    /// sessions.
+    fn stack_with_a_session_reaching_extension_set() -> Stack {
+        let zone = alien_core::CustomResource::from_untagged(
+            "acme/dns-zone",
+            serde_json::json!({ "id": "zone", "domain": "internal.acme.dev" }),
+        )
+        .unwrap();
+        let mut stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add(zone, ResourceLifecycle::Frozen)
+            .build();
+        let mut records_write = serde_json::to_value(inline_run_microvm_set("x")).unwrap();
+        records_write["id"] = "acme/dns-zone/records-write".into();
+        stack.extensions = vec![serde_json::from_value(serde_json::json!({
+            "name": "acme",
+            "version": "0.1.0",
+            "digest": "sha256:4ff931a2",
+            "resourceTypes": { "acme/dns-zone": {
+                "lifecycles": ["frozen"],
+                "holdsData": false,
+                "setup": { "cloudformation": ["aws"], "terraform": [], "helm": [], "importers": ["aws"] },
+                "controllerPlatforms": [],
+                "permissionSets": [records_write],
+                "link": { "permissionSets": ["acme/dns-zone/records-write"] },
+                "schemas": { "config": {}, "outputs": {} }
+            } }
+        }))
+        .unwrap()];
+        stack
+    }
+
+    /// Nothing holds an extension's set to the `${resourceName}` invariant, so the key it is
+    /// filed under doesn't keep it off the sandbox.
+    #[tokio::test]
+    async fn a_remote_sandbox_reached_by_an_extension_set_is_refused() {
+        let mut stack = stack_with_a_session_reaching_extension_set();
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            PermissionProfile::new().resource("zone", ["acme/dns-zone/records-write"]),
+        );
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config())
+            .await
+            .expect_err("an extension set that can start sessions is a second tenant");
+
+        assert!(
+            error
+                .to_string()
+                .contains("permission profile 'execution' grants access to it"),
+            "the refusal must name the profile, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remote_sandbox_reached_through_a_link_to_a_custom_resource_is_refused() {
+        let mut worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "api:1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        worker.links.push(alien_core::ResourceRef::new(
+            alien_core::ResourceType::from("acme/dns-zone"),
+            "zone",
+        ));
+        let mut stack = stack_with_a_session_reaching_extension_set();
+        stack.resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(worker),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config())
+            .await
+            .expect_err("a link that grants a session-reaching set is a second tenant");
+
+        assert!(
+            error.to_string().contains(
+                "resource 'api' links 'zone', and that link grants 'acme/dns-zone/records-write', which reaches it"
+            ),
+            "the refusal must name the link, got: {error}"
         );
     }
 

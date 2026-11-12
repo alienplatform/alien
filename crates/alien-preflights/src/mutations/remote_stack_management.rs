@@ -191,6 +191,7 @@ mod tests {
         deployment_model: DeploymentModel,
     ) -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             gcp_federation_scope: None,
             deployment_name: None,
             stack_settings: StackSettings {

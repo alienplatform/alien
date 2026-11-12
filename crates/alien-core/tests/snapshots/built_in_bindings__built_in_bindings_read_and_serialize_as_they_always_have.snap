@@ -1,0 +1,192 @@
+---
+source: crates/alien-core/tests/built_in_bindings.rs
+expression: out
+---
+ONE {"type":"storage","service":"s3","bucketName":"demo","endpoint":"https://s3.example.test","region":"us-east-1","forcePathStyle":true}
+  => Ok(("{\"type\":\"storage\",\"service\":\"s3\",\"bucketName\":\"demo\",\"endpoint\":\"https://s3.example.test\",\"region\":\"us-east-1\",\"forcePathStyle\":true}", "null", Ok("{\"bucketName\":\"demo\",\"endpoint\":\"https://s3.example.test\",\"forcePathStyle\":true,\"region\":\"us-east-1\",\"service\":\"s3\"}"), "storage"))
+MAP => Ok("{\"r\":{\"type\":\"storage\",\"service\":\"s3\",\"bucketName\":\"demo\",\"endpoint\":\"https://s3.example.test\",\"region\":\"us-east-1\",\"forcePathStyle\":true}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"storage\",\"service\":\"s3\",\"bucketName\":\"demo\",\"endpoint\":\"https://s3.example.test\",\"region\":\"us-east-1\",\"forcePathStyle\":true}}}")
+ONE {"type":"storage","service":"blob","accountName":"demo","containerName":"archive"}
+  => Ok(("{\"type\":\"storage\",\"service\":\"blob\",\"accountName\":\"demo\",\"containerName\":\"archive\"}", "null", Ok("{\"accountName\":\"demo\",\"containerName\":\"archive\",\"service\":\"blob\"}"), "storage"))
+MAP => Ok("{\"r\":{\"type\":\"storage\",\"service\":\"blob\",\"accountName\":\"demo\",\"containerName\":\"archive\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"storage\",\"service\":\"blob\",\"accountName\":\"demo\",\"containerName\":\"archive\"}}}")
+ONE {"type":"storage","service":"gcs","bucketName":"demo"}
+  => Ok(("{\"type\":\"storage\",\"service\":\"gcs\",\"bucketName\":\"demo\"}", "null", Ok("{\"bucketName\":\"demo\",\"service\":\"gcs\"}"), "storage"))
+MAP => Ok("{\"r\":{\"type\":\"storage\",\"service\":\"gcs\",\"bucketName\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"storage\",\"service\":\"gcs\",\"bucketName\":\"demo\"}}}")
+ONE {"type":"storage","service":"local-storage","storagePath":"/tmp/demo"}
+  => Ok(("{\"type\":\"storage\",\"service\":\"local-storage\",\"storagePath\":\"/tmp/demo\"}", "null", Ok("{\"service\":\"local-storage\",\"storagePath\":\"/tmp/demo\"}"), "storage"))
+MAP => Ok("{\"r\":{\"type\":\"storage\",\"service\":\"local-storage\",\"storagePath\":\"/tmp/demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"storage\",\"service\":\"local-storage\",\"storagePath\":\"/tmp/demo\"}}}")
+ONE {"type":"storage","service":"s3","bucketName":{"secretRef":{"name":"demo","key":"bucket"}}}
+  => Ok(("{\"type\":\"storage\",\"service\":\"s3\",\"bucketName\":{\"secretRef\":{\"name\":\"demo\",\"key\":\"bucket\"}}}", "null", Ok("{\"bucketName\":{\"secretRef\":{\"key\":\"bucket\",\"name\":\"demo\"}},\"service\":\"s3\"}"), "storage"))
+MAP => Ok("{\"r\":{\"type\":\"storage\",\"service\":\"s3\",\"bucketName\":{\"secretRef\":{\"name\":\"demo\",\"key\":\"bucket\"}}}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"storage\",\"service\":\"s3\",\"bucketName\":{\"secretRef\":{\"name\":\"demo\",\"key\":\"bucket\"}}}}}")
+ONE {"type":"queue","service":"sqs","queueUrl":"https://queue.example.test/demo"}
+  => Ok(("{\"type\":\"queue\",\"service\":\"sqs\",\"queueUrl\":\"https://queue.example.test/demo\"}", "null", Ok("{\"queueUrl\":\"https://queue.example.test/demo\",\"service\":\"sqs\"}"), "queue"))
+MAP => Ok("{\"r\":{\"type\":\"queue\",\"service\":\"sqs\",\"queueUrl\":\"https://queue.example.test/demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"queue\",\"service\":\"sqs\",\"queueUrl\":\"https://queue.example.test/demo\"}}}")
+ONE {"type":"queue","service":"pubsub","topic":"demo","subscription":"reader"}
+  => Ok(("{\"type\":\"queue\",\"service\":\"pubsub\",\"topic\":\"demo\",\"subscription\":\"reader\"}", "null", Ok("{\"service\":\"pubsub\",\"subscription\":\"reader\",\"topic\":\"demo\"}"), "queue"))
+MAP => Ok("{\"r\":{\"type\":\"queue\",\"service\":\"pubsub\",\"topic\":\"demo\",\"subscription\":\"reader\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"queue\",\"service\":\"pubsub\",\"topic\":\"demo\",\"subscription\":\"reader\"}}}")
+ONE {"type":"queue","service":"servicebus","namespace":"demo","queueName":"events"}
+  => Ok(("{\"type\":\"queue\",\"service\":\"servicebus\",\"namespace\":\"demo\",\"queueName\":\"events\"}", "null", Ok("{\"namespace\":\"demo\",\"queueName\":\"events\",\"service\":\"servicebus\"}"), "queue"))
+MAP => Ok("{\"r\":{\"type\":\"queue\",\"service\":\"servicebus\",\"namespace\":\"demo\",\"queueName\":\"events\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"queue\",\"service\":\"servicebus\",\"namespace\":\"demo\",\"queueName\":\"events\"}}}")
+ONE {"type":"queue","service":"local-queue","queuePath":"/tmp/demo"}
+  => Ok(("{\"type\":\"queue\",\"service\":\"local-queue\",\"queuePath\":\"/tmp/demo\"}", "null", Ok("{\"queuePath\":\"/tmp/demo\",\"service\":\"local-queue\"}"), "queue"))
+MAP => Ok("{\"r\":{\"type\":\"queue\",\"service\":\"local-queue\",\"queuePath\":\"/tmp/demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"queue\",\"service\":\"local-queue\",\"queuePath\":\"/tmp/demo\"}}}")
+ONE {"type":"kv","service":"dynamodb","tableName":"demo","region":"us-east-1","endpointUrl":"https://kv.example.test"}
+  => Ok(("{\"type\":\"kv\",\"service\":\"dynamodb\",\"tableName\":\"demo\",\"region\":\"us-east-1\",\"endpointUrl\":\"https://kv.example.test\"}", "null", Ok("{\"endpointUrl\":\"https://kv.example.test\",\"region\":\"us-east-1\",\"service\":\"dynamodb\",\"tableName\":\"demo\"}"), "kv"))
+MAP => Ok("{\"r\":{\"type\":\"kv\",\"service\":\"dynamodb\",\"tableName\":\"demo\",\"region\":\"us-east-1\",\"endpointUrl\":\"https://kv.example.test\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"kv\",\"service\":\"dynamodb\",\"tableName\":\"demo\",\"region\":\"us-east-1\",\"endpointUrl\":\"https://kv.example.test\"}}}")
+ONE {"type":"kv","service":"firestore","projectId":"demo","databaseId":"demo","collectionName":"items"}
+  => Ok(("{\"type\":\"kv\",\"service\":\"firestore\",\"projectId\":\"demo\",\"databaseId\":\"demo\",\"collectionName\":\"items\"}", "null", Ok("{\"collectionName\":\"items\",\"databaseId\":\"demo\",\"projectId\":\"demo\",\"service\":\"firestore\"}"), "kv"))
+MAP => Ok("{\"r\":{\"type\":\"kv\",\"service\":\"firestore\",\"projectId\":\"demo\",\"databaseId\":\"demo\",\"collectionName\":\"items\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"kv\",\"service\":\"firestore\",\"projectId\":\"demo\",\"databaseId\":\"demo\",\"collectionName\":\"items\"}}}")
+ONE {"type":"kv","service":"tablestorage","resourceGroupName":"demo","accountName":"demo","tableName":"items"}
+  => Ok(("{\"type\":\"kv\",\"service\":\"tablestorage\",\"resourceGroupName\":\"demo\",\"accountName\":\"demo\",\"tableName\":\"items\"}", "null", Ok("{\"accountName\":\"demo\",\"resourceGroupName\":\"demo\",\"service\":\"tablestorage\",\"tableName\":\"items\"}"), "kv"))
+MAP => Ok("{\"r\":{\"type\":\"kv\",\"service\":\"tablestorage\",\"resourceGroupName\":\"demo\",\"accountName\":\"demo\",\"tableName\":\"items\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"kv\",\"service\":\"tablestorage\",\"resourceGroupName\":\"demo\",\"accountName\":\"demo\",\"tableName\":\"items\"}}}")
+ONE {"type":"kv","service":"redis","connectionUrl":"redis://localhost:6379","keyPrefix":"demo","database":2}
+  => Ok(("{\"type\":\"kv\",\"service\":\"redis\",\"connectionUrl\":\"redis://localhost:6379\",\"keyPrefix\":\"demo\",\"database\":2}", "null", Ok("{\"connectionUrl\":\"redis://localhost:6379\",\"database\":2,\"keyPrefix\":\"demo\",\"service\":\"redis\"}"), "kv"))
+MAP => Ok("{\"r\":{\"type\":\"kv\",\"service\":\"redis\",\"connectionUrl\":\"redis://localhost:6379\",\"keyPrefix\":\"demo\",\"database\":2}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"kv\",\"service\":\"redis\",\"connectionUrl\":\"redis://localhost:6379\",\"keyPrefix\":\"demo\",\"database\":2}}}")
+ONE {"type":"kv","service":"local-kv","dataDir":"/tmp/demo","keyPrefix":"demo"}
+  => Ok(("{\"type\":\"kv\",\"service\":\"local-kv\",\"dataDir\":\"/tmp/demo\",\"keyPrefix\":\"demo\"}", "null", Ok("{\"dataDir\":\"/tmp/demo\",\"keyPrefix\":\"demo\",\"service\":\"local-kv\"}"), "kv"))
+MAP => Ok("{\"r\":{\"type\":\"kv\",\"service\":\"local-kv\",\"dataDir\":\"/tmp/demo\",\"keyPrefix\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"kv\",\"service\":\"local-kv\",\"dataDir\":\"/tmp/demo\",\"keyPrefix\":\"demo\"}}}")
+ONE {"type":"redis","service":"elasticache","host":"cache.example.test","port":6379,"username":"default","passwordSecretArn":"demo-secret"}
+  => Ok(("{\"type\":\"redis\",\"service\":\"elasticache\",\"host\":\"cache.example.test\",\"port\":6379,\"username\":\"default\",\"passwordSecretArn\":\"demo-secret\"}", "null", Ok("{\"host\":\"cache.example.test\",\"passwordSecretArn\":\"demo-secret\",\"port\":6379,\"service\":\"elasticache\",\"username\":\"default\"}"), "redis"))
+MAP => Ok("{\"r\":{\"type\":\"redis\",\"service\":\"elasticache\",\"host\":\"cache.example.test\",\"port\":6379,\"username\":\"default\",\"passwordSecretArn\":\"demo-secret\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"redis\",\"service\":\"elasticache\",\"host\":\"cache.example.test\",\"port\":6379,\"username\":\"default\",\"passwordSecretArn\":\"demo-secret\"}}}")
+ONE {"type":"redis","service":"memorystore","host":"10.0.0.5","port":6379,"username":"default","serverCaCertificates":["demo-ca"],"instanceName":"demo"}
+  => Ok(("{\"type\":\"redis\",\"service\":\"memorystore\",\"host\":\"10.0.0.5\",\"port\":6379,\"username\":\"default\",\"serverCaCertificates\":[\"demo-ca\"],\"instanceName\":\"demo\"}", "null", Ok("{\"host\":\"10.0.0.5\",\"instanceName\":\"demo\",\"port\":6379,\"serverCaCertificates\":[\"demo-ca\"],\"service\":\"memorystore\",\"username\":\"default\"}"), "redis"))
+MAP => Ok("{\"r\":{\"type\":\"redis\",\"service\":\"memorystore\",\"host\":\"10.0.0.5\",\"port\":6379,\"username\":\"default\",\"serverCaCertificates\":[\"demo-ca\"],\"instanceName\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"redis\",\"service\":\"memorystore\",\"host\":\"10.0.0.5\",\"port\":6379,\"username\":\"default\",\"serverCaCertificates\":[\"demo-ca\"],\"instanceName\":\"demo\"}}}")
+ONE {"type":"redis","service":"azure-managed-redis","host":"cache.example.test","port":10000,"username":"default","databaseResourceId":"demo-db"}
+  => Ok(("{\"type\":\"redis\",\"service\":\"azure-managed-redis\",\"host\":\"cache.example.test\",\"port\":10000,\"username\":\"default\",\"databaseResourceId\":\"demo-db\"}", "null", Ok("{\"databaseResourceId\":\"demo-db\",\"host\":\"cache.example.test\",\"port\":10000,\"service\":\"azure-managed-redis\",\"username\":\"default\"}"), "redis"))
+MAP => Ok("{\"r\":{\"type\":\"redis\",\"service\":\"azure-managed-redis\",\"host\":\"cache.example.test\",\"port\":10000,\"username\":\"default\",\"databaseResourceId\":\"demo-db\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"redis\",\"service\":\"azure-managed-redis\",\"host\":\"cache.example.test\",\"port\":10000,\"username\":\"default\",\"databaseResourceId\":\"demo-db\"}}}")
+ONE {"type":"redis","service":"external","host":"cache.example.test","port":6379,"username":"default","password":"demo","tls":false}
+  => Ok(("{\"type\":\"redis\",\"service\":\"external\",\"host\":\"cache.example.test\",\"port\":6379,\"username\":\"default\",\"password\":\"demo\",\"tls\":false}", "null", Ok("{\"host\":\"cache.example.test\",\"password\":\"demo\",\"port\":6379,\"service\":\"external\",\"tls\":false,\"username\":\"default\"}"), "redis"))
+MAP => Ok("{\"r\":{\"type\":\"redis\",\"service\":\"external\",\"host\":\"cache.example.test\",\"port\":6379,\"username\":\"default\",\"password\":\"demo\",\"tls\":false}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"redis\",\"service\":\"external\",\"host\":\"cache.example.test\",\"port\":6379,\"username\":\"default\",\"password\":\"demo\",\"tls\":false}}}")
+ONE {"type":"redis","service":"local-redis","host":"127.0.0.1","port":6379,"username":"default","password":"demo"}
+  => Ok(("{\"type\":\"redis\",\"service\":\"local-redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"username\":\"default\",\"password\":\"demo\"}", "null", Ok("{\"host\":\"127.0.0.1\",\"password\":\"demo\",\"port\":6379,\"service\":\"local-redis\",\"username\":\"default\"}"), "redis"))
+MAP => Ok("{\"r\":{\"type\":\"redis\",\"service\":\"local-redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"username\":\"default\",\"password\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"redis\",\"service\":\"local-redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"username\":\"default\",\"password\":\"demo\"}}}")
+ONE {"type":"artifact_registry","service":"ecr","repositoryPrefix":"demo","pullRoleArn":"demo-pull","pushRoleArn":"demo-push"}
+  => Ok(("{\"type\":\"artifact_registry\",\"service\":\"ecr\",\"repositoryPrefix\":\"demo\",\"pullRoleArn\":\"demo-pull\",\"pushRoleArn\":\"demo-push\"}", "null", Ok("{\"pullRoleArn\":\"demo-pull\",\"pushRoleArn\":\"demo-push\",\"repositoryPrefix\":\"demo\",\"service\":\"ecr\"}"), "artifact_registry"))
+MAP => Ok("{\"r\":{\"type\":\"artifact_registry\",\"service\":\"ecr\",\"repositoryPrefix\":\"demo\",\"pullRoleArn\":\"demo-pull\",\"pushRoleArn\":\"demo-push\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"artifact_registry\",\"service\":\"ecr\",\"repositoryPrefix\":\"demo\",\"pullRoleArn\":\"demo-pull\",\"pushRoleArn\":\"demo-push\"}}}")
+ONE {"type":"artifact_registry","service":"acr","registryName":"demo","resourceGroupName":"demo","repositoryPrefix":"demo"}
+  => Ok(("{\"type\":\"artifact_registry\",\"service\":\"acr\",\"registryName\":\"demo\",\"resourceGroupName\":\"demo\",\"repositoryPrefix\":\"demo\"}", "null", Ok("{\"registryName\":\"demo\",\"repositoryPrefix\":\"demo\",\"resourceGroupName\":\"demo\",\"service\":\"acr\"}"), "artifact_registry"))
+MAP => Ok("{\"r\":{\"type\":\"artifact_registry\",\"service\":\"acr\",\"registryName\":\"demo\",\"resourceGroupName\":\"demo\",\"repositoryPrefix\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"artifact_registry\",\"service\":\"acr\",\"registryName\":\"demo\",\"resourceGroupName\":\"demo\",\"repositoryPrefix\":\"demo\"}}}")
+ONE {"type":"artifact_registry","service":"gar","repositoryName":"demo","pullServiceAccountEmail":"pull@example.test","pushServiceAccountEmail":"push@example.test"}
+  => Ok(("{\"type\":\"artifact_registry\",\"service\":\"gar\",\"repositoryName\":\"demo\",\"pullServiceAccountEmail\":\"pull@example.test\",\"pushServiceAccountEmail\":\"push@example.test\"}", "null", Ok("{\"pullServiceAccountEmail\":\"pull@example.test\",\"pushServiceAccountEmail\":\"push@example.test\",\"repositoryName\":\"demo\",\"service\":\"gar\"}"), "artifact_registry"))
+MAP => Ok("{\"r\":{\"type\":\"artifact_registry\",\"service\":\"gar\",\"repositoryName\":\"demo\",\"pullServiceAccountEmail\":\"pull@example.test\",\"pushServiceAccountEmail\":\"push@example.test\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"artifact_registry\",\"service\":\"gar\",\"repositoryName\":\"demo\",\"pullServiceAccountEmail\":\"pull@example.test\",\"pushServiceAccountEmail\":\"push@example.test\"}}}")
+ONE {"type":"artifact_registry","service":"local","registryUrl":"localhost:5000","dataDir":null}
+  => Ok(("{\"type\":\"artifact_registry\",\"service\":\"local\",\"registryUrl\":\"localhost:5000\",\"dataDir\":null}", "null", Ok("{\"dataDir\":null,\"registryUrl\":\"localhost:5000\",\"service\":\"local\"}"), "artifact_registry"))
+MAP => Ok("{\"r\":{\"type\":\"artifact_registry\",\"service\":\"local\",\"registryUrl\":\"localhost:5000\",\"dataDir\":null}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"artifact_registry\",\"service\":\"local\",\"registryUrl\":\"localhost:5000\",\"dataDir\":null}}}")
+ONE {"type":"vault","service":"parameter-store","vaultPrefix":"demo"}
+  => Ok(("{\"type\":\"vault\",\"service\":\"parameter-store\",\"vaultPrefix\":\"demo\"}", "null", Ok("{\"service\":\"parameter-store\",\"vaultPrefix\":\"demo\"}"), "vault"))
+MAP => Ok("{\"r\":{\"type\":\"vault\",\"service\":\"parameter-store\",\"vaultPrefix\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"vault\",\"service\":\"parameter-store\",\"vaultPrefix\":\"demo\"}}}")
+ONE {"type":"vault","service":"secret-manager","vaultPrefix":"demo"}
+  => Ok(("{\"type\":\"vault\",\"service\":\"secret-manager\",\"vaultPrefix\":\"demo\"}", "null", Ok("{\"service\":\"secret-manager\",\"vaultPrefix\":\"demo\"}"), "vault"))
+MAP => Ok("{\"r\":{\"type\":\"vault\",\"service\":\"secret-manager\",\"vaultPrefix\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"vault\",\"service\":\"secret-manager\",\"vaultPrefix\":\"demo\"}}}")
+ONE {"type":"vault","service":"key-vault","vaultName":"demo"}
+  => Ok(("{\"type\":\"vault\",\"service\":\"key-vault\",\"vaultName\":\"demo\"}", "null", Ok("{\"service\":\"key-vault\",\"vaultName\":\"demo\"}"), "vault"))
+MAP => Ok("{\"r\":{\"type\":\"vault\",\"service\":\"key-vault\",\"vaultName\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"vault\",\"service\":\"key-vault\",\"vaultName\":\"demo\"}}}")
+ONE {"type":"vault","service":"kubernetes-secret","namespace":"demo","vaultPrefix":"demo"}
+  => Ok(("{\"type\":\"vault\",\"service\":\"kubernetes-secret\",\"namespace\":\"demo\",\"vaultPrefix\":\"demo\"}", "null", Ok("{\"namespace\":\"demo\",\"service\":\"kubernetes-secret\",\"vaultPrefix\":\"demo\"}"), "vault"))
+MAP => Ok("{\"r\":{\"type\":\"vault\",\"service\":\"kubernetes-secret\",\"namespace\":\"demo\",\"vaultPrefix\":\"demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"vault\",\"service\":\"kubernetes-secret\",\"namespace\":\"demo\",\"vaultPrefix\":\"demo\"}}}")
+ONE {"type":"vault","service":"local-vault","vaultName":"demo","dataDir":"/tmp/demo"}
+  => Ok(("{\"type\":\"vault\",\"service\":\"local-vault\",\"vaultName\":\"demo\",\"dataDir\":\"/tmp/demo\"}", "null", Ok("{\"dataDir\":\"/tmp/demo\",\"service\":\"local-vault\",\"vaultName\":\"demo\"}"), "vault"))
+MAP => Ok("{\"r\":{\"type\":\"vault\",\"service\":\"local-vault\",\"vaultName\":\"demo\",\"dataDir\":\"/tmp/demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"vault\",\"service\":\"local-vault\",\"vaultName\":\"demo\",\"dataDir\":\"/tmp/demo\"}}}")
+ONE {"type":"azure_container_apps_environment","environmentName":"demo","resourceId":"demo","resourceGroupName":"demo","defaultDomain":"example.test","staticIp":"192.0.2.1"}
+  => Err(Error("unknown variant `azure_container_apps_environment`, expected one of `storage`, `queue`, `kv`, `artifact_registry`, `vault`, `container_apps_environment`, `postgres`, `redis`, `ai`", line: 0, column: 0))
+MAP => Err(Error("unknown variant `azure_container_apps_environment`, expected one of `storage`, `queue`, `kv`, `artifact_registry`, `vault`, `container_apps_environment`, `postgres`, `redis`, `ai`", line: 1, column: 175))
+SETTINGS => Err(Error("unknown variant `azure_container_apps_environment`, expected one of `storage`, `queue`, `kv`, `artifact_registry`, `vault`, `container_apps_environment`, `postgres`, `redis`, `ai`", line: 1, column: 195))
+ONE {"type":"container_apps_environment","environmentName":"demo","resourceId":"demo","resourceGroupName":"demo","defaultDomain":"example.test","staticIp":"192.0.2.1"}
+  => Ok(("{\"type\":\"container_apps_environment\",\"environmentName\":\"demo\",\"resourceId\":\"demo\",\"resourceGroupName\":\"demo\",\"defaultDomain\":\"example.test\",\"staticIp\":\"192.0.2.1\"}", "{\"defaultDomain\":\"example.test\",\"environmentName\":\"demo\",\"resourceGroupName\":\"demo\",\"resourceId\":\"demo\",\"staticIp\":\"192.0.2.1\",\"type\":\"azure_container_apps_environment\"}", Ok("{\"defaultDomain\":\"example.test\",\"environmentName\":\"demo\",\"resourceGroupName\":\"demo\",\"resourceId\":\"demo\",\"staticIp\":\"192.0.2.1\"}"), "azure_container_apps_environment"))
+MAP => Ok("{\"r\":{\"type\":\"container_apps_environment\",\"environmentName\":\"demo\",\"resourceId\":\"demo\",\"resourceGroupName\":\"demo\",\"defaultDomain\":\"example.test\",\"staticIp\":\"192.0.2.1\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"container_apps_environment\",\"environmentName\":\"demo\",\"resourceId\":\"demo\",\"resourceGroupName\":\"demo\",\"defaultDomain\":\"example.test\",\"staticIp\":\"192.0.2.1\"}}}")
+ONE {"type":"postgres","service":"aurora","clusterEndpoint":"db.example.test","port":5432,"database":"demo","username":"demo","passwordSecretArn":"demo-secret"}
+  => Ok(("{\"type\":\"postgres\",\"service\":\"aurora\",\"clusterEndpoint\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"passwordSecretArn\":\"demo-secret\"}", "null", Ok("{\"clusterEndpoint\":\"db.example.test\",\"database\":\"demo\",\"passwordSecretArn\":\"demo-secret\",\"port\":5432,\"service\":\"aurora\",\"username\":\"demo\"}"), "postgres"))
+MAP => Ok("{\"r\":{\"type\":\"postgres\",\"service\":\"aurora\",\"clusterEndpoint\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"passwordSecretArn\":\"demo-secret\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"postgres\",\"service\":\"aurora\",\"clusterEndpoint\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"passwordSecretArn\":\"demo-secret\"}}}")
+ONE {"type":"postgres","service":"cloud-sql","host":"db.example.test","port":5432,"database":"demo","username":"demo","serverCaCertificates":["demo-ca"],"passwordSecretName":"demo-secret"}
+  => Ok(("{\"type\":\"postgres\",\"service\":\"cloud-sql\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"serverCaCertificates\":[\"demo-ca\"],\"passwordSecretName\":\"demo-secret\"}", "null", Ok("{\"database\":\"demo\",\"host\":\"db.example.test\",\"passwordSecretName\":\"demo-secret\",\"port\":5432,\"serverCaCertificates\":[\"demo-ca\"],\"service\":\"cloud-sql\",\"username\":\"demo\"}"), "postgres"))
+MAP => Ok("{\"r\":{\"type\":\"postgres\",\"service\":\"cloud-sql\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"serverCaCertificates\":[\"demo-ca\"],\"passwordSecretName\":\"demo-secret\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"postgres\",\"service\":\"cloud-sql\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"serverCaCertificates\":[\"demo-ca\"],\"passwordSecretName\":\"demo-secret\"}}}")
+ONE {"type":"postgres","service":"flexible-server","host":"db.example.test","port":5432,"database":"demo","username":"demo","passwordSecretUri":"https://vault.example.test/demo"}
+  => Ok(("{\"type\":\"postgres\",\"service\":\"flexible-server\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"passwordSecretUri\":\"https://vault.example.test/demo\"}", "null", Ok("{\"database\":\"demo\",\"host\":\"db.example.test\",\"passwordSecretUri\":\"https://vault.example.test/demo\",\"port\":5432,\"service\":\"flexible-server\",\"username\":\"demo\"}"), "postgres"))
+MAP => Ok("{\"r\":{\"type\":\"postgres\",\"service\":\"flexible-server\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"passwordSecretUri\":\"https://vault.example.test/demo\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"postgres\",\"service\":\"flexible-server\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"passwordSecretUri\":\"https://vault.example.test/demo\"}}}")
+ONE {"type":"postgres","service":"external","host":"db.example.test","port":5432,"database":"demo","username":"demo","password":"demo-only","sslMode":"verify-full"}
+  => Ok(("{\"type\":\"postgres\",\"service\":\"external\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":\"demo-only\",\"sslMode\":\"verify-full\"}", "null", Ok("{\"database\":\"demo\",\"host\":\"db.example.test\",\"password\":\"demo-only\",\"port\":5432,\"service\":\"external\",\"sslMode\":\"verify-full\",\"username\":\"demo\"}"), "postgres"))
+MAP => Ok("{\"r\":{\"type\":\"postgres\",\"service\":\"external\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":\"demo-only\",\"sslMode\":\"verify-full\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"postgres\",\"service\":\"external\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":\"demo-only\",\"sslMode\":\"verify-full\"}}}")
+ONE {"type":"postgres","service":"external","host":"db.example.test","port":5432,"database":"demo","username":"demo","password":{"secretRef":{"name":"database-credentials","key":"password"}}}
+  => Ok(("{\"type\":\"postgres\",\"service\":\"external\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":{\"secretRef\":{\"name\":\"database-credentials\",\"key\":\"password\"}},\"sslMode\":\"verify-full\"}", "null", Ok("{\"database\":\"demo\",\"host\":\"db.example.test\",\"password\":{\"secretRef\":{\"key\":\"password\",\"name\":\"database-credentials\"}},\"port\":5432,\"service\":\"external\",\"sslMode\":\"verify-full\",\"username\":\"demo\"}"), "postgres"))
+MAP => Ok("{\"r\":{\"type\":\"postgres\",\"service\":\"external\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":{\"secretRef\":{\"name\":\"database-credentials\",\"key\":\"password\"}},\"sslMode\":\"verify-full\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"postgres\",\"service\":\"external\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":{\"secretRef\":{\"name\":\"database-credentials\",\"key\":\"password\"}},\"sslMode\":\"verify-full\"}}}")
+ONE {"type":"postgres","service":"local-postgres","host":"db.example.test","port":5432,"database":"demo","username":"demo","password":"demo-only"}
+  => Ok(("{\"type\":\"postgres\",\"service\":\"local-postgres\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":\"demo-only\"}", "null", Ok("{\"database\":\"demo\",\"host\":\"db.example.test\",\"password\":\"demo-only\",\"port\":5432,\"service\":\"local-postgres\",\"username\":\"demo\"}"), "postgres"))
+MAP => Ok("{\"r\":{\"type\":\"postgres\",\"service\":\"local-postgres\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":\"demo-only\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"postgres\",\"service\":\"local-postgres\",\"host\":\"db.example.test\",\"port\":5432,\"database\":\"demo\",\"username\":\"demo\",\"password\":\"demo-only\"}}}")
+ONE {"type":"ai","provider":"openai","apiKey":{"secretRef":{"name":"demo","key":"api-key"}}}
+  => Ok(("{\"type\":\"ai\",\"provider\":\"openai\",\"apiKey\":{\"secretRef\":{\"name\":\"demo\",\"key\":\"api-key\"}}}", "null", Ok("{\"apiKey\":{\"secretRef\":{\"key\":\"api-key\",\"name\":\"demo\"}},\"provider\":\"openai\",\"service\":\"external-ai\"}"), "ai"))
+MAP => Ok("{\"r\":{\"type\":\"ai\",\"provider\":\"openai\",\"apiKey\":{\"secretRef\":{\"name\":\"demo\",\"key\":\"api-key\"}}}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"ai\",\"provider\":\"openai\",\"apiKey\":{\"secretRef\":{\"name\":\"demo\",\"key\":\"api-key\"}}}}}")
+ONE {"type":"ai","provider":"anthropic","apiKey":"sk-x"}
+  => Ok(("{\"type\":\"ai\",\"provider\":\"anthropic\",\"apiKey\":\"sk-x\"}", "null", Ok("{\"apiKey\":\"sk-x\",\"provider\":\"anthropic\",\"service\":\"external-ai\"}"), "ai"))
+MAP => Ok("{\"r\":{\"type\":\"ai\",\"provider\":\"anthropic\",\"apiKey\":\"sk-x\"}}")
+SETTINGS => Ok("{\"endpointAccess\":\"internet\",\"externalBindings\":{\"r\":{\"type\":\"ai\",\"provider\":\"anthropic\",\"apiKey\":\"sk-x\"}}}")
+ONE {"type":"unknown","service":"s3","bucketName":"demo"}
+  => Err(Error("unknown variant `unknown`, expected one of `storage`, `queue`, `kv`, `artifact_registry`, `vault`, `container_apps_environment`, `postgres`, `redis`, `ai`", line: 0, column: 0))
+MAP => Err(Error("unknown variant `unknown`, expected one of `storage`, `queue`, `kv`, `artifact_registry`, `vault`, `container_apps_environment`, `postgres`, `redis`, `ai`", line: 1, column: 59))
+SETTINGS => Err(Error("unknown variant `unknown`, expected one of `storage`, `queue`, `kv`, `artifact_registry`, `vault`, `container_apps_environment`, `postgres`, `redis`, `ai`", line: 1, column: 79))
+ONE {"type":"storage","service":"unknown","bucketName":"demo"}
+  => Err(Error("unknown variant `unknown`, expected one of `s3`, `blob`, `gcs`, `local-storage`", line: 0, column: 0))
+MAP => Err(Error("unknown variant `unknown`, expected one of `s3`, `blob`, `gcs`, `local-storage`", line: 1, column: 64))
+SETTINGS => Err(Error("unknown variant `unknown`, expected one of `s3`, `blob`, `gcs`, `local-storage`", line: 1, column: 84))
+ONE {"type":"storage","service":"s3"}
+  => Err(Error("missing field `bucketName`", line: 0, column: 0))
+MAP => Err(Error("missing field `bucketName`", line: 1, column: 39))
+SETTINGS => Err(Error("missing field `bucketName`", line: 1, column: 59))
+ONE {"type":"storage","service":"s3","bucketName":"demo","forcePathStyle":"true"}
+  => Err(Error("invalid type: string \"true\", expected a boolean", line: 0, column: 0))
+MAP => Err(Error("invalid type: string \"true\", expected a boolean", line: 1, column: 83))
+SETTINGS => Err(Error("invalid type: string \"true\", expected a boolean", line: 1, column: 103))
+ONE {"type":"ai","provider":42,"apiKey":"demo-only"}
+  => Err(Error("invalid type: integer `42`, expected a string", line: 0, column: 0))
+MAP => Err(Error("invalid type: integer `42`, expected a string", line: 1, column: 54))
+SETTINGS => Err(Error("invalid type: integer `42`, expected a string", line: 1, column: 74))
+ONE {"service":"s3","bucketName":"b"}
+  => Err(Error("missing field `type`", line: 0, column: 0))
+MAP => Err(Error("missing field `type`", line: 1, column: 39))
+SETTINGS => Err(Error("missing field `type`", line: 1, column: 59))
+ONE {"type":7,"service":"s3","bucketName":"b"}
+  => Err(Error("invalid type: integer `7`, expected variant identifier", line: 0, column: 0))
+MAP => Err(Error("invalid type: integer `7`, expected variant identifier", line: 1, column: 48))
+SETTINGS => Err(Error("invalid type: integer `7`, expected variant identifier", line: 1, column: 68))
+ONE [1,2]
+  => Err(Error("invalid type: integer `1`, expected variant identifier", line: 0, column: 0))
+MAP => Err(Error("invalid type: integer `1`, expected variant identifier", line: 1, column: 11))
+SETTINGS => Err(Error("invalid type: integer `1`, expected variant identifier", line: 1, column: 31))
+ONE "storage"
+  => Err(Error("invalid type: string \"storage\", expected internally tagged enum ExternalBinding", line: 0, column: 0))
+MAP => Err(Error("invalid type: string \"storage\", expected internally tagged enum ExternalBinding", line: 1, column: 15))
+SETTINGS => Err(Error("invalid type: string \"storage\", expected internally tagged enum ExternalBinding", line: 1, column: 35))

@@ -105,6 +105,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
         };
 
@@ -168,6 +169,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
         };
 

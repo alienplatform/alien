@@ -58,6 +58,17 @@ pub enum ErrorData {
     )]
     SyncFailed { message: String },
 
+    /// An extension bundle a release pins failed its check. The same bytes fail the same way, so
+    /// another try fails too.
+    #[error(
+        code = "EXTENSION_BUNDLE_REFUSED",
+        message = "{message}",
+        retryable = "false",
+        internal = "false",
+        human = "transparent"
+    )]
+    ExtensionBundleRefused { message: String },
+
     #[error(
         code = "DEPLOYMENT_FAILED",
         message = "{message}",

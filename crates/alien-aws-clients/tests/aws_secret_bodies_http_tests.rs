@@ -168,3 +168,51 @@ async fn secrets_manager_errors_do_not_record_secret_values() {
         .expect_err("an unparsable answer must be an error");
     recorded(&get);
 }
+
+/// A role's trust can require an `sts:ExternalId`, so IAM calls that write a trust carry it in
+/// their body. An error IAM answers with a code Alien doesn't map must not keep that body.
+#[tokio::test]
+async fn iam_errors_do_not_record_the_trust_they_write() {
+    use alien_aws_clients::iam::{CreateRoleRequest, IamApi, IamClient};
+    let server = MockServer::start_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method(POST);
+            then.status(400).body(
+                "<ErrorResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\">\
+                 <Error><Type>Sender</Type><Code>MalformedPolicyDocument</Code>\
+                 <Message>Invalid principal in policy</Message></Error>\
+                 <RequestId>00000000-0000-0000-0000-000000000000</RequestId></ErrorResponse>",
+            );
+        })
+        .await;
+    let trust = json!({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"AWS": "arn:aws:iam::123456789012:root"},
+            "Action": "sts:AssumeRole",
+            "Condition": {"StringEquals": {"sts:ExternalId": SENTINEL}}
+        }]
+    })
+    .to_string();
+    let client = IamClient::new(reqwest::Client::new(), credentials("iam", &server));
+    let update = client
+        .update_assume_role_policy("role", &trust)
+        .await
+        .expect_err("HTTP 400 must reach the caller");
+    assert!(recorded(&update).contains("MalformedPolicyDocument"));
+    let create = client
+        .create_role(CreateRoleRequest {
+            role_name: "role".into(),
+            assume_role_policy_document: trust,
+            permissions_boundary: None,
+            path: None,
+            description: None,
+            max_session_duration: None,
+            tags: None,
+        })
+        .await
+        .expect_err("HTTP 400 must reach the caller");
+    assert!(recorded(&create).contains("MalformedPolicyDocument"));
+}

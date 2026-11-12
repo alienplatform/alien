@@ -1,0 +1,17 @@
+{
+  "id": "acme/dns-zone/records-write",
+  "description": "Write the zone's DNS records",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      }
+    ]
+  }
+}

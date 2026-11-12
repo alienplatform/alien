@@ -5,6 +5,9 @@ use uuid::Uuid;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
+use alien_azure_clients::managed_identity::{
+    FederatedCredentialProperties, FederatedIdentityCredential,
+};
 use alien_azure_clients::models::authorization_role_assignments::{
     RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
 };
@@ -31,8 +34,9 @@ use alien_permissions::{
 use chrono::Utc;
 use std::collections::HashMap;
 
-/// Generates the Azure managed identity name.
-fn get_azure_managed_identity_name(prefix: &str, name: &str) -> String {
+/// The name setup gives a service account's managed identity: `<prefix>-<id>`, as the Terraform
+/// template names it.
+pub fn get_azure_managed_identity_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 
@@ -78,6 +82,50 @@ const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
 // setup can drive this state quickly, so keep the Stay guard comfortably above
 // the number of reconciles that can happen inside the deadline.
 const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
+
+/// An extension's identity trusts the manager's OIDC issuer and subject, the way the remote
+/// bindings identity does.
+async fn trust_manager(ctx: &ResourceControllerContext<'_>, identity_name: &str) -> Result<()> {
+    let config = ctx.desired_resource_config::<ServiceAccount>()?;
+    let Some(extension) = &config.extension else {
+        return Ok(());
+    };
+    let management = ctx.get_azure_management_config()?.ok_or_else(|| {
+        AlienError::new(ErrorData::InfrastructureError {
+            message: format!(
+                "Azure management configuration is required for the identity of the extension '{extension}'"
+            ),
+            operation: Some("trust_manager".to_string()),
+            resource_id: Some(config.id.clone()),
+        })
+    })?;
+    let credential = FederatedIdentityCredential {
+        id: None,
+        name: None,
+        type_: None,
+        properties: Some(FederatedCredentialProperties {
+            issuer: management.oidc_issuer.clone(),
+            subject: management.oidc_subject.clone(),
+            audiences: vec!["api://AzureADTokenExchange".to_string()],
+        }),
+    };
+    ctx.service_provider
+        .get_azure_managed_identity_client(ctx.get_azure_config()?)?
+        .create_or_update_federated_credential(
+            &crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?,
+            identity_name,
+            &format!("{identity_name}-federated-credential"),
+            &credential,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to let the manager assume the identity of the extension '{extension}'"
+            ),
+            resource_id: Some(config.id.clone()),
+        })?;
+    Ok(())
+}
 
 fn current_unix_timestamp_secs() -> u64 {
     SystemTime::now()
@@ -247,6 +295,7 @@ impl AzureServiceAccountController {
         self.identity_resource_id = Some(identity_id);
         self.identity_client_id = Some(client_id.to_string());
         self.identity_principal_id = Some(principal_id.to_string());
+        trust_manager(ctx, &identity_name).await?;
 
         info!("Waiting for managed identity to propagate across Azure tenants");
 
@@ -667,6 +716,11 @@ impl AzureServiceAccountController {
             "Updating Azure managed identity permissions"
         );
 
+        trust_manager(
+            ctx,
+            &get_azure_managed_identity_name(ctx.resource_prefix, &config.id),
+        )
+        .await?;
         let resource_group_name =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
@@ -1177,4 +1231,150 @@ fn emit_azure_service_account_heartbeat(
         ),
         raw: vec![],
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+    use alien_azure_clients::managed_identity::MockManagedIdentityApi;
+    use alien_core::{AzureManagementConfig, ManagementConfig};
+    use std::sync::Arc;
+
+    /// Direct setup lets the manager's OIDC issuer and subject assume an extension's identity, as
+    /// the setup template does.
+    #[tokio::test]
+    async fn direct_setup_lets_the_managers_issuer_assume_the_extension_identity() {
+        let mut identities = MockManagedIdentityApi::new();
+        let mut sequence = mockall::Sequence::new();
+        identities
+            .expect_create_or_update_user_assigned_identity()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, name, _| {
+                assert_eq!(name, "test-acme-ext");
+                Ok(serde_json::from_value(serde_json::json!({
+                    "id": "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-acme-ext",
+                    "location": "eastus",
+                    "properties": {
+                        "clientId": "00000000-0000-0000-0000-000000000001",
+                        "principalId": "00000000-0000-0000-0000-000000000002",
+                        "tenantId": "00000000-0000-0000-0000-000000000003"
+                    }
+                }))
+                .unwrap())
+            });
+        identities
+            .expect_create_or_update_federated_credential()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, identity, name, credential| {
+                assert_eq!(identity, "test-acme-ext");
+                assert_eq!(name, "test-acme-ext-federated-credential");
+                let properties = credential.properties.as_ref().unwrap();
+                assert_eq!(properties.issuer, "https://manager.example.com");
+                assert_eq!(properties.subject, "manager-subject");
+                assert_eq!(properties.audiences, ["api://AzureADTokenExchange"]);
+                Ok(credential.clone())
+            });
+        let identities = Arc::new(identities);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_managed_identity_client()
+            .returning(move |_| Ok(identities.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                ServiceAccount::new("acme-ext".to_string())
+                    .extension("acme".to_string())
+                    .build(),
+            )
+            .controller(AzureServiceAccountController::default())
+            .platform(Platform::Azure)
+            .management_config(ManagementConfig::Azure(AzureManagementConfig {
+                managing_tenant_id: "vendor-tenant".to_string(),
+                oidc_issuer: "https://manager.example.com".to_string(),
+                oidc_subject: "manager-subject".to_string(),
+            }))
+            .with_test_dependencies()
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureServiceAccountController>()
+            .unwrap();
+        assert_eq!(
+            controller.state,
+            AzureServiceAccountState::WaitingForManagedIdentityPropagation
+        );
+        assert_eq!(
+            controller
+                .build_outputs()
+                .unwrap()
+                .downcast_ref::<ServiceAccountOutputs>()
+                .unwrap()
+                .identity,
+            "00000000-0000-0000-0000-000000000001"
+        );
+    }
+
+    /// An update writes the federated credential again, so the identity follows a change to the
+    /// manager's issuer or subject.
+    #[tokio::test]
+    async fn an_update_reasserts_the_managers_federated_credential() {
+        let mut identities = MockManagedIdentityApi::new();
+        identities
+            .expect_create_or_update_federated_credential()
+            .times(1)
+            .returning(|_, identity, _, credential| {
+                assert_eq!(identity, "test-acme-ext");
+                assert_eq!(
+                    credential.properties.as_ref().unwrap().subject,
+                    "rotated-subject"
+                );
+                Ok(credential.clone())
+            });
+        let identities = Arc::new(identities);
+        let authorization =
+            Arc::new(alien_azure_clients::authorization::MockAuthorizationApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_managed_identity_client()
+            .returning(move |_| Ok(identities.clone()));
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| Ok(authorization.clone()));
+        let identity = ServiceAccount::new("acme-ext".to_string())
+            .extension("acme".to_string())
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(identity.clone())
+            .controller(AzureServiceAccountController {
+                custom_role_definition_ids: Vec::new(),
+                role_assignment_ids: Vec::new(),
+                ..AzureServiceAccountController::mock_ready("test-acme-ext")
+            })
+            .platform(Platform::Azure)
+            .management_config(ManagementConfig::Azure(AzureManagementConfig {
+                managing_tenant_id: "vendor-tenant".to_string(),
+                oidc_issuer: "https://manager.example.com".to_string(),
+                oidc_subject: "rotated-subject".to_string(),
+            }))
+            .with_test_dependencies()
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.update(identity).unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<AzureServiceAccountController>()
+                .unwrap()
+                .state,
+            AzureServiceAccountState::CreatingRoleDefinitions
+        );
+    }
 }

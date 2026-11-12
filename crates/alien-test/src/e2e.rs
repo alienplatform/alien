@@ -712,6 +712,8 @@ async fn complete_local_deletion(
         ClientConfig::Local {
             state_directory: state_directory.to_string_lossy().into_owned(),
         },
+        &manager.url,
+        &manager.admin_token,
     )
     .await
     .map_err(|error| anyhow::anyhow!("Local setup teardown failed: {error}"))

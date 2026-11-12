@@ -76,3 +76,4 @@ libc = "0.2"
 
 [dev-dependencies]
 httpmock = { workspace = true }
+alien-infra = { workspace = true, features = ["test-utils"] }

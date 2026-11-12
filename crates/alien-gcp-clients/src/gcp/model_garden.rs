@@ -79,6 +79,8 @@ pub struct ModelGardenClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(ModelGardenClient);
+
 impl ModelGardenClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

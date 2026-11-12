@@ -39,24 +39,59 @@ impl CompileTimeCheck for PermissionSetsExistCheck {
         let profiles = stack
             .permission_profiles()
             .iter()
-            .map(|(name, profile)| (name.as_str(), profile))
+            .map(|(name, profile)| (name.as_str(), profile, false))
             .chain(
                 stack
                     .management()
                     .profile()
-                    .map(|profile| ("management", profile)),
+                    .map(|profile| ("management", profile, true)),
             );
         let mut errors = Vec::new();
-        for (profile_name, profile) in profiles {
+        for (profile_name, profile, management) in profiles {
             for (resource_id, references) in &profile.0 {
                 for reference in references {
-                    if let PermissionSetReference::Name(name) = reference {
-                        if alien_permissions::get_permission_set(name).is_none() {
-                            errors.push(format!(
-                                "Permission profile '{profile_name}' references unknown permission set '{name}' for resource '{resource_id}'. Use a registered permission name or an inline permission definition."
-                            ));
+                    let name = match reference {
+                        PermissionSetReference::Name(name) => name,
+                        PermissionSetReference::Inline(set) => {
+                            // An id under an extension's name would show on the management
+                            // identity in the setup template as that extension's grant.
+                            if let Some(extension) = management
+                                .then(|| set.id.split('/').next())
+                                .flatten()
+                                .filter(|prefix| {
+                                    stack
+                                        .extensions
+                                        .iter()
+                                        .any(|extension| extension.name == *prefix)
+                                })
+                            {
+                                errors.push(format!(
+                                    "The management profile grants the inline permission set '{}' for resource '{resource_id}', whose id is under the extension '{extension}'. Ids under an extension's name belong to its own identity. Give the set an id outside '{extension}/'.",
+                                    set.id
+                                ));
+                            }
+                            continue;
                         }
+                    };
+                    if alien_permissions::get_permission_set(name).is_some() {
+                        continue;
                     }
+                    let extension_set =
+                        alien_permissions::get_stack_permission_set(stack, name).is_some();
+                    // A workload may hold an extension's permission sets. The management
+                    // identity never does: they belong to the extension's own identity.
+                    if !management && extension_set {
+                        continue;
+                    }
+                    errors.push(if extension_set {
+                        format!(
+                            "The management profile grants '{name}' for resource '{resource_id}', but an extension's permission sets are granted only to the extension's own identity. Remove it from the management permissions."
+                        )
+                    } else {
+                        format!(
+                            "Permission profile '{profile_name}' references unknown permission set '{name}' for resource '{resource_id}'. Use a registered permission name or an inline permission definition."
+                        )
+                    });
                 }
             }
         }

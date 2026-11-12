@@ -41,6 +41,12 @@ pub struct ServiceAccount {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     #[builder(default)]
     pub resource_permission_sets: IndexMap<String, Vec<PermissionSet>>,
+
+    /// The extension whose controllers run as this identity. No workload may assume it: on a
+    /// cloud Alien's manager does, the way it assumes the remote bindings identity, and on
+    /// Kubernetes only the pod the Operator runs the extension's controller in does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
 }
 
 impl ServiceAccount {
@@ -86,6 +92,7 @@ impl ServiceAccount {
             id,
             stack_permission_sets,
             resource_permission_sets,
+            extension: None,
         })
     }
 
@@ -208,6 +215,13 @@ impl ResourceDefinition for ServiceAccount {
                 reason: "the 'id' field is immutable".to_string(),
             }));
         }
+        // The extension decides who may assume the identity, and an update never changes trust.
+        if self.extension != new_service_account.extension {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'extension' field is immutable".to_string(),
+            }));
+        }
 
         Ok(())
     }
@@ -277,6 +291,31 @@ impl ResourceOutputsDefinition for ServiceAccountOutputs {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Who may assume an identity is decided at setup; an update can't turn a workload's account
+    /// into an extension's identity or back.
+    #[test]
+    fn an_update_never_changes_whose_identity_it_is() {
+        let workload = ServiceAccount::new("acme-ext".to_string()).build();
+        let identity = ServiceAccount::new("acme-ext".to_string())
+            .extension("acme".to_string())
+            .build();
+        let other = ServiceAccount::new("acme-ext".to_string())
+            .extension("other".to_string())
+            .build();
+        for (from, to) in [
+            (&workload, &identity),
+            (&identity, &workload),
+            (&identity, &other),
+        ] {
+            let error = from.validate_update(to).unwrap_err();
+            assert!(
+                format!("{error:?}").contains("the 'extension' field is immutable"),
+                "{error:?}"
+            );
+        }
+        identity.validate_update(&identity.clone()).unwrap();
+    }
 
     fn signing(scope: &str) -> PermissionSet {
         serde_json::from_value(json!({

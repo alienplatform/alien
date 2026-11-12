@@ -12,8 +12,8 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         downcast, emit_iam_role_policy, emit_iam_role_policy_for_target_with_label,
-        iam_role_name_template, jsonencode, required_label, service_assume_role_policy,
-        stack_permission_context, tags,
+        iam_role_name_template, jsonencode, managing_role_trust_statement, required_label,
+        service_assume_role_policy, stack_permission_context, tags,
     },
     expr,
 };
@@ -30,11 +30,22 @@ impl TfEmitter for AwsServiceAccountEmitter {
         let service_account = downcast::<ServiceAccount>(ctx, ServiceAccount::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        let TrustPrincipals {
-            services,
-            role_arns,
-        } = trust_principals(ctx, service_account);
-        let services_ref: Vec<&str> = services.iter().copied().collect();
+        let assume_role_policy = if service_account.extension.is_some() {
+            jsonencode(expr::object([
+                ("Version", Expression::String("2012-10-17".to_string())),
+                (
+                    "Statement",
+                    Expression::Array(vec![managing_role_trust_statement()]),
+                ),
+            ]))
+        } else {
+            let TrustPrincipals {
+                services,
+                role_arns,
+            } = trust_principals(ctx, service_account);
+            let services_ref: Vec<&str> = services.iter().copied().collect();
+            trust_assume_role_policy(&services_ref, role_arns)
+        };
 
         let mut fragment = TfFragment::default();
         fragment.resource_blocks.push(resource_block(
@@ -42,10 +53,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
             label,
             [
                 attr("name", iam_role_name_template(&service_account.id)),
-                attr(
-                    "assume_role_policy",
-                    trust_assume_role_policy(&services_ref, role_arns),
-                ),
+                attr("assume_role_policy", assume_role_policy),
                 attr("tags", tags(ctx, "service-account")),
             ],
         ));

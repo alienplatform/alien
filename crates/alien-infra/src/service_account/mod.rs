@@ -17,7 +17,7 @@ mod test;
 
 pub use aws::AwsServiceAccountController;
 pub use aws_import::AwsServiceAccountImporter;
-pub use azure::AzureServiceAccountController;
+pub use azure::{get_azure_managed_identity_name, AzureServiceAccountController};
 pub use azure_import::AzureServiceAccountImporter;
 pub use environment_providers::*;
 pub use gcp::GcpServiceAccountController;

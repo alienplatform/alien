@@ -552,3 +552,65 @@ fn test_artifact_registry_naming_conventions() {
     let ar_underscore = get_permission_set("artifact_registry/provision").unwrap();
     assert_eq!(ar_hyphenated.id, ar_underscore.id);
 }
+
+/// The docs' `acme` extension: `acme/dns-zone` with a `provision` and a `records-write` set.
+fn acme_manifest() -> alien_core::ExtensionManifest {
+    let set = |name: &str| {
+        serde_json::json!({
+            "id": format!("acme/dns-zone/{name}"),
+            "description": name,
+            "platforms": { "aws": [{
+                "grant": { "actions": ["route53:ChangeResourceRecordSets"] },
+                "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+            }] }
+        })
+    };
+    serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "0.1.0",
+        "digest": "sha256:4ff931a2",
+        "resourceTypes": { "acme/dns-zone": {
+            "lifecycles": ["frozen", "live"],
+            "holdsData": false,
+            "setup": { "cloudformation": ["aws"], "terraform": [], "helm": [], "importers": ["aws"] },
+            "controllerPlatforms": ["aws"],
+            "permissionSets": [set("provision"), set("records-write")],
+            "link": { "permissionSets": ["acme/dns-zone/records-write"] },
+            "schemas": { "config": {}, "outputs": {} }
+        } }
+    }))
+    .unwrap()
+}
+
+fn stack_with(extensions: Vec<alien_core::ExtensionManifest>) -> alien_core::Stack {
+    let mut stack = alien_core::Stack::new("app".to_string()).build();
+    stack.extensions = extensions;
+    stack
+}
+
+#[test]
+fn a_stack_resolves_the_permission_sets_its_extensions_define() {
+    use alien_permissions::get_stack_permission_set;
+
+    let stack = stack_with(vec![acme_manifest()]);
+    for id in ["acme/dns-zone/provision", "acme/dns-zone/records-write"] {
+        assert_eq!(
+            get_stack_permission_set(&stack, id).map(|set| set.id.as_str()),
+            Some(id)
+        );
+    }
+    assert_eq!(
+        get_stack_permission_set(&stack, "storage/data-read"),
+        get_permission_set("storage/data-read")
+    );
+    // An id is found only under the type it names.
+    assert!(get_stack_permission_set(&stack, "acme/dns-zone/heartbeat").is_none());
+    assert!(get_stack_permission_set(&stack, "acme/record/provision").is_none());
+
+    // Another deployment's stack, and the built-in registry, never see acme's sets.
+    assert!(get_stack_permission_set(&stack_with(Vec::new()), "acme/dns-zone/provision").is_none());
+    assert!(get_permission_set("acme/dns-zone/provision").is_none());
+    assert!(!list_permission_set_ids()
+        .iter()
+        .any(|id| id.starts_with("acme/")));
+}

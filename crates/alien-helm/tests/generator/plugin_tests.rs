@@ -107,3 +107,52 @@ fn plugin_emitter_extends_infrastructure_yaml() {
         "plugin emitter should set service: {onprem}"
     );
 }
+
+/// A stack whose custom type comes from an extension with the given Helm platforms.
+fn stack_with_extension(helm: &[&str]) -> Stack {
+    serde_json::from_value(serde_json::json!({
+        "id": "acme-chart",
+        "resources": {
+            "zone": {
+                "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                "lifecycle": "frozen",
+                "dependencies": []
+            }
+        },
+        "extensions": [{
+            "name": "acme",
+            "version": "1.0.0",
+            "digest": "sha256:0",
+            "resourceTypes": {
+                "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": false,
+                    "setup": { "cloudformation": ["aws"], "terraform": ["aws"], "helm": helm, "importers": ["aws"] },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }
+            }
+        }]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_custom_type_without_a_helm_emitter_turns_helm_off_with_the_reason() {
+    let error = super::helpers::try_render(&stack_with_extension(&[]), StackSettings::default())
+        .expect_err("Helm is off for the stack");
+    insta::assert_snapshot!(error.to_string());
+}
+
+#[test]
+fn a_custom_type_whose_descriptor_lists_helm_needs_its_emitter() {
+    // The descriptor lists Helm and the registry has no emitter for the type.
+    let error = super::helpers::try_render(
+        &stack_with_extension(&["kubernetes"]),
+        StackSettings::default(),
+    )
+    .expect_err("the type's Helm emitter is missing");
+    assert_eq!(error.code, "IMPORT_REGISTRATION_MISSING", "{error}");
+}

@@ -782,3 +782,119 @@ fn platform_scoped_storage_is_absent_from_kubernetes_chart() {
     let values: serde_yaml::Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
     assert!(values["infrastructure"]["data"].is_null());
 }
+
+/// A stack that lists the `acme` extension, with the identity setup adds for it.
+fn stack_with_an_extension() -> Stack {
+    let mut stack = Stack::new("extension-chart".to_string())
+        .add(
+            alien_core::ServiceAccount::new("acme-ext".to_string())
+                .extension("acme".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.extensions = vec![serde_json::from_value(serde_json::json!({
+        "name": "acme", "version": "0.1.0", "digest": "sha256:4ff931a2", "resourceTypes": {}
+    }))
+    .unwrap()];
+    stack
+}
+
+/// The Operator runs an extension's controller in a pod of its own, and the chart is what bounds
+/// that pod: its service account is one the chart renders for the extension's identity, apart
+/// from the Operator's, and a NetworkPolicy lets only the Operator in and keeps the node's
+/// metadata address out. The Operator finds both by the names it derives from its prefix.
+#[test]
+fn an_extension_s_controller_pod_gets_its_own_account_and_network_policy() {
+    let chart = render(&stack_with_an_extension(), StackSettings::default());
+    assert_helm_valid(&chart, "extension controller pod");
+    let rendered =
+        super::test_utils::helm_template(&chart.files, Some("serviceAccountPrefix: test-prefix\n"));
+    rendered.assert_ok("extension controller pod");
+    let documents: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+        .map(|document| serde::Deserialize::deserialize(document).unwrap())
+        .collect();
+    let named = |kind: &str, name: &str| {
+        documents
+            .iter()
+            .find(|doc| doc["kind"] == kind && doc["metadata"]["name"] == name)
+            .unwrap_or_else(|| panic!("the chart renders the {kind} {name}:\n{}", rendered.stdout))
+    };
+
+    let account = alien_core::kubernetes_service_account_name("test-prefix", "acme-ext");
+    named("ServiceAccount", &account);
+    let operator = documents
+        .iter()
+        .find(|doc| doc["kind"] == "Deployment")
+        .expect("the Operator's Deployment");
+    let operator_pod = &operator["spec"]["template"];
+    assert_ne!(
+        operator_pod["spec"]["serviceAccountName"].as_str(),
+        Some(account.as_str())
+    );
+
+    let policy = named(
+        "NetworkPolicy",
+        &alien_core::kubernetes_extension_controllers_policy_name("test-prefix"),
+    );
+    assert_eq!(
+        policy["spec"],
+        serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            r#"
+podSelector:
+  matchLabels:
+    alien.dev/deployment: test-prefix
+    component: extension-controller
+    managed-by: runtime
+policyTypes: [Ingress, Egress]
+ingress:
+  - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: {name}
+            app.kubernetes.io/instance: {instance}
+    ports:
+      - protocol: TCP
+        port: 8080
+egress:
+  - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+    ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+  - to:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          except: [169.254.169.254/32]
+"#,
+            name = operator_pod["metadata"]["labels"]["app.kubernetes.io/name"]
+                .as_str()
+                .unwrap(),
+            instance = operator_pod["metadata"]["labels"]["app.kubernetes.io/instance"]
+                .as_str()
+                .unwrap(),
+        ))
+        .unwrap()
+    );
+}
+
+/// A chart for a stack that lists no extension has nothing for a controller's pod.
+#[test]
+fn a_stack_without_extensions_renders_no_controller_network_policy() {
+    let chart = render(
+        &Stack::new("plain-chart".to_string()).build(),
+        StackSettings::default(),
+    );
+    assert!(
+        !chart.files.keys().any(|path| path.contains("extension")),
+        "{:?}",
+        chart.files.keys().collect::<Vec<_>>()
+    );
+}

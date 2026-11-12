@@ -1,0 +1,3 @@
+name = "extensions/postgres-backup-retention"
+description = "An extension that keeps Postgres backups for 30 days in every setup template."
+language = "Rust"

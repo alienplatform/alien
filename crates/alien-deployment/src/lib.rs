@@ -25,6 +25,8 @@ mod provisioning;
 pub mod runner;
 mod running;
 pub mod setup_teardown;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 pub mod transport;
 mod updating;
 
@@ -87,7 +89,8 @@ async fn resolve_gcp_project_number(
 /// - Takes the current deployment state (which includes target release with stack)
 /// - Takes the deployment configuration (management config, capabilities, env vars)
 /// - Takes cloud credentials for executing the deployment
-/// - Takes an optional service provider for platform services (defaults to DefaultPlatformServiceProvider)
+/// - Takes an optional service provider for platform services (real clients when `None`; a
+///   deployment whose release lists extensions needs the provider that loaded them)
 /// - Does ONE incremental step based on `current.status`
 /// - Returns the complete next state (not a delta)
 /// - Works identically whether called from CLI, controller, or manager
@@ -101,7 +104,8 @@ async fn resolve_gcp_project_number(
 /// * `current` - Current deployment state (includes current_release and target_release)
 /// * `config` - Deployment configuration (management config, capabilities, env vars)
 /// * `client_config` - Cloud credentials for deployment execution
-/// * `service_provider` - Optional platform service provider (uses default if None)
+/// * `service_provider` - Platform service provider; real clients when `None`, which a
+///   deployment with extensions refuses
 ///
 /// # Returns
 /// `DeploymentStepResult` containing the complete next state and platform hints
@@ -225,10 +229,7 @@ pub async fn step(
     // runtime_metadata.prepared_stack instead).
     let target_stack = current.target_release.as_ref().map(|r| r.stack.clone());
 
-    // Use provided service provider or default
-    let service_provider = service_provider.unwrap_or_else(|| {
-        std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default())
-    });
+    let service_provider = helpers::service_provider_for(&current, service_provider)?;
 
     // Dispatch to appropriate handler based on status
     // Mutation and injection strategy:

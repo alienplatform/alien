@@ -125,6 +125,7 @@ impl LambdaClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 
@@ -725,12 +726,18 @@ impl LambdaApi for LambdaClient {
             builder = builder.body(reqwest::Body::from(request.payload.clone()));
         }
 
-        let signed_builder = builder.sign_aws_request(&self.sign_config())?;
-        let response = signed_builder.send().await.into_alien_error().context(
-            ErrorData::HttpRequestFailed {
+        // The payload is the function's own bytes, which interceptors are never offered.
+        let sign_config = AwsSignConfig {
+            interceptors: self.credentials.interceptors().for_object_payload(),
+            ..self.sign_config()
+        };
+        let response = builder
+            .sign_aws_request(&sign_config)?
+            .send_raw()
+            .await
+            .context(ErrorData::HttpRequestFailed {
                 message: format!("Failed to invoke Lambda function '{}'", function_name),
-            },
-        )?;
+            })?;
 
         let status = response.status().as_u16();
         let headers = response.headers().clone();

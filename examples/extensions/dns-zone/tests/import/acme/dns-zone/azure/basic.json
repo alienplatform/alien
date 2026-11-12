@@ -1,0 +1,6 @@
+{
+  "resource": { "id": "zone", "domain": "internal.acme.dev" },
+  "importData": {
+    "zoneId": "/subscriptions/0000/resourceGroups/my-app/providers/Microsoft.Network/dnsZones/internal.acme.dev"
+  }
+}

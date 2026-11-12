@@ -10,7 +10,8 @@ import { PermissionSetSchema } from "./permission-set-schema.js";
  * @description Represents a non-human identity that can be assumed by compute services\nsuch as Lambda, Cloud Run, ECS, Container Apps, etc.\n\nMaps to:\n- AWS: IAM Role\n- GCP: Service Account\n- Azure: User-assigned Managed Identity\n\nThe ServiceAccount is automatically created from permission profiles in the stack\nand contains the resolved permission sets for both stack-level and resource-scoped access.
  */
 export const ServiceAccountSchema = z.object({
-    "id": z.string().describe("Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
+    "extension": z.string().describe("The extension whose controllers run as this identity. No workload may assume it: on a\ncloud Alien's manager does, the way it assumes the remote bindings identity, and on\nKubernetes only the pod the Operator runs the extension's controller in does.").nullish(),
+"id": z.string().describe("Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
 "resourcePermissionSets": z.optional(z.object({
     
     }).catchall(z.array(z.lazy(() => PermissionSetSchema).describe("A permission set that can be applied across different cloud platforms"))).describe("Resolved grants for concrete resource IDs, captured for setup comparison.")),

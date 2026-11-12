@@ -91,6 +91,26 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "nextjs-app",
         "Deploy a complete Next.js application as a Container.",
     ),
+    (
+        "extensions/postgres-iam-auth",
+        "An extension that turns on IAM authentication for Alien's Postgres on every setup path.",
+    ),
+    (
+        "extensions/postgres-backup-retention",
+        "An extension that keeps Postgres backups for 30 days in every setup template.",
+    ),
+    (
+        "extensions/resource-tags",
+        "An extension that adds your tags to the resources Alien's controllers create.",
+    ),
+    (
+        "extensions/budget-alert",
+        "An extension that adds an AWS budget alert, a custom resource with no controller.",
+    ),
+    (
+        "extensions/dns-zone",
+        "An extension that adds a DNS zone, a custom resource with its own controllers.",
+    ),
 ];
 
 fn fallback_templates() -> Vec<TemplateInfo> {
@@ -297,9 +317,18 @@ fn new_spinner(message: &str) -> Spinner {
     Spinner::new(message)
 }
 
+/// The repository archive templates come from: the release's tag for a release CLI, so the
+/// template matches the crates [`alien_crates_reference`] pins it to, and `main` otherwise.
+fn template_archive_url(version: &str) -> String {
+    let reference = match release_tag(version) {
+        Some(tag) => format!("refs/tags/{tag}"),
+        None => "main".to_string(),
+    };
+    format!("https://codeload.github.com/alienplatform/alien/tar.gz/{reference}")
+}
+
 async fn download_and_extract(template: &str, target_dir: &Path) -> Result<()> {
-    let url = "https://codeload.github.com/alienplatform/alien/tar.gz/main";
-    let prefix = format!("alien-main/examples/{}/", template);
+    let url = &template_archive_url(crate::CLI_VERSION);
 
     let client = crate::http_client::client()?;
     let response = client
@@ -333,7 +362,17 @@ async fn download_and_extract(template: &str, target_dir: &Path) -> Result<()> {
                 url: Some(url.to_string()),
             })?;
 
-    let decoder = GzDecoder::new(&bytes[..]);
+    extract_template(&bytes, template, target_dir)
+}
+
+/// Writes `examples/<template>/` from a repository archive into `target_dir`, without its
+/// `template.toml`, and pins its dependencies on Alien's crates to this CLI's release.
+///
+/// The archive's top directory is named after the reference (`alien-main`, or `alien-3.3.54` for
+/// the tag `v3.3.54`), so it is skipped whatever its name.
+fn extract_template(archive_gz: &[u8], template: &str, target_dir: &Path) -> Result<()> {
+    let prefix = format!("examples/{}/", template);
+    let decoder = GzDecoder::new(archive_gz);
     let mut archive = Archive::new(decoder);
 
     let mut found_any = false;
@@ -363,7 +402,12 @@ async fn download_and_extract(template: &str, target_dir: &Path) -> Result<()> {
                 reason: "Failed to read entry path".to_string(),
             })?;
 
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = path
+            .components()
+            .skip(1)
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .to_string();
 
         if let Some(relative) = path_str.strip_prefix(&prefix) {
             if relative.is_empty() {
@@ -406,7 +450,101 @@ async fn download_and_extract(template: &str, target_dir: &Path) -> Result<()> {
         }));
     }
 
-    Ok(())
+    pin_alien_crates(target_dir)
+}
+
+/// The repository the extension templates' Alien crates come from in a scaffold.
+const ALIEN_REPOSITORY: &str = "https://github.com/alienplatform/alien";
+
+/// Rewrites each `name = { path = "../../../crates/name" }` dependency in the template's
+/// `Cargo.toml` to the same crate in Alien's repository, at this CLI's release tag. In the
+/// repository an extension template builds against the crates beside it.
+fn pin_alien_crates(target_dir: &Path) -> Result<()> {
+    let manifest = target_dir.join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return Ok(());
+    };
+    let pinned = pin_alien_crate_lines(&text, crate::CLI_VERSION);
+    if pinned == text {
+        return Ok(());
+    }
+    std::fs::write(&manifest, pinned)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: manifest.display().to_string(),
+            reason: "Failed to pin Alien's crates".to_string(),
+        })
+}
+
+/// The repository's tag for a CLI at `version`, when the version is a release.
+///
+/// Each release tags the repository `v<version>`. A canary carries a pre-release suffix
+/// (`3.3.31-00000001`) and has no tag: it builds from a pinned commit of the repository that its
+/// version doesn't name, and that can trail `main`. A local build of an untagged commit reports
+/// the version of the release it builds on, and so gets that release's tag.
+fn release_tag(version: &str) -> Option<String> {
+    let is_release = version.split('.').count() == 3
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    is_release.then(|| format!("v{version}"))
+}
+
+/// The git reference of Alien's crates for a CLI at `version`, and the comment a scaffold needs
+/// when there is no fixed one: without a release tag it follows `main`, as its templates do.
+fn alien_crates_reference(version: &str) -> (String, Option<String>) {
+    match release_tag(version) {
+        Some(tag) => (format!(r#"tag = "{tag}""#), None),
+        None => (
+            r#"branch = "main""#.to_string(),
+            Some(format!(
+                "# alien {version} has no release tag, so this follows main. Pin a release with tag = \"v<version>\".\n"
+            )),
+        ),
+    }
+}
+
+/// Rewrites the path dependencies on Alien's crates, and drops the comment lines right above
+/// each: in a template they describe its build inside the repository, which a scaffold isn't.
+fn pin_alien_crate_lines(text: &str, version: &str) -> String {
+    let (reference, comment) = alien_crates_reference(version);
+    let mut pinned = String::new();
+    let mut comments = String::new();
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with('#') {
+            comments.push_str(line);
+            continue;
+        }
+        let rewritten = line
+            .trim_end()
+            .split_once(" = ")
+            .and_then(|(name, source)| {
+                let crate_name = name.trim();
+                (crate_name.starts_with("alien-")
+                    && source == format!(r#"{{ path = "../../../crates/{crate_name}" }}"#))
+                .then(|| {
+                    let newline = if line.ends_with('\n') { "\n" } else { "" };
+                    format!(
+                        r#"{}{name} = {{ git = "{ALIEN_REPOSITORY}", {reference} }}{newline}"#,
+                        comment.as_deref().unwrap_or("")
+                    )
+                })
+            });
+        match rewritten {
+            Some(rewritten) => {
+                comments.clear();
+                pinned.push_str(&rewritten);
+            }
+            None => {
+                pinned.push_str(&comments);
+                comments.clear();
+                pinned.push_str(line);
+            }
+        }
+    }
+    pinned.push_str(&comments);
+    pinned
 }
 
 fn rewrite_package_json_name(target_dir: &Path, new_name: &str) -> Result<()> {
@@ -454,29 +592,6 @@ fn rewrite_package_json_name(target_dir: &Path, new_name: &str) -> Result<()> {
         })?;
 
     Ok(())
-}
-
-/// The commands to print after scaffolding. A project without a package.json has nothing to
-/// install and no dev server to start, so it goes straight to a release.
-fn next_steps(
-    directory: &str,
-    has_package_json: bool,
-    installed: bool,
-    package_manager: &str,
-) -> Vec<String> {
-    let mut steps = Vec::new();
-    if directory != "." {
-        steps.push(format!("cd {directory}"));
-    }
-    if has_package_json {
-        if !installed {
-            steps.push(format!("{package_manager} install"));
-        }
-        steps.push(command("alien dev"));
-    } else {
-        steps.push(command("alien release"));
-    }
-    steps
 }
 
 pub async fn init_task(args: InitArgs) -> Result<()> {
@@ -635,23 +750,25 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     remove_unused_template_lockfile(&target_dir, package_manager)?;
     steps.complete(1, Some("ready".to_string()));
 
-    let has_package_json = target_dir.join("package.json").exists();
     steps.activate(2, Some("installing...".to_string()));
-    let installed = if !has_package_json {
-        steps.skip(2, Some("no package.json".to_string()));
-        false
-    } else {
-        match install_dependencies(&target_dir, package_manager).await {
-            Ok(true) => {
-                steps.complete(2, Some("done".to_string()));
-                true
+    let installed =
+        if !target_dir.join("package.json").exists() || is_extension_workspace(&target_dir) {
+            // An extension's Cargo workspace, whose package.json only publishes it, or an app in a
+            // subdirectory: the next steps say what to run, and where.
+            steps.skip(2, Some("none here".to_string()));
+            false
+        } else {
+            match install_dependencies(&target_dir, package_manager).await {
+                Ok(true) => {
+                    steps.complete(2, Some("done".to_string()));
+                    true
+                }
+                _ => {
+                    steps.skip(2, Some("run manually".to_string()));
+                    false
+                }
             }
-            _ => {
-                steps.skip(2, Some("run manually".to_string()));
-                false
-            }
-        }
-    };
+        };
     drop(steps);
 
     // 6. Print success
@@ -660,22 +777,116 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     println!("{} {}", dim_label("Template "), accent(&selected.name));
     println!();
     println!("{}", dim_label("Next steps"));
-    for step in next_steps(
-        &directory,
-        has_package_json,
-        installed,
-        package_manager.unwrap_or("npm"),
-    ) {
-        println!("  {step}");
+    for step in next_steps(&target_dir, &directory, installed, package_manager) {
+        println!("  {}", command(&step));
     }
 
     Ok(())
 }
 
+/// What to run after scaffolding, from what the template is: an extension's workspace is tested
+/// with `alien extensions test`; an app runs with `alien dev` from the directory with its
+/// `alien.ts`, which may be a subdirectory of the template, and an `alien.toml` project is
+/// released.
+fn next_steps(
+    target_dir: &Path,
+    directory: &str,
+    installed: bool,
+    package_manager: Option<&str>,
+) -> Vec<String> {
+    let cd = |relative: &str| {
+        let path = match (directory, relative) {
+            (".", "") => return None,
+            (".", relative) => relative.to_string(),
+            (directory, "") => directory.to_string(),
+            (directory, relative) => format!("{directory}/{relative}"),
+        };
+        Some(format!("cd {path}"))
+    };
+    if is_extension_workspace(target_dir) {
+        return cd("")
+            .into_iter()
+            .chain(["alien extensions test".to_string()])
+            .collect();
+    }
+    let Some(app) = app_directory(target_dir) else {
+        return cd("").into_iter().collect();
+    };
+    let relative = app
+        .strip_prefix(target_dir)
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut steps: Vec<String> = cd(&relative).into_iter().collect();
+    let installed_here = installed && relative.is_empty();
+    if app.join("package.json").exists() && !installed_here {
+        let package_manager = if relative.is_empty() {
+            package_manager
+        } else {
+            package_manager_for(&app)
+        };
+        steps.push(format!("{} install", package_manager.unwrap_or("npm")));
+    }
+    // An alien.toml project has no package.json: nothing to install and no dev server, so it
+    // goes straight to a release.
+    steps.push(if app.join("package.json").exists() {
+        "alien dev".to_string()
+    } else {
+        "alien release".to_string()
+    });
+    steps
+}
+
+fn is_extension_workspace(target_dir: &Path) -> bool {
+    std::fs::read_to_string(target_dir.join("Cargo.toml"))
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+        .is_some_and(|manifest| {
+            manifest
+                .get("workspace")
+                .and_then(|workspace| workspace.get("metadata"))
+                .and_then(|metadata| metadata.get("alien-extension"))
+                .is_some()
+        })
+}
+
+/// The directory with the app's `alien.ts` or `alien.toml`: the template's own, or the first of
+/// its subdirectories, two levels deep, that has one.
+fn app_directory(target_dir: &Path) -> Option<PathBuf> {
+    let has_config = |directory: &Path| {
+        directory.join("alien.ts").is_file() || directory.join("alien.toml").is_file()
+    };
+    if has_config(target_dir) {
+        return Some(target_dir.to_path_buf());
+    }
+    let mut level = vec![target_dir.to_path_buf()];
+    for _ in 0..2 {
+        let mut next: Vec<PathBuf> = level
+            .iter()
+            .filter_map(|directory| std::fs::read_dir(directory).ok())
+            .flatten()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.is_dir()
+                    && path.file_name().is_some_and(|name| {
+                        name != "node_modules" && !name.to_string_lossy().starts_with('.')
+                    })
+            })
+            .collect();
+        next.sort();
+        if let Some(app) = next.iter().find(|path| has_config(path)) {
+            return Some(app.clone());
+        }
+        level = next;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{destination_for_init, display_directory, next_steps, KNOWN_TEMPLATES};
-    use crate::ui::command;
+    use super::{
+        destination_for_init, display_directory, extract_template, next_steps,
+        pin_alien_crate_lines, template_archive_url, KNOWN_TEMPLATES,
+    };
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
@@ -685,7 +896,9 @@ mod tests {
         let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let mut metadata_templates = BTreeSet::new();
 
-        for entry in fs::read_dir(examples_dir).expect("examples directory") {
+        let examples = fs::read_dir(&examples_dir).expect("examples directory");
+        let extensions = fs::read_dir(examples_dir.join("extensions")).expect("extensions");
+        for entry in examples.chain(extensions) {
             let entry = entry.expect("example entry");
             let metadata_path = entry.path().join("template.toml");
             if !metadata_path.is_file() {
@@ -707,23 +920,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert_eq!(catalog_templates, metadata_templates);
-    }
-
-    #[test]
-    fn next_steps_for_a_node_project_install_then_start_the_dev_server() {
-        assert_eq!(
-            next_steps("app", true, false, "pnpm"),
-            ["cd app", "pnpm install", &command("alien dev")]
-        );
-        assert_eq!(next_steps(".", true, true, "pnpm"), [command("alien dev")]);
-    }
-
-    #[test]
-    fn next_steps_for_a_project_without_package_json_skip_install() {
-        assert_eq!(
-            next_steps("worker", false, false, "npm"),
-            ["cd worker", &command("alien release")]
-        );
     }
 
     #[test]
@@ -757,6 +953,186 @@ mod tests {
         assert_eq!(
             destination,
             temporary.path().join("packages/private-runtime")
+        );
+    }
+
+    #[test]
+    fn points_alien_crates_at_the_release_tag_and_leaves_the_rest() {
+        // The comment right above a rewritten line describes the repository's build, so it goes;
+        // other comments stay.
+        let manifest = r#"[workspace.dependencies]
+# In the repository, the example builds against the SDK beside it.
+alien-extension-sdk = { path = "../../../crates/alien-extension-sdk" }
+# The types crate.
+acme-types = { path = "types" }
+alien-core = { path = "../../../crates/alien-other" }
+"#;
+        assert_eq!(
+            pin_alien_crate_lines(manifest, "3.4.0"),
+            r#"[workspace.dependencies]
+alien-extension-sdk = { git = "https://github.com/alienplatform/alien", tag = "v3.4.0" }
+# The types crate.
+acme-types = { path = "types" }
+alien-core = { path = "../../../crates/alien-other" }
+"#
+        );
+    }
+
+    // A canary's version has a pre-release suffix and no tag in the repository.
+    #[test]
+    fn a_cli_without_a_release_tag_follows_main_and_says_so() {
+        let manifest = "alien-extension-sdk = { path = \"../../../crates/alien-extension-sdk\" }\n";
+        assert_eq!(
+            pin_alien_crate_lines(manifest, "3.3.31-00000001"),
+            "# alien 3.3.31-00000001 has no release tag, so this follows main. Pin a release with tag = \"v<version>\".\n\
+             alien-extension-sdk = { git = \"https://github.com/alienplatform/alien\", branch = \"main\" }\n"
+        );
+        for version in ["3.4", "3.4.0.1", "v3.4.0", "3.4.x"] {
+            assert!(
+                pin_alien_crate_lines(manifest, version).contains(r#"branch = "main""#),
+                "{version}"
+            );
+        }
+    }
+
+    /// The repository's `main` archive as GitHub serves it, with only `examples/<template>/`.
+    fn archive(template: &str) -> Vec<u8> {
+        archive_at("alien-main", template)
+    }
+
+    /// The archive GitHub serves for a reference, whose top directory is `top`.
+    fn archive_at(top: &str, template: &str) -> Vec<u8> {
+        let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        let mut directories = vec![examples.join(template)];
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap();
+                if name == "target" || name == "generated" || name == "node_modules" {
+                    continue;
+                }
+                if path.is_dir() {
+                    directories.push(path);
+                } else {
+                    let relative = path.strip_prefix(&examples).unwrap();
+                    builder
+                        .append_path_with_name(
+                            &path,
+                            PathBuf::from(top).join("examples").join(relative),
+                        )
+                        .unwrap();
+                }
+            }
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn scaffolds_each_extension_template_against_the_release_tag() {
+        let version = crate::CLI_VERSION;
+        for template in [
+            "extensions/postgres-iam-auth",
+            "extensions/postgres-backup-retention",
+            "extensions/resource-tags",
+            "extensions/budget-alert",
+            "extensions/dns-zone",
+        ] {
+            let target = tempfile::tempdir().unwrap();
+            extract_template(&archive(template), template, target.path()).unwrap();
+
+            assert!(!target.path().join("template.toml").exists(), "{template}");
+            assert!(
+                target.path().join("hooks/src/lib.rs").is_file(),
+                "{template}"
+            );
+            let manifest = fs::read_to_string(target.path().join("Cargo.toml")).unwrap();
+            assert!(
+                manifest.contains(&format!(
+                    "alien-extension-sdk = {{ git = \"https://github.com/alienplatform/alien\", tag = \"v{version}\" }}\n"
+                )),
+                "{template}:\n{manifest}"
+            );
+            assert!(
+                !manifest.contains("../../crates"),
+                "{template}:\n{manifest}"
+            );
+            assert!(
+                !manifest.contains("In the") && !manifest.contains("repository"),
+                "{template}:\n{manifest}"
+            );
+            assert_eq!(
+                next_steps(target.path(), "my-extension", false, Some("pnpm")),
+                vec!["cd my-extension", "alien extensions test"],
+                "{template}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_release_cli_downloads_templates_from_its_tag() {
+        assert_eq!(
+            template_archive_url("3.4.0"),
+            "https://codeload.github.com/alienplatform/alien/tar.gz/refs/tags/v3.4.0"
+        );
+        assert_eq!(
+            template_archive_url("3.3.31-00000001"),
+            "https://codeload.github.com/alienplatform/alien/tar.gz/main"
+        );
+
+        // A tag's archive is named after the version, not `main`.
+        let target = tempfile::tempdir().unwrap();
+        extract_template(
+            &archive_at("alien-3.4.0", "extensions/postgres-backup-retention"),
+            "extensions/postgres-backup-retention",
+            target.path(),
+        )
+        .unwrap();
+        assert!(target.path().join("hooks/src/lib.rs").is_file());
+    }
+
+    #[test]
+    fn an_app_template_installs_and_runs_alien_dev() {
+        let target = tempfile::tempdir().unwrap();
+        extract_template(
+            &archive("basic-worker-ts"),
+            "basic-worker-ts",
+            target.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            next_steps(target.path(), "my-app", false, Some("pnpm")),
+            vec!["cd my-app", "pnpm install", "alien dev"]
+        );
+        assert_eq!(
+            next_steps(target.path(), ".", true, Some("pnpm")),
+            vec!["alien dev"]
+        );
+    }
+
+    // The app's alien.ts is in packages/remote-agent, with its own lockfile.
+    #[test]
+    fn an_app_in_a_subdirectory_starts_there() {
+        let target = tempfile::tempdir().unwrap();
+        extract_template(&archive("github-agent"), "github-agent", target.path()).unwrap();
+        let steps = next_steps(target.path(), "agent", false, Some("pnpm"));
+        assert_eq!(steps[0], "cd agent/packages/remote-agent");
+        assert!(steps[1].ends_with(" install"), "{steps:?}");
+        assert_eq!(steps[2], "alien dev");
+        assert_eq!(steps.len(), 3);
+    }
+
+    // A declarative alien.toml project has no package.json to install.
+    #[test]
+    fn an_alien_toml_project_skips_install_and_releases() {
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("alien.toml"), "name = \"worker\"\n").unwrap();
+        assert_eq!(
+            next_steps(target.path(), "worker", false, Some("npm")),
+            vec!["cd worker", "alien release"]
         );
     }
 }

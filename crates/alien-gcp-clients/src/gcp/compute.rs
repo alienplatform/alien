@@ -711,6 +711,8 @@ pub struct ComputeClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(ComputeClient);
+
 impl ComputeClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

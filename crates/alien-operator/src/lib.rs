@@ -23,8 +23,11 @@
 pub mod cli;
 pub mod collector_logs;
 pub mod config;
+pub mod controller_host;
+pub mod controller_pods;
 pub mod db;
 pub mod error;
+pub mod extension_bundles;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
@@ -369,6 +372,10 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         config: config.clone(),
         db: db.clone(),
         service_provider,
+        extension_controllers: Arc::new(extension_bundles::Controllers::for_operator(
+            &config,
+            db.clone(),
+        )),
         operations_sync_handler,
         pod_log_collection: runtime_options.pod_log_collection.is_some(),
         cancel: cancel.clone(),
@@ -969,6 +976,9 @@ pub struct OperatorState {
     /// Platform service provider for deployment operations.
     /// When running on local platform, this should contain a LocalBindingsProvider.
     pub service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    /// Where the controllers of the extensions the deployment's releases list run, kept from one
+    /// pass of the deployment loop to the next.
+    pub extension_controllers: Arc<extension_bundles::Controllers>,
     /// Drives the plugin registry toward the sync loop's target bundle set
     /// and reports what's loaded. `None` in OSS builds, which have no
     /// registry.

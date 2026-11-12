@@ -1,14 +1,15 @@
 //! GCP Service Activation mutation that enables required GCP APIs.
 
 use crate::error::Result;
-use crate::mutations::runs_on_platform_or_base;
+use crate::mutations::activation::{gcp::*, Activation};
+use crate::mutations::{required_activations, runs_on_platform_or_base};
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Key, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
     StackState,
 };
 use async_trait::async_trait;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info};
 
 /// Mutation that adds ServiceActivation resources for required GCP APIs.
@@ -27,16 +28,14 @@ use tracing::{debug, info};
 /// - redis: memorystore.googleapis.com (Memorystore for Valkey) + networkconnectivity.googleapis.com (service connection policy)
 /// - network: compute.googleapis.com (Compute Engine)
 /// - compute-cluster: compute.googleapis.com (Compute Engine)
+/// - an extension's type: the APIs its descriptor lists for GCP
 // Google documents these prerequisites for customer-owned workload federation.
 // Setup enables them; runtime identities do not receive Service Usage administration.
-pub(crate) const GCP_FEDERATION_SERVICES: [(&str, &str); 4] = [
-    ("enable-iam", "iam.googleapis.com"),
-    (
-        "enable-cloud-resource-manager",
-        "cloudresourcemanager.googleapis.com",
-    ),
-    ("enable-iam-credentials", "iamcredentials.googleapis.com"),
-    ("enable-security-token-service", "sts.googleapis.com"),
+pub(crate) const GCP_FEDERATION_SERVICES: [Activation; 4] = [
+    IAM,
+    CLOUD_RESOURCE_MANAGER,
+    IAM_CREDENTIALS,
+    SECURITY_TOKEN_SERVICE,
 ];
 
 pub struct GcpServiceActivationMutation;
@@ -57,8 +56,11 @@ impl StackMutation for GcpServiceActivationMutation {
             return false;
         }
 
-        // Check what resource types exist in the stack that need service activation
-        let required_services = self.get_required_services(stack, stack_state);
+        // Check what resource types exist in the stack that need service activation. An
+        // error is `mutate`'s to report.
+        let Ok(required_services) = self.get_required_services(stack, stack_state) else {
+            return true;
+        };
 
         if required_services.is_empty() {
             return false;
@@ -91,7 +93,7 @@ impl StackMutation for GcpServiceActivationMutation {
     ) -> Result<Stack> {
         info!("Adding GCP ServiceActivation resources");
 
-        let required_services = self.get_required_services(&stack, stack_state);
+        let required_services = self.get_required_services(&stack, stack_state)?;
 
         for (service_id, service_name) in required_services {
             // Check if this service activation already exists
@@ -140,7 +142,7 @@ impl StackMutation for GcpServiceActivationMutation {
 }
 
 /// The Cloud KMS activation. Its id is also the Key's dependency.
-pub(crate) const CLOUD_KMS_ACTIVATION_ID: &str = "enable-cloud-kms";
+pub(crate) const CLOUD_KMS_ACTIVATION_ID: &str = CLOUD_KMS.id();
 
 /// Whether the installed stack already has a Key but no Cloud KMS activation.
 ///
@@ -166,179 +168,102 @@ impl GcpServiceActivationMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-    ) -> BTreeMap<String, String> {
-        let mut services = BTreeMap::new();
+    ) -> Result<BTreeMap<String, String>> {
+        let mut apis = BTreeSet::new();
         // Enable quota reads in new setup artifacts. An installed deployment
         // without this optional API must keep updating with Unknown warnings;
         // adding a Frozen resource would require setup permissions it may lack.
         if stack_state.resources.is_empty()
             || stack_state.resources.contains_key("enable-cloud-quotas")
         {
-            services.insert(
-                "enable-cloud-quotas".to_string(),
-                "cloudquotas.googleapis.com".to_string(),
-            );
+            apis.insert(CLOUD_QUOTAS);
         }
 
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
                 "remote-stack-management" | "resource-access" => {
-                    for (id, service) in GCP_FEDERATION_SERVICES {
-                        services.insert(id.to_string(), service.to_string());
-                    }
+                    apis.extend(GCP_FEDERATION_SERVICES);
                 }
 
                 "worker" => {
-                    services.insert(
-                        "enable-cloud-run".to_string(),
-                        "run.googleapis.com".to_string(),
-                    );
+                    apis.insert(CLOUD_RUN);
                 }
                 "build" => {
-                    services.insert(
-                        "enable-cloud-build".to_string(),
-                        "cloudbuild.googleapis.com".to_string(),
-                    );
+                    apis.insert(CLOUD_BUILD);
                 }
                 "storage" => {
-                    services.insert(
-                        "enable-cloud-storage".to_string(),
-                        "storage.googleapis.com".to_string(),
-                    );
+                    apis.insert(CLOUD_STORAGE);
                 }
                 "key" => {
-                    services.insert(
-                        CLOUD_KMS_ACTIVATION_ID.to_string(),
-                        "cloudkms.googleapis.com".to_string(),
-                    );
+                    apis.insert(CLOUD_KMS);
                 }
                 "role" => {
-                    services.insert("enable-iam".to_string(), "iam.googleapis.com".to_string());
-                    services.insert(
-                        "enable-cloud-resource-manager".to_string(),
-                        "cloudresourcemanager.googleapis.com".to_string(),
-                    );
+                    apis.insert(IAM);
+                    apis.insert(CLOUD_RESOURCE_MANAGER);
                 }
                 "artifact-registry" => {
-                    services.insert(
-                        "enable-artifact-registry".to_string(),
-                        "artifactregistry.googleapis.com".to_string(),
-                    );
+                    apis.insert(ARTIFACT_REGISTRY);
                 }
                 "kv" => {
-                    services.insert(
-                        "enable-firestore".to_string(),
-                        "firestore.googleapis.com".to_string(),
-                    );
+                    apis.insert(FIRESTORE);
                 }
                 "ai" => {
                     // Vertex AI. The native controller enables this at runtime, but a
                     // Frozen/Terraform GCP deploy relies on this activation being injected
                     // here, otherwise the first Vertex call fails with SERVICE_DISABLED.
-                    services.insert(
-                        "enable-aiplatform".to_string(),
-                        "aiplatform.googleapis.com".to_string(),
-                    );
+                    apis.insert(AI_PLATFORM);
                 }
                 "sandbox" => {
                     // Agent Platform sandboxes are Vertex reasoning engines; a stack with a
                     // sandbox but no ai resource would otherwise never enable aiplatform. Same
                     // key as "ai", so a stack with both enables it once.
-                    services.insert(
-                        "enable-aiplatform".to_string(),
-                        "aiplatform.googleapis.com".to_string(),
-                    );
+                    apis.insert(AI_PLATFORM);
                 }
                 "queue" => {
-                    services.insert(
-                        "enable-pubsub".to_string(),
-                        "pubsub.googleapis.com".to_string(),
-                    );
+                    apis.insert(PUBSUB);
                 }
                 "vault" => {
-                    services.insert(
-                        "enable-secret-manager".to_string(),
-                        "secretmanager.googleapis.com".to_string(),
-                    );
+                    apis.insert(SECRET_MANAGER);
                 }
                 "postgres" => {
-                    services.insert(
-                        "enable-cloud-sql".to_string(),
-                        "sqladmin.googleapis.com".to_string(),
-                    );
+                    apis.insert(CLOUD_SQL);
                     // The private connection uses Private Service Connect — a
                     // `google_compute_address` + `google_compute_forwarding_rule` in the stack
                     // VPC — so Compute Engine must be enabled too. Shares the `network` arm's key
                     // so the two dedupe when both resources are present.
-                    services.insert(
-                        "enable-compute-engine".to_string(),
-                        "compute.googleapis.com".to_string(),
-                    );
+                    apis.insert(COMPUTE_ENGINE);
                     // The setup emitter stores the generated connection password in a
                     // `google_secret_manager_secret`, so the apply needs the API even when the
                     // stack has no `vault`. Shares the `vault` arm's key so the two dedupe.
-                    services.insert(
-                        "enable-secret-manager".to_string(),
-                        "secretmanager.googleapis.com".to_string(),
-                    );
+                    apis.insert(SECRET_MANAGER);
                 }
                 "redis" => {
-                    services.insert(
-                        "enable-memorystore".to_string(),
-                        "memorystore.googleapis.com".to_string(),
-                    );
+                    apis.insert(MEMORYSTORE);
                     // PSC for Memorystore goes through a service connection policy.
-                    services.insert(
-                        "enable-network-connectivity".to_string(),
-                        "networkconnectivity.googleapis.com".to_string(),
-                    );
-                    services.insert(
-                        "enable-service-consumer-management".to_string(),
-                        "serviceconsumermanagement.googleapis.com".to_string(),
-                    );
-                    services.insert(
-                        "enable-compute-engine".to_string(),
-                        "compute.googleapis.com".to_string(),
-                    );
+                    apis.insert(NETWORK_CONNECTIVITY);
+                    apis.insert(SERVICE_CONSUMER_MANAGEMENT);
+                    apis.insert(COMPUTE_ENGINE);
                 }
                 "network" => {
-                    services.insert(
-                        "enable-compute-engine".to_string(),
-                        "compute.googleapis.com".to_string(),
-                    );
+                    apis.insert(COMPUTE_ENGINE);
                 }
                 "compute-cluster" => {
-                    services.insert(
-                        "enable-compute-engine".to_string(),
-                        "compute.googleapis.com".to_string(),
-                    );
+                    apis.insert(COMPUTE_ENGINE);
                     // Required for the IMDS metadata proxy to impersonate service accounts on
                     // behalf of containers via generateAccessToken.
-                    services.insert(
-                        "enable-iam-credentials".to_string(),
-                        "iamcredentials.googleapis.com".to_string(),
-                    );
+                    apis.insert(IAM_CREDENTIALS);
                 }
                 "kubernetes-cluster" => {
-                    services.insert(
-                        "enable-container".to_string(),
-                        "container.googleapis.com".to_string(),
-                    );
-                    services.insert(
-                        "enable-compute-engine".to_string(),
-                        "compute.googleapis.com".to_string(),
-                    );
-                    services.insert(
-                        "enable-iam-credentials".to_string(),
-                        "iamcredentials.googleapis.com".to_string(),
-                    );
+                    apis.insert(CONTAINER);
+                    apis.insert(COMPUTE_ENGINE);
+                    apis.insert(IAM_CREDENTIALS);
                 }
                 _ => {}
             }
         }
 
-        services
+        required_activations(stack, Platform::Gcp, apis, self.description())
     }
 }
 
@@ -473,7 +398,8 @@ mod tests {
             )
             .build();
         let services = GcpServiceActivationMutation
-            .get_required_services(&stack, &StackState::new(Platform::Gcp));
+            .get_required_services(&stack, &StackState::new(Platform::Gcp))
+            .unwrap();
         assert_eq!(
             services.get("enable-aiplatform").map(String::as_str),
             Some("aiplatform.googleapis.com"),
@@ -490,7 +416,8 @@ mod tests {
             )
             .build();
         let services = GcpServiceActivationMutation
-            .get_required_services(&stack, &StackState::new(Platform::Gcp));
+            .get_required_services(&stack, &StackState::new(Platform::Gcp))
+            .unwrap();
         let enabled: std::collections::BTreeSet<_> =
             services.values().map(String::as_str).collect();
         for api in [

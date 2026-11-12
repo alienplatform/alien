@@ -25,11 +25,11 @@ use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
     Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode, Key,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, Storage,
-    TelemetryMode, UpdatesMode, Worker, WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH,
-    MANAGEMENT_EXTERNAL_ID_MIN_LENGTH, MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN,
-    MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SetupFormat, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    MANAGEMENT_EXTERNAL_ID_MAX_LENGTH, MANAGEMENT_EXTERNAL_ID_MIN_LENGTH,
+    MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN, MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -549,6 +549,12 @@ pub fn generate_cloudformation_template_with_profile(
         {
             continue;
         }
+        stack.check_setup_format(
+            resource_id,
+            &resource_type,
+            SetupFormat::CloudFormation,
+            options.target.cloud_platform(),
+        )?;
         let emitter = options
             .registry
             .require(&resource_type, options.target.cloud_platform())?;
@@ -2058,10 +2064,9 @@ fn add_compute_parameters(
             );
             parameter.min_value = Some(CfExpression::from(range.min));
             parameter.max_value = Some(CfExpression::from(range.max));
-            template.parameters.insert(
-                compute_data_disk_parameter_name(&group.group_id),
-                parameter,
-            );
+            template
+                .parameters
+                .insert(compute_data_disk_parameter_name(&group.group_id), parameter);
         }
 
         // Setup preflights add workloads the source does not have (an internet sandbox's

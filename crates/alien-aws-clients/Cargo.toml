@@ -45,6 +45,7 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 
 [dev-dependencies]
+alien-client-core = { workspace = true, features = ["test-utils"] }
 alien-aws-clients = { path = ".", features = ["test-utils"] }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }

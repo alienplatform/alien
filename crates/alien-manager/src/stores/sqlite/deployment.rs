@@ -3,17 +3,21 @@
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use sea_query::{Cond, Expr, IntoCondition, Order, Query, SqliteQueryBuilder};
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tracing::warn;
 use turso::transaction::TransactionBehavior;
 
 use alien_core::{
     import::ImportSourceKind, DeploymentModel, DeploymentStatus, EnvironmentVariable, Platform,
+    Stack,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use super::database::{db_error, RowParser, SqliteDatabase};
-use super::migrations::{DeploymentGroups, Deployments};
+use super::migrations::{DeploymentGroups, Deployments, Releases};
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
@@ -1211,10 +1215,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to inspect deployment recovery inventory".to_string(),
             })?;
-        if let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+        let deployment = match rows.next().await.into_alien_error().context(GenericError {
             message: "Failed to read deployment recovery inventory".to_string(),
         })? {
-            let deployment = Self::parse_deployment(&row)?;
+            Some(row) => Some(Self::parse_deployment(&row)?),
+            None => None,
+        };
+        drop(rows);
+        if let Some(deployment) = deployment {
             if deployment.locked_by.is_some() && deployment.status != "deleted" {
                 return Err(AlienError::new(ErrorData::DeploymentLocked {
                     deployment_id: id.to_string(),
@@ -1222,18 +1230,47 @@ impl DeploymentStore for SqliteDeploymentStore {
                 })
                 .into_generic());
             }
+            // The releases' stacks carry the descriptors that say whether an extension's
+            // resource holds data.
+            let mut release_stacks = Vec::new();
+            for release_id in [
+                &deployment.current_release_id,
+                &deployment.desired_release_id,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let query = Query::select()
+                    .column(Releases::Stack)
+                    .from(Releases::Table)
+                    .and_where(Expr::col(Releases::Id).eq(release_id.as_str()))
+                    .to_string(SqliteQueryBuilder);
+                let mut rows =
+                    conn.query(&query, ())
+                        .await
+                        .into_alien_error()
+                        .context(GenericError {
+                            message: "Failed to inspect the deployment's release".to_string(),
+                        })?;
+                if let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+                    message: "Failed to read the deployment's release".to_string(),
+                })? {
+                    let stacks: HashMap<Platform, Stack> = RowParser::new(&row).json(0, "stack")?;
+                    release_stacks.extend(stacks.into_values());
+                }
+            }
+            let stacks: Vec<&Stack> = release_stacks.iter().collect();
             if matches!(
                 deployment.status.as_str(),
                 "retention-required" | "retained"
             ) || deployment.stack_state.as_ref().is_some_and(|stack| {
-                !alien_deployment::installed_durable_resource_ids(stack).is_empty()
+                !alien_deployment::installed_durable_resource_ids(stack, &stacks).is_empty()
             }) {
                 return Err(ErrorData::bad_request(
                     "Recovery metadata is required by retained durable data; complete explicit erase before forgetting this deployment",
                 ).into_generic());
             }
         }
-        drop(rows);
         let sql = Query::delete()
             .from_table(Deployments::Table)
             .and_where(Expr::col(Deployments::Id).eq(id))

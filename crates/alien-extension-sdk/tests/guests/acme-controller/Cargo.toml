@@ -1,0 +1,25 @@
+# The controller crate of the docs' full example (Build a full extension): one controller per
+# cloud for the DNS zone, and a local one for `alien dev`, served by `run_controllers`.
+[package]
+name = "acme-controller"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+acme-types = { path = "../acme-types" }
+alien-extension-sdk = { workspace = true, features = ["controller"] }
+# The docs' AWS controller calls Route53, which Alien has no client for. The HTTPS client and
+# runtime aws-config uses; the default features would add hyper 0.14's TLS stack.
+aws-sdk-route53 = { version = "=1.121.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+# `#[controller]` derives serde's traits, whose expansion names the `serde` crate.
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+alien-infra = { workspace = true, features = ["test-utils"] }
+base64 = { workspace = true }
+chrono = { workspace = true }
+ed25519-compact = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "net"] }

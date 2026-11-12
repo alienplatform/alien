@@ -113,6 +113,28 @@ mod queue;
 mod import;
 pub use import::*;
 
+pub mod step_protocol;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod public_host;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod extension_bundle;
+#[cfg(not(target_arch = "wasm32"))]
+mod extensions;
+mod refusal;
+#[cfg(not(target_arch = "wasm32"))]
+pub use extensions::{run_hooks, DeploymentRegistries, HostRegistrations, LoadedExtensions};
+#[cfg(not(target_arch = "wasm32"))]
+mod modifiers;
+#[cfg(not(target_arch = "wasm32"))]
+pub use modifiers::{changes_for_review, record_terraform_changes, ExtensionChanges, Modifiers};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod interceptors;
+#[cfg(not(target_arch = "wasm32"))]
+pub use interceptors::DeploymentInterceptors;
+
 pub mod import_helpers;
 
 #[cfg(feature = "aws")]

@@ -549,6 +549,8 @@ pub async fn teardown_target(
         deployment_id,
         platform,
         target_config,
+        &manager.url,
+        &manager.admin_token,
     )
     .await
     .map_err(|e| anyhow::anyhow!("push_deletion failed: {}", e))?;

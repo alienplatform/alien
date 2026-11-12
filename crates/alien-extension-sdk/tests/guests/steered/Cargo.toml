@@ -1,0 +1,14 @@
+# A hooks module that returns whatever its input asks for, so tests can hand Alien's modifier
+# pass any output, including what the SDK's own types can't produce.
+[package]
+name = "steered-hooks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+alien-extension-sdk = { workspace = true }
+serde_json = { workspace = true }

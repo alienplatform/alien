@@ -407,7 +407,9 @@ impl AzurePermissionsHelper {
         let mut bindings = Vec::new();
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| {
+                    alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
+                })
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!("Permission set '{}' not found", permission_set_ref.id()),
@@ -1174,7 +1176,9 @@ impl AzurePermissionsHelper {
         let generator = AzureRuntimePermissionsGenerator::new();
         for permission_set_ref in refs {
             let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .resolve(|name| {
+                    alien_permissions::get_stack_permission_set(ctx.desired_stack, name).cloned()
+                })
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!(
@@ -1471,6 +1475,94 @@ mod tests {
             },
             service_overrides: None,
         }
+    }
+
+    /// Plans the assignments an Azure storage resource `files` gets, in a stack with the acme
+    /// extension, the `app` profile and the management grants `management`.
+    async fn planned_assignments_with_an_extension_set(
+        app: alien_core::permissions::PermissionProfile,
+        management: alien_core::permissions::PermissionProfile,
+    ) -> Result<Vec<String>> {
+        use crate::core::controller_test::SingleControllerExecutor;
+        use crate::core::MockPlatformServiceProvider;
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+        let executor = SingleControllerExecutor::builder()
+            .resource(alien_core::Storage::new("files".to_string()).build())
+            .controller(crate::storage::AzureStorageController::default())
+            .platform(alien_core::Platform::Azure)
+            .with_dependency(
+                alien_core::ServiceAccount::new("app-sa".to_string()).build(),
+                crate::service_account::AzureServiceAccountController {
+                    identity_resource_id: Some("/identities/app".to_string()),
+                    identity_principal_id: Some("app-principal".to_string()),
+                    ..Default::default()
+                },
+            )
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                crate::remote_stack_management::AzureRemoteStackManagementController {
+                    uami_principal_id: Some("management-principal".to_string()),
+                    ..Default::default()
+                },
+            )
+            .permission_profile("app", app)
+            .management_permissions(alien_core::ManagementPermissions::Extend(management))
+            .extension(extension)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let context = PermissionContext::new()
+            .with_subscription_id("sub-123")
+            .with_resource_group("rg-123")
+            .with_resource_name("test-files")
+            .with_storage_account_name("testfiles");
+        executor.with_context(|ctx| {
+            futures::executor::block_on(
+                AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
+                    ctx,
+                    "files",
+                    "storage",
+                    Scope::ResourceGroup {
+                        resource_group_name: "rg-123".to_string(),
+                    },
+                    &context,
+                ),
+            )
+        })
+    }
+
+    /// A profile's grant of an extension's set on a resource resolves from the stack.
+    #[tokio::test]
+    async fn a_profile_grant_of_an_extension_set_resolves_from_the_stack() {
+        let grant = alien_core::permissions::PermissionProfile::new()
+            .resource("files", ["acme/dns-zone/records-write"]);
+        let planned = planned_assignments_with_an_extension_set(
+            grant,
+            alien_core::permissions::PermissionProfile::new(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
+        assert_eq!(planned.len(), 1, "{planned:?}");
+    }
+
+    /// A management grant of an extension's set on a resource resolves from the stack.
+    #[tokio::test]
+    async fn a_management_grant_of_an_extension_set_resolves_from_the_stack() {
+        let grant = alien_core::permissions::PermissionProfile::new()
+            .resource("files", ["acme/dns-zone/records-write"]);
+        let planned = planned_assignments_with_an_extension_set(
+            alien_core::permissions::PermissionProfile::new(),
+            grant,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the extension's set did not resolve: {error}"));
+        assert!(!planned.is_empty(), "{planned:?}");
     }
 
     #[test]

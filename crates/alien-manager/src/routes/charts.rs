@@ -16,6 +16,7 @@ use std::{
 };
 
 use alien_core::{DeploymentModel, Platform, StackSettings};
+use alien_error::{AlienError, AlienErrorData};
 use alien_helm::{
     apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
     LogCollectorDefault, OperatorImageDefault, PackageDefaults, SetupDefault,
@@ -168,7 +169,7 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
 
     if let Some(reference) = operation.strip_prefix("manifests/") {
         if reference.starts_with("sha256:") {
-            return visible_blob(state, &settings, &charts, method, reference);
+            return visible_blob(state, subject, &settings, &charts, method, reference).await;
         }
         let Some((version, release)) = charts.iter().find(|(version, _)| version == reference)
         else {
@@ -178,14 +179,14 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
                 format!("chart '{name}' has no version '{reference}'"),
             );
         };
-        return match render(state, &settings, release, version) {
+        return match render(state, subject, &settings, release, version).await {
             Ok(digests) => blob_response(method, &digests.manifest),
             Err(response) => response,
         };
     }
 
     if let Some(digest) = operation.strip_prefix("blobs/") {
-        return visible_blob(state, &settings, &charts, method, digest);
+        return visible_blob(state, subject, &settings, &charts, method, digest).await;
     }
 
     oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path")
@@ -232,15 +233,16 @@ pub(crate) async fn served_bundle_sources(
 /// Serve `digest` only if it belongs to one of `charts`, the charts this
 /// caller may read. The blob cache is shared across callers, so a digest
 /// alone must not grant access.
-fn visible_blob(
+async fn visible_blob(
     state: &AppState,
+    subject: &Subject,
     settings: &ChartSettings,
     charts: &[(String, ReleaseRecord)],
     method: &Method,
     digest: &str,
 ) -> Response {
     for (version, release) in charts {
-        match render(state, settings, release, version) {
+        match render(state, subject, settings, release, version).await {
             Ok(digests) if digests.contains(digest) => return blob_response(method, digest),
             Ok(_) => {}
             Err(response) => return response,
@@ -287,8 +289,9 @@ async fn chart_releases(
 }
 
 /// Render a release's chart once, cache its blobs, and return their digests.
-fn render(
+async fn render(
     state: &AppState,
+    subject: &Subject,
     settings: &ChartSettings,
     release: &ReleaseRecord,
     version: &str,
@@ -297,8 +300,6 @@ fn render(
     if let Some(digests) = rendered().get(&key) {
         return Ok(digests.clone());
     }
-    let render_failed =
-        |message: String| oci_error(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", message);
     let stack = release
         .stacks
         .get(&Platform::Kubernetes)
@@ -308,15 +309,33 @@ fn render(
         deployment_model: DeploymentModel::Pull,
         ..Default::default()
     };
-    let chart = generate_helm_chart(
-        stack,
-        HelmOptions {
-            registry: &HelmRegistry::built_in(),
-            stack_settings,
-            chart_name: stack.id().to_string(),
-        },
-    )
-    .map_err(|e| render_failed(format!("failed to generate chart: {e}")))?;
+    let registries = state
+        .registries(subject, &release.project_id, stack)
+        .await
+        .map_err(|e| render_failed("failed to load the release's extensions", e))?;
+    // A hook blocks its thread until it returns or reaches its deadline, and this manager
+    // serves other deployments meanwhile.
+    let chart = alien_infra::run_hooks({
+        let stack = stack.clone();
+        move || {
+            let mut chart = generate_helm_chart(
+                &stack,
+                HelmOptions {
+                    registry: &registries.helm,
+                    stack_settings,
+                    chart_name: stack.id().to_string(),
+                },
+            )
+            .map_err(|e| render_failed("failed to generate chart", e))?;
+            registries
+                .modifiers
+                .modify_helm(&mut chart)
+                .map_err(|e| render_failed("failed to apply the stack's extensions", e))?;
+            Ok::<_, Response>(chart)
+        }
+    })
+    .await
+    .map_err(|e| render_failed("failed to run the chart's hooks", e))??;
 
     let management_url = state.config.base_url();
     let registry_host = alien_core::image_rewrite::strip_url_scheme(&management_url).to_string();
@@ -350,9 +369,8 @@ fn render(
             }),
         },
     )
-    .map_err(|e| render_failed(format!("failed to apply chart defaults: {e}")))?;
-    let archive = package_chart(&chart)
-        .map_err(|e| render_failed(format!("failed to package chart: {e}")))?;
+    .map_err(|e| render_failed("failed to apply chart defaults", e))?;
+    let archive = package_chart(&chart).map_err(|e| render_failed("failed to package chart", e))?;
 
     let config = serde_json::json!({
         "apiVersion": "v2",
@@ -450,6 +468,29 @@ fn split_image(image: &str) -> (&str, &str) {
         Some(i) => (&image[..name_start + i], &image[name_start + i + 1..]),
         None => (image, "latest"),
     }
+}
+
+/// The OCI error for a chart render that failed at `step`, with the status the error carries: a
+/// refusal is a denied pull, a missing object an unknown manifest, anything else the manager's
+/// own failure. An internal error says only the step: its text, which can carry whatever a hook
+/// panicked with or the address of a service the manager calls, goes to the server's log, since
+/// one manager serves many projects. Any other error says its own message, not its causes.
+fn render_failed<E>(step: &str, error: AlienError<E>) -> Response
+where
+    E: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let (status, code) = match error.http_status_code {
+        Some(403) => (StatusCode::FORBIDDEN, "DENIED"),
+        Some(404) => (StatusCode::NOT_FOUND, "MANIFEST_UNKNOWN"),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN"),
+    };
+    let message = if error.internal {
+        tracing::error!(error = %error, step, "A chart render failed");
+        step.to_string()
+    } else {
+        format!("{step}: {}", error.into_external().message)
+    };
+    oci_error(status, code, message)
 }
 
 fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {

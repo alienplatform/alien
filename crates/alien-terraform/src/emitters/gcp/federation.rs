@@ -17,7 +17,7 @@ fn scope_hash(purpose: &ResourceType) -> String {
 
 pub(super) fn emit(fragment: &mut TfFragment, label: &str, purpose: &ResourceType) {
     let hash = scope_hash(purpose);
-    let pool = format!("{label}_manager");
+    let pool = pool_label(label);
     fragment.resource_blocks.push(resource_block(
         "google_iam_workload_identity_pool",
         &pool,
@@ -76,7 +76,12 @@ pub(super) fn emit(fragment: &mut TfFragment, label: &str, purpose: &ResourceTyp
             )),
         ],
     ));
-    fragment.resource_blocks.push(resource_block("google_service_account_iam_member", &pool, [
+    trust_manager(fragment, label, &pool);
+}
+
+/// Lets the manager, federated through `pool`, impersonate the service account `label`.
+pub(super) fn trust_manager(fragment: &mut TfFragment, label: &str, pool: &str) {
+    fragment.resource_blocks.push(resource_block("google_service_account_iam_member", &format!("{label}_manager"), [
         attr("service_account_id", expr::traversal(["google_service_account", label, "id"])),
         attr("role", Expression::String("roles/iam.workloadIdentityUser".into())),
         attr("member", expr::raw(format!("\"principal://iam.googleapis.com/${{google_iam_workload_identity_pool.{pool}.name}}/subject/${{var.managing_oidc_subject}}\""))),
@@ -84,8 +89,13 @@ pub(super) fn emit(fragment: &mut TfFragment, label: &str, purpose: &ResourceTyp
     ]));
 }
 
+/// The label of the workload identity pool `emit` creates for the identity labeled `label`.
+pub(super) fn pool_label(label: &str) -> String {
+    format!("{label}_manager")
+}
+
 pub(super) fn import_ref(label: &str, purpose: &ResourceType) -> Expression {
-    let pool = format!("{label}_manager");
+    let pool = pool_label(label);
     expr::object([
         (
             "projectNumber",

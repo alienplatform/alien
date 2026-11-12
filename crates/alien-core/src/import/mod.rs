@@ -11,6 +11,7 @@
 //!   response types of `POST /v1/stack/import`.
 //! * [`context`] — [`EmitContext`] / [`ImportContext`]. Pure data passed
 //!   through to format emitters and to importers respectively.
+//! * [`importer`] — [`ResourceImporter`], the trait every importer implements.
 //!
 //! Format-specific traits, registries, and emitters live in their respective
 //! format crates:
@@ -21,17 +22,18 @@
 //!   `hcl::Expression` directly — no intermediate IR).
 //! * `alien_helm::HelmEmitter` + `HelmRegistry`.
 //!
-//! Importers live next to their controllers in `alien-infra`:
-//!
-//! * `alien_infra::ResourceImporter` + `ImporterRegistry`.
+//! Alien's importers and `alien_infra::ImporterRegistry` live in
+//! `alien-infra`, which re-exports [`ResourceImporter`].
 //!
 //! This split keeps `alien-core` lightweight (no format dependencies) and
 //! lets each format crate use its native types without an intermediate IR.
 
 pub mod context;
 pub mod data;
+pub mod importer;
 pub mod request;
 
 pub use context::*;
 pub use data::*;
+pub use importer::*;
 pub use request::*;

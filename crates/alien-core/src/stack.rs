@@ -1,5 +1,7 @@
 use crate::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
-use crate::{Platform, Resource, ResourceLifecycle, ResourceRef, StackInputDefinition};
+use crate::{
+    Platform, Resource, ResourceLifecycle, ResourceRef, ResourceType, StackInputDefinition,
+};
 use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -134,6 +136,10 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<crate::OperationsConfig>,
+    /// Extensions whose resource types this stack may use, in the order the stack lists them.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<crate::ExtensionManifest>,
 }
 
 impl Stack {
@@ -367,6 +373,62 @@ impl Stack {
             Some(platforms) => platforms.contains(platform),
             None => true,
         }
+    }
+
+    /// The descriptor of a resource type an extension in this stack defines. `None` for a
+    /// built-in type, even when a manifest lists it, for a type listed only by an extension whose
+    /// name is not the type's prefix, and for a type no extension defines.
+    pub fn descriptor(
+        &self,
+        resource_type: &ResourceType,
+    ) -> Option<&crate::ResourceTypeDescriptor> {
+        self.defining_extension(resource_type)
+            .and_then(|extension| extension.resource_types.get(resource_type))
+    }
+
+    /// The extension in this stack that defines `resource_type`.
+    fn defining_extension(
+        &self,
+        resource_type: &ResourceType,
+    ) -> Option<&crate::ExtensionManifest> {
+        if !crate::custom_resource::is_custom_resource_type(resource_type.as_ref()) {
+            return None;
+        }
+        self.extensions.iter().find(|extension| {
+            extension.owns(resource_type) && extension.resource_types.contains_key(resource_type)
+        })
+    }
+
+    /// Refuses to set up resource `resource_id` with `format` on `platform` when its type comes
+    /// from an extension that has no part for that format and platform. A setup path a custom
+    /// resource lacks is off for every stack that uses it, and the error says why. Alien's own
+    /// types pass.
+    pub fn check_setup_format(
+        &self,
+        resource_id: &str,
+        resource_type: &ResourceType,
+        format: crate::SetupFormat,
+        platform: Platform,
+    ) -> crate::Result<()> {
+        let Some(extension) = self.defining_extension(resource_type) else {
+            return Ok(());
+        };
+        if extension.resource_types[resource_type]
+            .setup
+            .platforms(format)
+            .contains(&platform)
+        {
+            return Ok(());
+        }
+        Err(alien_error::AlienError::new(
+            crate::ErrorData::OperationNotSupported {
+                operation: format!("{format} setup"),
+                reason: format!(
+                    "resource '{resource_id}' has type {resource_type} from extension '{}', which has no {format} emitter for it on {platform}, so {format} setup is off for every stack that uses it",
+                    extension.name
+                ),
+            },
+        ))
     }
 }
 
@@ -1263,5 +1325,149 @@ mod tests {
             .values()
             .chain(target_entries.values())
             .all(|digest| digest.len() == 64));
+    }
+
+    /// The manifest `alien extensions build` writes for the docs' DNS zone, in its wire shape.
+    fn acme_manifest() -> serde_json::Value {
+        serde_json::json!({
+            "name": "acme",
+            "version": "0.1.0",
+            "digest": "sha256:4ff931a2",
+            "resourceTypes": {
+                "acme/dns-zone": {
+                    "lifecycles": ["frozen", "live"],
+                    "holdsData": false,
+                    "setup": {
+                        "cloudformation": ["aws"],
+                        "terraform": ["aws", "gcp", "azure"],
+                        "helm": ["kubernetes"],
+                        "importers": ["aws", "gcp", "azure"]
+                    },
+                    "controllerPlatforms": ["aws", "gcp", "azure"],
+                    "permissionSets": [{
+                        "id": "acme/dns-zone/provision",
+                        "description": "Create, read and delete the zone",
+                        "platforms": {
+                            "aws": [{
+                                "grant": { "actions": ["route53:CreateHostedZone"] },
+                                "binding": {
+                                    "stack": { "resources": ["*"] },
+                                    "resource": { "resources": ["*"] }
+                                }
+                            }]
+                        }
+                    }],
+                    "link": { "permissionSets": ["acme/dns-zone/records-write"] },
+                    "schemas": {
+                        "config": { "type": "object", "required": ["id", "domain"] },
+                        "outputs": { "type": "object", "required": ["zoneId"] }
+                    }
+                }
+            }
+        })
+    }
+
+    fn dns_zone() -> crate::CustomResource {
+        crate::CustomResource::from_untagged(
+            "acme/dns-zone",
+            serde_json::json!({ "id": "zone", "domain": "internal.acme.dev" }),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_stack_without_extensions_writes_no_extensions_field() {
+        let stack = Stack::new("app".to_string())
+            .add(dns_zone(), ResourceLifecycle::Frozen)
+            .build();
+
+        let json = serde_json::to_value(&stack).unwrap();
+        assert!(json.get("extensions").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<Stack>(json).unwrap(), stack);
+    }
+
+    #[test]
+    fn a_stack_carries_its_extensions_and_finds_the_types_they_define() {
+        let mut stack = Stack::new("app".to_string())
+            .add(dns_zone(), ResourceLifecycle::Frozen)
+            .build();
+        stack.extensions = vec![serde_json::from_value(acme_manifest()).unwrap()];
+
+        let json = serde_json::to_value(&stack).unwrap();
+        assert_eq!(json["extensions"], serde_json::json!([acme_manifest()]));
+        let stack: Stack = serde_json::from_value(json).unwrap();
+
+        let descriptor = stack
+            .descriptor(&ResourceType::from("acme/dns-zone"))
+            .expect("acme declares acme/dns-zone");
+        assert!(!descriptor.holds_data);
+        assert_eq!(
+            descriptor.lifecycles,
+            [ResourceLifecycle::Frozen, ResourceLifecycle::Live]
+        );
+        assert_eq!(
+            descriptor.link.permission_sets,
+            ["acme/dns-zone/records-write"]
+        );
+        assert!(stack
+            .descriptor(&ResourceType::from("acme/record"))
+            .is_none());
+    }
+
+    #[test]
+    fn a_descriptor_writes_services_and_the_network_only_when_the_type_asks_for_them() {
+        let descriptor: crate::ResourceTypeDescriptor =
+            serde_json::from_value(acme_manifest()["resourceTypes"]["acme/dns-zone"].clone())
+                .unwrap();
+        assert!(descriptor.services.is_empty());
+        assert!(!descriptor.requires_network);
+        let json = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(json, acme_manifest()["resourceTypes"]["acme/dns-zone"]);
+
+        let mut asking = json;
+        asking["services"] = serde_json::json!({
+            "gcp": ["dns.googleapis.com"],
+            "azure": ["Microsoft.Network"]
+        });
+        asking["requiresNetwork"] = true.into();
+        let descriptor: crate::ResourceTypeDescriptor =
+            serde_json::from_value(asking.clone()).unwrap();
+        assert_eq!(
+            descriptor.services[&crate::Platform::Gcp],
+            ["dns.googleapis.com"]
+        );
+        assert!(descriptor.requires_network);
+        assert_eq!(serde_json::to_value(&descriptor).unwrap(), asking);
+    }
+
+    /// An extension cannot redefine a built-in type: its descriptor for one is never returned.
+    #[test]
+    fn a_manifest_that_lists_a_built_in_type_does_not_describe_it() {
+        let mut manifest = acme_manifest();
+        let zone = manifest["resourceTypes"]["acme/dns-zone"].clone();
+        manifest["resourceTypes"]["storage"] = zone;
+        let mut stack = Stack::new("app".to_string()).build();
+        stack.extensions = vec![serde_json::from_value(manifest).unwrap()];
+
+        assert!(stack.descriptor(&Storage::RESOURCE_TYPE).is_none());
+    }
+
+    /// Only `acme` can define `acme/dns-zone`, wherever another extension sits in the list.
+    #[test]
+    fn a_type_listed_by_an_extension_of_another_name_has_no_descriptor() {
+        let mut evil = acme_manifest();
+        evil["name"] = "evil".into();
+        let mut stack = Stack::new("app".to_string()).build();
+        stack.extensions = vec![serde_json::from_value(evil).unwrap()];
+        let zone = ResourceType::from("acme/dns-zone");
+        assert!(stack.descriptor(&zone).is_none());
+
+        stack
+            .extensions
+            .push(serde_json::from_value(acme_manifest()).unwrap());
+        assert!(std::ptr::eq(
+            stack.descriptor(&zone).unwrap(),
+            &stack.extensions[1].resource_types[&zone]
+        ));
     }
 }

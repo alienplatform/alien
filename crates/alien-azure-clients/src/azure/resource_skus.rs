@@ -171,6 +171,8 @@ pub struct AzureResourceSkusClient {
     token_cache: AzureTokenCache,
 }
 
+crate::azure::common::impl_with_interceptors!(AzureResourceSkusClient);
+
 impl AzureResourceSkusClient {
     const API_VERSION: &'static str = "2021-07-01";
 

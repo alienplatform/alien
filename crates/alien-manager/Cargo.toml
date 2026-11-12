@@ -60,6 +60,7 @@ tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 base64 = { workspace = true }
+ed25519-compact = { workspace = true }
 
 # Crypto
 sha2 = { workspace = true }
@@ -131,6 +132,7 @@ mockall = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
 httpmock = { workspace = true }
+alien-client-core = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = { workspace = true }
 container-registry = { workspace = true, features = ["test-support"] }
@@ -148,3 +150,6 @@ base64 = { workspace = true }
 ngrok = { workspace = true }
 url = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# A controller server over HTTPS on loopback, as alien-bindings' tests serve one.
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+rcgen = "0.13"

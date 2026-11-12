@@ -202,7 +202,11 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         let preflight_runner = &preflight_runner;
         async move {
             let summary = preflight_runner
-                .run_build_time_preflights(&stack, settings.platform.runtime_platform())
+                .run_build_time_preflights_on(
+                    &stack,
+                    settings.platform.runtime_platform(),
+                    alien_preflights::ClusterCloud::of_target(settings.platform.base_platform()),
+                )
                 .await
                 .context(ErrorData::StackProcessorFailed {
                     message: "Failed to run build-time preflights".to_string(),
@@ -4761,6 +4765,75 @@ mod tests {
         let serialized = serde_json::to_string(&error).expect("error should serialize");
         assert!(serialized.contains("MACHINES_UNSUPPORTED_RESOURCE"));
         assert!(!output.path().join("build").join("machines").exists());
+    }
+
+    /// A Kubernetes build for a named cloud runs the preflights for that cloud's clusters: the
+    /// docs' Live zone, with controllers for the clouds only, builds for eks and for any cluster,
+    /// and a zone with only a GCP controller builds for any cluster but not for eks.
+    #[tokio::test]
+    async fn a_kubernetes_build_checks_custom_resources_for_its_base_platform() {
+        let zone = |controllers: serde_json::Value| -> Stack {
+            serde_json::from_value(serde_json::json!({
+                "id": "zone-app",
+                "resources": { "zone": {
+                    "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                    "lifecycle": "live", "dependencies": []
+                } },
+                "permissions": { "profiles": {}, "management": "auto" },
+                "extensions": [{
+                    "name": "acme", "version": "1.0.0", "digest": "sha256:0",
+                    "resourceTypes": { "acme/dns-zone": {
+                        "lifecycles": ["frozen", "live"], "holdsData": false,
+                        "setup": { "cloudformation": [], "terraform": [], "helm": ["kubernetes"], "importers": [] },
+                        "controllerPlatforms": controllers, "permissionSets": [],
+                        "link": { "permissionSets": [] },
+                        "schemas": { "config": {}, "outputs": {} }
+                    } }
+                }]
+            }))
+            .unwrap()
+        };
+        let output = tempdir().unwrap();
+        let settings = |base_platform| BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Kubernetes { base_platform },
+            targets: Some(vec![BinaryTarget::LinuxX64]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+
+        build_stack(
+            zone(serde_json::json!(["aws", "gcp", "azure", "local"])),
+            &settings(Some(Platform::Aws)),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        // A build with no base platform makes the chart every cluster installs, so the zone needs
+        // to run on one of them: not on a cluster in no cloud, and not on eks in particular.
+        for controllers in [
+            serde_json::json!(["aws", "gcp", "azure", "local"]),
+            serde_json::json!(["gcp"]),
+        ] {
+            build_stack(zone(controllers.clone()), &settings(None))
+                .await
+                .unwrap_or_else(|error| panic!("the chart serves {controllers}: {error:?}"));
+        }
+        let error = build_stack(
+            zone(serde_json::json!(["gcp"])),
+            &settings(Some(Platform::Aws)),
+        )
+        .await
+        .expect_err("an eks build needs the AWS controller");
+        let serialized = serde_json::to_string(&error).unwrap();
+        assert!(
+            serialized.contains(
+                "no controller for platform 'aws', the cloud its Kubernetes cluster runs in"
+            ),
+            "{serialized}"
+        );
     }
 
     #[tokio::test]

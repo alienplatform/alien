@@ -79,6 +79,8 @@ pub struct SecretManagerClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(SecretManagerClient);
+
 impl SecretManagerClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

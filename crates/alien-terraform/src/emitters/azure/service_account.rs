@@ -55,6 +55,46 @@ impl TfEmitter for AzureServiceAccountEmitter {
             ],
         ));
 
+        // On Kubernetes the Kubernetes identity overlay trusts the pod of the extension's
+        // controller instead.
+        if service_account.extension.is_some() && !ctx.targets_kubernetes {
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_federated_identity_credential",
+                &format!("{label}_fic"),
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.azure_oidc_issuer != \"\" && var.azure_oidc_subject != \"\" ? 1 : 0",
+                        ),
+                    ),
+                    attr(
+                        "name",
+                        resource_prefix_template(&format!(
+                            "{}-federated-credential",
+                            service_account.id
+                        )),
+                    ),
+                    attr(
+                        "resource_group_name",
+                        expr::raw("var.azure_resource_group_name"),
+                    ),
+                    attr(
+                        "parent_id",
+                        expr::traversal(["azurerm_user_assigned_identity", label, "id"]),
+                    ),
+                    attr(
+                        "audience",
+                        Expression::Array(vec![Expression::String(
+                            "api://AzureADTokenExchange".to_string(),
+                        )]),
+                    ),
+                    attr("issuer", expr::raw("var.azure_oidc_issuer")),
+                    attr("subject", expr::raw("var.azure_oidc_subject")),
+                ],
+            ));
+        }
+
         let principal_id_expr =
             expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]);
         let context = permission_context(label);

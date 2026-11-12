@@ -171,6 +171,29 @@ impl CheckResult {
     }
 }
 
+/// Where a Kubernetes deployment's cluster runs, as far as the caller knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterCloud {
+    /// Not known: a release, a build or the one chart every Kubernetes target installs.
+    Unknown,
+    /// In no cloud Alien manages, such as a cluster on-premises.
+    NoCloud,
+    /// In this cloud: an eks, gke or aks cluster.
+    Cloud(Platform),
+}
+
+impl ClusterCloud {
+    /// The cluster of a deployment, whose config names its cloud or none.
+    pub fn of_deployment(base_platform: Option<Platform>) -> Self {
+        base_platform.map_or(Self::NoCloud, Self::Cloud)
+    }
+
+    /// The cluster a template or a build is for: the cloud a target names, or any cluster.
+    pub fn of_target(base_platform: Option<Platform>) -> Self {
+        base_platform.map_or(Self::Unknown, Self::Cloud)
+    }
+}
+
 /// Validates stack configuration without requiring cloud access.
 /// Can run during build time for early error detection.
 #[async_trait::async_trait]
@@ -188,6 +211,17 @@ pub trait CompileTimeCheck: Send + Sync {
 
     /// Run the check without cloud access
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult>;
+
+    /// Run the check for a deployment on `platform` whose Kubernetes cluster runs where `cloud`
+    /// says. Only a check whose answer depends on that cloud reads it.
+    async fn check_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        _cloud: ClusterCloud,
+    ) -> Result<CheckResult> {
+        self.check(stack, platform).await
+    }
 }
 
 /// Validates that the deployment target provides required environment capabilities.
@@ -505,6 +539,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::RemoteBindingsMutation));
         registry.add_mutation(Box::new(mutations::ResourceLinkPermissionsMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
+        registry.add_mutation(Box::new(mutations::ExtensionIdentityMutation));
 
         // Phase 3: Service activations and platform infrastructure
         // These scan resource types to decide what to create, so they must see all

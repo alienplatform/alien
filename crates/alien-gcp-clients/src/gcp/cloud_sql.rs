@@ -265,6 +265,8 @@ pub struct CloudSqlClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(CloudSqlClient);
+
 impl CloudSqlClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let project_id = config.project_id.clone();

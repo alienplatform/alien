@@ -1,0 +1,18 @@
+[package]
+name = "acme-controller"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+acme-types = { workspace = true }
+alien-extension-sdk = { workspace = true, features = ["controller"] }
+# The AWS controller calls Route53, which Alien has no client for. The HTTPS client and runtime
+# aws-config uses; the default features would add hyper 0.14's TLS stack.
+aws-sdk-route53 = { version = "=1.121.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+# `#[controller]` derives serde's traits, whose expansion names the `serde` crate.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# The Route53 the AWS controller's tests answer from.
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }

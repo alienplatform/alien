@@ -160,6 +160,8 @@ async fn build_standalone_server(
         .unwrap_or_else(|e| panic!("Failed to set up the response signing key: {e}"));
     let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(&state_dir)
         .unwrap_or_else(|e| panic!("Failed to set up the bundle signing key: {e}"));
+    let step_token_key = alien_manager::bootstrap::step_token_key(&state_dir)
+        .unwrap_or_else(|e| panic!("Failed to set up the step token key: {e}"));
 
     let ephemeral_state_dir = alien_manager::values::state_dir_is_ephemeral(&state_dir)
         .unwrap_or_else(|e| panic!("Failed to check the state directory: {e}"));
@@ -181,6 +183,7 @@ async fn build_standalone_server(
         ))
         .bundle_signing_key(bundle_signing_key)
         .ephemeral_state_dir(ephemeral_state_dir)
+        .step_token_key(step_token_key)
         .with_standalone_defaults(toml_config)
         .await
         .expect("Failed to set up standalone defaults")

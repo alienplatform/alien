@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
-    ownership_policy_for_resource_type, ManagementPermissions, PermissionProfile, Platform,
-    ResourceLifecycle, Stack,
+    ownership_policy_for_resource_type, CustomResource, ManagementPermissions, PermissionProfile,
+    Platform, ResourceLifecycle, Stack,
 };
 
 /// Ensures explicit management overrides still grant provision permissions for Live resources.
@@ -33,7 +33,11 @@ impl CompileTimeCheck for LiveProvisionPermissionsCheck {
         let mut errors = Vec::new();
 
         for (resource_id, entry) in stack.resources() {
-            if entry.lifecycle != ResourceLifecycle::Live {
+            // The extension's own identity provisions a custom resource; the management
+            // identity never holds an extension's permission sets.
+            if entry.lifecycle != ResourceLifecycle::Live
+                || entry.config.downcast_ref::<CustomResource>().is_some()
+            {
                 continue;
             }
 
@@ -120,6 +124,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test".to_string(),
             resources,

@@ -45,6 +45,7 @@ pub(crate) fn overlay_per_resource(
 
     let cluster_label = kubernetes_cluster_label(stack, resource_labels);
     let mut service_accounts: Vec<(String, String, String)> = Vec::new();
+    let mut extension_identities: Vec<(String, String, String)> = Vec::new();
     for (resource_id, entry) in stack.resources() {
         let Some(service_account) = entry.config.downcast_ref::<ServiceAccount>() else {
             continue;
@@ -52,11 +53,16 @@ pub(crate) fn overlay_per_resource(
         let Some(label) = resource_labels.get(resource_id) else {
             continue;
         };
-        service_accounts.push((
+        let account = (
             resource_id.clone(),
             label.clone(),
             permission_profile_from_service_account_id(service_account.id()),
-        ));
+        );
+        if service_account.extension.is_some() {
+            extension_identities.push(account);
+        } else {
+            service_accounts.push(account);
+        }
     }
 
     let mut helm_service_accounts: Vec<(String, Expression)> = Vec::new();
@@ -88,6 +94,36 @@ pub(crate) fn overlay_per_resource(
         }
     }
 
+    let helm_manager_service_account = overlay_manager_service_account(
+        stack,
+        target,
+        resource_labels,
+        per_resource,
+        &mut target_cluster_data_added,
+        cluster_label.as_deref(),
+    );
+    // An extension's controller runs in a pod of its own, so its identity trusts that pod's
+    // service account, named after the identity as a workload's is after its profile, and
+    // nothing else: the Operator can't act as the identity. The identity waits for the
+    // management identity, so the cluster's data goes with that one.
+    for (resource_id, label, identity) in &extension_identities {
+        let Some(fragment) = per_resource.get_mut(resource_id) else {
+            continue;
+        };
+        if !target_cluster_data_added {
+            add_target_cluster_data(fragment, target, cluster_label.as_deref());
+            target_cluster_data_added = true;
+        }
+        let controller = terraform_service_account_name_expr(identity);
+        let helm_value = match target {
+            TerraformTarget::Eks => apply_eks(fragment, label, &controller),
+            TerraformTarget::Gke => apply_gke(fragment, label, &controller),
+            TerraformTarget::Aks => apply_aks(fragment, label, &controller),
+            _ => continue,
+        };
+        helm_service_accounts.push((identity.clone(), helm_value));
+    }
+
     if !service_accounts.is_empty() {
         shared_locals.insert(
             "kubernetes_namespace".to_string(),
@@ -97,14 +133,6 @@ pub(crate) fn overlay_per_resource(
     shared_locals.insert(
         "helm_service_accounts".to_string(),
         expr::object(helm_service_accounts),
-    );
-    let helm_manager_service_account = overlay_manager_service_account(
-        stack,
-        target,
-        resource_labels,
-        per_resource,
-        &mut target_cluster_data_added,
-        cluster_label.as_deref(),
     );
     shared_locals.insert(
         "helm_manager_service_account".to_string(),

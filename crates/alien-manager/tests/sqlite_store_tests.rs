@@ -3003,6 +3003,93 @@ async fn forgetting_keeps_installed_data_recovery_until_erased() {
         .is_none());
 }
 
+/// An installed resource of an extension's type keeps the record when its release's descriptor
+/// says it holds data, or when no release describes its type; it doesn't when the descriptor says
+/// it holds none.
+#[tokio::test]
+async fn forgetting_follows_the_release_descriptor_of_an_extension_resource() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let releases = SqliteReleaseStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let mut stack_state = StackState::new(Platform::Aws);
+    let zone = alien_core::CustomResource::from_untagged(
+        "acme/dns-zone",
+        serde_json::json!({ "id": "zone", "domain": "internal.acme.dev" }),
+    )
+    .unwrap();
+    let mut resource = alien_core::StackResourceState::new_pending(
+        "acme/dns-zone".to_string(),
+        alien_core::Resource::new(zone),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    resource.status = alien_core::ResourceStatus::Running;
+    stack_state.resources.insert("zone".into(), resource);
+
+    for (name, holds_data, forgotten) in [
+        ("holds-data", Some(true), false),
+        ("no-data", Some(false), true),
+        ("undescribed", None, false),
+    ] {
+        let mut stack = Stack::new(name.to_string()).build();
+        if let Some(holds_data) = holds_data {
+            stack.extensions = vec![serde_json::from_value(serde_json::json!({
+                "name": "acme",
+                "version": "0.1.0",
+                "digest": "sha256:4ff931a2",
+                "resourceTypes": { "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": holds_data,
+                    "setup": {
+                        "cloudformation": ["aws"], "terraform": [], "helm": [], "importers": ["aws"]
+                    },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }}
+            }))
+            .unwrap()];
+        }
+        let release = releases
+            .create_release(
+                &test_subject(),
+                CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([(Platform::Aws, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let dep = create_test_deployment(&store, &group, name, Platform::Aws).await;
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                "UPDATE deployments SET stack_state = ?, current_release_id = ? WHERE id = ?",
+                (
+                    serde_json::to_string(&stack_state).unwrap(),
+                    release.id,
+                    dep.id.clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let result = store.delete_deployment(&test_subject(), &dep.id).await;
+        assert_eq!(result.is_ok(), forgotten, "{name}: {result:?}");
+        let remaining = store
+            .get_deployment(&test_subject(), &dep.id)
+            .await
+            .unwrap();
+        assert_eq!(remaining.is_none(), forgotten, "{name}");
+    }
+}
+
 #[tokio::test]
 async fn legacy_teardown_retain_request_fences_old_actors() {
     let db = fresh_db().await;
@@ -3608,7 +3695,7 @@ mod retention_handoff_tests {
             "type": "AwsStorageController", "state": "createFailed", "_controllerStateVersion": 1
         }));
         stack.resources.insert("data".into(), bucket);
-        assert!(installed_durable_resource_ids(&stack).is_empty());
+        assert!(installed_durable_resource_ids(&stack, &[]).is_empty());
         // An interrupted request is cleaned up by the controller's ownership-checked
         // delete path; it is not evidence that an installed bucket holds user data.
         stack
@@ -3618,7 +3705,7 @@ mod retention_handoff_tests {
             .internal_state
             .as_mut()
             .unwrap()["requestedBucketName"] = serde_json::json!("test-data");
-        assert!(installed_durable_resource_ids(&stack).is_empty());
+        assert!(installed_durable_resource_ids(&stack, &[]).is_empty());
         stack
             .resources
             .get_mut("data")
@@ -3626,7 +3713,7 @@ mod retention_handoff_tests {
             .internal_state
             .as_mut()
             .unwrap()["bucketName"] = serde_json::json!("test-data");
-        assert_eq!(installed_durable_resource_ids(&stack), vec!["data"]);
+        assert_eq!(installed_durable_resource_ids(&stack, &[]), vec!["data"]);
     }
 
     #[tokio::test]

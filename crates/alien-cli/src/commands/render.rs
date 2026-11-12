@@ -1,4 +1,5 @@
-use crate::config::load_configuration;
+use crate::commands::extensions::load_local_bundles;
+use crate::config::load_configuration_and_extension_modules;
 use crate::error::{ErrorData, Result};
 use alien_client_config::ClientConfigExt;
 use alien_core::{
@@ -7,6 +8,7 @@ use alien_core::{
     Platform, StackSettings, StackState,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_infra::{DeploymentRegistries, ExtensionChanges, HostRegistrations, LoadedExtensions};
 use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,10 +16,12 @@ use std::sync::OnceLock;
 
 pub type CloudFormationRegistryExtension = fn(&mut alien_cloudformation::CfRegistry);
 pub type TerraformRegistryExtension = fn(&mut alien_terraform::TfRegistry);
+pub type HelmRegistryExtension = fn(&mut alien_helm::HelmRegistry);
 
 static CLOUDFORMATION_REGISTRY_EXTENSION: OnceLock<CloudFormationRegistryExtension> =
     OnceLock::new();
 static TERRAFORM_REGISTRY_EXTENSION: OnceLock<TerraformRegistryExtension> = OnceLock::new();
+static HELM_REGISTRY_EXTENSION: OnceLock<HelmRegistryExtension> = OnceLock::new();
 
 /// Registers additional CloudFormation emitters for a composed CLI.
 ///
@@ -39,20 +43,33 @@ pub fn register_terraform_registry_extension(extension: TerraformRegistryExtensi
         .expect("Terraform registry extension already registered");
 }
 
-fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
-    let mut registry = alien_cloudformation::CfRegistry::built_in();
-    if let Some(extension) = CLOUDFORMATION_REGISTRY_EXTENSION.get() {
-        extension(&mut registry);
-    }
-    registry
+/// Registers additional Helm emitters for a composed CLI.
+///
+/// Call this once during process startup, before running a render command.
+/// The OSS `alien` binary intentionally leaves the built-in registry unchanged.
+pub fn register_helm_registry_extension(extension: HelmRegistryExtension) {
+    HELM_REGISTRY_EXTENSION
+        .set(extension)
+        .expect("Helm registry extension already registered");
 }
 
-fn terraform_registry() -> alien_terraform::TfRegistry {
-    let mut registry = alien_terraform::TfRegistry::built_in();
-    if let Some(extension) = TERRAFORM_REGISTRY_EXTENSION.get() {
-        extension(&mut registry);
-    }
-    registry
+/// The registries a render uses: Alien's emitters, then a composed CLI's, then the stack's
+/// extensions'.
+fn registries(stack: &alien_core::Stack, extensions: &LoadedExtensions) -> DeploymentRegistries {
+    let none = HostRegistrations::NONE;
+    let platform = HostRegistrations {
+        cloudformation: CLOUDFORMATION_REGISTRY_EXTENSION
+            .get()
+            .copied()
+            .unwrap_or(none.cloudformation),
+        terraform: TERRAFORM_REGISTRY_EXTENSION
+            .get()
+            .copied()
+            .unwrap_or(none.terraform),
+        helm: HELM_REGISTRY_EXTENSION.get().copied().unwrap_or(none.helm),
+        ..none
+    };
+    DeploymentRegistries::for_stack(stack, &platform, extensions)
 }
 
 /// Render setup artifacts for review.
@@ -122,7 +139,9 @@ pub enum RenderRegistrationMode {
 
 pub async fn render_task(args: RenderArgs) -> Result<()> {
     validate_args(&args)?;
-    let mut stack = load_configuration(args.stack.clone()).await?;
+    let configuration = load_configuration_and_extension_modules(args.stack.clone()).await?;
+    let extensions = load_local_bundles(&configuration)?;
+    let mut stack = configuration.stack;
     let mut stack_settings = load_stack_settings(args.stack_settings.as_deref())?;
     let platform = match args.format {
         RenderFormat::Cloudformation => Platform::Aws,
@@ -137,7 +156,7 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
         stack_settings.compute.as_mut(),
     );
 
-    match args.format {
+    let changes = match args.format {
         RenderFormat::Cloudformation => {
             let prepared = prepare_stack_for_render(
                 stack.clone(),
@@ -147,7 +166,13 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
                 args.check_quotas,
             )
             .await?;
-            render_cloudformation(&prepared, &stack, &stack_settings, &args)
+            alien_infra::run_hooks(move || {
+                render_cloudformation(&prepared, &stack, &stack_settings, &args, &extensions)
+            })
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "The stack's extensions stopped before the render finished".to_string(),
+            })??
         }
         RenderFormat::Terraform => {
             let target = args.target.expect("validated by validate_args");
@@ -160,15 +185,28 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
                 args.check_quotas,
             )
             .await?;
-            render_terraform(&stack, &stack_settings, &args)
+            alien_infra::run_hooks(move || {
+                render_terraform(&stack, &stack_settings, &args, &extensions)
+            })
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "The stack's extensions stopped before the render finished".to_string(),
+            })??
         }
         RenderFormat::Helm => {
             let stack =
                 prepare_stack_for_render(stack, Platform::Kubernetes, None, &stack_settings, false)
                     .await?;
-            render_helm(&stack, &stack_settings, &args)
+            alien_infra::run_hooks(move || render_helm(&stack, &stack_settings, &args, &extensions))
+                .await
+                .context(ErrorData::ConfigurationError {
+                    message: "The stack's extensions stopped before the render finished"
+                        .to_string(),
+                })??
         }
-    }
+    };
+    report_changes(&changes);
+    Ok(())
 }
 
 async fn prepare_stack_for_render(
@@ -180,12 +218,17 @@ async fn prepare_stack_for_render(
 ) -> Result<alien_core::Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
     runner
-        .run_template_preflights(&stack, platform)
+        .run_template_preflights_on(
+            &stack,
+            platform,
+            alien_preflights::ClusterCloud::of_target(base_platform),
+        )
         .await
         .map_err(preflight_error)?;
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        management_external_id: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
@@ -346,13 +389,14 @@ fn render_cloudformation(
     source_stack: &alien_core::Stack,
     stack_settings: &StackSettings,
     args: &RenderArgs,
-) -> Result<()> {
-    let registry = cloudformation_registry();
+    extensions: &LoadedExtensions,
+) -> Result<Vec<ExtensionChanges>> {
+    let registries = registries(stack, extensions);
     let registration = registration_mode(args)?;
-    let template = alien_cloudformation::generate_cloudformation_template(
+    let mut template = alien_cloudformation::generate_cloudformation_template(
         stack,
         alien_cloudformation::CloudFormationOptions {
-            registry: &registry,
+            registry: &registries.cloudformation,
             source_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: stack_settings.clone(),
@@ -365,6 +409,10 @@ fn render_cloudformation(
         },
     )
     .map_err(render_error)?;
+    let changes = registries
+        .modifiers
+        .modify_cloudformation(&mut template)
+        .map_err(render_error)?;
 
     let (file_name, contents) = if args.json {
         (
@@ -383,7 +431,8 @@ fn render_cloudformation(
         )
     };
 
-    write_single_or_stdout(args.output.as_deref(), file_name, &contents)
+    write_single_or_stdout(args.output.as_deref(), file_name, &contents)?;
+    Ok(changes)
 }
 
 fn registration_mode(args: &RenderArgs) -> Result<alien_cloudformation::RegistrationMode> {
@@ -418,15 +467,16 @@ fn render_terraform(
     stack: &alien_core::Stack,
     stack_settings: &StackSettings,
     args: &RenderArgs,
-) -> Result<()> {
+    extensions: &LoadedExtensions,
+) -> Result<Vec<ExtensionChanges>> {
     let target = args.target.expect("validated by validate_args");
-    let registry = terraform_registry();
-    let module = alien_terraform::generate_terraform_module(
+    let registries = registries(stack, extensions);
+    let mut module = alien_terraform::generate_terraform_module(
         stack,
         terraform_target(target),
         alien_terraform::TerraformOptions {
             display_name: None,
-            registry: &registry,
+            registry: &registries.terraform,
             stack_settings: stack_settings.clone(),
             registration: None,
             helm_install: None,
@@ -434,13 +484,19 @@ fn render_terraform(
         },
     )
     .map_err(render_error)?;
+    let changes = registries
+        .modifiers
+        .modify_terraform(&mut module)
+        .map_err(render_error)?;
+    alien_infra::record_terraform_changes(&mut module, &changes);
 
     let files: Vec<(String, String)> = module
         .iter()
         .map(|(path, contents)| (path.to_string(), contents.to_string()))
         .collect();
 
-    write_files_or_stdout(args.output.as_deref(), &files)
+    write_files_or_stdout(args.output.as_deref(), &files)?;
+    Ok(changes)
 }
 
 fn terraform_target(target: RenderTarget) -> alien_terraform::TerraformTarget {
@@ -458,20 +514,37 @@ fn render_helm(
     stack: &alien_core::Stack,
     stack_settings: &StackSettings,
     args: &RenderArgs,
-) -> Result<()> {
-    let registry = alien_helm::HelmRegistry::built_in();
-    let chart = alien_helm::generate_helm_chart(
+    extensions: &LoadedExtensions,
+) -> Result<Vec<ExtensionChanges>> {
+    let registries = registries(stack, extensions);
+    let mut chart = alien_helm::generate_helm_chart(
         stack,
         alien_helm::HelmOptions {
-            registry: &registry,
+            registry: &registries.helm,
             stack_settings: stack_settings.clone(),
             chart_name: stack.id().to_string(),
         },
     )
     .map_err(render_error)?;
+    let changes = registries
+        .modifiers
+        .modify_helm(&mut chart)
+        .map_err(render_error)?;
 
     let files = chart.files.into_iter().collect::<Vec<_>>();
-    write_files_or_stdout(args.output.as_deref(), &files)
+    write_files_or_stdout(args.output.as_deref(), &files)?;
+    Ok(changes)
+}
+
+/// Lists what each of the stack's extensions changed, on stderr: stdout is the template.
+fn report_changes(changes: &[ExtensionChanges]) {
+    if changes.is_empty() {
+        return;
+    }
+    eprintln!("Changed by extensions, in the order the stack lists them:");
+    for extension in changes {
+        eprintln!("  {extension}");
+    }
 }
 
 fn write_single_or_stdout(
@@ -725,13 +798,13 @@ mod tests {
         )
         .await
         .expect("render preflights pass");
-        let registry = terraform_registry();
+        let registries = registries(&stack, &LoadedExtensions::default());
         let module = alien_terraform::generate_terraform_module(
             &stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
                 display_name: None,
-                registry: &registry,
+                registry: &registries.terraform,
                 stack_settings: StackSettings::default(),
                 registration: None,
                 helm_install: None,
@@ -784,6 +857,7 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    management_external_id: None,
                     // Rendering precedes installation reservation; setup supplies the scope.
                     gcp_federation_scope: None,
                     stored_secret_input_ids: None,
@@ -837,6 +911,81 @@ mod tests {
                     "the same change is refused where setup renders from the image: {errors:?}"
                 );
             }
+        }
+    }
+
+    fn args(format: RenderFormat, target: Option<RenderTarget>, output: &Path) -> RenderArgs {
+        RenderArgs {
+            format,
+            target,
+            stack: PathBuf::from("alien.json"),
+            output: Some(output.to_path_buf()),
+            check_quotas: false,
+            registration_mode: RenderRegistrationMode::Auto,
+            notification_lambda_arn: None,
+            stack_settings: None,
+            json: false,
+        }
+    }
+
+    /// Every format runs the stack's modifiers before it writes: an extension the stack lists
+    /// whose hooks module isn't loaded fails the render, naming it, and writes nothing.
+    #[test]
+    fn every_format_runs_the_stack_s_modifiers_before_writing() {
+        let mut stack = Stack::new("app".into())
+            .add(
+                Storage::new("data".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let settings = StackSettings::default();
+        let extensions = LoadedExtensions::default();
+        for listed in [false, true] {
+            if listed {
+                stack.extensions = vec![serde_json::from_value(serde_json::json!({
+                    "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
+                }))
+                .unwrap()];
+            }
+            let output = tempfile::tempdir().unwrap();
+            let results = [
+                render_cloudformation(
+                    &stack,
+                    &stack,
+                    &settings,
+                    &args(RenderFormat::Cloudformation, None, output.path()),
+                    &extensions,
+                ),
+                render_terraform(
+                    &stack,
+                    &settings,
+                    &args(
+                        RenderFormat::Terraform,
+                        Some(RenderTarget::Aws),
+                        output.path(),
+                    ),
+                    &extensions,
+                ),
+                render_helm(
+                    &stack,
+                    &settings,
+                    &args(RenderFormat::Helm, None, output.path()),
+                    &extensions,
+                ),
+            ];
+            for result in results {
+                match (listed, result) {
+                    (false, Ok(changes)) => assert!(changes.is_empty()),
+                    (true, Err(error)) => assert!(
+                        error.message.contains("extension 'acme' can't run"),
+                        "{}",
+                        error.message
+                    ),
+                    (_, other) => panic!("listed {listed}: {other:?}"),
+                }
+            }
+            let written = fs::read_dir(output.path()).unwrap().count();
+            assert_eq!(written > 0, !listed, "files written: {written}");
         }
     }
 }

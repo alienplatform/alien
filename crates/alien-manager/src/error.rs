@@ -308,6 +308,26 @@ pub enum ErrorData {
     )]
     Forbidden { reason: String },
 
+    /// No extension bundle object is stored under the digest.
+    #[error(
+        code = "EXTENSION_BUNDLE_OBJECT_NOT_FOUND",
+        message = "No extension bundle object is stored under {digest}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ExtensionBundleObjectNotFound { digest: String },
+
+    /// A release's stack pins an extension bundle this manager can't find.
+    #[error(
+        code = "EXTENSION_BUNDLE_MISSING",
+        message = "{message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ExtensionBundleMissing { message: String },
+
     /// A value is larger than the store accepts.
     #[error(
         code = "VALUE_TOO_LARGE",

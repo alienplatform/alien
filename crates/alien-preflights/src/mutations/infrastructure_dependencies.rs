@@ -134,12 +134,15 @@ impl InfrastructureDependenciesMutation {
         let waits_for_network = match platform {
             Platform::Aws | Platform::Gcp => {
                 stack.resources.get(resource_id).is_some_and(|entry| {
-                    resource_requires_network(entry) || resource_type.as_ref() == "worker"
+                    resource_requires_network(stack, entry) || resource_type.as_ref() == "worker"
                 })
             }
             Platform::Azure => {
                 resource_type == &alien_core::AzureContainerAppsEnvironment::RESOURCE_TYPE
                     || resource_type == &alien_core::Postgres::RESOURCE_TYPE
+                    || stack
+                        .descriptor(resource_type)
+                        .is_some_and(|descriptor| descriptor.requires_network)
                     || resource_type == &alien_core::Redis::RESOURCE_TYPE
             }
             _ => false,
@@ -195,9 +198,16 @@ impl InfrastructureDependenciesMutation {
         }
 
         // AWS workload roles need setup's boundary before create, and must be
-        // deleted before setup removes that policy.
+        // deleted before setup removes that policy. On GCP an extension's identity trusts the
+        // manager through the management identity's federation.
+        let extension_identity = stack
+            .resources
+            .get(resource_id)
+            .and_then(|entry| entry.config.downcast_ref::<alien_core::ServiceAccount>())
+            .is_some_and(|account| account.extension.is_some());
         if !is_infrastructure_resource
             || (platform == Platform::Aws && resource_type.as_ref() == "service-account")
+            || (platform == Platform::Gcp && extension_identity)
         {
             if let Some(management_id) = remote_stack_management_id(stack) {
                 dependencies.push(ResourceRef::new(
@@ -364,9 +374,12 @@ impl InfrastructureDependenciesMutation {
             (Platform::Gcp, "remote-stack-management" | "resource-access") => {
                 super::gcp_service_activation::GCP_FEDERATION_SERVICES
                     .iter()
-                    .filter(|(id, _)| stack.resources.contains_key(*id))
-                    .map(|(id, _)| {
-                        ResourceRef::new(alien_core::ServiceActivation::RESOURCE_TYPE, *id)
+                    .filter(|activation| stack.resources.contains_key(activation.id()))
+                    .map(|activation| {
+                        ResourceRef::new(
+                            alien_core::ServiceActivation::RESOURCE_TYPE,
+                            activation.id(),
+                        )
                     })
                     .collect()
             }
@@ -461,7 +474,33 @@ impl InfrastructureDependenciesMutation {
                 )]
             }
 
-            _ => Vec::new(),
+            // An extension's type waits for the activations of the services it asks for. A service
+            // Alien declares an activation for has Alien's id, whether or not an Alien type in the
+            // stack needs it.
+            _ => stack
+                .descriptor(resource_type)
+                .map(|descriptor| {
+                    let services = descriptor.services.get(&platform);
+                    stack
+                        .resources()
+                        .filter(|(_, entry)| {
+                            entry
+                                .config
+                                .downcast_ref::<alien_core::ServiceActivation>()
+                                .is_some_and(|activation| {
+                                    services.is_some_and(|services| {
+                                        services.iter().any(|service| {
+                                            service.eq_ignore_ascii_case(&activation.service_name)
+                                        })
+                                    })
+                                })
+                        })
+                        .map(|(id, _)| {
+                            ResourceRef::new(alien_core::ServiceActivation::RESOURCE_TYPE, id)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -878,6 +917,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

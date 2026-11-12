@@ -334,7 +334,15 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 )?;
             }
 
-            push_deletion(&client, &deployment_id, platform, client_config).await
+            push_deletion(
+                &client,
+                &deployment_id,
+                platform,
+                client_config,
+                &manager_url,
+                &token,
+            )
+            .await
         },
     )
     .await?;

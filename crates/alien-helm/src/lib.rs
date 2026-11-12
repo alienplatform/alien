@@ -15,6 +15,7 @@
 mod emitter;
 mod emitters;
 mod generator;
+mod objects;
 mod package;
 mod postgres;
 mod registry;
@@ -30,6 +31,10 @@ pub use generator::{
     HelmOptions, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
     OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
     OperatorScope, ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
+};
+pub use objects::{
+    compare_extension_objects, extension_subchart, post_rendered_objects, refuse_repeated_objects,
+    rendered_objects, RenderedObject,
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,

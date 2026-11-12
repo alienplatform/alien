@@ -52,10 +52,12 @@
 //! }
 //! ```
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::ExitCode;
 
 use alien_core::commands_types::COMMANDS_INLINE_MAX_BYTES;
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::protocol::{PluginInvocation, PluginResult, PROTOCOL_VERSION};
@@ -82,7 +84,8 @@ const MAX_INVOCATION_BYTES: usize = COMMANDS_INLINE_MAX_BYTES / 3 * 4 + 4096;
 /// [`TypedOperations::execute`](crate::TypedOperations::execute) with
 /// per-invocation setup; dispatching on `invocation.operation` by hand skips
 /// typed parameter validation and generated metadata.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait Plugin: Send + Sync {
     /// Run one operation and return its result. Implementations should
     /// return `PluginResult::error(...)` rather than panicking on any
@@ -97,6 +100,7 @@ pub trait Plugin: Send + Sync {
 /// Call this from `main`. It never panics: a malformed invocation or an I/O
 /// failure writing the result is reported as `ExitCode::FAILURE` rather
 /// than propagated.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn run_plugin(plugin: impl Plugin) -> ExitCode {
     let result = match read_invocation(tokio::io::stdin()).await {
         Ok(invocation) => dispatch(&plugin, invocation).await,
@@ -126,6 +130,7 @@ pub async fn dispatch(plugin: &impl Plugin, invocation: PluginInvocation) -> Plu
     plugin.handle(&invocation).await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn read_invocation(
     reader: impl tokio::io::AsyncRead + Unpin,
 ) -> Result<PluginInvocation, String> {
@@ -146,6 +151,7 @@ async fn read_invocation(
     serde_json::from_slice(&bytes).map_err(|_| "invocation was not valid JSON".to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn write_result(result: &PluginResult) -> std::io::Result<()> {
     let bytes =
         serde_json::to_vec(result).expect("PluginResult contains only serializable protocol data");
@@ -160,7 +166,8 @@ mod tests {
 
     struct Echo;
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl Plugin for Echo {
         async fn handle(&self, invocation: &PluginInvocation) -> PluginResult {
             PluginResult::success_json(&serde_json::json!({ "operation": invocation.operation }))
@@ -170,7 +177,8 @@ mod tests {
 
     struct AlwaysErrors;
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl Plugin for AlwaysErrors {
         async fn handle(&self, _invocation: &PluginInvocation) -> PluginResult {
             PluginResult::error("BOOM", "always fails")

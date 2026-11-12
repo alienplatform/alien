@@ -1776,3 +1776,67 @@ fn key_reimport_rejects_identity_changes_but_allows_version_rotation() {
         assert_eq!(error.code, "INVALID_RESOURCE_UPDATE");
     }
 }
+
+/// An extension's identity imports like any setup-created identity, and its stack state carries
+/// what the manager mints credentials for: the role ARN, the service account email, the managed
+/// identity's client id.
+#[test]
+fn an_extension_identity_imports_with_the_identity_the_manager_assumes() {
+    let entry = frozen_entry(
+        ServiceAccount::new("acme-ext".to_string())
+            .extension("acme".to_string())
+            .build(),
+    );
+    let cases = [
+        (
+            Platform::Aws,
+            json!({
+                "roleArn": "arn:aws:iam::123456789012:role/alien-stack-acme-ext",
+                "roleName": "alien-stack-acme-ext",
+                "stackPermissionsApplied": true
+            }),
+            aws_management_config(),
+            "arn:aws:iam::123456789012:role/alien-stack-acme-ext",
+        ),
+        (
+            Platform::Gcp,
+            json!({
+                "projectId": "my-project",
+                "serviceAccountEmail": "a-alien-stack-acme-ext@my-project.iam.gserviceaccount.com",
+                "serviceAccountUniqueId": "123456789012345678901",
+                "stackPermissionsApplied": true
+            }),
+            gcp_management_config(),
+            "a-alien-stack-acme-ext@my-project.iam.gserviceaccount.com",
+        ),
+        (
+            Platform::Azure,
+            json!({
+                "subscriptionId": "00000000-0000-0000-0000-000000000000",
+                "resourceGroup": "rg-alien",
+                "identityId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-stack-acme-ext",
+                "principalId": "22222222-2222-2222-2222-222222222222",
+                "clientId": "11111111-1111-1111-1111-111111111111",
+                "stackPermissionsApplied": true
+            }),
+            azure_management_config(),
+            "11111111-1111-1111-1111-111111111111",
+        ),
+    ];
+    for (platform, payload, management, identity) in cases {
+        let state = run_through_registry(
+            &ServiceAccount::RESOURCE_TYPE,
+            platform,
+            payload,
+            &entry,
+            "us-east-1",
+            &management,
+        );
+        let outputs = state
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::ServiceAccountOutputs>())
+            .unwrap_or_else(|| panic!("{platform:?} imports the identity's outputs"));
+        assert_eq!(outputs.identity, identity, "{platform:?}");
+    }
+}

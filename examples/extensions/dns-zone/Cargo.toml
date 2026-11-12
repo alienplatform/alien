@@ -1,0 +1,16 @@
+[workspace]
+members = ["types", "hooks", "controller"]
+resolver = "2"
+
+# Tells `alien extensions build` which crate is which.
+[workspace.metadata.alien-extension]
+hooks = "hooks"
+controller = "controller"
+types = "types"
+controller-url = "https://controllers.acme.dev"
+
+[workspace.dependencies]
+# `alien init` points this at the Alien repository's tag for the CLI's release. In the
+# repository, the example builds against the SDK beside it.
+alien-extension-sdk = { path = "../../../crates/alien-extension-sdk" }
+acme-types = { path = "types" }

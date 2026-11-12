@@ -65,6 +65,8 @@ pub mod elasticache;
 pub mod elbv2;
 pub mod eventbridge;
 pub mod iam;
+#[cfg(test)]
+mod interceptor_tests;
 pub mod kms;
 pub mod lambda;
 pub mod lambda_microvms;

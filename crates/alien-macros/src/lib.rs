@@ -1,3 +1,5 @@
+mod alien_resource;
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Expr, ItemFn};
@@ -131,4 +133,18 @@ pub fn terminal_state(_input: TokenStream) -> TokenStream {
     // This will be used inside the controller impl
     // For now, just return an empty token stream as it will be handled by the controller macro
     quote::quote! {}.into()
+}
+
+/// Makes a struct an extension's resource type:
+/// `#[alien_resource(type = "acme/dns-zone", outputs = DnsZoneOutputs, lifecycles = [Frozen, Live], holds_data = false)]`.
+///
+/// It writes the type's `RESOURCE_TYPE`, `ResourceDefinition` for the struct (which needs an
+/// `id: String` field), `ResourceOutputsDefinition` for its outputs, and the extension SDK's
+/// `AlienResource`, whose consts the type's descriptor is built from. The expansion names
+/// `alien_extension_sdk`, so it is for an extension's types crate.
+#[proc_macro_attribute]
+pub fn alien_resource(args: TokenStream, input: TokenStream) -> TokenStream {
+    alien_resource::expand(args.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }

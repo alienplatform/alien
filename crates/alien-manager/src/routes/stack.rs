@@ -416,7 +416,23 @@ pub async fn stack_import(
         return error.into_response();
     }
 
-    let mut stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
+    let registries = match state
+        .registries(&subject, &release.project_id, &prepared_stack)
+        .await
+    {
+        Ok(registries) => registries,
+        Err(e) => return e.into_response(),
+    };
+    let mut stack_state = match alien_infra::run_hooks({
+        let (req, stack) = (req.clone(), prepared_stack.clone());
+        move || build_stack_state(&registries.importers, &req, &stack)
+    })
+    .await
+    .context(ErrorData::InternalError {
+        message: "The stack's extension hooks stopped while importing the stack".to_string(),
+    })
+    .and_then(|stack_state| stack_state)
+    {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -578,17 +594,41 @@ pub async fn stack_import(
         }
         if !activates_setup_reservation {
             if let Some(existing_stack_state) = existing.stack_state.as_ref() {
-                stack_state = match merge_reimported_stack_state(
-                    &state,
-                    &req,
-                    &prepared_stack,
-                    existing_stack_state,
-                    stack_state,
-                    existing
-                        .runtime_metadata
-                        .as_ref()
-                        .is_some_and(|metadata| metadata.automatic_setup),
-                ) {
+                let automatic_setup = existing
+                    .runtime_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.automatic_setup);
+                let (state, req, stack, existing_stack_state) = (
+                    state.clone(),
+                    req.clone(),
+                    prepared_stack.clone(),
+                    existing_stack_state.clone(),
+                );
+                let registries = match state
+                    .registries(&subject, &release.project_id, &stack)
+                    .await
+                {
+                    Ok(registries) => registries,
+                    Err(error) => return error.into_response(),
+                };
+                stack_state = match alien_infra::run_hooks(move || {
+                    merge_reimported_stack_state(
+                        &registries.importers,
+                        &req,
+                        &stack,
+                        &existing_stack_state,
+                        stack_state,
+                        automatic_setup,
+                    )
+                })
+                .await
+                .context(ErrorData::InternalError {
+                    message:
+                        "The stack's extension hooks stopped while merging the reimported stack"
+                            .to_string(),
+                })
+                .and_then(|stack_state| stack_state)
+                {
                     Ok(state) => state,
                     Err(error) => return error.into_response(),
                 };
@@ -931,7 +971,7 @@ fn migrate_legacy_remote_bindings_handoff(
 }
 
 fn merge_reimported_stack_state(
-    state: &AppState,
+    importers: &alien_infra::ImporterRegistry,
     req: &StackImportRequest,
     stack: &Stack,
     existing: &StackState,
@@ -958,7 +998,7 @@ fn merge_reimported_stack_state(
                 ),
             }));
         }
-        let platform = import_platform_for_resource(state, req, &resource.resource_type);
+        let platform = import_platform_for_resource(importers, req, &resource.resource_type);
         if existing_resource
             .controller_platform
             .is_some_and(|existing_platform| existing_platform != platform)
@@ -978,8 +1018,7 @@ fn merge_reimported_stack_state(
                 ),
             })
         })?;
-        let mut merged = state
-            .import_registry
+        let mut merged = importers
             .merge_reimport(
                 &resource.resource_type,
                 platform,
@@ -1601,7 +1640,11 @@ pub(super) async fn prepare_setup_stack(
     let runner = alien_preflights::runner::PreflightRunner::new();
     let mutation_platform = req.platform;
     runner
-        .run_template_preflights(&source_stack, mutation_platform)
+        .run_template_preflights_on(
+            &source_stack,
+            mutation_platform,
+            alien_preflights::ClusterCloud::of_deployment(req.base_platform),
+        )
         .await
         .map_err(|err| {
             AlienError::new(ErrorData::BadRequest {
@@ -1614,6 +1657,7 @@ pub(super) async fn prepare_setup_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
+        management_external_id: None,
         // Template preparation grants no access and does not select an
         // installation authorization namespace.
         gcp_federation_scope: None,
@@ -1782,21 +1826,20 @@ pub(super) fn resolve_stack(
     })
 }
 
-/// Run every `ImportedResource` through the [`alien_infra::ImporterRegistry`]
+/// Run every `ImportedResource` through the stack's [`alien_infra::ImporterRegistry`]
 /// and assemble the resulting `(resource_id → StackResourceState)` map into
 /// a [`StackState`]. Errors here are surfaced verbatim — they are typed
 /// `ImportRegistrationMissing` / `JsonDeserializationFailed` so the caller
 /// gets enough context to fix the setup artifact without log spelunking.
 fn build_stack_state(
-    state: &AppState,
-    _subject: &Subject,
+    importers: &alien_infra::ImporterRegistry,
     req: &StackImportRequest,
     stack: &Stack,
 ) -> crate::error::Result<StackState> {
     let mut resources: HashMap<String, StackResourceState> = HashMap::new();
 
     for imported in &req.resources {
-        let import_platform = import_platform_for_resource(state, req, &imported.resource_type);
+        let import_platform = import_platform_for_resource(importers, req, &imported.resource_type);
         let entry = stack.resources.get(&imported.id).ok_or_else(|| {
             AlienError::new(ErrorData::BadRequest {
                 reason: format!(
@@ -1822,8 +1865,7 @@ fn build_stack_state(
         // by stringifying once rather than introducing a passthrough variant
         // on the manager's surface that would have to be kept in sync with
         // every importer-side error code.
-        let mut resource_state = state
-            .import_registry
+        let mut resource_state = importers
             .run(
                 &imported.resource_type,
                 import_platform,
@@ -1960,7 +2002,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
 }
 
 fn import_platform_for_resource(
-    state: &AppState,
+    importers: &alien_infra::ImporterRegistry,
     req: &StackImportRequest,
     resource_type: &alien_core::ResourceType,
 ) -> Platform {
@@ -1973,11 +2015,7 @@ fn import_platform_for_resource(
     }
 
     if let Some(base_platform) = req.base_platform {
-        if state
-            .import_registry
-            .importer(resource_type, base_platform)
-            .is_some()
-        {
+        if importers.importer(resource_type, base_platform).is_some() {
             return base_platform;
         }
     }

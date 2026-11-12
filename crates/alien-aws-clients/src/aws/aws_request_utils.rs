@@ -10,8 +10,8 @@ use std::time::SystemTime;
 use std::time::{Duration, UNIX_EPOCH};
 use tracing::{debug, trace};
 
-use alien_client_core::RequestBuilderExt;
-use alien_client_core::{ErrorData, Result};
+use alien_client_core::interceptor::{Cloud, InterceptorChain};
+use alien_client_core::{ErrorData, InterceptedRequestBuilder, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
@@ -44,18 +44,21 @@ pub struct AwsSignConfig {
     pub credentials: Credentials,
     /// Optional alternate signing region (used by services such as IAM).
     pub signing_region: Option<String>,
+    /// The deployment's interceptors, run on the request before it is signed.
+    pub interceptors: InterceptorChain,
 }
 
 /// Extension trait that enables AWS SigV4 signing on request builders (both the raw
 /// `reqwest::RequestBuilder` and the retry wrapper from `crate::request_utils`).
 pub trait AwsRequestSigner: Sized {
-    /// Sign the request and return a new builder containing the signed request so that
-    /// further combinators (e.g. `with_retry`, `send_json`) can be chained.
-    fn sign_aws_request(self, config: &AwsSignConfig) -> Result<Self>;
+    /// Run the deployment's interceptors on the request, sign it, and return a builder containing
+    /// the signed request so that further combinators (e.g. `with_retry`, `send_json`) can be
+    /// chained. Its response goes through the interceptors that matched the request.
+    fn sign_aws_request(self, config: &AwsSignConfig) -> Result<InterceptedRequestBuilder>;
 }
 
 impl AwsRequestSigner for reqwest::RequestBuilder {
-    fn sign_aws_request(self, config: &AwsSignConfig) -> Result<Self> {
+    fn sign_aws_request(self, config: &AwsSignConfig) -> Result<InterceptedRequestBuilder> {
         // First build the request.
         let (client, req_result) = self.build_split();
 
@@ -68,6 +71,14 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
                         config.service_name
                     ),
                 })?;
+
+        // Before the Host rewrite below, so an interceptor sees, and may not change, the
+        // destination this client chose, endpoint override included.
+        let response_hook = config.interceptors.intercept(
+            Cloud::Aws,
+            &config.service_name,
+            &mut reqwest_request,
+        )?;
 
         // Endpoint overrides change the destination, but several service clients
         // still supply their default AWS Host header. SigV4 signs that header,
@@ -229,7 +240,10 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
         // continue chaining.
         let signed_builder = reqwest::RequestBuilder::from_parts(client, signed_reqwest_request);
 
-        Ok(signed_builder)
+        Ok(InterceptedRequestBuilder::new(
+            signed_builder,
+            response_hook,
+        ))
     }
 }
 
@@ -521,6 +535,7 @@ mod tests {
             region: "us-east-1".to_string(),
             credentials: Credentials::new("test-key", "test-secret", None, None, "test"),
             signing_region: None,
+            interceptors: Default::default(),
         };
         Client::new()
             .post(url)

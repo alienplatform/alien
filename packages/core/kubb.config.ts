@@ -32,6 +32,18 @@ export default defineConfig({
             wrapOutput: () => "z.json()",
           },
         },
+        {
+          type: "schemaName",
+          pattern: /^CustomResourceType$/,
+          options: {
+            // An extension's type is `<extension>/<type>`. Typed as a template literal it cannot
+            // equal a built-in tag, so `resourceType === "ai"` still narrows the heartbeat union.
+            // Only the type changes: an intersection would emit two schemas for one field, which
+            // the Rust SDK generator can't merge, and alien-core's pattern already requires the `/`.
+            wrapOutput: ({ output }) =>
+              `(${output}) as unknown as z.ZodType<\`\${string}/\${string}\`>`,
+          },
+        },
       ],
       transformers: {
         name: (name, type) => {

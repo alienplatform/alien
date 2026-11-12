@@ -4,6 +4,7 @@ use crate::gcp::gcp_request_utils::{
 use crate::gcp::iam::IamPolicy;
 use crate::gcp::GcpClientConfig;
 use crate::gcp::GcpClientConfigExt;
+use alien_client_core::interceptor::InterceptorChain;
 use alien_client_core::ErrorData;
 use alien_client_core::Result;
 use alien_error::AlienError;
@@ -104,13 +105,24 @@ pub trait GcsApi: Send + Sync + Debug {
 pub struct GcsClient {
     http: Client,
     cfg: GcpClientConfig,
+    interceptors: InterceptorChain,
 }
 
 impl GcsClient {
     /// Construct a new client using the provided hyper/reqwest `Client` and
     /// platform configuration.
     pub fn new(http: Client, cfg: GcpClientConfig) -> Self {
-        Self { http, cfg }
+        Self {
+            http,
+            cfg,
+            interceptors: InterceptorChain::default(),
+        }
+    }
+
+    /// The same client, with the deployment's interceptors.
+    pub fn with_interceptors(mut self, interceptors: InterceptorChain) -> Self {
+        self.interceptors = interceptors;
+        self
     }
 
     /// Helper that fetches a fresh bearer token and wraps it as `GcpAuthConfig`.
@@ -121,6 +133,8 @@ impl GcsClient {
             .await?;
         Ok(GcpAuthConfig {
             bearer_token: token,
+            service: "storage".to_string(),
+            interceptors: self.interceptors.clone(),
         })
     }
 
@@ -381,15 +395,11 @@ impl GcsApi for GcsClient {
             // The metadata is passed as JSON query params – GCS ignores body JSON in simple upload.
             ;
 
+        // The body is the object's own bytes, which interceptors are never offered.
+        let mut auth = self.auth().await?;
+        auth.interceptors = auth.interceptors.for_object_payload();
         // Successful upload returns the Object metadata as JSON.
-        auth_send_json(
-            builder,
-            &self.auth().await?,
-            "InsertObject",
-            &object_name,
-            "GCS",
-        )
-        .await
+        auth_send_json(builder, &auth, "InsertObject", &object_name, "GCS").await
     }
 
     /// Empty a bucket by deleting all objects (including all versions if versioned).

@@ -296,6 +296,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::AwsOpenSearch>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            other if crate::custom_resource::is_custom_resource_type(other) => Box::new(
+                crate::custom_resource::CustomResource::from_untagged(other, value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             other => {
                 return Err(serde::de::Error::unknown_variant(
                     other,
@@ -687,6 +691,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
             ),
             "experimental/aws-opensearch" => Box::new(
                 serde_json::from_value::<crate::resources::AwsOpenSearchOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
+            other if crate::custom_resource::is_custom_resource_type(other) => Box::new(
+                crate::custom_resource::CustomResourceOutputs::from_untagged(other, value)
                     .map_err(serde::de::Error::custom)?,
             ),
             other => {

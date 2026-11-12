@@ -955,30 +955,16 @@ fn required_string_tags(schema: &Value, field: &str) -> Option<BTreeSet<String>>
     if schema.get("nullable") == Some(&Value::Bool(true)) || schema.get("$ref").is_some() {
         return None;
     }
-    if schema.get("type").and_then(Value::as_str) == Some("object")
-        && schema
-            .get("required")
-            .and_then(Value::as_array)
-            .is_some_and(|required| required.contains(&Value::String(field.to_string())))
+    if let Some(values) = required_string_tag(schema, field)
+        .and_then(|tag| tag.get("enum"))
+        .and_then(Value::as_array)
     {
-        if let Some(tag) = schema
-            .get("properties")
-            .and_then(|properties| properties.get(field))
-        {
-            if tag.get("type").and_then(Value::as_str) == Some("string")
-                && tag.get("nullable") != Some(&Value::Bool(true))
-                && tag.get("$ref").is_none()
-            {
-                if let Some(values) = tag.get("enum").and_then(Value::as_array) {
-                    let tags: Option<BTreeSet<String>> = values
-                        .iter()
-                        .map(|value| value.as_str().map(str::to_string))
-                        .collect();
-                    if let Some(tags) = tags.filter(|tags| !tags.is_empty()) {
-                        return Some(tags);
-                    }
-                }
-            }
+        let tags: Option<BTreeSet<String>> = values
+            .iter()
+            .map(|value| value.as_str().map(str::to_string))
+            .collect();
+        if let Some(tags) = tags.filter(|tags| !tags.is_empty()) {
+            return Some(tags);
         }
     }
     if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
@@ -999,6 +985,34 @@ fn required_string_tags(schema: &Value, field: &str) -> Option<BTreeSet<String>>
         }
     }
     None
+}
+
+fn required_string_tag<'a>(schema: &'a Value, field: &str) -> Option<&'a Value> {
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)?
+        .contains(&Value::String(field.to_string()));
+    let tag = schema.get("properties")?.get(field)?;
+    (schema.get("type").and_then(Value::as_str) == Some("object")
+        && required
+        && tag.get("type").and_then(Value::as_str) == Some("string")
+        && tag.get("nullable") != Some(&Value::Bool(true))
+        && tag.get("$ref").is_none())
+    .then_some(tag)
+}
+
+// An open tag such as an extension's resource type (`acme/dns-zone`) has a
+// pattern instead of an enum. It cannot match a sibling whose finite tags the
+// pattern rejects.
+fn required_pattern_tag(schema: &Value, field: &str) -> Option<regress::Regex> {
+    if schema.get("nullable") == Some(&Value::Bool(true)) || schema.get("$ref").is_some() {
+        return None;
+    }
+    let tag = required_string_tag(schema, field)?;
+    if tag.get("enum").is_some() {
+        return None;
+    }
+    regress::Regex::new(tag.get("pattern")?.as_str()?).ok()
 }
 
 fn candidate_tag_fields(schema: &Value, fields: &mut BTreeSet<String>) {
@@ -1109,10 +1123,20 @@ fn normalize_disjoint_tagged_unions(schema: &mut Value) {
                     candidate_tag_fields(first, &mut fields);
                     let tagged_by_field = fields.iter().any(|field| {
                         let mut seen = BTreeSet::new();
-                        branches.iter().all(|branch| {
-                            required_string_tags(branch, field)
-                                .is_some_and(|tags| tags.into_iter().all(|tag| seen.insert(tag)))
-                        })
+                        let mut patterns = Vec::new();
+                        // Two patterns may overlap, so at most one branch has an open tag.
+                        branches
+                            .iter()
+                            .all(|branch| match required_string_tags(branch, field) {
+                                Some(tags) => tags.into_iter().all(|tag| seen.insert(tag)),
+                                None => required_pattern_tag(branch, field)
+                                    .map(|pattern| patterns.push(pattern))
+                                    .is_some(),
+                            })
+                            && patterns.len() <= 1
+                            && patterns
+                                .iter()
+                                .all(|pattern| seen.iter().all(|tag| pattern.find(tag).is_none()))
                     });
                     tagged_by_field || externally_tagged(branches)
                 });

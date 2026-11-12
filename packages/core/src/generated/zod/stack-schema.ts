@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ExtensionManifestSchema } from "./extension-manifest-schema.js";
 import { OperationsConfigSchema } from "./operations-config-schema.js";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
@@ -16,6 +17,9 @@ import { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
 export const StackSchema = z.object({
     "dynamicContainerImageResources": z.optional(z.array(z.string()).describe("Released Container resources whose image repositories are approved for\ncontainers created after installation.")),
 "dynamicContainerRepositories": z.optional(z.array(z.string()).describe("Exact image repositories approved for containers created after installation.\nThe runtime API also requires an immutable SHA-256 digest.")),
+get "extensions"(){
+                return z.array(ExtensionManifestSchema.describe("An extension a stack uses, and the resource types it defines.")).describe("Extensions whose resource types this stack may use, in the order the stack lists them.").optional()
+              },
 "id": z.string().describe("Unique identifier for the stack"),
 get "inputs"(){
                 return z.array(StackInputDefinitionSchema.describe("Stack input definition serialized into a release stack.")).describe("Input definitions required before setup or deployment can proceed.").optional()

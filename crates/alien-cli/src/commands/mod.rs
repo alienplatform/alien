@@ -18,6 +18,7 @@ pub mod domains;
 mod event_display;
 #[cfg(feature = "platform")]
 pub mod examples;
+pub mod extensions;
 pub mod init;
 pub mod logs;
 pub mod logs_manager;
@@ -84,6 +85,7 @@ pub use dev_helpers::{
 pub use domains::{domains_task, DomainsArgs};
 #[cfg(feature = "platform")]
 pub use examples::{examples_task, ExamplesArgs};
+pub use extensions::{extensions_task, ExtensionsArgs};
 pub use init::{init_task, InitArgs};
 pub use logs::{logs_task, LogsArgs};
 pub use onboard::{onboard_task, OnboardArgs};

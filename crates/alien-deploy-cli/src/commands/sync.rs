@@ -4253,7 +4253,12 @@ async fn helm_upgrade(
     if let Some(context) = &settings.kube_context {
         cmd.arg("--kube-context").arg(context);
     }
-    run(cmd, "helm upgrade --install").await.map(|_| ())
+    let check = super::helm_release::add_release_check(&mut cmd, chart).await?;
+    let result = run(cmd, "helm upgrade --install").await.map(|_| ());
+    match &check {
+        Some(check) => check.explain(result),
+        None => result,
+    }
 }
 
 /// Store the registry credentials as an image pull Secret in `namespace` and
@@ -4563,6 +4568,233 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
+
+    /// A `helm` first on PATH that logs each call and its `HELM_PLUGINS`, turns `upgrade
+    /// --install` into a render of the same chart, values and post-renderer by the real Helm,
+    /// logging INSTALLED when it succeeds, answers `get` with no values, and runs any other
+    /// command with the real Helm, so tests running beside it keep working. PATH is restored
+    /// when the returned guard drops.
+    fn fake_helm(directory: &Path) -> RestorePath {
+        let real = String::from_utf8(
+            std::process::Command::new("sh")
+                .args(["-c", "command -v helm"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let log = directory.join("log");
+        let script = format!(
+            r#"#!/bin/sh
+echo "ARGS $*" >> {log}
+echo "PLUGINS $HELM_PLUGINS" >> {log}
+case "$1" in
+  upgrade) shift ;;
+  get) echo null; exit 0 ;;
+  *) exec {real} "$@" ;;
+esac
+count=$#
+i=0
+while [ $i -lt $count ]; do
+  argument=$1; shift; i=$((i+1))
+  case "$argument" in
+    --install|--create-namespace|--reset-then-reuse-values|--wait) ;;
+    --timeout|--description) shift; i=$((i+1)) ;;
+    *) set -- "$@" "$argument" ;;
+  esac
+done
+{real} template "$@" > /dev/null || exit $?
+echo INSTALLED >> {log}
+"#,
+            log = log.display(),
+            real = real.trim()
+        );
+        let helm = directory.join("helm");
+        std::fs::write(&helm, script).unwrap();
+        std::fs::set_permissions(&helm, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = std::env::var("PATH").unwrap();
+        std::env::set_var("PATH", format!("{}:{path}", directory.display()));
+        RestorePath(path)
+    }
+
+    /// Puts back the PATH it holds when dropped, even when the test fails.
+    struct RestorePath(String);
+
+    impl Drop for RestorePath {
+        fn drop(&mut self) {
+            std::env::set_var("PATH", &self.0);
+        }
+    }
+
+    /// A chart whose stack lists `acme`, and Alien's Secret `rel`. With `subchart`, the acme
+    /// subchart renders `subchart_object`.
+    fn release_chart(directory: &Path, subchart: Option<&str>) {
+        let _ = std::fs::remove_dir_all(directory);
+        std::fs::create_dir_all(directory.join("templates")).unwrap();
+        std::fs::create_dir_all(directory.join("files")).unwrap();
+        let mut chart = "apiVersion: v2\nname: app\nversion: 0.1.0\n".to_string();
+        let mut stack = alien_core::Stack::new("app".to_string()).build();
+        if let Some(object) = subchart {
+            chart.push_str("dependencies:\n- name: acme\n  version: 0.0.0\n");
+            stack.extensions = vec![serde_json::from_value(serde_json::json!({
+                "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
+            }))
+            .unwrap()];
+            std::fs::create_dir_all(directory.join("charts/acme/templates")).unwrap();
+            std::fs::write(
+                directory.join("charts/acme/Chart.yaml"),
+                "apiVersion: v2\nname: acme\nversion: 0.0.0\n",
+            )
+            .unwrap();
+            std::fs::write(directory.join("charts/acme/templates/zz.yaml"), object).unwrap();
+        }
+        std::fs::write(directory.join("Chart.yaml"), chart).unwrap();
+        std::fs::write(
+            directory.join("values.yaml"),
+            "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("templates/secret.yaml"),
+            "apiVersion: v1\nkind: Secret\nmetadata:\n  name: rel\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("files/stack.json"),
+            serde_json::to_string(&stack).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Both places the deploy CLI applies a chart, `up` and `sync`, run the release check as
+    /// Helm's post-renderer: a release that repeats an object never installs, a clean one does,
+    /// and a chart without an extension's subchart gets no post-renderer and no `HELM_PLUGINS`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn every_install_runs_the_release_check_when_the_chart_has_an_extension_subchart() {
+        let work = tempfile::tempdir().unwrap();
+        let fake = work.path().join("fake");
+        std::fs::create_dir_all(&fake).unwrap();
+        // Stands in for this executable's check-helm-release: refuses two Secrets.
+        let checker = work.path().join("checker.sh");
+        std::fs::write(
+            &checker,
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --refusal ] && refusal=$2; shift; done\nin=$(cat)\nif [ \"$(printf '%s\\n' \"$in\" | grep -c '^kind: Secret')\" -gt 1 ]; then echo \"extension 'acme' renders Secret rel\" > \"$refusal\"; exit 1; fi\nprintf '%s\\n' \"$in\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &checker,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let _serial = super::super::helm_release::tests::SERIAL.lock().await;
+        let _stand_in = super::super::helm_release::tests::StandIn::new(checker);
+        let path = std::env::var("PATH").unwrap();
+        let fake_path = fake_helm(&fake);
+
+        let duplicate = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: rel\n";
+        let own = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: acme\n";
+        let chart = work.path().join("chart/app");
+        let package = work.path().join("package");
+        let values = work.path().join("values.json");
+        std::fs::write(&values, "{}").unwrap();
+        let settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some("ns".into()),
+            values: vec![],
+            kube_context: None,
+        };
+        let record = InstalledBundle {
+            rollout_succeeded: false,
+            sequence: None,
+            target_hash: None,
+            configuration_revision: None,
+            release_id: "release".into(),
+            stack_id: "app".into(),
+            chart: "app-0.1.0.tgz".into(),
+            chart_images: BTreeMap::from([(
+                "runtime.image".into(),
+                SiteImage {
+                    repository: "registry.example.com/site/operator".into(),
+                    tag: "fixture".into(),
+                },
+            )]),
+            telemetry_ack: None,
+            inventory: BTreeSet::new(),
+            registry: Some(settings.registry.clone()),
+        };
+        for site in ["up", "sync"] {
+            for (subchart, refused) in [(Some(duplicate), true), (Some(own), false), (None, false)]
+            {
+                release_chart(&chart, subchart);
+                let _ = std::fs::remove_file(fake.join("log"));
+                let result = if site == "up" {
+                    crate::commands::up::helm_upgrade_install(
+                        &chart, &values, "app", "ns", None, None,
+                    )
+                    .await
+                } else {
+                    let _ = std::fs::remove_dir_all(&package);
+                    std::fs::create_dir_all(&package).unwrap();
+                    let packaged = std::process::Command::new("helm")
+                        .arg("package")
+                        .arg(&chart)
+                        .arg("--destination")
+                        .arg(&package)
+                        .output()
+                        .unwrap();
+                    assert!(packaged.status.success(), "{packaged:?}");
+                    helm_upgrade(
+                        &settings,
+                        &record,
+                        &package.join("app-0.1.0.tgz"),
+                        "ns",
+                        None,
+                        "key",
+                        "dep_1",
+                        "app",
+                        None,
+                    )
+                    .await
+                };
+                let log = std::fs::read_to_string(fake.join("log")).unwrap_or_default();
+                let install = log
+                    .lines()
+                    .position(|line| line.starts_with("ARGS upgrade"))
+                    .unwrap_or_else(|| panic!("{site}: no install in {log}"));
+                let plugins = log.lines().nth(install + 1).unwrap();
+                let context = format!("{site}, subchart {subchart:?}: {result:?}\n{log}");
+                if refused {
+                    let error = result.expect_err(&context);
+                    assert!(
+                        error
+                            .message
+                            .contains("extension 'acme' renders Secret rel"),
+                        "{context}"
+                    );
+                    assert!(!log.contains("INSTALLED"), "{context}");
+                } else {
+                    result.expect(&context);
+                    assert!(log.contains("INSTALLED"), "{context}");
+                }
+                let checked = subchart.is_some();
+                assert_eq!(
+                    log.lines()
+                        .nth(install)
+                        .unwrap()
+                        .contains("--post-renderer alien-release-check"),
+                    checked,
+                    "{context}"
+                );
+                assert_eq!(plugins != "PLUGINS ", checked, "{context}");
+            }
+        }
+        drop(fake_path);
+        assert_eq!(std::env::var("PATH").unwrap(), path);
+    }
 
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]

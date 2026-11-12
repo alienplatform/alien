@@ -26,9 +26,9 @@ use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
-    TelemetryMode, UpdatesMode,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SetupFormat, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
@@ -376,6 +376,12 @@ pub(crate) fn render_terraform_module(
             continue;
         }
 
+        stack.check_setup_format(
+            resource_id,
+            &resource_type,
+            SetupFormat::Terraform,
+            platform,
+        )?;
         let emitter = options.registry.require(&resource_type, platform)?;
         let ctx = EmitContext {
             stack,
@@ -5417,6 +5423,34 @@ fn retain_data_helper(
 
 #[cfg(test)]
 mod tests {
+    /// Each file the generator names, besides one per resource, is one an extension can't take
+    /// the name of: an extension's Terraform modifier writes `<extension>.tf` beside them.
+    #[test]
+    fn extension_names_cannot_take_a_file_the_module_writes() {
+        let source = include_str!("generator.rs");
+        let code = &source[..source.find("#[cfg(test)]\nmod tests {").unwrap()];
+        let mut stems = Vec::new();
+        for line in code
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+        {
+            for literal in line.split('"').skip(1).step_by(2) {
+                if let Some(stem) = literal.strip_suffix(".tf") {
+                    if !stem.is_empty() && !stem.contains(['{', '}', '/', ' ']) {
+                        stems.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        assert!(stems.len() >= 10, "{stems:?}");
+        for stem in stems {
+            assert!(
+                alien_core::TERRAFORM_MODULE_FILE_STEMS.contains(&stem.as_str()),
+                "`{stem}.tf` is missing from alien_core::TERRAFORM_MODULE_FILE_STEMS"
+            );
+        }
+    }
+
     /// CI serves these providers from a mirror that falls back to the registry only for providers
     /// it doesn't list, so a constraint changed here without the script would break CI's inits.
     #[test]

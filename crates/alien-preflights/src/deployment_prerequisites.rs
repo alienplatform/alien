@@ -796,13 +796,9 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
         config: &DeploymentConfig,
     ) -> bool {
         !external_binding_required_types(stack_state.platform).is_empty()
-            || config
-                .external_bindings
-                .0
-                .values()
-                .any(|binding| {
-                    postgres_password_is_reference(binding) || redis_password_is_reference(binding)
-                })
+            || config.external_bindings.0.values().any(|binding| {
+                postgres_password_is_reference(binding) || redis_password_is_reference(binding)
+            })
     }
 
     async fn check(
@@ -937,6 +933,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             gcp_federation_scope: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
@@ -1040,10 +1037,17 @@ mod tests {
                 .check(&stack, &state, &config)
                 .await
                 .unwrap();
-            assert!(!result.success, "{platform:?} must require a binding for Redis");
+            assert!(
+                !result.success,
+                "{platform:?} must require a binding for Redis"
+            );
         }
         // A cloud platform provisions its own server.
-        assert!(!ExternalBindingsRequiredCheck.should_run(&stack, &stack_state(Platform::Aws), &config));
+        assert!(!ExternalBindingsRequiredCheck.should_run(
+            &stack,
+            &stack_state(Platform::Aws),
+            &config
+        ));
     }
 
     #[tokio::test]
@@ -1312,6 +1316,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

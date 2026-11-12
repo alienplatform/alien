@@ -1,0 +1,17 @@
+{
+  "name": "dataplane-with-extension",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "alien dev"
+  },
+  "dependencies": {
+    "@alienplatform/core": "^1.0.1",
+    "hono": "^4.13.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.15",
+    "typescript": "~5.8.3"
+  }
+}

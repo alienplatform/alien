@@ -29,7 +29,10 @@ pub struct AlienManager {
     pub(crate) dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     pub(crate) log_buffer: Arc<LogBuffer>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
+    pub(crate) extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     pub(crate) values: Option<Arc<crate::values::ValueStore>>,
+    pub(crate) extension_controllers:
+        Option<Arc<crate::extension_controllers::ExtensionControllers>>,
     pub(crate) release_channels: Option<Arc<dyn ReleaseChannelStore>>,
 }
 
@@ -113,7 +116,9 @@ impl AlienManager {
                         self.server_bindings.clone(),
                         self.dev_status_tx,
                     )
+                    .with_extension_bundles(self.extension_bundles.clone())
                     .with_value_store(self.values.clone())
+                    .with_extension_controllers(self.extension_controllers.clone())
                     .with_release_channels(self.release_channels.clone()),
                 ))
             } else {
@@ -476,6 +481,109 @@ mod tests {
             .expect("manager port must be released");
     }
 
+    /// Alien's storage emitter, replaced by one that panics.
+    struct PanickingEmitter;
+
+    impl alien_helm::HelmEmitter for PanickingEmitter {
+        fn emit(
+            &self,
+            _: &alien_core::import::EmitContext<'_>,
+        ) -> alien_core::Result<alien_helm::HelmFragment> {
+            panic!("the storage emitter fell over")
+        }
+    }
+
+    fn panicking_storage(registry: &mut alien_helm::HelmRegistry) {
+        registry.register("storage", Platform::Kubernetes, PanickingEmitter);
+    }
+
+    /// A hook that panics while the manager renders a chart fails that one pull with a 500; the
+    /// manager keeps serving the requests after it.
+    #[tokio::test]
+    async fn a_panic_while_rendering_a_chart_answers_500_and_the_manager_keeps_serving() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &directory.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .unwrap(),
+        );
+        let release_store = Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(db.clone()));
+        let mut state = crate::routes::sync::tests::test_app_state(
+            directory.path(),
+            Arc::new(crate::stores::sqlite::SqliteDeploymentStore::new(
+                db.clone(),
+            )),
+            release_store.clone(),
+            Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    directory.path().to_path_buf(),
+                ),
+            ),
+            db,
+        )
+        .await;
+        state.charts = Some(Arc::new(crate::routes::charts::ChartSettings::new(
+            None, false,
+        )));
+        state.host_registrations = alien_infra::HostRegistrations {
+            helm: panicking_storage,
+            ..alien_infra::HostRegistrations::NONE
+        };
+        let stack = alien_core::Stack::new("panic-chart".to_string())
+            .add(
+                alien_core::Storage::new("data".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        release_store
+            .create_release(
+                &crate::auth::Subject::system(),
+                crate::traits::CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: std::collections::HashMap::from([(Platform::Kubernetes, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let router = crate::routes::registry_proxy::router()
+            .route("/health", get(|| async { "ok" }))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = tokio::spawn(serve(listener, router, Duration::from_secs(30)));
+        let client = reqwest::Client::new();
+
+        let pull = client
+            .get(format!(
+                "http://{addr}/v2/charts/panic-chart/manifests/1.0.1"
+            ))
+            .bearer_auth("any-token")
+            .send()
+            .await
+            .expect("the manager answers the pull");
+        assert_eq!(pull.status().as_u16(), 500);
+        // The panic's text is internal: it stays in the server's log.
+        let body = pull.text().await.unwrap();
+        assert!(body.contains("failed to run the chart's hooks"), "{body}");
+        assert!(!body.contains("storage emitter"), "{body}");
+        assert!(!body.contains("HOOKS_STOPPED"), "{body}");
+
+        let health = client
+            .get(format!("http://{addr}/health"))
+            .send()
+            .await
+            .expect("the manager keeps serving");
+        assert_eq!(health.status().as_u16(), 200);
+        assert!(!served.is_finished(), "serve returned: {:?}", served.await);
+        served.abort();
+    }
+
     #[tokio::test]
     async fn idle_keep_alive_connection_is_closed_after_the_timeout() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -516,5 +624,59 @@ mod tests {
             closed, 0,
             "expected EOF from the server closing the idle connection"
         );
+    }
+
+    /// A manager with a step-token key publishes the key's JWKS to anyone, and signs steps as
+    /// its own URL. One without a key publishes nothing.
+    #[tokio::test]
+    async fn a_manager_publishes_its_step_token_key_and_signs_as_its_url() {
+        let path = crate::extension_controllers::STEP_TOKEN_JWKS_PATH;
+        for seed in [Some([9u8; 32]), None] {
+            let directory = tempfile::tempdir().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let config = ManagerConfig {
+                db_path: Some(directory.path().join("manager.db")),
+                state_dir: Some(directory.path().to_path_buf()),
+                // The issuer is the URL without its trailing slash, as a server compares it.
+                base_url: Some("https://manager.example.com/".to_string()),
+                disable_deployment_loop: true,
+                disable_heartbeat_loop: true,
+                response_signing_key: b"test-response-signing-key".to_vec(),
+                ..Default::default()
+            };
+            let mut builder = AlienManager::builder(config)
+                .with_standalone_defaults(&ManagerTomlConfig::default())
+                .await
+                .unwrap();
+            if let Some(seed) = seed {
+                builder = builder.step_token_key(seed);
+            }
+            let server = builder.build().await.unwrap();
+            assert_eq!(
+                server
+                    .extension_controllers
+                    .as_ref()
+                    .map(|controllers| controllers.issuer()),
+                seed.map(|_| "https://manager.example.com")
+            );
+            let task = tokio::spawn(server.start_with_listener_and_shutdown(listener, pending()));
+            let response = reqwest::get(format!("http://{addr}{path}")).await.unwrap();
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap();
+            task.abort();
+            match seed {
+                Some(seed) => {
+                    assert_eq!(status, 200, "{body}");
+                    let jwks: serde_json::Value = serde_json::from_str(&body).unwrap();
+                    let key = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed));
+                    assert_eq!(
+                        alien_infra::step_protocol::token::keys_from_jwks(&jwks),
+                        vec![key.pk]
+                    );
+                }
+                None => assert_eq!(status, 404, "{body}"),
+            }
+        }
     }
 }

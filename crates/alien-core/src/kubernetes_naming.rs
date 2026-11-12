@@ -71,6 +71,15 @@ pub fn kubernetes_build_service_account_name(resource_prefix: &str) -> String {
     truncate_dns_label(format!("{}-build-sa", dns_label(resource_prefix)))
 }
 
+/// The NetworkPolicy the chart renders for the pods the Operator runs extension controllers
+/// in. The Operator creates such a pod only where this policy exists.
+pub fn kubernetes_extension_controllers_policy_name(resource_prefix: &str) -> String {
+    truncate_dns_label(format!(
+        "{}-extension-controllers",
+        dns_label(resource_prefix)
+    ))
+}
+
 /// ServiceAccount resource IDs are generated as `{permission_profile}-sa`.
 pub fn permission_profile_from_service_account_id(id: &str) -> String {
     id.strip_suffix("-sa").unwrap_or(id).to_string()

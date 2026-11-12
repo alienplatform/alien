@@ -2,6 +2,7 @@ use crate::kubernetes::{
     kubernetes_request_utils::KubernetesAuthConfig, KubernetesClientConfig,
     KubernetesClientConfigExt, ResolvedKubernetesConfig,
 };
+use alien_client_core::interceptor::InterceptorChain;
 use alien_client_core::{ErrorData, Result};
 use alien_error::Context;
 use alien_error::IntoAlienError;
@@ -17,6 +18,7 @@ pub struct KubernetesClient {
     client: Client,
     config: KubernetesClientConfig,
     resolved_config: ResolvedKubernetesConfig,
+    interceptors: InterceptorChain,
 }
 
 impl KubernetesClient {
@@ -96,12 +98,22 @@ impl KubernetesClient {
             client,
             config,
             resolved_config,
+            interceptors: InterceptorChain::default(),
         })
     }
 
     /// Get the authentication configuration
     pub fn auth_config(&self) -> KubernetesAuthConfig {
-        KubernetesAuthConfig::from(&self.resolved_config)
+        KubernetesAuthConfig {
+            interceptors: self.interceptors.clone(),
+            ..KubernetesAuthConfig::from(&self.resolved_config)
+        }
+    }
+
+    /// The same client, with the deployment's interceptors.
+    pub fn with_interceptors(mut self, interceptors: InterceptorChain) -> Self {
+        self.interceptors = interceptors;
+        self
     }
 
     /// Get the base URL for the Kubernetes API

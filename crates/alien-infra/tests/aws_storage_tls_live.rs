@@ -31,7 +31,7 @@ async fn signed_status(client: &Client, signing: &AwsSignConfig, url: &str) -> S
         .content_sha256("")
         .sign_aws_request(signing)
         .unwrap()
-        .send()
+        .send_raw()
         .await
         .unwrap()
         .status()
@@ -74,6 +74,7 @@ async fn storage_requires_https_through_create_upgrade_and_public_read_changes()
         region: aws.region.clone(),
         credentials: aws.get_credentials(),
         signing_region: None,
+        interceptors: Default::default(),
     };
     let s3 = S3Client::new(
         client.clone(),

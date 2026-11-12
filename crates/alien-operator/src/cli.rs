@@ -375,6 +375,11 @@ pub fn cli_main_with_all_loops(
     // Ignoring `Err` makes this idempotent across re-invocations in tests.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // The same binary hosts an extension's controller in the pod the Operator creates for it.
+    if std::env::args().nth(1).as_deref() == Some(crate::controller_host::COMMAND) {
+        crate::controller_host::main();
+    }
+
     let OperatorCliArgs {
         args,
         operator_image,
@@ -491,6 +496,9 @@ async fn run_operator_cli(
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to acquire instance lock in '{}'", data_dir),
         })?;
+
+    // The lock makes this the only Operator running controllers from this data directory.
+    crate::extension_bundles::remove_stale_private_copies(&data_dir).await;
 
     install_panic_hook(&data_dir_path);
 
@@ -1353,7 +1361,7 @@ fn with_plugins_key(json: String) -> String {
     }
 }
 
-fn parse_json_opt<T: serde::de::DeserializeOwned>(
+pub(crate) fn parse_json_opt<T: serde::de::DeserializeOwned>(
     json_str: Option<String>,
     label: &str,
 ) -> Result<Option<T>> {
@@ -1370,7 +1378,7 @@ fn parse_json_opt<T: serde::de::DeserializeOwned>(
     }
 }
 
-fn stack_settings_with_bindings(
+pub(crate) fn stack_settings_with_bindings(
     mut settings: alien_core::StackSettings,
     bindings: Option<alien_core::ExternalBindings>,
 ) -> alien_core::StackSettings {

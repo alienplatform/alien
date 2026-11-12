@@ -218,6 +218,10 @@ jobs:
           install_args: rust
           cache: false
 
+      - name: Install Rust targets
+        # alien-hooks-runtime's tests build their hooks module for wasm32-wasip1.
+        run: rustup target add wasm32-wasip1
+
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
@@ -682,6 +686,49 @@ jobs:
       - name: Check every package and target
         run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
 
+  wasm32:
+    name: WebAssembly crates
+    needs: [pr-conventions, changes]
+    # Extension hooks are wasm32-wasip1 modules built against these crates, and
+    # nothing else in CI compiles them for that target.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode != 'none')
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - name: Install Rust targets
+        run: rustup target add wasm32-wasip1
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Build for wasm32-wasip1
+        env:
+          # An extension's workspace lacks this repository's cargo config, so build without its
+          # rustflags (`--cfg tokio_unstable`), as `alien extensions build` does.
+          CARGO_ENCODED_RUSTFLAGS: ""
+        run: >-
+          cargo build --locked --target wasm32-wasip1
+          -p alien-error -p alien-permission-types -p alien-core -p alien-permissions
+          -p alien-cloudformation -p alien-terraform -p alien-operations-sdk -p alien-helm
+          -p alien-extension-sdk
+
   workspace-hack:
     name: Workspace-hack up to date
     needs: [pr-conventions, changes]
@@ -814,7 +861,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration]
+    needs: [pr-conventions, changes, rust, rust-check, wasm32, workspace-hack, typescript, worker-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

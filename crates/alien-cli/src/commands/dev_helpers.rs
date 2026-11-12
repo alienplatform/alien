@@ -427,8 +427,22 @@ pub async fn build_embedded_dev_manager(
     let toml_config = ManagerTomlConfig::default();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let project_dir = get_current_dir()?;
+    // Under the state directory, since `alien extensions build` empties the folder it builds
+    // controllers into.
+    let controller_copies = state_dir.join("extension-controllers");
     let server = alien_manager::AlienManager::builder(config)
         .credential_resolver(Arc::new(LocalCredentialResolver::new(state_dir)))
+        // The controllers run with the developer's environment, as the rest of `alien dev`
+        // does.
+        .local_extension_controllers(alien_manager::extension_bundles::LocalControllers::new(
+            Arc::new(move |name: &str, sha256: &str| {
+                crate::commands::extensions::release::local_controller(&project_dir, name, sha256)
+                    .map_err(AlienError::into_generic)
+            }),
+            std::env::vars().collect(),
+            controller_copies,
+        ))
         .telemetry_backend(Arc::new(InMemoryTelemetryBackend::new(log_buffer.clone())))
         .auth_validator(Arc::new(PermissiveAuthValidator::new()))
         .log_buffer(log_buffer)
@@ -627,12 +641,23 @@ pub async fn build_and_post_release_simple(
             Some(cf) => cf.clone(),
             None => current_dir.clone(),
         };
-        let stack =
-            load_configuration(config_path)
-                .await
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to load configuration".to_string(),
-                })?;
+        // The extensions the stack lists build first, for this machine only, so the stack pins
+        // the bundles they write. A machine no bundle has a controller for builds every target
+        // it can, and the manager then refuses the extension naming the machine.
+        let stack = crate::commands::extensions::release::evaluate_building_extensions(
+            current_dir,
+            &alien_infra::extension_bundle::host_target()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            || async {
+                load_configuration(config_path.clone()).await.context(
+                    ErrorData::ConfigurationError {
+                        message: "Failed to load configuration".to_string(),
+                    },
+                )
+            },
+        )
+        .await?;
 
         let settings = BuildSettings {
             output_directory: output_dir.to_str().unwrap().to_string(),
@@ -673,9 +698,30 @@ pub async fn build_and_post_release_simple(
     })?;
 
     validate_local_release_artifacts(&stack)?;
+    validate_local_controllers(&stack)?;
 
     // Post release to dev server
-    let client = AlienManagerClient::new(&format!("http://localhost:{}", port));
+    let manager_url = format!("http://localhost:{}", port);
+    let client = AlienManagerClient::new(&manager_url);
+    if !stack.extensions.is_empty() {
+        let uploads = crate::commands::extensions::release::check_listed(
+            &stack.extensions,
+            &crate::commands::extensions::release::local_module_dirs(current_dir),
+            &crate::commands::extensions::release::ReleaseChecks {
+                platforms: &[alien_core::Platform::Local],
+                // A local release ships no setup CLI, so only this machine's controller is built.
+                allow_missing_controller_targets: true,
+            },
+        )
+        .await?;
+        crate::commands::extensions::upload::upload_to_manager(
+            &reqwest::Client::new(),
+            &manager_url,
+            DEV_PROJECT_ID,
+            &uploads,
+        )
+        .await?;
+    }
 
     let stack_json =
         serde_json::to_value(&stack)
@@ -700,9 +746,7 @@ pub async fn build_and_post_release_simple(
         .body(CreateReleaseRequest {
             stack: stack_by_platform,
             git_metadata: None,
-            // dev mode is single-project; "default" is the canonical
-            // sentinel and is required by the wire schema.
-            project_id: "default".to_string(),
+            project_id: DEV_PROJECT_ID.to_string(),
             channel: None,
         })
         .send()
@@ -715,6 +759,33 @@ pub async fn build_and_post_release_simple(
         })?;
 
     Ok(response.id.clone())
+}
+
+/// Dev mode is single-project; "default" is the canonical sentinel, which the wire schema
+/// requires.
+const DEV_PROJECT_ID: &str = "default";
+
+/// Refuses a custom resource whose extension registers no controller for the local platform,
+/// since `alien dev` has nothing to run it with.
+fn validate_local_controllers(stack: &Stack) -> Result<()> {
+    for (id, entry) in stack.resources() {
+        let resource_type = entry.config.resource_type();
+        let Some(descriptor) = stack.descriptor(&resource_type) else {
+            continue;
+        };
+        if !descriptor
+            .controller_platforms
+            .contains(&alien_core::Platform::Local)
+        {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "resources".to_string(),
+                message: format!(
+                    "Resource '{id}' ({resource_type}) can't run in `alien dev`: its extension registers no controller for Platform::Local. Register one in the extension's controller main.rs"
+                ),
+            }));
+        }
+    }
+    Ok(())
 }
 
 fn validate_local_release_artifacts(stack: &Stack) -> Result<()> {
@@ -1436,6 +1507,90 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stack without extensions posts the release it always did and asks the manager for no
+    /// bundle object.
+    #[tokio::test]
+    async fn a_dev_release_without_extensions_uploads_nothing() {
+        let server = httpmock::MockServer::start_async().await;
+        let stack = Stack::new("app".to_string()).build();
+        let release = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/v1/releases")
+                    .json_body_partial(
+                        serde_json::json!({
+                            "stack": { "local": serde_json::to_value(&stack).unwrap() },
+                            "projectId": "default"
+                        })
+                        .to_string(),
+                    );
+                then.status(201).json_body(serde_json::json!({"id":"rel_dev", "workspaceId":"default",
+                    "projectId":"default", "stack":{}, "createdAt":"2026-01-01T00:00:00Z", "setupFingerprints":{}}));
+            })
+            .await;
+        let bundles = server
+            .mock_async(|when, then| {
+                when.path_contains("/v1/extensions/");
+                then.status(500);
+            })
+            .await;
+        let directory = TempDir::new().unwrap();
+        let artifacts = directory.path().join(".alien/build/local");
+        fs::create_dir_all(&artifacts).unwrap();
+        fs::write(
+            artifacts.join("stack.json"),
+            serde_json::to_vec(&stack).unwrap(),
+        )
+        .unwrap();
+
+        let id = build_and_post_release_simple(
+            &directory.path().to_path_buf(),
+            server.address().port(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(id, "rel_dev");
+        release.assert_hits_async(1).await;
+        bundles.assert_hits_async(0).await;
+    }
+
+    /// The docs' rule: a custom type with no local controller stops `alien dev`, naming it.
+    #[test]
+    fn a_custom_type_without_a_local_controller_is_refused_naming_it() {
+        let stack = |platforms: &[&str]| -> Stack {
+            serde_json::from_value(serde_json::json!({
+                "id": "my-app",
+                "resources": { "zone": {
+                    "config": { "type": "acme/dns-zone", "id": "zone", "domain": "a.acme.dev" },
+                    "lifecycle": "live", "dependencies": []
+                }},
+                "permissions": { "profiles": {}, "management": "auto" },
+                "extensions": [{
+                    "name": "acme", "version": "1.0.0", "digest": "sha256:0",
+                    "resourceTypes": { "acme/dns-zone": {
+                        "lifecycles": ["live"], "holdsData": false,
+                        "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                        "controllerPlatforms": platforms, "permissionSets": [],
+                        "link": { "permissionSets": [] }, "schemas": { "config": {}, "outputs": {} }
+                    }}
+                }]
+            }))
+            .unwrap()
+        };
+
+        validate_local_controllers(&stack(&["aws", "local"])).unwrap();
+        let error = validate_local_controllers(&stack(&["aws"])).unwrap_err();
+        assert!(
+            error.message.contains("Resource 'zone' (acme/dns-zone)")
+                && error.message.contains("no controller for Platform::Local"),
+            "{}",
+            error.message
+        );
+    }
     use alien_core::ResourceLifecycle;
     use alien_manager::traits::deployment_store::{
         CreateDeploymentGroupParams, CreateDeploymentParams,

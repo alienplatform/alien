@@ -1,0 +1,12 @@
+[package]
+name = "tags-hooks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+# `cdylib` is the WebAssembly module Alien loads; `rlib` runs the same hooks in `cargo test`.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alien-extension-sdk = { workspace = true }

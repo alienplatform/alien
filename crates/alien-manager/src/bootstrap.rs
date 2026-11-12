@@ -1,6 +1,6 @@
 //! First-start setup shared by the `alien-manager` binary and `alien serve`:
-//! the admin token, the key that signs command responses, and the key that
-//! signs air-gapped bundles.
+//! the admin token, the key that signs command responses, the key that
+//! signs air-gapped bundles, and the key that signs extension controller steps.
 
 use std::path::Path;
 
@@ -24,6 +24,10 @@ const SIGNING_KEY_FILE: &str = "response-signing-key";
 /// Seed of the key that signs air-gapped bundles, generated once per state
 /// directory. Environments trust its public key, so it must persist.
 const BUNDLE_SIGNING_KEY_FILE: &str = "bundle-signing-key";
+
+/// Seed of the key that signs the tokens of extension controller steps, generated once per
+/// state directory. Controller servers trust its public key, so it must persist.
+const STEP_TOKEN_KEY_FILE: &str = "step-token-signing-key";
 
 /// How the admin token was established on this start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +132,12 @@ pub fn bundle_signing_key(state_dir: &Path) -> Result<BundleSigningKey> {
     Ok(BundleSigningKey::from_seed(seed))
 }
 
+/// The seed of the key that signs the tokens of extension controller steps: read from the state
+/// directory, or generated and stored (owner-only) on first start.
+pub fn step_token_key(state_dir: &Path) -> Result<[u8; 32]> {
+    secret_file_32(&state_dir.join(STEP_TOKEN_KEY_FILE))
+}
+
 /// Read a 32-byte secret from `path`, creating it (owner-only) when missing.
 fn secret_file_32(path: &Path) -> Result<[u8; 32]> {
     match std::fs::read(path) {
@@ -152,4 +162,20 @@ fn secret_file_32(path: &Path) -> Result<[u8; 32]> {
             reason: format!("Failed to write {}", path.display()),
         })?;
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The first start generates the step-token key and every later start reads the same one,
+    /// so controller servers keep trusting it.
+    #[test]
+    fn the_step_token_key_is_generated_once_per_state_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = step_token_key(directory.path()).unwrap();
+        assert_eq!(step_token_key(directory.path()).unwrap(), first);
+        let other = tempfile::tempdir().unwrap();
+        assert_ne!(step_token_key(other.path()).unwrap(), first);
+    }
 }

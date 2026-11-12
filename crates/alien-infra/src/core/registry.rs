@@ -93,19 +93,16 @@ impl<T> DefaultInfraRequirementsProviderFactory<T> {
 }
 
 /// Registry for Resource types and their controllers
+///
+/// It is not `Clone`: a deployment's registry holds registrations no copy could rebuild, such as
+/// the controllers of its stack's extensions. Share one through an `Arc`.
 #[derive(Debug)]
 pub struct ResourceRegistry {
     /// Maps (resource_type, platform) to controller factories
     controller_factories: HashMap<(ResourceType, Platform), Box<dyn ControllerFactory>>,
-}
-
-impl Clone for ResourceRegistry {
-    fn clone(&self) -> Self {
-        // Since the trait objects cannot be cloned directly, we create a new registry with built-ins
-        // This is a limitation - custom registrations will be lost on clone
-        // This is acceptable for our current use case where we mainly clone built-in registries
-        Self::with_built_ins()
-    }
+    /// Custom types and platforms whose extension ships a controller this process has no
+    /// endpoint for, by extension name.
+    unloaded_extensions: HashMap<(ResourceType, Platform), String>,
 }
 
 impl ResourceRegistry {
@@ -113,6 +110,7 @@ impl ResourceRegistry {
     pub fn new() -> Self {
         Self {
             controller_factories: HashMap::new(),
+            unloaded_extensions: HashMap::new(),
         }
     }
 
@@ -131,15 +129,32 @@ impl ResourceRegistry {
         platform: Platform,
     ) -> Result<Box<dyn ResourceController>> {
         let key = (resource_type.clone(), platform);
-        self.controller_factories
-            .get(&key)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ControllerNotAvailable {
-                    resource_type: resource_type.clone(),
-                    platform,
-                })
-            })
-            .map(|factory| factory.create())
+        if let Some(factory) = self.controller_factories.get(&key) {
+            return Ok(factory.create());
+        }
+        Err(AlienError::new(match self.unloaded_extensions.get(&key) {
+            Some(extension) => ErrorData::ExtensionControllerNotLoaded {
+                extension: extension.clone(),
+                resource_type,
+                platform,
+            },
+            None => ErrorData::ControllerNotAvailable {
+                resource_type,
+                platform,
+            },
+        }))
+    }
+
+    /// Records that `extension` ships a controller for `resource_type` on `platform` that this
+    /// process can't reach, so asking for it says so.
+    pub(crate) fn register_unloaded_extension(
+        &mut self,
+        resource_type: ResourceType,
+        platform: Platform,
+        extension: String,
+    ) {
+        self.unloaded_extensions
+            .insert((resource_type, platform), extension);
     }
 
     /// Registers a controller factory for a specific resource type and platform

@@ -93,6 +93,19 @@ pub enum ErrorData {
         dimension: String,
         reason: String,
     },
+    /// A rendered Helm chart a check refuses: an object it can't read, or one an extension
+    /// renders that collides with another.
+    #[error(
+        code = "RENDERED_CHART_REFUSED",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    RenderedChartRefused {
+        /// Why the chart is refused
+        reason: String,
+    },
+
     /// A fallback error when nothing more specific matches.
     #[error(
         code = "GENERIC_ERROR",

@@ -1289,6 +1289,10 @@ fn deserialize_controller_by_tag(
             deser!(crate::infra_requirements::AzureServiceBusNamespaceController)
         }
 
+        crate::step_protocol::PROXY_CONTROLLER_TYPE => {
+            deser!(crate::step_protocol::ExtensionProxyController)
+        }
+
         other => {
             if let Some(ext) = CONTROLLER_DESERIALIZER_EXTENSION.get() {
                 match ext(other, value) {

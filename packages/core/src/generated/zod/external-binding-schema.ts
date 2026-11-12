@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { ArtifactRegistryBindingSchema } from "./artifact-registry-binding-schema.js";
 import { ContainerAppsEnvironmentBindingSchema } from "./container-apps-environment-binding-schema.js";
+import { CustomExternalBindingSchema } from "./custom-external-binding-schema.js";
 import { ExternalAiBindingSchema } from "./external-ai-binding-schema.js";
 import { KvBindingSchema } from "./kv-binding-schema.js";
 import { PostgresBindingSchema } from "./postgres-binding-schema.js";
@@ -35,6 +36,6 @@ export const ExternalBindingSchema = z.union([z.lazy(() => StorageBindingSchema)
     "type": z.enum(["redis"])
     })).describe("Connection details for a Redis-compatible server, one variant per backend.\n\nService tags are unique across all binding enums (serde dispatches on\n`service` alone), so the key-value store's `redis` tag is not reused."), z.lazy(() => ExternalAiBindingSchema).and(z.object({
     "type": z.enum(["ai"])
-    })).describe("External AI provider binding configuration (BYO-key).\n\nThe operator-supplied secret rides inside the binding via\n`BindingValue<String>`, so it is a literal on cloud platforms and gains\nKubernetes SecretRef resolution for free (`extract_binding_secrets` walks\nthe binding JSON for `secretRef`).")]).describe("Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor.")
+    })).describe("External AI provider binding configuration (BYO-key).\n\nThe operator-supplied secret rides inside the binding via\n`BindingValue<String>`, so it is a literal on cloud platforms and gains\nKubernetes SecretRef resolution for free (`extract_binding_secrets` walks\nthe binding JSON for `secretRef`)."), z.lazy(() => CustomExternalBindingSchema)]).describe("Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor.")
 
 export type ExternalBinding = z.infer<typeof ExternalBindingSchema>

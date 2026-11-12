@@ -44,6 +44,7 @@ impl EventBridgeClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 
@@ -368,7 +369,9 @@ impl TargetsResponse {
         let Some(entry) = self.failed_entries.into_iter().next() else {
             return Ok(());
         };
-        let code = entry.error_code.unwrap_or_else(|| "UnknownErrorCode".into());
+        let code = entry
+            .error_code
+            .unwrap_or_else(|| "UnknownErrorCode".into());
         let message = format!(
             "{operation} failed for target '{}' of rule '{rule_name}': {}",
             entry.target_id.as_deref().unwrap_or("unknown"),
@@ -472,7 +475,11 @@ mod tests {
         assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
         assert!(error.retryable);
         assert!(error.message.contains("target '1'"), "{}", error.message);
-        assert!(error.message.contains("Too many requests"), "{}", error.message);
+        assert!(
+            error.message.contains("Too many requests"),
+            "{}",
+            error.message
+        );
     }
 
     #[tokio::test]
