@@ -556,13 +556,34 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         .map(|port| port["port"].as_u64().unwrap())
         .collect();
     assert_eq!(runner_ports, vec![443, 6443]);
+    // No `to` block: on Cilium a CIDR rule does not match node addresses, and the API server
+    // often runs on a node. The rule allows any destination on those ports.
+    assert!(
+        runner["spec"]["egress"][0]["to"].is_null(),
+        "{}",
+        serde_yaml::to_string(runner).unwrap()
+    );
+    // A failed install must not leave any probe policy behind.
+    for suffix in ["runner", "egress", "listener"] {
+        let policy = allow(suffix);
+        let delete_policy = policy["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+            .as_str()
+            .unwrap();
+        assert!(
+            delete_policy.contains("hook-failed"),
+            "{suffix}: {delete_policy}"
+        );
+    }
     let egress = serde_yaml::to_string(allow("egress")).unwrap();
-    assert!(egress.contains("denied") && egress.contains("NotIn"), "{egress}");
+    assert!(
+        egress.contains("denied") && egress.contains("NotIn"),
+        "{egress}"
+    );
     let listener = serde_yaml::to_string(allow("listener")).unwrap();
     // The denied pod must reach the listener's ingress, so only the egress bound can refuse it;
     // the ingress-denied pod must not, so only the ingress bound can refuse it.
-    let listener_roles: Vec<&str> = allow("listener")["spec"]["ingress"][0]["from"][0]["podSelector"]
-        ["matchExpressions"][0]["values"]
+    let listener_roles: Vec<&str> = allow("listener")["spec"]["ingress"][0]["from"][0]
+        ["podSelector"]["matchExpressions"][0]["values"]
         .as_sequence()
         .unwrap()
         .iter()
@@ -963,7 +984,9 @@ fn workload_priority_create_keeps_the_releases_own_class_when_mapped_to_its_name
     let mapped: serde_json::Value = serde_json::from_str(&mapped.unwrap()).unwrap();
     assert_eq!(mapped["critical"], own.as_str());
     assert_eq!(classes.len(), 4);
-    assert!(classes.iter().any(|c| c["metadata"]["name"] == own.as_str()));
+    assert!(classes
+        .iter()
+        .any(|c| c["metadata"]["name"] == own.as_str()));
 }
 
 #[test]
