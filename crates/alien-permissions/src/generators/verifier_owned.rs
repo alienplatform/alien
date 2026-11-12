@@ -90,31 +90,6 @@ pub fn aws_passed_to_services(binding: &AwsBindingSpec) -> Option<Vec<String>> {
     (!services.is_empty()).then_some(services)
 }
 
-/// Azure actions a protected management identity loses. Setup's deny settings refuse it every
-/// write and delete in the workload resource group except those [`azure_runs_no_code`] admits,
-/// but they cannot refuse an `/action`, so these go from its roles:
-/// - starting a Container Apps job takes a template that replaces the job's containers;
-/// - activating a revision runs an older release than the one the verifier applied;
-/// - assigning a user-assigned identity lets a resource outside that group run as it;
-/// - deactivating or restarting a revision decides which signed revision serves;
-/// - a run command runs a script on a machine.
-const AZURE_VERIFIER_OWNED_ACTIONS: &[&str] = &[
-    "Microsoft.App/jobs/start/action",
-    "Microsoft.App/containerApps/revisions/activate/action",
-    "Microsoft.App/containerApps/revisions/deactivate/action",
-    "Microsoft.App/containerApps/revisions/restart/action",
-    "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
-    "Microsoft.Compute/virtualMachines/runCommand/action",
-    "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/runCommand/action",
-];
-
-/// Whether only the verifier may hold the Azure `action` in a protected install's roles.
-pub fn azure_verifier_owned_action(action: &str) -> bool {
-    AZURE_VERIFIER_OWNED_ACTIONS
-        .iter()
-        .any(|owned| owned.eq_ignore_ascii_case(action))
-}
-
 /// What a protected install's management identity receives instead of a predefined role that a
 /// built-in set it holds binds at the resource group, and that reaches the verifier's identity or
 /// runs a template:
@@ -201,7 +176,24 @@ pub fn azure_changes_what_runs(action: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{azure_changes_what_runs, AWS_VERIFIER_OWNED};
-    use crate::generators::families::aws_family;
+    use crate::generators::families::{aws_family, azure_family};
+
+    /// Actions that start a job, pick a revision, assign an identity or run a script were once a
+    /// hand-kept list; the family predicate alone must cover them.
+    #[test]
+    fn azure_actions_that_run_code_or_assign_identities_are_family_actions() {
+        for action in [
+            "Microsoft.App/jobs/start/action",
+            "Microsoft.App/containerApps/revisions/activate/action",
+            "Microsoft.App/containerApps/revisions/deactivate/action",
+            "Microsoft.App/containerApps/revisions/restart/action",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            "Microsoft.Compute/virtualMachines/runCommand/action",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/runCommand/action",
+        ] {
+            assert!(azure_family(action).is_some(), "{action}");
+        }
+    }
 
     #[test]
     fn every_aws_action_the_verifier_is_granted_is_in_a_family() {

@@ -60,6 +60,5 @@ pub use gcp_runtime::{
 pub use protected_allowlist::management_stack_secrets_data;
 pub use verifier_owned::{
     aws_management_actions, aws_passed_to_services, azure_changes_what_runs,
-    azure_protected_role_substitute, azure_runs_no_code, azure_verifier_owned_action,
-    azure_write_or_delete, AWS_VERIFIER_OWNED,
+    azure_protected_role_substitute, azure_runs_no_code, azure_write_or_delete, AWS_VERIFIER_OWNED,
 };

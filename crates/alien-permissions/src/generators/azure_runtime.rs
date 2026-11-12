@@ -1,13 +1,11 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
+        azure_sandbox_data::azure_sandbox_role_substitute,
         families::{azure_data_family, azure_family, azure_reach_exclusions, Family},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
-        azure_sandbox_data::azure_sandbox_role_substitute,
         protected_allowlist::is_built_in_unchanged,
-        verifier_owned::{
-            azure_changes_what_runs, azure_protected_role_substitute, azure_verifier_owned_action,
-        },
+        verifier_owned::{azure_changes_what_runs, azure_protected_role_substitute},
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -939,9 +937,7 @@ fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> 
         .iter()
         .filter(|action| {
             !(context.signing_protected
-                && (azure_family(action).is_some()
-                    || azure_verifier_owned_action(action)
-                    || azure_changes_what_runs(action)))
+                && (azure_family(action).is_some() || azure_changes_what_runs(action)))
         })
         .cloned()
         .collect()
