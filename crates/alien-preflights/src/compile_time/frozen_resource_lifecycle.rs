@@ -1094,7 +1094,7 @@ mod tests {
             assert!(result
                 .errors
                 .iter()
-                .any(|error| error.contains("supported only on AWS, GCP and Azure")));
+                .any(|error| error.contains("only AWS, GCP and Azure do")));
         }
     }
 }
