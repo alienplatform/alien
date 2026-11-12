@@ -5,8 +5,8 @@ use async_trait::async_trait;
 /// The longest startup timeout a daemon can set: 24 hours.
 const MAX_STARTUP_TIMEOUT_SECONDS: u32 = 86_400;
 
-/// Validates `healthCheck.startupTimeoutSeconds`: it applies to daemons only, and has to be
-/// between 1 second and 24 hours.
+/// Validates `healthCheck.startupTimeoutSeconds`: it applies to daemons on the Machines platform
+/// only, and has to be between 1 second and 24 hours.
 pub struct HealthCheckStartupTimeoutCheck;
 
 #[async_trait]
@@ -38,7 +38,7 @@ impl CompileTimeCheck for HealthCheckStartupTimeoutCheck {
         })
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> crate::error::Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> crate::error::Result<CheckResult> {
         let mut failures = Vec::new();
         for (_, entry) in stack.resources() {
             if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
@@ -47,6 +47,15 @@ impl CompileTimeCheck for HealthCheckStartupTimeoutCheck {
                     .as_ref()
                     .and_then(|check| check.startup_timeout_seconds)
                 {
+                    if platform != Platform::Machines {
+                        failures.push(format!(
+                            "Daemon '{}': healthCheck.startupTimeoutSeconds is only enforced on the \
+                             Machines platform; remove it for {}",
+                            daemon.id,
+                            platform.as_str()
+                        ));
+                        continue;
+                    }
                     if !(1..=MAX_STARTUP_TIMEOUT_SECONDS).contains(&seconds) {
                         failures.push(format!(
                             "Daemon '{}': healthCheck.startupTimeoutSeconds must be between 1 and \
@@ -126,8 +135,12 @@ mod tests {
     }
 
     async fn errors(stack: &Stack) -> Vec<String> {
+        errors_on(stack, Platform::Machines).await
+    }
+
+    async fn errors_on(stack: &Stack, platform: Platform) -> Vec<String> {
         HealthCheckStartupTimeoutCheck
-            .check(stack, Platform::Machines)
+            .check(stack, platform)
             .await
             .expect("check should run")
             .errors
@@ -155,5 +168,13 @@ mod tests {
         let errors = errors(&container_stack(Some(600))).await;
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("only applies to daemons"), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn rejects_it_on_a_platform_that_does_not_enforce_it() {
+        let errors = errors_on(&daemon_stack(Some(600)), Platform::Kubernetes).await;
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("only enforced on the Machines platform"), "{errors:?}");
+        assert!(errors_on(&daemon_stack(None), Platform::Kubernetes).await.is_empty());
     }
 }
