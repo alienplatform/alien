@@ -147,7 +147,8 @@ fn allow_egress_install_is_refused_where_network_policy_is_not_enforced() {
 #[test]
 #[ignore = "requires the disposable Kind cluster configured by CI"]
 fn allow_egress_install_proceeds_where_network_policy_is_enforced() {
-    install_proceeds(ENFORCED_CONTEXT);
+    // The guard must outlive the DNS check: dropping it deletes the namespace.
+    let _cleanup = install_proceeds(ENFORCED_CONTEXT);
     resolves_names_but_reaches_no_other_private_host_on_53();
 }
 
@@ -156,11 +157,11 @@ fn allow_egress_install_proceeds_where_network_policy_is_enforced() {
 #[test]
 #[ignore = "requires the disposable Cilium Kind cluster configured by CI"]
 fn allow_egress_install_proceeds_on_cilium() {
-    install_proceeds(CILIUM_CONTEXT);
+    let _cleanup = install_proceeds(CILIUM_CONTEXT);
 }
 
-fn install_proceeds(context: &str) {
-    let (_cleanup, install) = install_allow_chart(context);
+fn install_proceeds(context: &str) -> Cleanup {
+    let (cleanup, install) = install_allow_chart(context);
     assert!(
         install.status.success(),
         "an enforcing cluster must accept an `allow` sandbox:\n{}\n{}",
@@ -191,6 +192,7 @@ fn install_proceeds(context: &str) {
         "networkpolicy",
         "alien-sbx-agent",
     ]);
+    cleanup
 }
 
 /// Install a chart with one `allow` sandbox into `context`, which must be the current context.
