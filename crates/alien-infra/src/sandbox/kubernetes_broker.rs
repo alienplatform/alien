@@ -54,6 +54,9 @@ pub struct ClaimedSession {
     /// session (the egress gateway's identity token) lives exactly this long, not as long as one
     /// capability.
     pub deadline: Option<i64>,
+    /// Whether the creator is still setting the session up (its egress policy). Another caller
+    /// that finds the session waits for this to clear before it uses it.
+    pub setup_pending: bool,
 }
 
 /// What a pod records about its session.
@@ -213,6 +216,7 @@ async fn claim_session_with_scope(
             tenant_key: tenant_key.map(str::to_string),
             created: true,
             deadline: crate::sandbox::session_deadline(&claimed),
+            setup_pending: false,
         });
     }
 
@@ -404,6 +408,7 @@ async fn cold_create(
                 tenant_key: tenant_key.map(str::to_string),
                 created: true,
                 deadline: crate::sandbox::session_deadline(&pod),
+                setup_pending: false,
             });
         }
         if started.elapsed() >= COLD_CREATE_TIMEOUT {
@@ -585,6 +590,7 @@ pub(crate) async fn reattach_session_for_deployment(
         tenant_key,
         created: false,
         deadline: crate::sandbox::session_deadline(&pod),
+        setup_pending: setup_pending(secrets, namespace, sandbox_id, session_id, now_unix).await?,
     }))
 }
 
@@ -782,6 +788,12 @@ const RESERVATION_POLL: std::time::Duration = std::time::Duration::from_millis(5
 #[cfg(test)]
 const RESERVATION_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 const ANNOTATION_RESERVED_AT: &str = "alien.dev/reserved-at";
+/// Set on a reservation the creator keeps until it reports that the session's setup is done.
+const ANNOTATION_SETUP_PENDING: &str = "alien.dev/setup-pending";
+/// How long a creator may take over a session's setup. Past it a session that is still marked is
+/// reported as ready: a creator that died mid-setup must not leave every caller waiting for a
+/// session that is only missing its egress policy, which each of them can set.
+const SETUP_WINDOW_SECONDS: i64 = 120;
 
 /// Name of the object that serializes creation of one session id.
 fn reservation_name(sandbox_id: &str, session_id: &str) -> String {
@@ -811,6 +823,7 @@ async fn reserve(
     sandbox_id: &str,
     session_id: &str,
     now_unix: i64,
+    hold_for_setup: bool,
 ) -> Result<Reservation> {
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -823,10 +836,16 @@ async fn reserve(
                 crate::sandbox::LABEL_SANDBOX.to_string(),
                 sandbox_id.to_string(),
             )])),
-            annotations: Some(std::collections::BTreeMap::from([(
-                ANNOTATION_RESERVED_AT.to_string(),
-                now_unix.to_string(),
-            )])),
+            annotations: Some({
+                let mut annotations = std::collections::BTreeMap::from([(
+                    ANNOTATION_RESERVED_AT.to_string(),
+                    now_unix.to_string(),
+                )]);
+                if hold_for_setup {
+                    annotations.insert(ANNOTATION_SETUP_PENDING.to_string(), "true".to_string());
+                }
+                annotations
+            }),
             ..Default::default()
         },
         ..Default::default()
@@ -859,6 +878,73 @@ async fn reserve(
             })
             .unwrap_err()),
     }
+}
+
+/// Whether the creator of `session_id` still holds the reservation it keeps while it sets the
+/// session up. A missing reservation (the usual case) is a session that is ready.
+async fn setup_pending(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+    now_unix: i64,
+) -> Result<bool> {
+    let name = reservation_name(sandbox_id, session_id);
+    let meta = match secrets.get_secret_metadata(namespace, &name).await {
+        Ok(meta) => meta,
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            return Ok(false)
+        }
+        Err(error) => {
+            return Err(Err::<(), _>(error)
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("could not read the setup state of session '{session_id}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+                .unwrap_err())
+        }
+    };
+    let annotations = meta.annotations.unwrap_or_default();
+    if annotations
+        .get(ANNOTATION_SETUP_PENDING)
+        .map(String::as_str)
+        != Some("true")
+    {
+        return Ok(false);
+    }
+    let reserved_at = annotations
+        .get(ANNOTATION_RESERVED_AT)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    Ok(now_unix - reserved_at <= SETUP_WINDOW_SECONDS)
+}
+
+/// The creator reports that its setup of the session is done (or that it ended the session):
+/// lets go of the reservation it kept.
+pub(crate) async fn finish_session_setup_for_deployment(
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+    secret_name: &str,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+) -> Result<()> {
+    signing_key(
+        secrets,
+        namespace,
+        secret_name,
+        sandbox_id,
+        Some((deployment_label_key, deployment_label_value)),
+    )
+    .await?;
+    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+    Ok(())
 }
 
 /// Lets go of the reservation. Best effort: one that is left behind expires on its own.
@@ -894,6 +980,7 @@ pub(crate) async fn find_or_create_session_for_deployment(
     deployment_label_value: &str,
     tenant_key: Option<&str>,
     timeout_seconds: Option<u64>,
+    hold_for_setup: bool,
 ) -> std::result::Result<ClaimedSession, SessionRequestError> {
     let unavailable = SessionRequestError::Unavailable;
     let started = std::time::Instant::now();
@@ -922,6 +1009,7 @@ pub(crate) async fn find_or_create_session_for_deployment(
             sandbox_id,
             session_id,
             now_unix + elapsed,
+            hold_for_setup,
         )
         .await
         .map_err(unavailable)?
@@ -949,7 +1037,12 @@ pub(crate) async fn find_or_create_session_for_deployment(
                     }
                     Err(error) => Err(SessionRequestError::Unavailable(error)),
                 };
-                release_reservation(secrets, namespace, sandbox_id, session_id).await;
+                // The creator that asked to set the session up keeps the reservation until it says
+                // the setup is done, so a caller that finds the session meanwhile can tell.
+                let keep = hold_for_setup && matches!(&outcome, Ok(session) if session.created);
+                if !keep {
+                    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+                }
                 return outcome;
             }
             Reservation::Taken { reserved_at } => {
@@ -1136,7 +1229,10 @@ pub(crate) async fn release_session_for_deployment(
         crate::sandbox::LABEL_SESSION,
         deployment_label_key
     );
-    release_matching_session(pods, namespace, session_id, selector).await
+    let released = release_matching_session(pods, namespace, session_id, selector).await;
+    // A session that ends while its creator was setting it up must not leave callers waiting.
+    release_reservation(secrets, namespace, sandbox_id, session_id).await;
+    released
 }
 
 async fn release_matching_session(
@@ -1183,6 +1279,19 @@ mod tests {
     use super::*;
     use alien_k8s_clients::kubernetes::pods::MockPodApi;
     use alien_k8s_clients::kubernetes::secrets::MockSecretsApi;
+
+    /// A mock cluster in which no creator holds a reservation for the session.
+    fn no_reservation(secrets: &mut MockSecretsApi) {
+        secrets.expect_get_secret_metadata().returning(|_, name| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "secret".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
+        secrets.expect_delete_secret().returning(|_, _| Ok(()));
+    }
     use k8s_openapi::api::core::v1::{PodStatus, Secret};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::List;
@@ -1287,6 +1396,7 @@ mod tests {
         let resolv = "nameserver 10.100.0.10\n";
         let check = |required: Option<&'static str>, configured: Option<&'static str>| async move {
             let mut secrets = MockSecretsApi::new();
+            no_reservation(&mut secrets);
             secrets
                 .expect_get_secret()
                 .returning(move |_, _| Ok(dns_secret(required)));
@@ -1348,6 +1458,7 @@ mod tests {
         });
         let pods: Arc<dyn PodApi> = Arc::new(mock);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(move |_, _| Ok(secret.clone()));
@@ -1473,6 +1584,7 @@ mod tests {
             .returning(|_, _, _| Ok(k8s_openapi::List::default()));
         let pods: Arc<dyn PodApi> = Arc::new(mock);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         let secret = preview_secret(&[8080]);
         secrets
             .expect_get_secret()
@@ -1501,6 +1613,8 @@ mod tests {
             .returning(|_, _, pod| Ok(pod.clone()));
 
         let mut secrets = MockSecretsApi::new();
+
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(|_, _| Ok(key_secret()));
@@ -1622,6 +1736,7 @@ mod tests {
         });
         let pods: Arc<dyn PodApi> = Arc::new(pods);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         let secret = key_secret();
         secrets
             .expect_get_secret()
@@ -1685,6 +1800,7 @@ mod tests {
         });
         let pods: Arc<dyn PodApi> = Arc::new(mock);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         let secret = key_secret();
         secrets
             .expect_get_secret()
@@ -1871,7 +1987,14 @@ mod tests {
                 .unwrap()
                 .get(name)
                 .map(|secret| secret.metadata.clone())
-                .ok_or_else(|| conflict(name))
+                .ok_or_else(|| {
+                    alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "secret".to_string(),
+                            resource_name: name.to_string(),
+                        },
+                    )
+                })
         }
         async fn list_secrets(
             &self,
@@ -1924,6 +2047,7 @@ mod tests {
                     DEPLOYMENT_LABEL_VALUE,
                     None,
                     None,
+                    false,
                 )
                 .await
                 .expect("create or find")
@@ -1985,6 +2109,7 @@ mod tests {
                     DEPLOYMENT_LABEL_VALUE,
                     tenant,
                     None,
+                    false,
                 )
                 .await
             }
@@ -1998,6 +2123,75 @@ mod tests {
                 "{other:?} must be refused"
             );
         }
+    }
+
+    /// A caller that finds a session while its creator is still setting up its egress is told so,
+    /// and is told it is ready once the creator reports it, or when the session ends.
+    #[tokio::test]
+    async fn a_session_is_pending_for_other_callers_until_its_creator_reports_the_setup() {
+        let cluster = Arc::new(FakeCluster::default());
+        let mut pod = idle_pod("pool-0", "10.0.0.1");
+        pod.metadata.resource_version = Some("1".to_string());
+        cluster.pods.lock().unwrap().push(pod);
+        let pods: Arc<dyn PodApi> = cluster.clone();
+        let secrets: Arc<dyn SecretsApi> = cluster.clone();
+        let find = |hold: bool| {
+            find_or_create_session_for_deployment(
+                &pods,
+                &secrets,
+                "sbx",
+                "alien",
+                "s1",
+                "key",
+                1_000,
+                DEPLOYMENT_LABEL_KEY,
+                DEPLOYMENT_LABEL_VALUE,
+                None,
+                None,
+                hold,
+            )
+        };
+
+        let created = find(true).await.expect("creates");
+        assert!(created.created);
+        let waiting = find(false).await.expect("finds");
+        assert!(!waiting.created);
+        assert!(waiting.setup_pending, "the creator has not reported yet");
+
+        finish_session_setup_for_deployment(
+            &secrets,
+            "alien",
+            "sbx",
+            "s1",
+            "key",
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await
+        .unwrap();
+        assert!(!find(false).await.expect("finds").setup_pending);
+
+        // A creator that never asked to set the session up leaves nothing to wait for.
+        let mut other = idle_pod("pool-1", "10.0.0.2");
+        other.metadata.resource_version = Some("1".to_string());
+        cluster.pods.lock().unwrap().push(other);
+        let plain = find_or_create_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s2",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(plain.created && !plain.setup_pending);
     }
 
     /// A pod that finished keeps its address, and one past its deadline is only ended on the
@@ -2032,6 +2226,7 @@ mod tests {
             });
             let pods: Arc<dyn PodApi> = Arc::new(mock);
             let mut secrets = MockSecretsApi::new();
+            no_reservation(&mut secrets);
             let secret = key_secret();
             secrets
                 .expect_get_secret()
@@ -2081,6 +2276,7 @@ mod tests {
         });
         let pods: Arc<dyn PodApi> = Arc::new(mock);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         let secret = key_secret();
         secrets
             .expect_get_secret()
@@ -2122,6 +2318,8 @@ mod tests {
         });
 
         let mut secrets = MockSecretsApi::new();
+
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(|_, _| Ok(key_secret()));
@@ -2202,6 +2400,7 @@ mod tests {
             Ok(pod)
         });
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         let secret = secret_with_template(&template);
         secrets
             .expect_get_secret()
@@ -2275,6 +2474,7 @@ mod tests {
     async fn an_empty_pool_without_a_template_asks_to_retry() {
         let pods = pods_returning(Vec::new());
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(|_, _| Ok(key_secret()));
@@ -2362,6 +2562,8 @@ mod tests {
             .returning(|_, _, pod| Ok(pod.clone()));
 
         let mut secrets = MockSecretsApi::new();
+
+        no_reservation(&mut secrets);
         secrets.expect_get_secret().returning(move |_, _| {
             Ok(Secret {
                 metadata: ObjectMeta {
@@ -2457,6 +2659,7 @@ mod tests {
 
         let pods: Arc<dyn PodApi> = Arc::new(pods);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(|_, _| Ok(key_secret()));
@@ -2484,6 +2687,7 @@ mod tests {
 
         let pods: Arc<dyn PodApi> = Arc::new(pods);
         let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(|_, _| Ok(key_secret()));
@@ -2549,6 +2753,8 @@ mod tests {
         });
 
         let mut secrets = MockSecretsApi::new();
+
+        no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
             .returning(|_, _| Ok(key_secret()));

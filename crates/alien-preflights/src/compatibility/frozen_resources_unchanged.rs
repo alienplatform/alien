@@ -219,14 +219,34 @@ fn kubernetes_live_sandbox_chart_changes(old_stack: &Stack, new_stack: &Stack) -
                 return None;
             }
             let old = old_entry.config.downcast_ref::<Sandbox>()?;
-            (old.egress != new.egress).then(|| {
-                format!(
+            if old.egress != new.egress {
+                return Some(format!(
                     "Live sandbox '{id}' changes its egress mode, which is the NetworkPolicy \
                      the chart installs. Rerun setup with the updated stack (helm upgrade)."
+                ));
+            }
+            // The chart's NetworkPolicy admits only the workloads that link the sandbox. A
+            // workload added to (or dropped from) that set is refused (or kept) by the old
+            // policy until the chart is upgraded.
+            (linkers(old_stack, id) != linkers(new_stack, id)).then(|| {
+                format!(
+                    "The workloads that link Live sandbox '{id}' change, and the chart's \
+                     NetworkPolicy lists them. Rerun setup with the updated stack (helm upgrade)."
                 )
             })
         })
         .collect()
+}
+
+/// Sorted `type/id` of every resource that links the sandbox `id`.
+fn linkers(stack: &Stack, id: &str) -> Vec<String> {
+    let mut linkers: Vec<String> = stack
+        .linkers(&alien_core::ResourceRef::new(Sandbox::RESOURCE_TYPE, id))
+        .iter()
+        .map(|linker| format!("{}/{}", linker.resource_type, linker.id))
+        .collect();
+    linkers.sort();
+    linkers
 }
 
 /// Keeps only `platform`'s section of each permission set.
@@ -1547,6 +1567,57 @@ mod tests {
             "{:?}",
             egress.errors
         );
+    }
+
+    /// The chart's NetworkPolicy lists the workloads that link a sandbox, so a workload that
+    /// starts linking an existing Live sandbox is refused by the old policy until setup runs.
+    #[tokio::test]
+    async fn a_new_workload_linking_a_live_kubernetes_sandbox_needs_setup() {
+        use alien_core::SandboxEgress;
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Kubernetes,
+        };
+        let old = live_sandbox_stack("app:1", "2Gi", SandboxEgress::None);
+        let sandbox = old
+            .resources
+            .get("agents")
+            .unwrap()
+            .config
+            .downcast_ref::<Sandbox>()
+            .unwrap()
+            .clone();
+        let container = alien_core::Container::new("web".into())
+            .code(alien_core::ContainerCode::Image {
+                image: "nginx:alpine".into(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
+            })
+            .permissions("app".into())
+            .link(&sandbox)
+            .build();
+        let new = Stack::new("stack".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .add(container, ResourceLifecycle::Live)
+            .build();
+
+        let result = check.check(&old, &new).await.unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("workloads that link Live sandbox 'agents'")),
+            "{:?}",
+            result.errors
+        );
+        let unchanged = check.check(&new, &new).await.unwrap();
+        assert!(unchanged.success, "{:?}", unchanged.errors);
     }
 
     /// A sandbox added by a release has no chart NetworkPolicy yet, so it waits for setup.

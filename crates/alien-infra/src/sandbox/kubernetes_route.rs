@@ -132,6 +132,16 @@ pub struct ClaimRequest {
     pub timeout_ms: Option<u64>,
 }
 
+/// Query of a claim. `setup=pending` says the caller will set the session up (its egress
+/// policy) and report it with `/ready`. A query rather than a body field so that a caller built
+/// for this broker still works against one that predates it, which ignores what it does not know.
+#[derive(Debug, Default, Deserialize)]
+pub struct ClaimQuery {
+    /// `pending` when the creator reports its setup afterwards
+    #[serde(default)]
+    pub setup: Option<String>,
+}
+
 /// What the application needs to reach its session.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +168,10 @@ pub struct ClaimResponse {
     /// Unix seconds at which the session ends; absent when it has no lifetime
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<i64>,
+    /// Whether the creator is still setting the session up; a caller that finds the session
+    /// waits for this to clear. Absent when false, so older callers see the body they know.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub setup_pending: bool,
 }
 
 impl From<crate::sandbox::kubernetes_broker::ClaimedSession> for ClaimResponse {
@@ -173,6 +187,7 @@ impl From<crate::sandbox::kubernetes_broker::ClaimedSession> for ClaimResponse {
             tenant_key: claimed.tenant_key,
             created: claimed.created,
             deadline: claimed.deadline,
+            setup_pending: claimed.setup_pending,
         }
     }
 }
@@ -238,6 +253,10 @@ pub fn broker_router_with_authorization(
         .route(
             "/v1/sandbox/{sandbox}/sessions/{session}/preview",
             post(preview),
+        )
+        .route(
+            "/v1/sandbox/{sandbox}/sessions/{session}/ready",
+            post(setup_done),
         )
         .with_state(BrokerRouteState {
             broker: state,
@@ -311,6 +330,7 @@ async fn authorize(
 async fn claim(
     State(state): State<BrokerRouteState>,
     headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<ClaimQuery>,
     Json(request): Json<ClaimRequest>,
 ) -> Result<Json<ClaimResponse>, StatusCode> {
     let authorization = authorize(&state, &headers).await?;
@@ -327,6 +347,7 @@ async fn claim(
         &authorization.deployment_label_value,
         request.tenant_key.as_deref(),
         request.timeout_ms.map(|ms| ms.div_ceil(1000)),
+        query.setup.as_deref() == Some("pending"),
     )
     .await
     .map_err(|error| match error {
@@ -339,6 +360,27 @@ async fn claim(
     })?;
 
     Ok(Json(claimed.into()))
+}
+
+/// The creator reports that it finished setting the session up (or ended it).
+async fn setup_done(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path((sandbox_id, session)): Path<(String, String)>,
+) -> Result<StatusCode, StatusCode> {
+    let authorization = authorize(&state, &headers).await?;
+    crate::sandbox::kubernetes_broker::finish_session_setup_for_deployment(
+        &state.broker.secrets,
+        &state.broker.namespace,
+        &sandbox_id,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Returns a session claimed earlier, by this process or another, with a fresh capability.
@@ -798,6 +840,7 @@ mod tests {
         let error = claim(
             State(scoped_state(pods, secrets, reviews)),
             bearer("release-a"),
+            axum::extract::Query(ClaimQuery::default()),
             Json(ClaimRequest {
                 sandbox_id: "sbx".to_string(),
                 session_id: "session".to_string(),

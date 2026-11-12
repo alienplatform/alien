@@ -18,6 +18,9 @@ pub const POOL_STATE_IDLE: &str = "idle";
 /// Value of [`LABEL_POOL_STATE`] once a session owns the pod.
 pub const POOL_STATE_CLAIMED: &str = "claimed";
 
+/// Value of [`LABEL_POOL_STATE`] for an idle pod the controller took out of the pool to delete.
+pub const POOL_STATE_RETIRED: &str = "retired";
+
 /// Selector matching pods this sandbox can still hand out.
 pub fn idle_selector(sandbox_id: &str) -> String {
     format!("{LABEL_SANDBOX}={sandbox_id},{LABEL_POOL_STATE}={POOL_STATE_IDLE}")

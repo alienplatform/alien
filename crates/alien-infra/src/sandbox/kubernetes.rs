@@ -20,6 +20,7 @@ use crate::error::{ErrorData, Result};
 use crate::sandbox::{
     idle_pool_pod_with_labels, idle_selector, pool_deficit, require_sandboxed_runtime_class,
     session_deadline_passed, SandboxPlacement, LABEL_POOL_STATE, LABEL_SANDBOX, LABEL_SESSION,
+    POOL_STATE_RETIRED,
 };
 use alien_core::{ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxOutputs};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -579,6 +580,21 @@ async fn replenish_warm_pool(
             resource_id: Some(sandbox.id.clone()),
         })?;
 
+    // A pod whose retire write succeeded but whose delete failed is in no pool and would run
+    // forever; every tick deletes the ones it finds.
+    sweep_retired_pods(
+        &client,
+        namespace,
+        &sandbox.id,
+        &format!(
+            "{},{}={}",
+            retired_selector(&sandbox.id),
+            deployment_label_key,
+            deployment_label_value
+        ),
+    )
+    .await;
+
     let mut created = 0;
     let Some(egress_environment) =
         super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
@@ -885,7 +901,7 @@ pub(crate) async fn retire_stale_idle_pods(
             .metadata
             .labels
             .get_or_insert_default()
-            .insert(LABEL_POOL_STATE.to_string(), "retired".to_string());
+            .insert(LABEL_POOL_STATE.to_string(), POOL_STATE_RETIRED.to_string());
         let retired = client.update_pod(namespace, &name, &stale).await;
         let outcome = match retired {
             Ok(_) => client.delete_pod(namespace, &name).await,
@@ -898,6 +914,38 @@ pub(crate) async fn retire_stale_idle_pods(
             Err(error) => {
                 warn!(sandbox_id = %sandbox_id, pod = %name, error = %error, "Left a stale idle pool pod; it may have been claimed")
             }
+        }
+    }
+}
+
+/// Selector for pods this controller took out of the pool and has not yet managed to delete.
+pub(crate) fn retired_selector(sandbox_id: &str) -> String {
+    format!("{LABEL_SANDBOX}={sandbox_id},{LABEL_POOL_STATE}={POOL_STATE_RETIRED}")
+}
+
+/// Deletes pods left in the `retired` state, e.g. because the delete after the retire failed.
+pub(crate) async fn sweep_retired_pods(
+    client: &std::sync::Arc<dyn alien_k8s_clients::PodApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    selector: &str,
+) {
+    let listed = match client
+        .list_pods(namespace, Some(selector.to_string()), None)
+        .await
+    {
+        Ok(listed) => listed,
+        Err(error) => {
+            warn!(sandbox_id = %sandbox_id, error = %error, "Could not list retired pool pods; they are swept next tick");
+            return;
+        }
+    };
+    for pod in listed.items {
+        let Some(name) = pod.metadata.name else {
+            continue;
+        };
+        if let Err(error) = client.delete_pod(namespace, &name).await {
+            warn!(sandbox_id = %sandbox_id, pod = %name, error = %error, "Could not delete a retired pool pod; retried next tick");
         }
     }
 }
@@ -1056,6 +1104,34 @@ mod tests {
             .into(),
         );
         pod
+    }
+
+    /// A pod whose retire write succeeded but whose delete failed is in no pool. The next tick's
+    /// sweep finds it by its `retired` label and deletes it.
+    #[tokio::test]
+    async fn a_retired_pod_whose_delete_failed_is_deleted_by_the_next_sweep() {
+        let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = deleted.clone();
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_list_pods()
+            .withf(|_, selector, _| {
+                selector
+                    .as_deref()
+                    .is_some_and(|s| s.contains("alien.dev/sandbox-pool=retired"))
+            })
+            .returning(|_, _, _| {
+                Ok(k8s_openapi::List {
+                    items: vec![idle_with_hash("stuck", Some("old"))],
+                    ..Default::default()
+                })
+            });
+        pods.expect_delete_pod().returning(move |_, name| {
+            seen.lock().unwrap().push(name.to_string());
+            Ok(())
+        });
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+        sweep_retired_pods(&client, "ns", "sbx", &retired_selector("sbx")).await;
+        assert_eq!(*deleted.lock().unwrap(), ["stuck"]);
     }
 
     /// A list that fails once does not stop the sweep for good: the sweep reports the error and

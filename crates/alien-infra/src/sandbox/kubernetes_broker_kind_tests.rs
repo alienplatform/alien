@@ -187,6 +187,7 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
                 SCOPE_VALUE,
                 tenant,
                 timeout,
+                false,
             )
             .await
         }

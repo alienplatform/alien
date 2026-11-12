@@ -64,6 +64,10 @@ struct ClaimResponse {
     /// predates the field).
     #[serde(default)]
     deadline: Option<i64>,
+    /// Whether the creator is still setting the session up (its egress policy). Absent from a
+    /// broker that predates the field, whose sessions are never marked.
+    #[serde(default)]
+    setup_pending: bool,
 }
 
 /// How long the gateway identity of a session without a lifetime is issued for. The issuer caps
@@ -91,12 +95,18 @@ struct ClaimRequest<'a> {
     timeout_ms: Option<u64>,
 }
 
-/// Asks the broker for a session and a fresh capability. `None` when no pod carries the id.
-async fn fetch_claim(
-    client: &reqwest::Client,
-    url: &str,
-    token: &str,
-) -> Result<Option<ClaimResponse>> {
+/// What asking the broker about a session id found.
+enum Lookup {
+    Found(ClaimResponse),
+    /// No pod carries the id: a clean not-found.
+    NotFound,
+    /// The broker has no route for a lookup by id (405, or 404 from one that does not know the
+    /// path): an Operator that predates this client.
+    Unsupported,
+}
+
+/// Asks the broker for a session and a fresh capability.
+async fn lookup_claim(client: &reqwest::Client, url: &str, token: &str) -> Result<Lookup> {
     let response = client
         .get(url)
         .bearer_auth(token)
@@ -109,7 +119,10 @@ async fn fetch_claim(
         })?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+        return Ok(Lookup::NotFound);
+    }
+    if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+        return Ok(Lookup::Unsupported);
     }
     if !response.status().is_success() {
         let status = response.status();
@@ -129,8 +142,32 @@ async fn fetch_claim(
             field: "body".to_string(),
             response_json: "the broker returned a body this provider cannot parse".to_string(),
         })
-        .map(Some)
+        .map(Lookup::Found)
 }
+
+/// Like [`lookup_claim`], where a broker without the lookup is an error. `None` when no pod
+/// carries the id.
+async fn fetch_claim(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<Option<ClaimResponse>> {
+    match lookup_claim(client, url, token).await? {
+        Lookup::Found(claim) => Ok(Some(claim)),
+        Lookup::NotFound => Ok(None),
+        Lookup::Unsupported => Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "sandbox.get".to_string(),
+            reason: "the sandbox broker predates lookups by id; upgrade the Operator".to_string(),
+        })),
+    }
+}
+
+/// How long a caller waits for another caller's setup of a session it found.
+const SETUP_WAIT: std::time::Duration = std::time::Duration::from_secs(150);
+#[cfg(not(test))]
+const SETUP_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(test)]
+const SETUP_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// One session's agent for as long as an interactive command runs.
 ///
@@ -335,30 +372,114 @@ impl KubernetesSandbox {
     }
 
     /// The session with this id, from the cache while its capability has more than a minute left
-    /// and from the broker otherwise. `None` when no pod carries the id, which is a clean
-    /// not-found rather than an error.
+    /// and the session has not reached its deadline, and from the broker otherwise. `None` when
+    /// no pod carries the id, which is a clean not-found rather than an error.
     async fn claimed(&self, sandbox_id: &str) -> Result<Option<ClaimResponse>> {
         if let Some(claim) = self.cached(sandbox_id) {
-            if claim.expires_at - chrono::Utc::now().timestamp() > CAPABILITY_REFRESH_MARGIN_SECONDS
-            {
+            let now = chrono::Utc::now().timestamp();
+            let capability_current = claim.expires_at - now > CAPABILITY_REFRESH_MARGIN_SECONDS;
+            let session_running = claim.deadline.is_none_or(|deadline| deadline > now);
+            if capability_current && session_running {
                 return Ok(Some(claim));
             }
         }
+        self.claimed_by_broker(sandbox_id).await
+    }
 
+    /// The session with this id as the broker answers it now, whatever the cache holds.
+    async fn claimed_by_broker(&self, sandbox_id: &str) -> Result<Option<ClaimResponse>> {
         let token = self.identity_token().await?;
-        let Some(claim) = fetch_claim(&self.client, &self.session_url(sandbox_id), &token).await?
-        else {
-            self.claims
-                .lock()
-                .expect("no panic holds this lock")
-                .remove(sandbox_id);
-            return Ok(None);
-        };
+        match lookup_claim(&self.client, &self.session_url(sandbox_id), &token).await? {
+            Lookup::Found(claim) => Ok(Some(self.remember(claim))),
+            Lookup::NotFound => {
+                self.forget(sandbox_id);
+                Ok(None)
+            }
+            Lookup::Unsupported => Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.get".to_string(),
+                reason: "the sandbox broker predates lookups by id; upgrade the Operator"
+                    .to_string(),
+            })),
+        }
+    }
+
+    fn remember(&self, claim: ClaimResponse) -> ClaimResponse {
         self.claims
             .lock()
             .expect("no panic holds this lock")
             .insert(claim.session_id.clone(), claim.clone());
-        Ok(Some(claim))
+        claim
+    }
+
+    fn forget(&self, sandbox_id: &str) {
+        self.claims
+            .lock()
+            .expect("no panic holds this lock")
+            .remove(sandbox_id);
+    }
+
+    /// Waits until the creator of `claim`'s session has finished setting it up. A session the
+    /// creator ended because its setup failed is an error here, not a session to use.
+    async fn after_setup(&self, mut claim: ClaimResponse) -> Result<ClaimResponse> {
+        let started = std::time::Instant::now();
+        while claim.setup_pending {
+            if started.elapsed() >= SETUP_WAIT {
+                return Err(self.failed(
+                    "sandbox.getOrCreate",
+                    &format!(
+                        "sandbox '{}' is still being set up by the process that created it",
+                        claim.session_id
+                    ),
+                ));
+            }
+            tokio::time::sleep(SETUP_POLL).await;
+            claim = self
+                .claimed_by_broker(&claim.session_id)
+                .await?
+                .ok_or_else(|| {
+                    self.failed(
+                        "sandbox.getOrCreate",
+                        &format!(
+                            "sandbox '{}' ended while the process that created it was setting it up",
+                            claim.session_id
+                        ),
+                    )
+                })?;
+        }
+        Ok(claim)
+    }
+
+    /// Tells the broker this process has finished setting the session up. A broker that predates
+    /// the route never marked the session, so there is nothing to clear.
+    async fn setup_done(&self, session_id: &str) {
+        let outcome = async {
+            let response = self
+                .client
+                .post(format!("{}/ready", self.session_url(session_id)))
+                .bearer_auth(self.identity_token().await?)
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::OperationNotSupported {
+                    operation: "sandbox.create".to_string(),
+                    reason: "the sandbox broker is unreachable".to_string(),
+                })?;
+            Ok::<_, AlienError<ErrorData>>(response.status())
+        }
+        .await;
+        match outcome {
+            Ok(status)
+                if status.is_success()
+                    || status == reqwest::StatusCode::NOT_FOUND
+                    || status == reqwest::StatusCode::METHOD_NOT_ALLOWED => {}
+            // Callers that find the session wait at most the broker's setup window.
+            Ok(status) => {
+                tracing::warn!(%status, session_id, "the broker did not record the end of setup")
+            }
+            Err(error) => {
+                tracing::warn!(%error, session_id, "the broker did not record the end of setup")
+            }
+        }
     }
 
     async fn create_resolved(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -373,9 +494,16 @@ impl KubernetesSandbox {
             .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
+        // A caller that will set the session up says so, so that others who find it wait. A query
+        // parameter: a broker that predates it ignores it.
+        let setup = if self.egress_manager.is_some() {
+            "?setup=pending"
+        } else {
+            ""
+        };
         let response = self
             .client
-            .post(format!("{}/v1/sandbox/sessions", self.broker_url))
+            .post(format!("{}/v1/sandbox/sessions{setup}", self.broker_url))
             .bearer_auth(self.identity_token().await?)
             .json(&ClaimRequest {
                 sandbox_id: &self.resource_id,
@@ -408,14 +536,12 @@ impl KubernetesSandbox {
             },
         )?;
 
-        self.claims
-            .lock()
-            .expect("no panic holds this lock")
-            .insert(claim.session_id.clone(), claim.clone());
+        let claim = self.remember(claim);
 
         // Another process created this id between the caller's lookup and this claim; the broker
         // answered with its session, which already carries its own policy.
         if !claim.created {
+            let claim = self.after_setup(claim).await?;
             self.require_same_tenant(&claim, request.tenant_key.as_deref())?;
             return Ok(ResolvedSandbox::found(SandboxInstance {
                 sandbox_id: claim.session_id,
@@ -450,6 +576,10 @@ impl KubernetesSandbox {
                 })?;
                 return Err(error);
             }
+        }
+
+        if self.egress_manager.is_some() {
+            self.setup_done(&claim.session_id).await;
         }
 
         Ok(ResolvedSandbox::created(SandboxInstance {
@@ -550,18 +680,38 @@ impl Sandbox for KubernetesSandbox {
         // `timeout_ms` applies when this call creates the session. A session that already exists
         // keeps the deadline it was created with.
         if let Some(id) = request.sandbox_id.as_deref() {
-            if let Some(claim) = self.claimed(id).await? {
-                // The id names one session; a caller with a different tenant key does not get it,
-                // and does not get to change its egress policy either.
-                self.require_same_tenant(&claim, request.tenant_key.as_deref())?;
-                if let Some(policy) = request.egress.clone() {
-                    self.update_egress(id, policy).await?;
+            // The broker decides whether the session exists: a cached capability only says the
+            // pod existed when it was minted, and the Operator may have ended it since.
+            let token = self.identity_token().await?;
+            match lookup_claim(&self.client, &self.session_url(id), &token).await? {
+                Lookup::Found(claim) => {
+                    let claim = self.remember(claim);
+                    // Another process may still be setting its egress up.
+                    let claim = self.after_setup(claim).await?;
+                    // The id names one session; a caller with a different tenant key does not get
+                    // it, and does not get to change its egress policy either.
+                    self.require_same_tenant(&claim, request.tenant_key.as_deref())?;
+                    if let Some(policy) = request.egress.clone() {
+                        self.update_egress(id, policy).await?;
+                    }
+                    return Ok(ResolvedSandbox::found(SandboxInstance {
+                        sandbox_id: claim.session_id,
+                        state: SandboxState::Running,
+                        generation: claim.generation,
+                    }));
                 }
-                return Ok(ResolvedSandbox::found(SandboxInstance {
-                    sandbox_id: claim.session_id,
-                    state: SandboxState::Running,
-                    generation: claim.generation,
-                }));
+                Lookup::NotFound => self.forget(id),
+                // An Operator that predates lookups by id: create as it always has. It cannot
+                // check a tenant key, so a caller that set one is refused rather than served
+                // without the check.
+                Lookup::Unsupported => {
+                    if request.tenant_key.is_some() {
+                        return Err(self.failed(
+                            "sandbox.getOrCreate",
+                            "the sandbox broker predates lookups by id and cannot honour a tenantKey; upgrade the Operator",
+                        ));
+                    }
+                }
             }
         }
 
@@ -1080,6 +1230,183 @@ mod tests {
         assert_eq!(*lookups.lock().unwrap(), 3, "refreshed before it expired");
     }
 
+    fn session_body(session: &str, pending: bool, deadline: Option<i64>) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "agentSessionId": "uid-1", "sessionId": session,
+            "endpoint": "http://10.0.0.1:8080", "capability": "c",
+            "expiresAt": chrono::Utc::now().timestamp() + 900, "created": false,
+        });
+        if pending {
+            body["setupPending"] = true.into();
+        }
+        if let Some(deadline) = deadline {
+            body["deadline"] = deadline.into();
+        }
+        body
+    }
+
+    /// A session another process is still setting up is not handed out until that process says
+    /// it is done; if the creator ends the session because its setup failed, the caller gets an
+    /// error and not a session without its egress.
+    #[tokio::test]
+    async fn a_session_still_being_set_up_by_its_creator_is_waited_for() {
+        use axum::routing::get;
+        let lookups = Arc::new(Mutex::new(0));
+        let seen = Arc::clone(&lookups);
+        let broker = serve(Router::new().route(
+            BROKER_RELEASE_ROUTE,
+            get(move |Path((_, session)): Path<(String, String)>| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    let mut lookups = seen.lock().unwrap();
+                    *lookups += 1;
+                    match (session.as_str(), *lookups) {
+                        // Pending for the first two lookups, then the creator reports.
+                        ("ready-later", 1 | 2) => Ok(Json(session_body(&session, true, None))),
+                        ("ready-later", _) => Ok(Json(session_body(&session, false, None))),
+                        // The creator's setup failed and it ended the session.
+                        (_, 1) => Ok(Json(session_body(&session, true, None))),
+                        _ => Err(StatusCode::NOT_FOUND),
+                    }
+                }
+            }),
+        ))
+        .await;
+        let token = tempfile::NamedTempFile::new().unwrap();
+        let sandbox = sandbox_over(broker, &token);
+
+        let found = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("ready-later".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("found once the creator reports");
+        assert!(!found.created);
+        assert_eq!(
+            *lookups.lock().unwrap(),
+            3,
+            "it waited for two pending answers"
+        );
+
+        *lookups.lock().unwrap() = 0;
+        let error = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("failed".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("the creator's setup failed");
+        assert!(error.to_string().contains("ended while"), "{error}");
+    }
+
+    /// The broker, not the cache, says whether a session still exists: the Operator may have
+    /// ended it at its deadline while the capability this process holds is still unexpired.
+    #[tokio::test]
+    async fn get_or_create_asks_the_broker_even_when_the_cached_capability_is_unexpired() {
+        use axum::routing::get;
+        let gone = Arc::new(Mutex::new(false));
+        let flag = Arc::clone(&gone);
+        let broker = serve(
+            Router::new()
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    get(move |Path((_, session)): Path<(String, String)>| {
+                        let flag = Arc::clone(&flag);
+                        async move {
+                            if *flag.lock().unwrap() {
+                                Err(StatusCode::NOT_FOUND)
+                            } else {
+                                Ok(Json(session_body(&session, false, None)))
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/v1/sandbox/sessions",
+                    axum::routing::post(|| async {
+                        let mut body = session_body("s1", false, None);
+                        body["created"] = true.into();
+                        Json(body)
+                    }),
+                ),
+        )
+        .await;
+        let token = tempfile::NamedTempFile::new().unwrap();
+        let sandbox = sandbox_over(broker, &token);
+        let request = || CreateSandboxRequest {
+            sandbox_id: Some("s1".to_string()),
+            ..Default::default()
+        };
+
+        assert!(!sandbox.get_or_create(request()).await.unwrap().created);
+        *gone.lock().unwrap() = true;
+        assert!(
+            sandbox.get_or_create(request()).await.unwrap().created,
+            "the session ended; a replacement is created"
+        );
+
+        // `get` stops trusting a cached session at its recorded deadline.
+        let past = chrono::Utc::now().timestamp() - 1;
+        sandbox.remember(serde_json::from_value(session_body("s1", false, Some(past))).unwrap());
+        assert!(sandbox.get("s1").await.unwrap().is_none());
+    }
+
+    /// A new SDK with an Operator that predates lookups by id: the lookup answers 405, and the
+    /// create goes on as it always did. A caller that set a tenant key is refused, because that
+    /// Operator cannot check it.
+    #[tokio::test]
+    async fn get_or_create_falls_back_to_create_on_an_operator_without_lookups() {
+        use axum::routing::post;
+        let posts = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&posts);
+        let broker = serve(
+            Router::new()
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    // The only method an old Operator routes here.
+                    axum::routing::delete(|| async { StatusCode::NO_CONTENT }),
+                )
+                .route(
+                    "/v1/sandbox/sessions",
+                    post(move |Json(body): Json<serde_json::Value>| {
+                        let seen = Arc::clone(&seen);
+                        async move {
+                            seen.lock().unwrap().push(body.clone());
+                            let mut reply =
+                                session_body(body["sessionId"].as_str().unwrap(), false, None);
+                            reply["created"] = true.into();
+                            Json(reply)
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let token = tempfile::NamedTempFile::new().unwrap();
+        let sandbox = sandbox_over(broker, &token);
+
+        let created = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("s1".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("falls back to the old create");
+        assert!(created.created);
+        assert_eq!(posts.lock().unwrap().len(), 1);
+
+        let refused = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("s2".to_string()),
+                tenant_key: Some("tenant".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a tenant key cannot be honoured");
+        assert!(refused.to_string().contains("tenantKey"), "{refused}");
+        assert_eq!(posts.lock().unwrap().len(), 1, "nothing was created for it");
+    }
+
     /// `get_or_create` from a new process per command: the known id is found (`created` false,
     /// generation from the pod), a new id is created, and a create that lost a race to another
     /// process is reported as found.
@@ -1257,6 +1584,7 @@ mod tests {
             created: false,
             tenant_key: None,
             deadline: None,
+            setup_pending: false,
         };
         let agent = SessionAgent {
             client: reqwest::Client::new(),
