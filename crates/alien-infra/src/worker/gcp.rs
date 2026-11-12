@@ -2222,8 +2222,20 @@ impl GcpWorkerController {
             }
         }
 
-        self.apply_command_topic_management_permissions(ctx, &topic_short_name)
-            .await?;
+        // Writing a topic's policy is a reach action management does not hold on a protected
+        // install, and the verifier never grants management anything, so the controller does not
+        // attempt it there. Management's access to the commands topic has to come from setup.
+        if verifier::is_protected(ctx) {
+            warn!(
+                worker=%cfg.id,
+                topic=%topic_short_name,
+                "Protected install: management's command permissions on the commands topic are not \
+                 written by the controller"
+            );
+        } else {
+            self.apply_command_topic_management_permissions(ctx, &topic_short_name)
+                .await?;
+        }
 
         info!(worker=%cfg.id, "Commands Pub/Sub infrastructure created");
 
