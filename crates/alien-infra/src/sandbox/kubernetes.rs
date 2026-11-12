@@ -614,6 +614,12 @@ async fn replenish_warm_pool(
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
     );
     placement.apply(&mut pod);
+    super::kubernetes_spec::require_enforced_policy(
+        &mut pod,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+            .ok()
+            .as_deref(),
+    );
     if let Some(secret_name) = ensure_image_pull_secret(ctx, sandbox, namespace).await? {
         pod.spec
             .as_mut()
