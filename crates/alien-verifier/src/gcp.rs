@@ -241,29 +241,6 @@ impl Gcp {
         .ok_or_else(|| AlienError::new(failed(format!("{path} was not created"))))
     }
 
-    /// Create (`instance` is `None`) or patch the Cloud SQL instance with the body the controller
-    /// built; the answer is the long-running operation the controller polls.
-    pub async fn sql_write(
-        &self,
-        method: reqwest::Method,
-        instance: Option<&str>,
-        body: &Value,
-    ) -> Result<Value> {
-        let url = match instance {
-            Some(name) => format!(
-                "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances/{name}",
-                self.project
-            ),
-            None => format!(
-                "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances",
-                self.project
-            ),
-        };
-        self.call(method, &url, Some(body), "cloudsql.instances.write")
-            .await?
-            .ok_or_else(|| AlienError::new(failed("the Cloud SQL instance write returned nothing")))
-    }
-
     /// Create a Pub/Sub topic or subscription (`collection` is `topics` or `subscriptions`) with
     /// the body the controller built.
     pub async fn create_pubsub(&self, collection: &str, name: &str, body: &Value) -> Result<()> {

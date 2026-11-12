@@ -735,9 +735,7 @@ mod tests {
                 ResourceWrite::CreateTopic { body, .. }
                 | ResourceWrite::CreateSubscription { body, .. }
                 | ResourceWrite::CreateCommandSubscription { body, .. }
-                | ResourceWrite::CreateSchedulerJob { body, .. }
-                | ResourceWrite::CreateDatabaseInstance { body }
-                | ResourceWrite::PatchDatabaseInstance { body, .. } => body.to_string(),
+                | ResourceWrite::CreateSchedulerJob { body, .. } => body.to_string(),
                 ResourceWrite::SetTopicIamPolicy { policy, .. }
                 | ResourceWrite::SetSubscriptionIamPolicy { policy, .. } => policy.to_string(),
                 ResourceWrite::CreateBlobContainer { body, .. }

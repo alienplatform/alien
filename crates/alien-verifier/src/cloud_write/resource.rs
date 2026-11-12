@@ -137,13 +137,6 @@ pub enum ResourceWrite {
     /// Run service on the signed cron, as the worker's own service account.
     #[serde(rename_all = "camelCase")]
     CreateSchedulerJob { job: String, body: Value },
-    /// Cloud SQL create of the install's database instance, as the client sends it. It carries
-    /// no password: the controller sets the database user's password afterwards.
-    #[serde(rename_all = "camelCase")]
-    CreateDatabaseInstance { body: Value },
-    /// Cloud SQL patch of the install's database instance: tier, availability and disk size.
-    #[serde(rename_all = "camelCase")]
-    PatchDatabaseInstance { instance: String, body: Value },
     /// Pub/Sub setIamPolicy of a topic: its whole policy.
     #[serde(rename_all = "camelCase")]
     SetTopicIamPolicy { topic: String, policy: Value },
@@ -231,8 +224,6 @@ impl ResourceWrite {
             ResourceWrite::CreateSubscription { .. } => "CreateSubscription",
             ResourceWrite::CreateCommandSubscription { .. } => "CreateCommandSubscription",
             ResourceWrite::CreateSchedulerJob { .. } => "CreateSchedulerJob",
-            ResourceWrite::CreateDatabaseInstance { .. } => "CreateDatabaseInstance",
-            ResourceWrite::PatchDatabaseInstance { .. } => "PatchDatabaseInstance",
             ResourceWrite::SetTopicIamPolicy { .. } => "SetTopicIamPolicy",
             ResourceWrite::SetSubscriptionIamPolicy { .. } => "SetSubscriptionIamPolicy",
             ResourceWrite::CreateBlobContainer { .. } => "CreateBlobContainer",
@@ -560,8 +551,6 @@ pub fn check_aws_write(
         | ResourceWrite::CreateSubscription { .. }
         | ResourceWrite::CreateCommandSubscription { .. }
         | ResourceWrite::CreateSchedulerJob { .. }
-        | ResourceWrite::CreateDatabaseInstance { .. }
-        | ResourceWrite::PatchDatabaseInstance { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
@@ -1095,8 +1084,6 @@ pub async fn forward_aws_write(
         | ResourceWrite::CreateSubscription { .. }
         | ResourceWrite::CreateCommandSubscription { .. }
         | ResourceWrite::CreateSchedulerJob { .. }
-        | ResourceWrite::CreateDatabaseInstance { .. }
-        | ResourceWrite::PatchDatabaseInstance { .. }
         | ResourceWrite::SetTopicIamPolicy { .. }
         | ResourceWrite::SetSubscriptionIamPolicy { .. }
         | ResourceWrite::CreateBlobContainer { .. }
@@ -1209,16 +1196,6 @@ pub fn check_gcp_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Resu
         ResourceWrite::CreateSchedulerJob { job, body } => {
             check_scheduler_job(facts, job, body, None, None)
         }
-        ResourceWrite::CreateDatabaseInstance { body } => {
-            check_database_instance(facts.place, facts.postgres()?, facts.resource_id, body)
-        }
-        ResourceWrite::PatchDatabaseInstance { instance, body } => check_database_patch(
-            facts.place,
-            facts.postgres().map(|_| ())?,
-            facts.resource_id,
-            instance,
-            body,
-        ),
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             facts.queue()?;
             own_topic(facts, topic, write.operation())?;
@@ -1368,99 +1345,6 @@ fn sandbox_image_is_signed(signed: &str, sent: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// The name this install gives the Cloud SQL instance of postgres `id`.
-fn database_instance_name(place: &Place, resource_id: &str) -> String {
-    format!("{}-{}", place.prefix, resource_id)
-}
-
-/// Check the create of the database instance. Nothing in the request may reach the database
-/// from outside: private only, Private Service Connect from the install's own project, no
-/// authorized networks and no field the verifier does not know (the body must survive a round
-/// trip through the client's own type unchanged). A password is refused so no secret travels in
-/// the request.
-fn check_database_instance(
-    place: &Place,
-    postgres: &alien_core::Postgres,
-    resource_id: &str,
-    body: &Value,
-) -> Result<()> {
-    use alien_gcp_clients::cloud_sql::{
-        postgres_database_version, DatabaseInstance, IpConfiguration, PscConfig,
-    };
-    let project = match &place.install {
-        alien_signing::InstallId::Gcp { project, .. } => project.as_str(),
-        _ => return Err(refused("this install is not a GCP install")),
-    };
-    let instance: DatabaseInstance = serde_json::from_value(body.clone())
-        .map_err(|error| refused(format!("the instance is not a Cloud SQL instance: {error}")))?;
-    if serde_json::to_value(&instance).ok().as_ref() != Some(body) {
-        return Err(refused(
-            "the instance sets a field the verifier does not know",
-        ));
-    }
-    if instance.root_password.is_some() {
-        return Err(refused(
-            "the instance carries a root password: it is set afterwards, not in this request",
-        ));
-    }
-    let own = database_instance_name(place, resource_id);
-    if instance.name != own {
-        return Err(refused(format!(
-            "the instance is named {}, not {own}",
-            instance.name
-        )));
-    }
-    if instance.database_version != postgres_database_version(&postgres.version) {
-        return Err(refused("the database version is not the signed stack's"));
-    }
-    let private = IpConfiguration {
-        ipv4_enabled: false,
-        psc_config: Some(PscConfig {
-            psc_enabled: true,
-            psc_auto_dns_enabled: false,
-            allowed_consumer_projects: vec![project.to_string()],
-        }),
-    };
-    if instance.settings.ip_configuration != private {
-        return Err(refused(
-            "the instance's network settings are not private service connect from this project only",
-        ));
-    }
-    Ok(())
-}
-
-/// Check the patch of the database instance: the instance is the install's own and the patch
-/// sets only size, availability and the concurrency token, never a network field.
-fn check_database_patch(
-    place: &Place,
-    _is_postgres: (),
-    resource_id: &str,
-    instance: &str,
-    body: &Value,
-) -> Result<()> {
-    let own = database_instance_name(place, resource_id);
-    if instance != own {
-        return Err(refused(format!(
-            "PatchDatabaseInstance names {instance}, not {own}"
-        )));
-    }
-    let fields = body
-        .as_object()
-        .filter(|fields| fields.len() == 1)
-        .and_then(|fields| fields.get("settings"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| refused("the patch is not {settings: {...}}"))?;
-    if let Some(field) = fields.keys().find(|key| {
-        !matches!(
-            key.as_str(),
-            "tier" | "availabilityType" | "dataDiskSizeGb" | "settingsVersion"
-        )
-    }) {
-        return Err(refused(format!("the patch sets '{field}'")));
-    }
-    Ok(())
 }
 
 /// The service a GCP worker runs as: the name setup gives its Cloud Run service.
@@ -2367,13 +2251,6 @@ pub async fn forward_gcp_write(gcp: &crate::gcp::Gcp, write: &ResourceWrite) -> 
             gcp.create_scheduler_job(body).await?;
             Ok(json!({ "job": job }))
         }
-        ResourceWrite::CreateDatabaseInstance { body } => {
-            gcp.sql_write(reqwest::Method::POST, None, body).await
-        }
-        ResourceWrite::PatchDatabaseInstance { instance, body } => {
-            gcp.sql_write(reqwest::Method::PATCH, Some(instance), body)
-                .await
-        }
         ResourceWrite::SetTopicIamPolicy { topic, policy } => {
             gcp.set_pubsub_iam_policy("topics", topic, policy).await?;
             Ok(json!({ "topic": topic }))
@@ -2872,154 +2749,5 @@ mod command_subscription_tests {
                 "{name} must be refused"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod database_instance_tests {
-    use super::*;
-    use alien_gcp_clients::cloud_sql::{
-        BackupConfiguration, DatabaseInstance, InstanceSettings, IpConfiguration, PscConfig,
-    };
-
-    fn facts_for<R>(f: impl FnOnce(&Place, &alien_core::Postgres) -> R) -> R {
-        let postgres = alien_core::Postgres::new("db".to_string()).build();
-        let place = Place {
-            install: alien_signing::InstallId::Gcp {
-                project: "acme-project".into(),
-                prefix: "acme".into(),
-            },
-            prefix: "acme".into(),
-            vpc: None,
-            machine_network: None,
-        };
-        f(&place, &postgres)
-    }
-
-    fn instance() -> DatabaseInstance {
-        DatabaseInstance {
-            name: "acme-db".into(),
-            database_version: "POSTGRES_17".into(),
-            region: Some("us-central1".into()),
-            settings: InstanceSettings {
-                tier: "db-custom-1-3840".into(),
-                data_disk_size_gb: Some("20".into()),
-                storage_auto_resize: Some(true),
-                settings_version: None,
-                ip_configuration: IpConfiguration {
-                    ipv4_enabled: false,
-                    psc_config: Some(PscConfig {
-                        psc_enabled: true,
-                        psc_auto_dns_enabled: false,
-                        allowed_consumer_projects: vec!["acme-project".into()],
-                    }),
-                },
-                backup_configuration: BackupConfiguration {
-                    enabled: true,
-                    point_in_time_recovery_enabled: true,
-                },
-                availability_type: Some("ZONAL".into()),
-                edition: Some("ENTERPRISE".into()),
-            },
-            root_password: None,
-            state: None,
-            psc_service_attachment_link: None,
-            ip_addresses: vec![],
-            server_ca_cert: None,
-        }
-    }
-
-    #[test]
-    fn only_a_private_password_free_instance_of_the_signed_stack_is_created() {
-        let signed = serde_json::to_value(instance()).unwrap();
-        facts_for(|place, postgres| {
-            check_database_instance(place, postgres, "db", &signed).expect("signed instance");
-            let mutate = |f: &dyn Fn(&mut Value)| {
-                let mut body = signed.clone();
-                f(&mut body);
-                body
-            };
-            for (name, body) in [
-                (
-                    "a root password",
-                    mutate(&|b| b["rootPassword"] = json!("secret")),
-                ),
-                (
-                    "a public address",
-                    mutate(&|b| b["settings"]["ipConfiguration"]["ipv4Enabled"] = json!(true)),
-                ),
-                (
-                    "an authorized network",
-                    mutate(&|b| {
-                        b["settings"]["ipConfiguration"]["authorizedNetworks"] =
-                            json!([{"value": "0.0.0.0/0"}])
-                    }),
-                ),
-                (
-                    "another consumer project",
-                    mutate(&|b| {
-                        b["settings"]["ipConfiguration"]["pscConfig"]["allowedConsumerProjects"] =
-                            json!(["other"])
-                    }),
-                ),
-                (
-                    "a private network",
-                    mutate(&|b| {
-                        b["settings"]["ipConfiguration"]["privateNetwork"] =
-                            json!("projects/x/global/networks/y")
-                    }),
-                ),
-                ("another name", mutate(&|b| b["name"] = json!("other"))),
-                (
-                    "another version",
-                    mutate(&|b| b["databaseVersion"] = json!("POSTGRES_15")),
-                ),
-                (
-                    "an unknown field",
-                    mutate(&|b| b["replicaConfiguration"] = json!({})),
-                ),
-            ] {
-                assert!(
-                    check_database_instance(place, postgres, "db", &body).is_err(),
-                    "{name} must be refused"
-                );
-            }
-        });
-    }
-
-    #[test]
-    fn a_patch_sets_only_size_availability_and_the_token() {
-        facts_for(|place, _| {
-            check_database_patch(
-                place,
-                (),
-                "db",
-                "acme-db",
-                &json!({"settings": {"tier": "db-custom-2-7680", "settingsVersion": "3"}}),
-            )
-            .expect("size patch");
-            for (name, instance, body) in [
-                (
-                    "ip configuration",
-                    "acme-db",
-                    json!({"settings": {"ipConfiguration": {"ipv4Enabled": true}}}),
-                ),
-                (
-                    "a top-level field",
-                    "acme-db",
-                    json!({"settings": {}, "rootPassword": "x"}),
-                ),
-                (
-                    "another instance",
-                    "other",
-                    json!({"settings": {"tier": "x"}}),
-                ),
-            ] {
-                assert!(
-                    check_database_patch(place, (), "db", instance, &body).is_err(),
-                    "{name} must be refused"
-                );
-            }
-        });
     }
 }

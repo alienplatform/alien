@@ -567,16 +567,6 @@ pub enum ResourceWrite {
         job: String,
         body: serde_json::Value,
     },
-    /// Cloud SQL create of the install's database instance: the instance as the client sends it,
-    /// without a password.
-    #[serde(rename_all = "camelCase")]
-    CreateDatabaseInstance { body: serde_json::Value },
-    /// Cloud SQL patch of the install's database instance.
-    #[serde(rename_all = "camelCase")]
-    PatchDatabaseInstance {
-        instance: String,
-        body: serde_json::Value,
-    },
     /// Pub/Sub setIamPolicy of a topic: its whole policy.
     #[serde(rename_all = "camelCase")]
     SetTopicIamPolicy {
