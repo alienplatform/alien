@@ -6,6 +6,84 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::api::core::v1::{LocalObjectReference, PodSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+pub(crate) fn uses_manager_proxy(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    image: &str,
+) -> bool {
+    ctx.deployment_config
+        .manager_url
+        .as_deref()
+        .is_some_and(|manager| {
+            image
+                .split_once('/')
+                .is_some_and(|(host, _)| host.eq_ignore_ascii_case(&registry_auth_host(manager)))
+        })
+}
+
+pub(crate) async fn refresh_pull_secret(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    namespace: &str,
+    workload_name: &str,
+    resource_id: &str,
+    image: &str,
+) -> Result<()> {
+    if ctx.deployment_config.runtime_identity_audience.is_none() || !uses_manager_proxy(ctx, image)
+    {
+        return Ok(());
+    }
+    let token = pull_credential(ctx, resource_id).await?;
+    let client = ctx
+        .service_provider
+        .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
+        .await?;
+    ensure_registry_pull_secret(
+        &client,
+        namespace,
+        &format!("{workload_name}-registry"),
+        image,
+        &token,
+        crate::core::kubernetes_cleanup_resource_labels(ctx, resource_id),
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn pull_credential(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<String> {
+    let invalid = || {
+        alien_error::AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Registry pull authority is unavailable or expired".into(),
+            resource_id: Some(resource_id.to_owned()),
+        })
+    };
+    if ctx.deployment_config.runtime_identity_audience.is_none() {
+        return ctx
+            .deployment_config
+            .deployment_token
+            .clone()
+            .ok_or_else(invalid);
+    }
+    let id = crate::kubernetes_runtime_credentials::deployment_id(ctx, resource_id)?;
+    let credential = ctx
+        .service_provider
+        .runtime_registry_pull_credential(id)
+        .await?
+        .ok_or_else(invalid)?;
+    let now = chrono::Utc::now();
+    if credential.token.is_empty()
+        || credential.expires_at <= now
+        || credential.expires_at
+            > now
+                + alien_client_core::runtime_credentials::REGISTRY_PULL_LIFETIME
+                + alien_client_core::runtime_credentials::ALLOWED_CLOCK_SKEW
+    {
+        return Err(invalid());
+    }
+    Ok(credential.token)
+}
+
 pub(crate) async fn ensure_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
     namespace: &str,

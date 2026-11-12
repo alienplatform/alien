@@ -21,6 +21,10 @@ const LEGACY_ADMIN_TOKEN_FILE: &str = "admin-token";
 /// Key that signs command responses, generated once per state directory.
 const SIGNING_KEY_FILE: &str = "response-signing-key";
 
+/// Key that signs bounded runtime capabilities. It persists so capabilities
+/// issued before a restart stay valid until their own short deadline.
+const RUNTIME_CAPABILITY_KEY_FILE: &str = "runtime-capability-key";
+
 /// Seed of the key that signs air-gapped bundles, generated once per state
 /// directory. Environments trust its public key, so it must persist.
 const BUNDLE_SIGNING_KEY_FILE: &str = "bundle-signing-key";
@@ -119,6 +123,12 @@ async fn register(token_store: &dyn TokenStore, token: &str) -> Result<()> {
 /// generated and stored (owner-only) on first start.
 pub fn response_signing_key(state_dir: &Path) -> Result<Vec<u8>> {
     secret_file_32(&state_dir.join(SIGNING_KEY_FILE)).map(|key| key.to_vec())
+}
+
+/// The key that signs runtime capabilities: read from the state directory, or
+/// generated and stored (owner-only) on first start.
+pub fn runtime_capability_key(state_dir: &Path) -> Result<[u8; 32]> {
+    secret_file_32(&state_dir.join(RUNTIME_CAPABILITY_KEY_FILE))
 }
 
 /// The key that signs air-gapped bundles: read from the state directory, or

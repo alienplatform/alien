@@ -61,6 +61,43 @@ impl Stack {
             .collect()
     }
 
+    /// Whether `alien build` recorded that the command receiver of this
+    /// Container or Daemon reads `ALIEN_COMMANDS_CAPABILITY_FILE`
+    /// (`commands_capability_file`). Everything else is treated as a receiver
+    /// from an older build: it needs `ALIEN_COMMANDS_TOKEN` to start. This is
+    /// the one place that rule lives; deployers and token revocation use it.
+    pub fn command_receiver_reads_capability_file(&self, resource_id: &str) -> bool {
+        let Some(entry) = self.resources.get(resource_id) else {
+            return false;
+        };
+        if let Some(container) = entry.config.downcast_ref::<crate::Container>() {
+            container.commands_capability_file
+        } else if let Some(daemon) = entry.config.downcast_ref::<crate::Daemon>() {
+            daemon.commands_capability_file
+        } else {
+            false
+        }
+    }
+
+    /// Ids of the command-enabled Containers and Daemons whose receiver is not
+    /// recorded as reading the capability file. While any exists, the
+    /// deployment token must stay valid: those receivers cannot start without it.
+    pub fn command_receivers_without_capability_file(&self) -> Vec<String> {
+        use crate::commands_types::CommandTargetType;
+
+        self.command_targets()
+            .into_iter()
+            .filter(|target| {
+                matches!(
+                    target.resource_type,
+                    CommandTargetType::Container | CommandTargetType::Daemon
+                )
+            })
+            .map(|target| target.resource_id)
+            .filter(|id| !self.command_receiver_reads_capability_file(id))
+            .collect()
+    }
+
     /// Returns the authentication token used by the manager/operator to push
     /// commands to each command-enabled Local/Kubernetes Worker runtime.
     /// Cloud-native Worker transports authenticate through their platform and
@@ -94,26 +131,21 @@ impl Stack {
     /// `target_resources` so every var reaches only its own resource.
     ///
     /// Workers receive platform pushes; Containers and Daemons run the pull
-    /// receiver, which reads this fixed environment contract:
+    /// receiver, which reads this environment:
     ///   - `ALIEN_COMMANDS_URL` (Plain) — base receiver URL
-    ///   - `ALIEN_COMMANDS_TOKEN` (Secret, only if a token is present)
+    ///   - the credential, chosen per target by `credential`
     ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_ID` (Plain) — this resource's id
     ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` (Plain) — `container`/`daemon`
     ///
     /// `ALIEN_DEPLOYMENT_ID` is intentionally NOT emitted here: the manager and
-    /// operator already inject it deployment-wide (`target_resources: None`), so
-    /// it reaches every Container/Daemon via that path — re-scoping it per
-    /// resource would be redundant. This mirrors the worker helper, which also
-    /// relies on the deployment-wide `ALIEN_DEPLOYMENT_ID`.
+    /// operator already inject it deployment-wide (`target_resources: None`).
     ///
-    /// Workers are excluded here, and a
-    /// commands-disabled Container/Daemon is never a `command_targets()` entry,
-    /// so it receives nothing — the receiver fail-fasts on a partial config, so
-    /// a deployment-wide flag would crash it at startup.
+    /// Workers are excluded here, and a commands-disabled Container/Daemon is
+    /// never a `command_targets()` entry, so it receives nothing.
     pub fn receiver_command_env_vars(
         &self,
         commands_url: &str,
-        commands_token: Option<&str>,
+        credential: impl Fn(&str) -> ReceiverCommandCredential,
     ) -> Result<Vec<EnvironmentVariable>> {
         use crate::commands_types::CommandTargetType;
 
@@ -126,23 +158,37 @@ impl Stack {
         }) {
             let resource_type = target.resource_type.as_str();
             let id = target.resource_id;
-            // Four of the five receiver vars without the token would make
-            // `Receiver::from_env` crash-loop the workload at startup; fail
-            // the deploy here instead, where the cause is nameable.
-            let token = require_command_token(commands_token, &id)?;
-            vars.extend([
-                scoped(
-                    crate::ENV_ALIEN_COMMANDS_URL,
-                    commands_url,
-                    EnvironmentVariableType::Plain,
-                    &id,
-                ),
-                scoped(
+            vars.push(scoped(
+                crate::ENV_ALIEN_COMMANDS_URL,
+                commands_url,
+                EnvironmentVariableType::Plain,
+                &id,
+            ));
+            match credential(&id) {
+                // Without a credential the receiver cannot start; fail the
+                // deploy here, where the cause is nameable.
+                ReceiverCommandCredential::Token(token) => vars.push(scoped(
                     crate::ENV_ALIEN_COMMANDS_TOKEN,
-                    token,
+                    require_command_token(token.as_deref(), &id)?,
                     EnvironmentVariableType::Secret,
                     &id,
-                ),
+                )),
+                ReceiverCommandCredential::HostFiles => vars.extend([
+                    scoped(
+                        crate::ENV_ALIEN_COMMANDS_CAPABILITY_FILE,
+                        crate::HOST_COMMANDS_CAPABILITY_FILE,
+                        EnvironmentVariableType::Plain,
+                        &id,
+                    ),
+                    scoped(
+                        crate::ENV_ALIEN_COMMANDS_TOKEN_FILE,
+                        crate::HOST_COMMANDS_TOKEN_FILE,
+                        EnvironmentVariableType::Plain,
+                        &id,
+                    ),
+                ]),
+            }
+            vars.extend([
                 scoped(
                     crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
                     resource_type,
@@ -161,6 +207,17 @@ impl Stack {
     }
 }
 
+/// How a Container or Daemon command receiver gets its credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiverCommandCredential {
+    /// A bearer token in `ALIEN_COMMANDS_TOKEN`. `None` fails the deploy.
+    Token(Option<String>),
+    /// The machine that runs the workload writes a short-lived credential to
+    /// `HOST_COMMANDS_CAPABILITY_FILE` and `HOST_COMMANDS_TOKEN_FILE` and
+    /// refreshes it. No token is put into the workload's environment.
+    HostFiles,
+}
+
 /// The deployment token, or a deploy-time error naming the command-enabled
 /// resource that needs it — a runtime crash-loop on a missing env var is the
 /// only alternative.
@@ -177,6 +234,7 @@ fn require_command_token<'a>(token: Option<&'a str>, resource_id: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use super::ReceiverCommandCredential;
     use crate::resource::ResourceLifecycle;
     use crate::{
         Container, ContainerCode, Daemon, DaemonCode, ResourceSpec, Stack, Storage, Worker,
@@ -452,7 +510,9 @@ mod tests {
             .build();
 
         let vars = stack
-            .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                ReceiverCommandCredential::Token(Some("tok".into()))
+            })
             .expect("token present");
 
         // Every var is scoped to exactly one command-enabled Container/Daemon —
@@ -535,7 +595,9 @@ mod tests {
         // Receiver::from_env crash-loop at startup; the deploy must fail.
         for token in [None, Some(""), Some("   \n")] {
             let error = stack
-                .receiver_command_env_vars("https://cmd.example.test/v1", token)
+                .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                    ReceiverCommandCredential::Token(token.map(str::to_string))
+                })
                 .expect_err("missing or blank token must fail the env build");
             assert_eq!(error.code, "COMMAND_TOKEN_MISSING");
             assert!(error.to_string().contains("container-a"));
@@ -543,7 +605,9 @@ mod tests {
 
         let original = "  nonempty-token  ";
         let vars = stack
-            .receiver_command_env_vars("https://cmd.example.test/v1", Some(original))
+            .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                ReceiverCommandCredential::Token(Some(original.into()))
+            })
             .expect("non-empty token");
         assert!(vars
             .iter()
@@ -567,8 +631,108 @@ mod tests {
 
         // Only a Worker target exists → receiver helper yields nothing.
         assert!(stack
-            .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                ReceiverCommandCredential::Token(Some("tok".into()))
+            })
             .expect("no command targets")
             .is_empty());
+    }
+
+    #[test]
+    fn a_receiver_counts_as_reading_the_capability_file_only_when_marked() {
+        let container = |id: &str, marked: bool, enabled: bool| {
+            Container::new(id.to_string())
+                .code(ContainerCode::Image {
+                    image: "container:latest".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .port(8080)
+                .permissions("container-execution".to_string())
+                .commands_enabled(enabled)
+                .commands_capability_file(marked)
+                .build()
+        };
+        let daemon = |id: &str, marked: bool| {
+            Daemon::new(id.to_string())
+                .code(DaemonCode::Image {
+                    image: "daemon:latest".to_string(),
+                })
+                .permissions("daemon-execution".to_string())
+                .commands_enabled(true)
+                .commands_capability_file(marked)
+                .build()
+        };
+        let stack = Stack::new("marker-stack".to_string())
+            .add(
+                container("old-container", false, true),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                container("new-container", true, true),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                container("quiet-container", false, false),
+                ResourceLifecycle::Live,
+            )
+            .add(daemon("old-daemon", false), ResourceLifecycle::Live)
+            .add(daemon("new-daemon", true), ResourceLifecycle::Live)
+            .build();
+
+        assert!(stack.command_receiver_reads_capability_file("new-container"));
+        assert!(stack.command_receiver_reads_capability_file("new-daemon"));
+        assert!(!stack.command_receiver_reads_capability_file("old-container"));
+        assert!(!stack.command_receiver_reads_capability_file("missing"));
+        // A resource that receives no commands has no receiver to wait for.
+        assert_eq!(
+            stack.command_receivers_without_capability_file(),
+            vec!["old-container".to_string(), "old-daemon".to_string()]
+        );
+
+        // The marker survives a release round trip; an old release has none.
+        let json = serde_json::to_value(&stack).unwrap();
+        let round_trip: Stack = serde_json::from_value(json.clone()).unwrap();
+        assert!(round_trip.command_receiver_reads_capability_file("new-daemon"));
+        let resource = &json["resources"]["old-daemon"]["config"];
+        assert!(
+            resource.get("commandsCapabilityFile").is_none(),
+            "{resource}"
+        );
+        assert_eq!(
+            json["resources"]["new-daemon"]["config"]["commandsCapabilityFile"],
+            true
+        );
+
+        // A stack stored by a build that predates the field reads as an old
+        // receiver, even for a resource that is marked today.
+        let mut stored_by_old_build = json.clone();
+        for id in ["new-container", "new-daemon"] {
+            stored_by_old_build["resources"][id]["config"]
+                .as_object_mut()
+                .unwrap()
+                .remove("commandsCapabilityFile");
+        }
+        let old_stack: Stack = serde_json::from_value(stored_by_old_build).unwrap();
+        // Resource order follows the JSON object's key order, which depends on
+        // whether the workspace turns on serde_json's `preserve_order`, so the
+        // set is compared, not its order.
+        let mut without_file = old_stack.command_receivers_without_capability_file();
+        without_file.sort();
+        assert_eq!(
+            without_file,
+            vec![
+                "new-container".to_string(),
+                "new-daemon".to_string(),
+                "old-container".to_string(),
+                "old-daemon".to_string()
+            ]
+        );
     }
 }

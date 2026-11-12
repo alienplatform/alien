@@ -4,6 +4,7 @@ mod stack;
 pub use stack::*;
 
 mod stack_commands;
+pub use stack_commands::ReceiverCommandCredential;
 
 mod stack_input;
 mod stack_input_resolution;

@@ -11,6 +11,7 @@ mod gcp_import;
 pub use gcp_import::GcpWorkerImporter;
 
 mod azure;
+mod azure_registry;
 pub use azure::*;
 
 mod azure_import;

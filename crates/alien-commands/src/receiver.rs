@@ -73,6 +73,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use alien_client_core::{
+    runtime_credentials::{RuntimeCredentialConfig, RuntimeCredentials, RuntimeProofProvider},
+    runtime_proofs::{GcpMetadataProof, SessionFileProof},
+};
 use alien_core::{
     ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS, ENV_ALIEN_COMMANDS_LEASE_SECONDS,
     ENV_ALIEN_COMMANDS_MAX_LEASES, ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
@@ -92,7 +96,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     error::{ErrorData, Result},
-    runtime::{command_budget, decode_params_bytes, submit_response_before, LeaseClient},
+    runtime::{
+        command_budget, decode_params_bytes, submit_response_before, LeaseClient,
+        COMMAND_RESPONSE_SUBMISSION_TIMEOUT,
+    },
     types::{
         CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest, TraceContext,
         DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES,
@@ -160,6 +167,7 @@ pub struct Context {
 
 #[derive(Debug, Clone)]
 enum TokenSource {
+    Runtime(Arc<alien_client_core::runtime_credentials::RuntimeCredentials>),
     Value(String),
     File {
         path: PathBuf,
@@ -186,12 +194,51 @@ impl TokenSource {
         }
     }
 
+    fn validate_endpoint(&self, endpoint: &Url) -> Result<()> {
+        if let Self::Runtime(credentials) = self {
+            if !credentials.allows_endpoint(endpoint.as_str()) {
+                return Err(AlienError::new(ErrorData::CommandReceiverConfigInvalid {
+                    message: "Command endpoint must use the configured manager origin".into(),
+                    env_var: ENV_ALIEN_COMMANDS_URL.into(),
+                }));
+            }
+        }
+        Ok(())
+    }
+
     fn refreshable(&self) -> bool {
-        matches!(self, Self::File { .. })
+        matches!(self, Self::File { .. } | Self::Runtime(_))
+    }
+
+    async fn read_after_rejection(&self, rejected: &str) -> Result<String> {
+        if let Self::Runtime(credentials) = self {
+            return credentials.token_after_rejection(rejected).await.context(
+                ErrorData::CommandReceiverConfigInvalid {
+                    message: "Cannot replace rejected command credential".into(),
+                    env_var: "ALIEN_IDENTITY_PROVIDER".into(),
+                },
+            );
+        }
+        self.read(true).await
+    }
+
+    async fn reject(&self, rejected: &str) {
+        if let Self::Runtime(credentials) = self {
+            credentials.reject(rejected).await;
+        }
     }
 
     async fn read(&self, force_refresh: bool) -> Result<String> {
         match self {
+            Self::Runtime(credentials) => {
+                credentials
+                    .token()
+                    .await
+                    .context(ErrorData::CommandReceiverConfigInvalid {
+                        message: "Cannot refresh command receiver credential".to_string(),
+                        env_var: "ALIEN_IDENTITY_PROVIDER".to_string(),
+                    })
+            }
             Self::Value(value) => Ok(value.clone()),
             Self::File { path, cached } => {
                 if !force_refresh {
@@ -315,6 +362,73 @@ impl Receiver {
     /// Build a receiver from an explicit environment map. Same contract as
     /// [`Receiver::from_env`]; useful for tests and embedding.
     pub fn from_env_vars(env: &HashMap<String, String>) -> Result<Self> {
+        if let Some(kind) = env.get("ALIEN_IDENTITY_PROVIDER") {
+            if kind == "capabilityFile" {
+                let credentials = RuntimeCredentials::from_capability_file(
+                    RuntimeCredentialConfig {
+                        manager_url: require_env(env, "ALIEN_MANAGER_URL")?.clone(),
+                        audience: require_env(env, "ALIEN_MANAGER_AUDIENCE")?.clone(),
+                        deployment_id: require_env(env, ENV_ALIEN_DEPLOYMENT_ID)?.clone(),
+                        purpose: serde_json::json!({"type":"receiveCommands"}),
+                    },
+                    require_env(env, "ALIEN_COMMANDS_CAPABILITY_FILE")?.into(),
+                )
+                .context(ErrorData::CommandReceiverConfigInvalid {
+                    message: "Invalid capability file configuration".into(),
+                    env_var: "ALIEN_COMMANDS_CAPABILITY_FILE".into(),
+                })?;
+                return Self::from_env_and_source(
+                    env,
+                    Some(TokenSource::Runtime(Arc::new(credentials))),
+                );
+            }
+            let proof: Arc<dyn RuntimeProofProvider> = match kind.as_str() {
+                "gcp" => Arc::new(GcpMetadataProof),
+                "session" => Arc::new(SessionFileProof(
+                    require_env(env, "ALIEN_SESSION_FILE")?.into(),
+                )),
+                _ => {
+                    return Err(AlienError::new(ErrorData::CommandReceiverConfigInvalid {
+                        message: "This identity provider requires an explicit proof provider"
+                            .into(),
+                        env_var: "ALIEN_IDENTITY_PROVIDER".into(),
+                    }))
+                }
+            };
+            return Self::from_env_with_identity(env, proof);
+        }
+        Self::from_env_and_source(env, None)
+    }
+
+    /// Build an identity-authenticated receiver. Stored legacy tokens in the
+    /// environment are ignored even when identity exchange fails.
+    pub fn from_env_with_identity(
+        env: &HashMap<String, String>,
+        proof: Arc<dyn alien_client_core::runtime_credentials::RuntimeProofProvider>,
+    ) -> Result<Self> {
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: require_env(env, "ALIEN_MANAGER_URL")?.clone(),
+                audience: require_env(env, "ALIEN_MANAGER_AUDIENCE")?.clone(),
+                deployment_id: require_env(env, ENV_ALIEN_DEPLOYMENT_ID)?.clone(),
+                purpose: serde_json::json!({"type":"receiveCommands", "target": {
+                    "resourceId":require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)?,
+                    "resourceType":require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE)?,
+                }}),
+            },
+            proof,
+        )
+        .context(ErrorData::CommandReceiverConfigInvalid {
+            message: "Invalid runtime identity configuration".to_string(),
+            env_var: "ALIEN_MANAGER_URL".to_string(),
+        })?;
+        Self::from_env_and_source(env, Some(TokenSource::Runtime(Arc::new(credentials))))
+    }
+
+    fn from_env_and_source(
+        env: &HashMap<String, String>,
+        source: Option<TokenSource>,
+    ) -> Result<Self> {
         let url_str = require_env(env, ENV_ALIEN_COMMANDS_URL)?;
         let url = Url::parse(url_str).map_err(|e| {
             AlienError::new(ErrorData::CommandReceiverConfigInvalid {
@@ -322,7 +436,11 @@ impl Receiver {
                 env_var: ENV_ALIEN_COMMANDS_URL.to_string(),
             })
         })?;
-        let token_source = TokenSource::from_env(env)?;
+        let token_source = match source {
+            Some(source) => source,
+            None => TokenSource::from_env(env)?,
+        };
+        token_source.validate_endpoint(&url)?;
         let deployment_id = require_env(env, ENV_ALIEN_DEPLOYMENT_ID)?.clone();
         let resource_id = require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)?.clone();
         let resource_type =
@@ -501,7 +619,9 @@ impl Receiver {
     /// Polls `POST {url}/commands/leases` every poll interval, dispatches
     /// each leased command to its handler concurrently, and submits
     /// responses. Retryable lease errors are logged and retried on the next
-    /// interval; non-retryable errors terminate the receiver. Returns after
+    /// interval; non-retryable errors terminate the receiver. With a token
+    /// file or a runtime credential, a missing, unreadable or rejected
+    /// credential is retried with backoff. Returns after
     /// [`ShutdownHandle::shutdown`]: no new lease poll starts once draining
     /// begins (a poll already in flight still completes and its leases are
     /// processed). In-flight commands may finish during the configured drain
@@ -666,6 +786,27 @@ impl Receiver {
     }
 
     async fn acquire_leases(&self, max_leases: usize) -> Result<Vec<LeaseInfo>> {
+        self.acquire_leases_once(max_leases)
+            .await
+            .map_err(|mut error| {
+                // A credential file can be missing, late or expired, and an
+                // exchange can fail for a while. Keep polling with backoff:
+                // a credential must not stop command delivery for good.
+                if self.token_source.refreshable()
+                    && matches!(
+                        error.code.as_str(),
+                        "COMMAND_RECEIVER_CONFIG_INVALID" | "COMMAND_RECEIVER_UNAUTHORIZED"
+                    )
+                {
+                    error.retryable = true;
+                }
+                error
+            })
+    }
+
+    async fn acquire_leases_once(&self, max_leases: usize) -> Result<Vec<LeaseInfo>> {
+        self.token_source
+            .validate_endpoint(self.lease_client.endpoint())?;
         let request = self.build_lease_request(max_leases);
         let token = self.token_source.read(false).await?;
         let result = self.lease_client.acquire_with_token(&request, &token).await;
@@ -674,11 +815,18 @@ impl Receiver {
             .is_err_and(|error| error.code == "COMMAND_RECEIVER_UNAUTHORIZED")
             && self.token_source.refreshable()
         {
-            let refreshed = self.token_source.read(true).await?;
-            return self
+            let refreshed = self.token_source.read_after_rejection(&token).await?;
+            let retry = self
                 .lease_client
                 .acquire_with_token(&request, &refreshed)
                 .await;
+            if retry
+                .as_ref()
+                .is_err_and(|error| error.code == "COMMAND_RECEIVER_UNAUTHORIZED")
+            {
+                self.token_source.reject(&refreshed).await;
+            }
+            return retry;
         }
         result
     }
@@ -727,6 +875,7 @@ async fn release_lease_with_rotation(
     token_source: &TokenSource,
     lease_id: &str,
 ) -> Result<()> {
+    token_source.validate_endpoint(client.endpoint())?;
     let token = token_source.read(false).await?;
     let result = client.release_with_token(lease_id, &token).await;
     if result
@@ -734,8 +883,48 @@ async fn release_lease_with_rotation(
         .is_err_and(|error| error.code == "COMMAND_RECEIVER_UNAUTHORIZED")
         && token_source.refreshable()
     {
-        let refreshed = token_source.read(true).await?;
-        return client.release_with_token(lease_id, &refreshed).await;
+        let refreshed = token_source.read_after_rejection(&token).await?;
+        let retry = client.release_with_token(lease_id, &refreshed).await;
+        if retry
+            .as_ref()
+            .is_err_and(|error| error.code == "COMMAND_RECEIVER_UNAUTHORIZED")
+        {
+            token_source.reject(&refreshed).await;
+        }
+        return retry;
+    }
+    result
+}
+
+async fn refresh_receiver_response_context(
+    client: &LeaseClient,
+    source: &TokenSource,
+    envelope: &mut crate::types::Envelope,
+    lease_id: &str,
+) -> Result<()> {
+    if !matches!(source, TokenSource::Runtime(_)) {
+        return Ok(());
+    }
+    source.validate_endpoint(client.endpoint())?;
+    let token = source.read(false).await?;
+    let result = client
+        .refresh_response_context(envelope, lease_id, &token)
+        .await;
+    if result
+        .as_ref()
+        .is_err_and(|error| error.code == "COMMAND_RECEIVER_UNAUTHORIZED")
+    {
+        let replacement = source.read_after_rejection(&token).await?;
+        let retry = client
+            .refresh_response_context(envelope, lease_id, &replacement)
+            .await;
+        if retry
+            .as_ref()
+            .is_err_and(|error| error.code == "COMMAND_RECEIVER_UNAUTHORIZED")
+        {
+            source.reject(&replacement).await;
+        }
+        return retry;
     }
     result
 }
@@ -852,7 +1041,7 @@ async fn process_receiver_lease(
         lease_expires_at,
         command_id,
         attempt,
-        envelope,
+        mut envelope,
     } = lease;
     let deadline = envelope.deadline;
 
@@ -881,7 +1070,31 @@ async fn process_receiver_lease(
     };
 
     let handler_status = command_response_status(&response).to_string();
-    let submit_status = match submit_response_before(&envelope, response, lease_expires_at).await {
+    let remaining_lease = (lease_expires_at - Utc::now())
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    let submission = tokio::time::timeout(
+        COMMAND_RESPONSE_SUBMISSION_TIMEOUT.min(remaining_lease),
+        async {
+            refresh_receiver_response_context(
+                &lease_client,
+                &token_source,
+                &mut envelope,
+                &lease_id,
+            )
+            .await?;
+            submit_response_before(&envelope, response, lease_expires_at).await
+        },
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(AlienError::new(ErrorData::HttpOperationFailed {
+            message: "Command response authorization and submission exceeded lease deadline".into(),
+            method: None,
+            url: None,
+        }))
+    });
+    let submit_status = match submission {
         Ok(()) => "submitted",
         Err(error) => {
             error!(
@@ -1152,34 +1365,6 @@ mod tests {
             "new-token"
         );
         std::fs::remove_file(path).expect("remove token file");
-    }
-
-    #[tokio::test]
-    async fn run_returns_terminal_token_file_error() {
-        let path = std::env::temp_dir().join(format!(
-            "alien-command-token-missing-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock after epoch")
-                .as_nanos()
-        ));
-        let mut env = full_env();
-        env.remove(ENV_ALIEN_COMMANDS_TOKEN);
-        env.insert(
-            ENV_ALIEN_COMMANDS_TOKEN_FILE.to_string(),
-            path.display().to_string(),
-        );
-        let receiver = Receiver::from_env_vars(&env).expect("valid file-token config");
-
-        let error = receiver
-            .run()
-            .await
-            .expect_err("a missing token file is a terminal configuration error");
-
-        assert_eq!(error.code, "COMMAND_RECEIVER_CONFIG_INVALID");
-        assert!(!error.retryable);
-        assert!(error.message.contains("Failed to read command token file"));
     }
 
     #[test]
@@ -1737,5 +1922,356 @@ mod tests {
             token.is_cancelled(),
             "ctx.cancellation must fire at budget expiry"
         );
+    }
+}
+
+#[cfg(all(test, feature = "test-utils", unix))]
+mod identity_lifecycle_tests {
+    use super::*;
+    use crate::test_utils::{test_inline_create_command, TestCommandServer};
+    use crate::types::CommandState;
+    use alien_client_core::runtime_credentials::RuntimeCredentialConfig;
+    use axum::{
+        body::{to_bytes, Body},
+        extract::State,
+        http::{Request, Response, StatusCode},
+        routing::post,
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+    use std::{
+        os::unix::fs::PermissionsExt,
+        sync::atomic::{AtomicI64, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct Fixture {
+        clock: Arc<AtomicI64>,
+        upstream: String,
+        proofs: Arc<std::sync::Mutex<Vec<String>>>,
+        commands: Arc<crate::server::CommandServer>,
+    }
+    async fn exchange(State(state): State<Fixture>, Json(request): Json<Value>) -> Json<Value> {
+        let now = state.clock.load(Ordering::SeqCst);
+        let expected = if now < 1_800_000_100 {
+            "parent-one"
+        } else if now < 1_800_000_200 {
+            "parent-two"
+        } else {
+            "parent-three"
+        };
+        assert_eq!(request["proof"]["token"], expected);
+        assert_eq!(request["purpose"]["type"], "receiveCommands");
+        state.proofs.lock().unwrap().push(expected.into());
+        Json(
+            json!({"token":format!("bounded-{now}"),"expiresAt":chrono::DateTime::from_timestamp(now+100,0).unwrap()}),
+        )
+    }
+    async fn forward(State(state): State<Fixture>, request: Request<Body>) -> Response<Body> {
+        let now = state.clock.load(Ordering::SeqCst);
+        let expected = format!("Bearer bounded-{now}");
+        if request.uri().path().contains("/commands/")
+            && request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                != Some(expected.as_str())
+        {
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Body::empty())
+                .unwrap();
+        }
+        if let Some(command_id) = request
+            .uri()
+            .path()
+            .strip_prefix("/v1/commands/")
+            .and_then(|path| path.strip_suffix("/response-context"))
+        {
+            let query =
+                url::form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
+                    .collect::<HashMap<_, _>>();
+            let lease_id = query.get("leaseId").expect("current lease is required");
+            let owner = state
+                .commands
+                .get_lease_owner(lease_id)
+                .await
+                .unwrap()
+                .expect("lease must be active");
+            assert_eq!(owner.0, command_id);
+            let handling = state
+                .commands
+                .refresh_response_handling(command_id, lease_id, None)
+                .await
+                .unwrap();
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&handling).unwrap()))
+                .unwrap();
+        }
+        let (parts, body) = request.into_parts();
+        let body = to_bytes(body, 1024 * 1024).await.unwrap();
+        let response = reqwest::Client::new()
+            .request(parts.method, format!("{}{}", state.upstream, parts.uri))
+            .headers(parts.headers)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let mut result = Response::builder()
+            .status(status)
+            .body(Body::from(response.bytes().await.unwrap()))
+            .unwrap();
+        *result.headers_mut() = headers;
+        result
+    }
+
+    struct FixtureProof;
+    #[async_trait::async_trait]
+    impl RuntimeProofProvider for FixtureProof {
+        async fn proof(&self, _: &str) -> alien_client_core::Result<Value> {
+            Ok(json!({"type":"session", "token":"fixture-parent"}))
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_origin_configuration_and_redirect_refused_before_delivery() {
+        let exchanges = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let deliveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager_url = format!("http://{}", manager.local_addr().unwrap());
+        let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let commands_url = format!("http://{}/v1", destination.local_addr().unwrap());
+        let manager_app = Router::new().route("/v1/identity/exchange", post({
+            let exchanges = exchanges.clone();
+            move || { let exchanges = exchanges.clone(); async move {
+                exchanges.fetch_add(1, Ordering::SeqCst);
+                Json(json!({"token":"fixture-bounded-authority", "expiresAt":chrono::Utc::now() + chrono::Duration::minutes(5)}))
+            }}
+        }));
+        let redirect_url = format!("{commands_url}/commands/leases");
+        let manager_app = manager_app.route(
+            "/v1/commands/leases",
+            post(move || {
+                let redirect_url = redirect_url.clone();
+                async move { axum::response::Redirect::temporary(&redirect_url) }
+            }),
+        );
+        let destination_app = Router::new().route(
+            "/v1/commands/leases",
+            post({
+                let deliveries = deliveries.clone();
+                move || {
+                    let deliveries = deliveries.clone();
+                    async move {
+                        deliveries.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({"leases":[]}))
+                    }
+                }
+            }),
+        );
+        let manager_server = tokio::spawn(async move {
+            axum::serve(manager, manager_app).await.unwrap();
+        });
+        let destination_server = tokio::spawn(async move {
+            axum::serve(destination, destination_app).await.unwrap();
+        });
+        let mut env = HashMap::from([
+            ("ALIEN_MANAGER_URL".into(), manager_url.clone()),
+            ("ALIEN_MANAGER_AUDIENCE".into(), "trusted-manager".into()),
+            (ENV_ALIEN_COMMANDS_URL.into(), commands_url),
+            (ENV_ALIEN_DEPLOYMENT_ID.into(), "deployment-one".into()),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.into(),
+                "receiver-one".into(),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.into(),
+                "daemon".into(),
+            ),
+        ]);
+        let result = Receiver::from_env_with_identity(&env, Arc::new(FixtureProof));
+        assert!(result.is_err());
+        assert_eq!(exchanges.load(Ordering::SeqCst), 0);
+        assert_eq!(deliveries.load(Ordering::SeqCst), 0);
+        // The direct capability-file mode must enforce the same destination
+        // boundary before opening the file or issuing a request.
+        env.insert("ALIEN_IDENTITY_PROVIDER".into(), "capabilityFile".into());
+        env.insert(
+            "ALIEN_COMMANDS_CAPABILITY_FILE".into(),
+            "/does-not-exist".into(),
+        );
+        assert!(Receiver::from_env_vars(&env).is_err());
+        env.remove("ALIEN_IDENTITY_PROVIDER");
+        env.insert(
+            "ALIEN_MANAGER_URL".into(),
+            manager_url.replacen("http:", "https:", 1),
+        );
+        assert!(Receiver::from_env_with_identity(&env, Arc::new(FixtureProof)).is_err());
+        assert_eq!(exchanges.load(Ordering::SeqCst), 0);
+        env.insert("ALIEN_MANAGER_URL".into(), manager_url.clone());
+        env.insert(ENV_ALIEN_COMMANDS_URL.into(), format!("{manager_url}/v1"));
+        let receiver = Receiver::from_env_with_identity(&env, Arc::new(FixtureProof)).unwrap();
+        assert!(receiver.acquire_leases(1).await.is_err());
+        assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+        assert_eq!(deliveries.load(Ordering::SeqCst), 0);
+        manager_server.abort();
+        destination_server.abort();
+        assert!(manager_server.await.unwrap_err().is_cancelled());
+        assert!(destination_server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn receiver_completes_real_commands_after_parent_file_replacement_and_expiry() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        let clock = Arc::new(AtomicI64::new(1_800_000_000));
+        let proofs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let upstream = reqwest::Url::parse(&server.command_base_url())
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route("/v1/identity/exchange", post(exchange))
+            .fallback(forward)
+            .with_state(Fixture {
+                clock: clock.clone(),
+                upstream,
+                proofs: proofs.clone(),
+                commands: server.command_server.clone(),
+            });
+        let proxy = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session");
+        std::fs::write(&path, "parent-one").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let env = HashMap::from([
+            (
+                ENV_ALIEN_COMMANDS_URL.into(),
+                format!(
+                    "{base}{}",
+                    reqwest::Url::parse(&server.command_base_url())
+                        .unwrap()
+                        .path()
+                ),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TOKEN.into(),
+                "legacy-must-not-be-used".into(),
+            ),
+            (ENV_ALIEN_DEPLOYMENT_ID.into(), "pull-agent".into()),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.into(),
+                server.default_target.resource_id.clone(),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.into(),
+                "daemon".into(),
+            ),
+        ]);
+        let observed_clock = clock.clone();
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: base,
+                audience: "test-manager".into(),
+                deployment_id: "pull-agent".into(),
+                purpose: json!({"type":"receiveCommands","target":server.default_target}),
+            },
+            Arc::new(SessionFileProof(path.clone())),
+        )
+        .unwrap()
+        .with_clock(Arc::new(move || {
+            chrono::DateTime::from_timestamp(observed_clock.load(Ordering::SeqCst), 0).unwrap()
+        }));
+        let mut receiver = Receiver::from_env_vars(&env)
+            .unwrap()
+            .with_poll_interval(Duration::from_millis(10));
+        receiver.token_source = TokenSource::Runtime(Arc::new(credentials));
+        receiver.command("sync-data", |input: Value, _| async move { Ok(input) });
+        let started = Arc::new(tokio::sync::Notify::new());
+        let finish = Arc::new(tokio::sync::Notify::new());
+        receiver.command("held-command", {
+            let started = started.clone();
+            let finish = finish.clone();
+            move |input: Value, _| {
+                let started = started.clone();
+                let finish = finish.clone();
+                async move {
+                    started.notify_one();
+                    finish.notified().await;
+                    Ok(input)
+                }
+            }
+        });
+        let shutdown = receiver.shutdown_handle();
+        receiver
+            .acquire_leases(1)
+            .await
+            .expect("initial lease poll must authenticate");
+        let run = tokio::spawn(async move { receiver.run().await });
+        let first = server
+            .create_command(test_inline_create_command("pull-agent", "sync-data"))
+            .await
+            .unwrap();
+        assert_eq!(
+            server
+                .wait_for_completion(&first.command_id, Duration::from_secs(5))
+                .await
+                .unwrap()
+                .state,
+            CommandState::Succeeded
+        );
+        let replacement = directory.path().join("session.next");
+        std::fs::write(&replacement, "parent-two").unwrap();
+        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        clock.store(1_800_000_100, Ordering::SeqCst);
+        let second = server
+            .create_command(test_inline_create_command("pull-agent", "sync-data"))
+            .await
+            .unwrap();
+        assert_eq!(
+            server
+                .wait_for_completion(&second.command_id, Duration::from_secs(5))
+                .await
+                .unwrap()
+                .state,
+            CommandState::Succeeded
+        );
+        let held = server
+            .create_command(test_inline_create_command("pull-agent", "held-command"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        std::fs::write(&replacement, "parent-three").unwrap();
+        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        clock.store(1_800_000_200, Ordering::SeqCst);
+        finish.notify_one();
+        assert_eq!(
+            server
+                .wait_for_completion(&held.command_id, Duration::from_secs(5))
+                .await
+                .unwrap()
+                .state,
+            CommandState::Succeeded
+        );
+        assert_eq!(
+            *proofs.lock().unwrap(),
+            ["parent-one", "parent-two", "parent-three"]
+        );
+        shutdown.shutdown();
+        run.await.unwrap().unwrap();
+        proxy.abort();
+        assert!(proxy.await.unwrap_err().is_cancelled());
     }
 }

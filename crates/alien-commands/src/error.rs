@@ -5,6 +5,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The receiver's authority expired before delegated credentials could be issued.
+    #[error(
+        code = "COMMAND_AUTHORITY_EXPIRED",
+        message = "Command receiver authority expired",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    CommandAuthorityExpired,
+
     /// Command validation failed or contains invalid data.
     #[error(
         code = "INVALID_COMMAND",
@@ -179,6 +189,24 @@ pub enum ErrorData {
         from: String,
         /// Attempted new state
         to: String,
+    },
+
+    /// A response came from a lease that another lease has replaced.
+    ///
+    /// 409: the command is held by a newer lease, and the receiver treats the
+    /// conflict as the command no longer being its own.
+    #[error(
+        code = "COMMAND_LEASE_SUPERSEDED",
+        message = "Lease '{lease_id}' no longer holds command '{command_id}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    LeaseSuperseded {
+        /// ID of the command
+        command_id: String,
+        /// ID of the lease that no longer holds it
+        lease_id: String,
     },
 
     /// Command has expired and can no longer be processed.

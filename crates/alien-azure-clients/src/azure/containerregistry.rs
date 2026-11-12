@@ -1,15 +1,15 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
-use crate::azure::long_running_operation::OperationResult;
+use crate::azure::long_running_operation::{LongRunningOperation, OperationResult};
 use crate::azure::models::containerregistry::{
-    GenerateCredentialsParameters, GenerateCredentialsResult, Registry, RegistryListResult,
-    RegistryUpdateParameters, ScopeMap, ScopeMapListResult, ScopeMapProperties,
+    GenerateCredentialsParameters, GenerateCredentialsResult, ImportImageParameters, Registry,
+    RegistryListResult, RegistryUpdateParameters, ScopeMap, ScopeMapListResult, ScopeMapProperties,
     ScopeMapUpdateParameters, Token, TokenListResult, TokenProperties, TokenUpdateParameters,
 };
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
-use alien_error::{Context, IntoAlienError};
-use reqwest::{Client, Method};
+use alien_error::{AlienError, Context, IntoAlienError};
+use reqwest::{redirect::Policy, Client, Method, StatusCode};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -62,6 +62,17 @@ pub trait ContainerRegistryApi: Send + Sync + std::fmt::Debug {
     ) -> Result<Registry>;
 
     async fn list_registries(&self, resource_group_name: Option<String>) -> Result<Vec<Registry>>;
+
+    /// Import an immutable source image without retaining source credentials.
+    async fn import_image(
+        &self,
+        resource_group_name: &str,
+        registry_name: &str,
+        parameters: &ImportImageParameters,
+    ) -> Result<OperationResult<()>>;
+
+    /// Poll an import without exposing provider response contents in errors.
+    async fn poll_image_import(&self, operation: &LongRunningOperation) -> Result<bool>;
 
     // ScopeMap operations
     async fn create_scope_map(
@@ -216,6 +227,191 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
             .await
     }
 
+    async fn import_image(
+        &self,
+        resource_group_name: &str,
+        registry_name: &str,
+        parameters: &ImportImageParameters,
+    ) -> Result<OperationResult<()>> {
+        let digest = parameters.source.source_image.split_once("@sha256:");
+        if !digest.is_some_and(|(repository, digest)| {
+            !repository.is_empty()
+                && digest.len() == 64
+                && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                message: "Image import requires an immutable SHA-256 source digest".into(),
+                field_name: Some("source.sourceImage".into()),
+            }));
+        }
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/importImage",
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
+            ),
+            Some(vec![("api-version", "2025-04-01".into())]),
+        );
+        let body = serde_json::to_string(parameters).map_err(|_| {
+            AlienError::new(ErrorData::SerializationError {
+                message: "Cannot encode image import request".into(),
+            })
+        })?;
+        let request = AzureRequestBuilder::new(Method::POST, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        let request_url = signed.url().clone();
+        // Import carries a transient source password. The generic request helper
+        // retains bodies in error context, and redirects could forward this body.
+        let client = Client::builder()
+            .redirect(Policy::none())
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|_| {
+                AlienError::new(ErrorData::HttpRequestFailed {
+                    message: "Cannot initialize image import transport".into(),
+                })
+            })?;
+        let response = client.execute(signed).await.map_err(|_| {
+            AlienError::new(ErrorData::HttpRequestFailed {
+                message: "Image import transport failed".into(),
+            })
+        })?;
+        let status = response.status();
+        if status.is_success() {
+            if let Some(operation) = LongRunningOperation::from_response_headers(&response)? {
+                for value in std::iter::once(&operation.url).chain(operation.location_url.iter()) {
+                    let same_origin = reqwest::Url::parse(value).is_ok_and(|url| {
+                        url.origin() == request_url.origin()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.fragment().is_none()
+                            && url.query_pairs().all(|(key, value)| {
+                                key == "api-version"
+                                    && value.len() <= 32
+                                    && value
+                                        .bytes()
+                                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                            })
+                    });
+                    if !same_origin {
+                        return Err(AlienError::new(ErrorData::HttpRequestFailed {
+                            message: "Image import returned an unauthorized polling endpoint"
+                                .into(),
+                        }));
+                    }
+                }
+                return Ok(OperationResult::LongRunning(operation));
+            }
+            if status == StatusCode::OK || status == StatusCode::NO_CONTENT {
+                return Ok(OperationResult::Completed(()));
+            }
+        }
+        let error = match status {
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ErrorData::AuthenticationError {
+                message: "Image import authorization was refused".into(),
+            },
+            StatusCode::NOT_FOUND => ErrorData::RemoteResourceNotFound {
+                resource_type: "ContainerRegistry".into(),
+                resource_name: registry_name.into(),
+            },
+            StatusCode::TOO_MANY_REQUESTS => ErrorData::RateLimitExceeded {
+                message: "Image import was rate limited".into(),
+            },
+            _ => ErrorData::HttpResponseError {
+                message: "Image import returned an unexpected status or missing operation handle"
+                    .into(),
+                url: request_url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: None,
+            },
+        };
+        Err(AlienError::new(error))
+    }
+
+    async fn poll_image_import(&self, operation: &LongRunningOperation) -> Result<bool> {
+        let invalid = || {
+            AlienError::new(ErrorData::HttpRequestFailed {
+                message: "Image import polling endpoint is invalid".into(),
+            })
+        };
+        let url = reqwest::Url::parse(&operation.url).map_err(|_| invalid())?;
+        let expected =
+            reqwest::Url::parse(self.token_cache.management_endpoint()).map_err(|_| invalid())?;
+        if url.origin() != expected.origin()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+            || !url.query_pairs().all(|(key, value)| {
+                key == "api-version"
+                    && value.len() <= 32
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+        {
+            return Err(invalid());
+        }
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let client = Client::builder()
+            .redirect(Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|_| invalid())?;
+        let mut response = client
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| {
+                AlienError::new(ErrorData::HttpRequestFailed {
+                    message: "Image import polling transport failed".into(),
+                })
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: "Image import polling failed".into(),
+                url: self.token_cache.management_endpoint().to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: None,
+            }));
+        }
+        if status == StatusCode::NO_CONTENT {
+            return Ok(true);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| invalid())? {
+            if bytes.len() + chunk.len() > 64 * 1024 {
+                return Err(invalid());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+            AlienError::new(ErrorData::SerializationError {
+                message: "Image import polling returned invalid status data".into(),
+            })
+        })?;
+        match value.get("status").and_then(serde_json::Value::as_str) {
+            Some("Succeeded") => Ok(true),
+            Some("Accepted" | "Running" | "InProgress") => Ok(false),
+            _ => Err(AlienError::new(ErrorData::HttpRequestFailed {
+                message: "Image import did not succeed".into(),
+            })),
+        }
+    }
+
     /// Delete a container registry
     async fn delete_registry(&self, resource_group_name: &str, registry_name: &str) -> Result<()> {
         let bearer_token = self
@@ -348,7 +544,8 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let path = if let Some(rg_name) = resource_group_name {
             format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries",
-                &self.token_cache.config().subscription_id, rg_name
+                &self.token_cache.config().subscription_id,
+                rg_name
             )
         } else {
             format!(
@@ -901,3 +1098,7 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "containerregistry_import_tests.rs"]
+mod import_tests;

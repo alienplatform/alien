@@ -44,7 +44,7 @@ pub async fn run_telemetry_loop(state: Arc<OperatorState>) {
     let mut dropped_total: usize = 0;
 
     loop {
-        match push_telemetry(&state, &client, &sync_config.url).await {
+        match push_pending_telemetry(&state, &client, &sync_config.url).await {
             Ok(outcome) => {
                 if outcome.pushed > 0 {
                     debug!(pushed = outcome.pushed, "Pushed telemetry to manager");
@@ -90,6 +90,7 @@ fn create_authenticated_client(token: &str) -> crate::error::Result<reqwest::Cli
     headers.insert(USER_AGENT, HeaderValue::from_static("operator"));
 
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -149,19 +150,12 @@ async fn read_rejection_body(mut response: reqwest::Response) -> String {
     String::from_utf8_lossy(&body).into_owned()
 }
 
-async fn push_telemetry(
+async fn push_pending_telemetry(
     state: &OperatorState,
     client: &reqwest::Client,
     base_url: &url::Url,
 ) -> crate::error::Result<PushOutcome> {
-    push_pending_telemetry(&state.db, client, base_url).await
-}
-
-async fn push_pending_telemetry(
-    db: &OperatorDb,
-    client: &reqwest::Client,
-    base_url: &url::Url,
-) -> crate::error::Result<PushOutcome> {
+    let db = &state.db;
     // Get pending telemetry
     let pending = db.get_pending_telemetry(100).await?;
 
@@ -191,12 +185,15 @@ async fn push_pending_telemetry(
             }
         };
 
-        let result = client
-            .post(endpoint)
-            .header("Content-Type", "application/x-protobuf")
-            .body(data.clone())
-            .send()
-            .await;
+        let result = crate::daily_identity::send_manager_request(
+            state,
+            serde_json::json!({"type":"telemetry"}),
+            client
+                .post(endpoint)
+                .header("Content-Type", "application/x-protobuf")
+                .body(data.clone()),
+        )
+        .await;
 
         match result {
             Ok(response) if response.status().is_success() => {
@@ -262,6 +259,8 @@ struct TelemetryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OperatorConfig;
+    use alien_core::Platform;
     use axum::{
         body::Bytes,
         extract::State,
@@ -274,6 +273,7 @@ mod tests {
         atomic::{AtomicU16, Ordering},
         Mutex,
     };
+    use tokio_util::sync::CancellationToken;
 
     const BAD: &[u8] = b"bad-timestamp";
     const TEST_ENCRYPTION_KEY: &str =
@@ -322,7 +322,8 @@ mod tests {
     }
 
     struct Harness {
-        db: OperatorDb,
+        state: OperatorState,
+        db: Arc<OperatorDb>,
         stub: Arc<Stub>,
         base_url: url::Url,
         client: reqwest::Client,
@@ -331,9 +332,23 @@ mod tests {
 
     async fn harness() -> Harness {
         let dir = tempfile::tempdir().unwrap();
-        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
-            .await
-            .unwrap();
+        let db = Arc::new(
+            OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
         let stub = Arc::new(Stub {
             bad_status: AtomicU16::new(400),
             ok_status: AtomicU16::new(200),
@@ -347,6 +362,7 @@ mod tests {
             url::Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Harness {
+            state,
             db,
             stub,
             base_url,
@@ -368,7 +384,7 @@ mod tests {
         h.db.store_telemetry("logs", BAD).await.unwrap();
         h.db.store_telemetry("logs", b"last").await.unwrap();
 
-        let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
+        let outcome = push_pending_telemetry(&h.state, &h.client, &h.base_url)
             .await
             .unwrap();
         assert_eq!(
@@ -381,7 +397,7 @@ mod tests {
         assert_eq!(pending_count(&h.db).await, 0);
 
         // A later pass must not send the dropped row again.
-        let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
+        let outcome = push_pending_telemetry(&h.state, &h.client, &h.base_url)
             .await
             .unwrap();
         assert_eq!(outcome, PushOutcome::default());
@@ -403,7 +419,7 @@ mod tests {
         let mut dropped = 0;
         let mut pushed = 0;
         for _ in 0..2 {
-            let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
+            let outcome = push_pending_telemetry(&h.state, &h.client, &h.base_url)
                 .await
                 .unwrap();
             dropped += outcome.dropped;
@@ -422,7 +438,7 @@ mod tests {
         h.db.store_telemetry("logs", BAD).await.unwrap();
 
         for _ in 0..2 {
-            let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
+            let outcome = push_pending_telemetry(&h.state, &h.client, &h.base_url)
                 .await
                 .unwrap();
             assert_eq!(outcome, PushOutcome::default());
@@ -432,7 +448,7 @@ mod tests {
 
         // Once the backend recovers, the same row goes through.
         h.stub.bad_status.store(200, Ordering::SeqCst);
-        let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
+        let outcome = push_pending_telemetry(&h.state, &h.client, &h.base_url)
             .await
             .unwrap();
         assert_eq!(
@@ -451,7 +467,7 @@ mod tests {
         for status in [401, 403, 408, 429] {
             h.stub.bad_status.store(status, Ordering::SeqCst);
             h.db.store_telemetry("logs", BAD).await.unwrap();
-            let outcome = push_pending_telemetry(&h.db, &h.client, &h.base_url)
+            let outcome = push_pending_telemetry(&h.state, &h.client, &h.base_url)
                 .await
                 .unwrap();
             assert_eq!(outcome, PushOutcome::default(), "status {status}");

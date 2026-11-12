@@ -193,6 +193,7 @@ mod tests {
         DeploymentConfig {
             image_registry: None,
             image_pull_secrets: Vec::new(),
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             deployment_name: None,
             stack_settings: StackSettings {

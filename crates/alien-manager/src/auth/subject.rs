@@ -336,8 +336,14 @@ pub enum Role {
     ProjectViewer,
     DeploymentManager,
     DeploymentTelemetryWriter,
+    /// Reconcile only the enrolled operator deployment.
+    OperatorSync,
+    /// Pull images without push or generic project access.
+    RegistryPull,
     DeploymentViewer,
     DeploymentGroupDeployer,
+    /// Local verified setup import only; never generic deployment or sync authority.
+    VerifiedSetupImporter,
     /// Inert outside command-specific authorization gates.
     CommandCapability,
     /// Inert outside signal-specific telemetry authorization.
@@ -357,6 +363,12 @@ pub enum Role {
     /// from another repository, provision, or any other project access. Paired with
     /// [`Scope::Project`]; covers every repository of the project unless `Authz` narrows by it.
     SandboxImagePusher,
+    /// Lease commands and answer them for one deployment, and nothing else.
+    ///
+    /// Paired with [`Scope::Deployment`]. It is the long-lived credential of a
+    /// command receiver built before capability files, which can only read its
+    /// credential from `ALIEN_COMMANDS_TOKEN`. Refused on every other route.
+    CommandsReceiver,
 }
 
 #[cfg(test)]

@@ -36,7 +36,10 @@ use crate::transports::containerapp::ContainerAppTransport;
 use crate::{
     config::{RuntimeConfig, TransportType},
     error::{ErrorData, Result},
-    otlp::{flush_otlp_logs, init_otlp_logging_from_config, shutdown_otlp_logs},
+    otlp::{
+        flush_otlp_logs, init_otlp_logging_from_config, init_otlp_logging_with_identity,
+        shutdown_otlp_logs,
+    },
     transports::local::LocalTransport,
 };
 
@@ -53,7 +56,7 @@ struct RuntimeSecretsConfig {
 
 #[derive(Clone)]
 struct CommandPushConfig {
-    token: String,
+    credential: crate::transports::local::CommandPushCredential,
     deployment_id: String,
     worker_resource_id: String,
 }
@@ -218,7 +221,24 @@ pub async fn run(
             std::collections::HashMap::new()
         };
 
-        let runtime_secrets = if let Some(ref provider) = bindings_provider {
+        let mut identity_env: HashMap<String, String> = std::env::vars().collect();
+        identity_env.extend(config.env_vars.clone());
+        // Telemetry must never decide whether the application runs. A broken
+        // identity configuration turns log export off and the app starts.
+        let (runtime_identity, export_logs) = match crate::identity::telemetry_credentials(
+            &identity_env,
+        )
+        .await
+        {
+            Ok(credentials) => (credentials, true),
+            Err(error) => {
+                warn!(error = %error, "Telemetry identity is unusable; app logs are not exported");
+                (None, false)
+            }
+        };
+        let runtime_secrets = if runtime_identity.is_some() || !export_logs {
+            HashMap::new()
+        } else if let Some(ref provider) = bindings_provider {
             load_runtime_secrets(&config, &**provider).await?
         } else {
             HashMap::new()
@@ -228,8 +248,12 @@ pub async fn run(
             .log_exporter
             .clone()
             .with_runtime_secrets(&runtime_secrets);
-        if let Some(otlp_config) = log_exporter.to_otlp_config() {
-            init_otlp_logging_from_config(otlp_config)?;
+        if let Some(otlp_config) = log_exporter.to_otlp_config().filter(|_| export_logs) {
+            if let Some(credentials) = runtime_identity {
+                init_otlp_logging_with_identity(otlp_config, credentials)?;
+            } else {
+                init_otlp_logging_from_config(otlp_config)?;
+            }
         }
 
         let command_push = command_push_config(&config, &secrets)?;
@@ -472,8 +496,8 @@ fn spawn_transport(
                 transport = transport.with_app_port(port);
             }
             if let Some(config) = command_push {
-                transport = transport.with_command_push(
-                    config.token,
+                transport = transport.with_command_push_credential(
+                    config.credential,
                     config.deployment_id,
                     config.worker_resource_id,
                 );
@@ -488,8 +512,8 @@ fn spawn_transport(
                 transport = transport.with_app_port(port);
             }
             if let Some(config) = command_push {
-                transport = transport.with_command_push(
-                    config.token,
+                transport = transport.with_command_push_credential(
+                    config.credential,
                     config.deployment_id,
                     config.worker_resource_id,
                 );
@@ -658,7 +682,13 @@ async fn start_application(
     // environment (the normal standalone Kubernetes path). Skipping an
     // explicit `cmd.env` is not enough: child processes inherit every parent
     // variable unless it is removed from the command environment.
-    for name in [ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS] {
+    for name in [
+        ENV_ALIEN_COMMANDS_TOKEN,
+        ENV_ALIEN_RUNTIME_SECRETS,
+        "ALIEN_SESSION_FILE",
+        "ALIEN_COMMANDS_CAPABILITY_FILE",
+        "ALIEN_TELEMETRY_CAPABILITY_FILE",
+    ] {
         cmd.env_remove(name);
     }
 
@@ -720,26 +750,29 @@ async fn start_application(
 }
 
 fn runtime_only_env(name: &str) -> bool {
-    matches!(name, ENV_ALIEN_RUNTIME_SECRETS | ENV_ALIEN_COMMANDS_TOKEN)
+    matches!(
+        name,
+        ENV_ALIEN_RUNTIME_SECRETS
+            | ENV_ALIEN_COMMANDS_TOKEN
+            | "ALIEN_SESSION_FILE"
+            | "ALIEN_COMMANDS_CAPABILITY_FILE"
+            | "ALIEN_TELEMETRY_CAPABILITY_FILE"
+    )
 }
 
 fn command_push_config(
     config: &RuntimeConfig,
     secrets: &HashMap<String, String>,
 ) -> Result<Option<CommandPushConfig>> {
-    let Some(token) = secrets
+    let capability_file = config.env_vars.get("ALIEN_COMMANDS_CAPABILITY_FILE");
+    let legacy_token = secrets
         .get(ENV_ALIEN_COMMANDS_TOKEN)
-        .or_else(|| config.env_vars.get(ENV_ALIEN_COMMANDS_TOKEN))
-        .cloned()
-    else {
+        .or_else(|| config.env_vars.get(ENV_ALIEN_COMMANDS_TOKEN));
+    if capability_file.is_none() && legacy_token.is_none() {
         return Ok(None);
-    };
-    if token.trim().is_empty() {
-        return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-            message: format!("{ENV_ALIEN_COMMANDS_TOKEN} must not be empty or whitespace"),
-            field: Some(ENV_ALIEN_COMMANDS_TOKEN.to_string()),
-        }));
     }
+    // An enrolled Operator sets both: the token is its push secret for
+    // runtimes that predate capability files. This runtime uses the file.
 
     let worker_resource_id = config
         .env_vars
@@ -769,8 +802,46 @@ fn command_push_config(
             })
         })?;
 
+    let credential = if let Some(path) = capability_file {
+        let required = |name: &str| {
+            config
+                .env_vars
+                .get(name)
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationInvalid {
+                        message: format!("{name} is required for bounded command credentials"),
+                        field: Some(name.into()),
+                    })
+                })
+        };
+        let credentials = alien_client_core::runtime_credentials::RuntimeCredentials::from_capability_file(
+            alien_client_core::runtime_credentials::RuntimeCredentialConfig {
+                manager_url: required("ALIEN_MANAGER_URL")?,
+                audience: required("ALIEN_MANAGER_AUDIENCE")?,
+                deployment_id: deployment_id.clone(),
+                purpose: serde_json::json!({"type":"receiveCommands","target":{"resourceId":worker_resource_id,"resourceType":"worker"}}),
+            },
+            path.into(),
+        ).context(ErrorData::ConfigurationInvalid {
+            message: "Invalid bounded command credential configuration".into(),
+            field: Some("ALIEN_COMMANDS_CAPABILITY_FILE".into()),
+        })?;
+        crate::transports::local::CommandPushCredential::File(Arc::new(credentials))
+    } else {
+        let token = legacy_token
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationInvalid {
+                    message: format!("{ENV_ALIEN_COMMANDS_TOKEN} must not be empty or whitespace"),
+                    field: Some(ENV_ALIEN_COMMANDS_TOKEN.into()),
+                })
+            })?;
+        crate::transports::local::CommandPushCredential::Legacy(token.clone())
+    };
     Ok(Some(CommandPushConfig {
-        token,
+        credential,
         deployment_id,
         worker_resource_id,
     }))

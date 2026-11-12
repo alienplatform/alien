@@ -35,6 +35,7 @@ get "publicEndpoints"(){
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
               },
+"runtimeIdentityExchange": z.optional(z.boolean().describe("Set by `alien build` when the Worker image was built on a runtime that\nexchanges its cloud identity for telemetry credentials. Absent means the\nimage may be older and still reads `ALIEN_RUNTIME_SECRETS`, so a deployer\nin identity mode keeps providing them. Build output replaces any value\nwritten in the stack definition.")),
 get "security"(){
                 return z.union([ContainerSecuritySchema, z.null()]).optional()
               },

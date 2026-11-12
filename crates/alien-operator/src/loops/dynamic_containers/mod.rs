@@ -407,13 +407,21 @@ pub async fn reconcile_saved(
     .context(ErrorData::DeploymentFailed {
         message: "Failed to initialize Kubernetes client for dynamic containers".to_string(),
     })?;
+    let pull_token = if state.config.sync.is_some() {
+        Some(
+            crate::daily_identity::request_token(state, serde_json::json!({"type":"registryPull"}))
+                .await?,
+        )
+    } else {
+        None
+    };
     let registry_auth = state.config.sync.as_ref().and_then(|sync| {
         let host = sync.url.host_str()?;
         let host = match sync.url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
         };
-        Some((host, sync.token.as_str()))
+        Some((host, pull_token.as_deref()?))
     });
     let deployment = state.db.get_deployment_state().await?;
     let installed_stack = deployment

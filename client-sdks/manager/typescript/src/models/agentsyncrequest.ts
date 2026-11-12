@@ -14,6 +14,11 @@ import {
   ExecutionClaim$outboundSchema,
 } from "./executionclaim.js";
 import {
+  InstalledSetup,
+  InstalledSetup$Outbound,
+  InstalledSetup$outboundSchema,
+} from "./installedsetup.js";
+import {
   ObservedApplicationReport,
   ObservedApplicationReport$Outbound,
   ObservedApplicationReport$outboundSchema,
@@ -83,11 +88,27 @@ export type AgentSyncRequest = {
    */
   dynamicContainers?: Array<DynamicContainerReport> | null | undefined;
   /**
+   * The Operator runs a settled release but lost its config (it cleared
+   *
+   * @remarks
+   * it in token mode, then enrolled). Answered with the current release.
+   */
+  installedConfigMissing?: boolean | undefined;
+  installedSetup?: InstalledSetup | null | undefined;
+  /**
    * Missing on actors that only understand protocol1.
    */
   maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   operationsConfig?: OperationsConfig | null | undefined;
   operatorImage?: OperatorImageReport | null | undefined;
+  /**
+   * The Operator rewrote the pull Secret its Deployment references from
+   *
+   * @remarks
+   * its own registry pull credential. Sent on every sync while that holds.
+   * The manager keeps the deployment token until it sees this.
+   */
+  pullSecretRefreshed?: boolean | undefined;
 };
 
 /** @internal */
@@ -105,9 +126,12 @@ export type AgentSyncRequest$Outbound = {
   supportsTunnels?: boolean | undefined;
   application?: ObservedApplicationReport$Outbound | null | undefined;
   dynamicContainers?: Array<DynamicContainerReport$Outbound> | null | undefined;
+  installedConfigMissing?: boolean | undefined;
+  installedSetup?: InstalledSetup$Outbound | null | undefined;
   maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   operationsConfig?: OperationsConfig$Outbound | null | undefined;
   operatorImage?: OperatorImageReport$Outbound | null | undefined;
+  pullSecretRefreshed?: boolean | undefined;
 };
 
 /** @internal */
@@ -130,9 +154,12 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   application: z.nullable(ObservedApplicationReport$outboundSchema).optional(),
   dynamicContainers: z.nullable(z.array(DynamicContainerReport$outboundSchema))
     .optional(),
+  installedConfigMissing: z.boolean().optional(),
+  installedSetup: z.nullable(InstalledSetup$outboundSchema).optional(),
   maxSupportedDeploymentProtocolVersion: z.nullable(z.int()).optional(),
   operationsConfig: z.nullable(OperationsConfig$outboundSchema).optional(),
   operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
+  pullSecretRefreshed: z.boolean().optional(),
 });
 
 export function agentSyncRequestToJSON(

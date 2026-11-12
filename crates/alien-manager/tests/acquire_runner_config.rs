@@ -98,7 +98,7 @@ struct Fixture {
 /// carries a command-enabled container, and one variable of its own. The
 /// record keeps the deployment token the command variables are built from
 /// unless `record_token` is false.
-async fn deployment_with_queued_update(record_token: bool) -> Fixture {
+async fn deployment_with_queued_update(manager_has_signing_key: bool) -> Fixture {
     alien_deployment::set_ephemeral_secrets_digest_key();
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let dir = temp_dir.path().to_path_buf();
@@ -140,7 +140,7 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
                 public_subdomain: None,
                 input_values: Default::default(),
                 setup_item: None,
-                deployment_token: record_token.then(|| deployment_token.clone()),
+                deployment_token: Some(deployment_token.clone()),
             },
         )
         .await
@@ -210,6 +210,11 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
         command_server,
         config: Arc::new(ManagerConfig {
             base_url: Some(MANAGER_URL.to_string()),
+            response_signing_key: if manager_has_signing_key {
+                b"test-signing-key".to_vec()
+            } else {
+                Vec::new()
+            },
             ..Default::default()
         }),
         bindings_provider: None,
@@ -300,6 +305,18 @@ async fn a_runner_that_acquires_an_update_gets_the_variables_the_manager_injects
     .expect("deploymentConfig deserializes as the CLI reads it");
 
     let api = Some(vec!["api".to_string()]);
+    // The container was built before capability files: it gets the commands-only
+    // key, and the deployment token never reaches a workload.
+    let commands_key = config
+        .environment_variables
+        .variables
+        .iter()
+        .find(|variable| variable.name == ENV_ALIEN_COMMANDS_TOKEN)
+        .expect("the receiver needs a commands token")
+        .value
+        .clone();
+    assert!(commands_key.starts_with("ax_cmds_"), "{commands_key}");
+    assert_ne!(commands_key, fixture.deployment_token);
     assert_eq!(
         config.environment_variables.variables,
         vec![
@@ -323,7 +340,7 @@ async fn a_runner_that_acquires_an_update_gets_the_variables_the_manager_injects
             ),
             variable(
                 ENV_ALIEN_COMMANDS_TOKEN,
-                &fixture.deployment_token,
+                &commands_key,
                 EnvironmentVariableType::Secret,
                 api.clone(),
             ),
@@ -362,8 +379,8 @@ async fn a_runner_that_acquires_an_update_gets_the_variables_the_manager_injects
 /// be there for the next runner.
 #[tokio::test]
 async fn an_acquire_whose_config_cannot_be_built_gives_back_the_lease() {
-    // Without a deployment token on the record, the command-enabled container
-    // has no commands token.
+    // A manager without a signing key cannot issue the commands key, so the
+    // command-enabled container has no commands token.
     let fixture = deployment_with_queued_update(false).await;
     fixture
         .store

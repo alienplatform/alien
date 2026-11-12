@@ -104,6 +104,7 @@ fn registered_setup_mounts_external_bindings() {
         .join("\n");
     let registered = files["values.yaml"]
         .replacen("  deploymentId: null", "  deploymentId: dep_existing", 1)
+        .replacen("  token: \"\"", "  token: ax_registered", 1)
         .replacen(
             "infrastructure: null",
             &format!("infrastructure:\n{bindings}"),

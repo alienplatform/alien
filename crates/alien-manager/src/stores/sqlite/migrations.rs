@@ -438,6 +438,24 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (scope, slot)
         )",
+        // One-use operator enrollment codes and daily operator keys, hashed.
+        "CREATE TABLE IF NOT EXISTS runtime_enrollment_codes (
+            code_hash TEXT PRIMARY KEY,
+            deployment_id TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            initial_key_hash TEXT
+        )",
+        "CREATE TABLE IF NOT EXISTS runtime_daily_keys (
+            deployment_id TEXT PRIMARY KEY,
+            key_hash TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            revision INTEGER NOT NULL
+        )",
+        // Generation of each deployment's commands key; see `auth::commands_key`.
+        "CREATE TABLE IF NOT EXISTS commands_key_generations (
+            deployment_id TEXT PRIMARY KEY,
+            generation INTEGER NOT NULL
+        )",
     ];
     for sql in channel_statements {
         conn.execute(sql, ())
@@ -449,6 +467,44 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
                     e.message
                 ))
             })?;
+    }
+
+    // Codes issued to a deployment group credential are marked, so enrolling
+    // with one checks again that the operator's key is not live. Older rows
+    // are not group codes.
+    if let Err(e) = conn
+        .execute(
+            "ALTER TABLE runtime_enrollment_codes ADD COLUMN from_group INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await
+    {
+        let msg = format!("{}", e);
+        if !msg.contains("duplicate column name") {
+            return Err(db_error(&format!(
+                "Enrollment code schema upgrade failed: {}",
+                msg
+            )));
+        }
+    }
+
+    // Codes made from a deployment token are marked, so they stop working once
+    // the deployment has an operator key. Older rows count as made by an admin.
+    // Tolerate the "duplicate column" failure on already-migrated databases.
+    if let Err(e) = conn
+        .execute(
+            "ALTER TABLE runtime_enrollment_codes ADD COLUMN from_token INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await
+    {
+        let msg = format!("{}", e);
+        if !msg.contains("duplicate column name") {
+            return Err(db_error(&format!(
+                "Enrollment code schema upgrade failed: {}",
+                msg
+            )));
+        }
     }
 
     let post_index_statements: &[&str] = &[

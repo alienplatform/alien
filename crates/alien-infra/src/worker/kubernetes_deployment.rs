@@ -138,6 +138,13 @@ pub(super) async fn build_worker_deployment(
     };
     crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
+    if ctx.deployment_config.runtime_identity_audience.is_some() {
+        crate::kubernetes_runtime_credentials::mount(
+            &mut pod_spec,
+            WORKER_CONTAINER_NAME,
+            function_name,
+        )?;
+    }
     Ok(Deployment {
         metadata: ObjectMeta {
             name: Some(function_name.to_string()),

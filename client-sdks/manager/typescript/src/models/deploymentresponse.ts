@@ -32,6 +32,19 @@ export type DeploymentResponse = {
   importSource?: ImportSourceKind | null | undefined;
   name: string;
   /**
+   * Whether that Operator is older than the Operator this manager's charts
+   *
+   * @remarks
+   * install, so the next chart version would upgrade it. Absent when the
+   * Operator version is unknown, isn't a release version, or this manager
+   * serves no charts.
+   */
+  operatorBehindTarget?: boolean | null | undefined;
+  /**
+   * Version of the Operator that last reported this deployment.
+   */
+  operatorVersion?: string | null | undefined;
+  /**
    * Represents the target cloud platform.
    */
   platform: PlatformEnum;
@@ -71,6 +84,8 @@ export const DeploymentResponse$inboundSchema: z.ZodType<
   id: z.string(),
   importSource: z.nullable(ImportSourceKind$inboundSchema).optional(),
   name: z.string(),
+  operatorBehindTarget: z.nullable(z.boolean()).optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
   platform: PlatformEnum$inboundSchema,
   projectId: z.string(),
   retryRequested: z.boolean(),

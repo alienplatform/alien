@@ -51,6 +51,12 @@ pub trait Authz: Send + Sync {
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
     fn can_read_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_update_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Import an already verified setup intent into an existing reservation.
+    /// A new setup role is denied until the policy explicitly opts in.
+    fn can_import_setup(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
+        subject.role != crate::auth::Role::VerifiedSetupImporter
+            && self.can_update_deployment(subject, deployment)
+    }
     /// `kind` and `resource_id` come from the release current at use, not at token issue.
     /// Implementations should apply `remote_binding_capability::resolve_decision`, then
     /// `write_authority_covers`: write authority must never reach a sandbox.

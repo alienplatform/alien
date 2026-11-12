@@ -16,8 +16,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, emit_profile_grants, permission_context, required_label,
-        resource_prefix_template, tags, ProfileGrants,
+        downcast, emit_profile_grants, permission_context, remote_stack_management_label,
+        required_label, resource_prefix_template, tags, ProfileGrants,
     },
     expr,
 };
@@ -104,6 +104,42 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
             ));
         }
 
+        // Management may verify the immutable pull principal before attaching
+        // this setup-owned identity. Reader is scoped to this identity only.
+        let management_observes_registry =
+            ctx.stack.management().profile().is_some_and(|profile| {
+                profile
+                    .0
+                    .get(ctx.resource_id)
+                    .into_iter()
+                    .flatten()
+                    .chain(profile.0.get("*").into_iter().flatten())
+                    .any(|permission| permission.id() == "artifact-registry/management")
+            });
+        if management_observes_registry {
+            if let Some(management_label) = remote_stack_management_label(ctx) {
+                fragment.resource_blocks.push(resource_block(
+                    "azurerm_role_assignment",
+                    &format!("{pull_label}_management_read"),
+                    [
+                        attr(
+                            "scope",
+                            expr::traversal(["azurerm_user_assigned_identity", &pull_label, "id"]),
+                        ),
+                        attr("role_definition_name", Expression::String("Reader".into())),
+                        attr(
+                            "principal_id",
+                            expr::traversal([
+                                "azurerm_user_assigned_identity",
+                                management_label,
+                                "principal_id",
+                            ]),
+                        ),
+                    ],
+                ));
+            }
+        }
+
         emit_profile_grants(
             ctx,
             &mut fragment,
@@ -141,6 +177,18 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
                     "azurerm_user_assigned_identity",
                     &pull_label,
                     "principal_id",
+                ]),
+            ),
+            (
+                "pullIdentityResourceId",
+                expr::traversal(["azurerm_user_assigned_identity", &pull_label, "id"]),
+            ),
+            (
+                "pullRoleAssignmentId",
+                expr::traversal([
+                    "azurerm_role_assignment",
+                    &format!("{pull_label}_role"),
+                    "id",
                 ]),
             ),
             (

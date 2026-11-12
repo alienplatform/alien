@@ -163,6 +163,9 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         Role::DeploymentViewer,
         Role::DeploymentTelemetryWriter,
         Role::RemoteBindingResolver,
+        Role::VerifiedSetupImporter,
+        Role::OperatorSync,
+        Role::CommandsReceiver,
     ] {
         subjects.insert(token(role), subject(deployment_scope.clone(), role));
     }
@@ -247,7 +250,12 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
         "charts/files/manifests/0.1.0",
         "alien-operator/manifests/v1",
     ] {
-        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+        for role in [
+            Role::ImageRepositoryProvisioner,
+            Role::SandboxImagePusher,
+            Role::VerifiedSetupImporter,
+            Role::OperatorSync,
+            ] {
             let (status, body) = pull(&state, role, path).await;
             assert_eq!(
                 status,
@@ -265,6 +273,94 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
             "developer pulling {path}: {body}"
         );
     }
+}
+
+/// Before it enrolls, an operator pulls its own image from the manager with
+/// its one-hour code, the only credential its chart holds. The code pulls the
+/// Operator image and nothing else, and stops working when it expires.
+#[tokio::test]
+async fn an_enrollment_code_pulls_only_the_operator_image() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let (mut state, deployment_id, _directory) = state().await;
+    let upstream = MockServer::start_async().await;
+    let manifest = upstream
+        .mock_async(|when, then| {
+            when.method(GET).path("/v2/ops/alien-operator/manifests/v1");
+            then.status(200)
+                .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+                .body("{\"schemaVersion\":2}");
+        })
+        .await;
+    let identity_directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(
+        alien_manager::stores::sqlite::SqliteRuntimeIdentityStore::new(Arc::new(
+            SqliteDatabase::new(&identity_directory.path().join("id.db").to_string_lossy())
+                .await
+                .unwrap(),
+        )),
+    );
+    let now = Arc::new(std::sync::Mutex::new(chrono::Utc::now()));
+    let clock = now.clone();
+    let verifier = alien_manager::auth::standalone_identity::StandaloneRuntimeIdentity::with_clock(
+        store.clone(),
+        state.deployment_store.clone(),
+        Arc::new(NoCredentials),
+        Arc::new(move || *clock.lock().unwrap()),
+    )
+    .unwrap();
+    let mut charts = alien_manager::routes::charts::ChartSettings::new(
+        Some(format!("{}/ops/alien-operator:v1", upstream.address())),
+        true,
+    );
+    charts.enrollment_codes = Some(Arc::new(verifier));
+    state.charts = Some(Arc::new(charts));
+    let (code, _) = store
+        .issue_enrollment_code(&deployment_id, *now.lock().unwrap())
+        .await
+        .unwrap();
+
+    let basic_pull = |password: String, path: &'static str| {
+        let state = state.clone();
+        async move {
+            let request = Request::builder()
+                .uri(format!("/v2/{path}"))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Basic {}", STANDARD.encode(format!("prod:{password}"))),
+                )
+                .body(Body::empty())
+                .unwrap();
+            let response = alien_manager::routes::registry_proxy::router()
+                .with_state(state)
+                .oneshot(request)
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, String::from_utf8_lossy(&body).into_owned())
+        }
+    };
+
+    let (status, body) = basic_pull(code.clone(), "alien-operator/manifests/v1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, "{\"schemaVersion\":2}");
+    manifest.assert_hits_async(1).await;
+
+    // The code opens no other repository.
+    let (status, _) = basic_pull(code.clone(), "artifacts/default/manifests/v1").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // An unknown code pulls nothing.
+    let (status, _) = basic_pull(
+        "ax_enroll_unknown".to_string(),
+        "alien-operator/manifests/v1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // After its hour the code pulls nothing.
+    *now.lock().unwrap() += chrono::Duration::hours(1);
+    let (status, _) = basic_pull(code, "alien-operator/manifests/v1").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    manifest.assert_hits_async(1).await;
 }
 
 struct LocalVaultCredentials(String);
@@ -619,5 +715,1733 @@ async fn vault_get_kubernetes_missing_key_is_404() {
 async fn vault_get_provider_denials_stay_internal_errors() {
     for backend in ["aws", "gcp", "azure", "kubernetes"] {
         cloud_vault_get(backend, false).await;
+    }
+}
+
+mod runtime_credentials {
+    use super::*;
+    use alien_manager::auth::identity_exchange::{RuntimeIdentityProof, VerifiedRuntimeIdentity};
+    use alien_manager::auth::runtime_capability::{
+        RuntimeAuthValidator, RuntimeCredentials, RuntimeGrant, RuntimePurpose,
+    };
+    use chrono::{TimeZone, Utc};
+    use opentelemetry_proto::tonic::{
+        collector::logs::v1::ExportLogsServiceRequest,
+        common::v1::{any_value, AnyValue},
+        logs::v1::{LogRecord, ResourceLogs, ScopeLogs},
+    };
+    use prost::Message;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    fn credentials(audience: &str, clock: Arc<AtomicI64>) -> Arc<RuntimeCredentials> {
+        Arc::new(
+            RuntimeCredentials::with_clock(
+                audience.to_owned(),
+                [7; 32],
+                Arc::new(move || Utc.timestamp_opt(clock.load(Ordering::SeqCst), 0).unwrap()),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn grant(deployment_id: &str) -> RuntimeGrant {
+        RuntimeGrant {
+            workspace_id: "default".into(),
+            project_id: "default".into(),
+            deployment_id: deployment_id.into(),
+            component_id: "worker-a".into(),
+            purpose: RuntimePurpose::Telemetry,
+        }
+    }
+
+    async fn logs(state: &AppState, bearer: &str) -> StatusCode {
+        let payload = ExportLogsServiceRequest {
+            resource_logs: vec![ResourceLogs {
+                scope_logs: vec![ScopeLogs {
+                    log_records: vec![LogRecord {
+                        body: Some(AnyValue {
+                            value: Some(any_value::Value::StringValue("runtime log".into())),
+                        }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        }
+        .encode_to_vec();
+        axum::Router::new()
+            .route(
+                "/v1/logs",
+                axum::routing::post(alien_manager::routes::telemetry::ingest_logs),
+            )
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/logs")
+                    .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                    .header("x-deployment-id", "different-deployment")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn bounded_telemetry_reaches_its_deployment_and_stops_exactly_at_expiry() {
+        let (mut state, deployment_id, _tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(1_800_000_000));
+        let credentials = credentials("manager-a", clock.clone());
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials.clone(),
+            state.auth_validator,
+        ));
+        state.telemetry_backend = Arc::new(
+            alien_manager::providers::in_memory_telemetry::InMemoryTelemetryBackend::new(
+                state.log_buffer.clone(),
+            ),
+        );
+        let now = Utc.timestamp_opt(clock.load(Ordering::SeqCst), 0).unwrap();
+        let bearer = credentials
+            .issue(grant(&deployment_id), now + chrono::Duration::hours(4))
+            .unwrap()
+            .token;
+        assert_eq!(logs(&state, &bearer).await, StatusCode::OK);
+        let entries = state.log_buffer.get_entries(None, 100).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].deployment_id, deployment_id);
+        assert_eq!(entries[0].body, "runtime log");
+        clock.fetch_add(3599, Ordering::SeqCst);
+        assert_eq!(logs(&state, &bearer).await, StatusCode::OK);
+        clock.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(logs(&state, &bearer).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(state.log_buffer.get_entries(None, 100).await.len(), 2);
+        let fresh = credentials
+            .issue(grant(&deployment_id), now + chrono::Duration::hours(4))
+            .unwrap()
+            .token;
+        assert_eq!(logs(&state, &fresh).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn parent_deadline_and_manager_audience_cannot_be_extended_or_replaced() {
+        let (mut state, deployment_id, _tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(1_800_000_000));
+        let issuer = credentials("manager-a", clock.clone());
+        let deadline = Utc.timestamp_opt(1_800_000_010, 0).unwrap();
+        let bearer = issuer.issue(grant(&deployment_id), deadline).unwrap().token;
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials("manager-b", clock.clone()),
+            state.auth_validator.clone(),
+        ));
+        assert_eq!(logs(&state, &bearer).await, StatusCode::UNAUTHORIZED);
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            issuer.clone(),
+            state.auth_validator.clone(),
+        ));
+        clock.fetch_add(9, Ordering::SeqCst);
+        let replay = issuer.issue(grant(&deployment_id), deadline).unwrap().token;
+        assert_eq!(logs(&state, &replay).await, StatusCode::OK);
+        clock.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(logs(&state, &bearer).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(logs(&state, &replay).await, StatusCode::UNAUTHORIZED);
+        assert!(issuer.issue(grant(&deployment_id), deadline).is_err());
+    }
+
+    struct NoLegacyFallback;
+
+    #[async_trait]
+    impl AuthValidator for NoLegacyFallback {
+        async fn validate(
+            &self,
+            _headers: &http::HeaderMap,
+        ) -> Result<Option<Subject>, AlienError> {
+            panic!("Runtime credential reached legacy authentication");
+        }
+    }
+
+    #[tokio::test]
+    async fn modified_capability_never_falls_back_to_legacy_authentication() {
+        let (mut state, deployment_id, _tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(1_800_000_000));
+        let credentials = credentials("manager-a", clock);
+        let bearer = credentials
+            .issue(
+                grant(&deployment_id),
+                Utc.timestamp_opt(1_800_003_600, 0).unwrap(),
+            )
+            .unwrap()
+            .token;
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials,
+            Arc::new(NoLegacyFallback),
+        ));
+        let (payload, signature) = bearer.split_once('.').unwrap();
+        let forged = format!("{payload}A.{signature}");
+        assert_eq!(logs(&state, &forged).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            logs(&state, "ax_cap_v2_unknown").await,
+            StatusCode::UNAUTHORIZED
+        );
+        let basic = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            format!("runtime:{forged}"),
+        );
+        let response = alien_manager::routes::telemetry::ingest_logs(
+            axum::extract::State(state),
+            [(
+                header::AUTHORIZATION,
+                format!("Basic {basic}").parse().unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+            bytes::Bytes::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn runtime_purposes_cannot_read_release_mint_tokens_or_delete_deployment() {
+        let (mut state, deployment_id, _tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(1_800_000_000));
+        let credentials = credentials("manager-a", clock);
+        let deadline = Utc.timestamp_opt(1_800_003_600, 0).unwrap();
+        let release = state
+            .release_store
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "default".into(),
+                    stacks: HashMap::from([(
+                        Platform::Kubernetes,
+                        Stack::new("test".to_owned()).build(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials.clone(),
+            state.auth_validator,
+        ));
+        let router = alien_manager::routes::releases::router()
+            .merge(alien_manager::routes::tokens::router())
+            .merge(alien_manager::routes::vault::router())
+            .merge(alien_manager::routes::bindings::router())
+            .merge(alien_manager::routes::deployments::router())
+            .with_state(state.clone());
+        for purpose in [
+            RuntimePurpose::OperatorSync,
+            RuntimePurpose::RegistryPull,
+            RuntimePurpose::OperatorOperations,
+            RuntimePurpose::OperationRelay {
+                target: alien_core::CommandTarget::new(
+                    "worker-a",
+                    alien_core::CommandTargetType::Worker,
+                ),
+            },
+            RuntimePurpose::Telemetry,
+            RuntimePurpose::ReceiveCommands {
+                target: alien_core::CommandTarget::new(
+                    "worker-a",
+                    alien_core::CommandTargetType::Worker,
+                ),
+            },
+        ] {
+            let mut grant = grant(&deployment_id);
+            grant.purpose = purpose;
+            let bearer = credentials.issue(grant, deadline).unwrap().token;
+            let bindings_body =
+                json!({"deploymentId": deployment_id, "resourceId": "storage"}).to_string();
+            for (method, path, body) in [
+                (
+                    "POST",
+                    "/v1/bindings/resolve".into(),
+                    bindings_body.as_str(),
+                ),
+                ("GET", format!("/v1/releases/{}", release.id), ""),
+                (
+                    "GET",
+                    format!("/v1/deployments/{deployment_id}/vault/secrets/secrets/TEST_KEY"),
+                    "",
+                ),
+                (
+                    "POST",
+                    format!("/v1/deployments/{deployment_id}/delete"),
+                    r#"{"action":"retain"}"#,
+                ),
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(&path)
+                            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(body.to_owned()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            }
+        }
+        let deployment = state
+            .deployment_store
+            .get_deployment(&Subject::system(), &deployment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deployment.status, "running");
+        assert!(state.token_store.list_tokens().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn receiver_authority_expires_with_parent_and_fresh_receiver_can_refresh() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
+        let server_clock = clock.clone();
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target("worker-a", alien_core::CommandTargetType::Worker)
+            .await
+            .unwrap();
+        state.command_server = Arc::new(
+            CommandServer::new(
+                state.kv.clone(),
+                Arc::new(
+                    LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                        .unwrap(),
+                ),
+                Arc::new(NullCommandDispatcher),
+                registry,
+                "http://localhost:0/v1".to_owned(),
+                b"test-signing-key".to_vec(),
+            )
+            .with_clock(Arc::new(move || {
+                Utc.timestamp_opt(server_clock.load(Ordering::SeqCst), 0)
+                    .unwrap()
+            })),
+        );
+        let created = state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.clone(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"hello"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some("worker-a".to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap();
+        let issuer = credentials("manager-a", clock.clone());
+        let mut authority = grant(&deployment_id);
+        authority.purpose = RuntimePurpose::ReceiveCommands {
+            target: alien_core::CommandTarget::new(
+                "worker-a",
+                alien_core::CommandTargetType::Worker,
+            ),
+        };
+        let deadline = Utc
+            .timestamp_opt(clock.load(Ordering::SeqCst) + 30, 0)
+            .unwrap();
+        let issued = issuer.issue(authority.clone(), deadline).unwrap();
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            issuer.clone(),
+            state.auth_validator,
+        ));
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let response = router.clone().oneshot(Request::builder().method("POST").uri("/v1/commands/leases")
+            .header(header::AUTHORIZATION, format!("Bearer {}", issued.token))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&json!({"deploymentId": deployment_id, "target": {"resourceId": "worker-a", "resourceType": "worker"}, "maxLeases": 1, "leaseSeconds": 60})).unwrap())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let leases: alien_core::LeaseResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(leases.leases.len(), 1);
+        let callback = &leases.leases[0]
+            .envelope
+            .response_handling
+            .submit_response_url;
+        let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
+        let callback = base.join(callback).unwrap();
+        assert!(
+            leases.leases[0]
+                .envelope
+                .response_handling
+                .storage_upload_request
+                .expiration
+                <= leases.leases[0].lease_expires_at
+        );
+        let callback_expiry = callback
+            .query_pairs()
+            .find(|(key, _)| key == "expires")
+            .unwrap()
+            .1
+            .parse::<i64>()
+            .unwrap();
+        // The result credential follows the lease, not the receiver's
+        // shorter credential.
+        assert_eq!(
+            callback_expiry,
+            leases.leases[0].lease_expires_at.timestamp()
+        );
+        clock.store(deadline.timestamp(), Ordering::SeqCst);
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&created.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Dispatched
+        );
+        let context_path = format!(
+            "/v1/commands/{}/response-context?leaseId={}",
+            created.command_id, leases.leases[0].lease_id
+        );
+        let old_context = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&context_path)
+                    .header(header::AUTHORIZATION, format!("Bearer {}", issued.token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(old_context.status(), StatusCode::UNAUTHORIZED);
+        let fresh_deadline = deadline + chrono::Duration::seconds(60);
+        let mut wrong = authority.clone();
+        wrong.purpose = RuntimePurpose::ReceiveCommands {
+            target: alien_core::CommandTarget::new(
+                "worker-b",
+                alien_core::CommandTargetType::Worker,
+            ),
+        };
+        let wrong = issuer.issue(wrong, fresh_deadline).unwrap();
+        let denied = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&context_path)
+                    .header(header::AUTHORIZATION, format!("Bearer {}", wrong.token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let fresh = issuer.issue(authority, fresh_deadline).unwrap();
+        let wrong_lease = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/commands/{}/response-context?leaseId=lease_wrong",
+                        created.command_id
+                    ))
+                    .header(header::AUTHORIZATION, format!("Bearer {}", fresh.token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong_lease.status(), StatusCode::NOT_FOUND);
+        let refreshed = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&context_path)
+                    .header(header::AUTHORIZATION, format!("Bearer {}", fresh.token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        let handling: alien_core::ResponseHandling =
+            serde_json::from_slice(&to_bytes(refreshed.into_body(), 65536).await.unwrap()).unwrap();
+        assert!(handling.storage_upload_request.expiration <= fresh_deadline);
+        assert!(handling.storage_upload_request.expiration <= leases.leases[0].lease_expires_at);
+        let callback = url::Url::parse(&handling.submit_response_url).unwrap();
+        let path = format!("{}?{}", callback.path(), callback.query().unwrap());
+        let completed = router
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&alien_core::SubmitResponseRequest {
+                            response: alien_core::CommandResponse::success(b"fresh authority"),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(completed.status(), StatusCode::OK);
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&created.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn long_command_still_completes_after_the_relay_capability_expires() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
+        let server_clock = clock.clone();
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target("worker-a", alien_core::CommandTargetType::Worker)
+            .await
+            .unwrap();
+        state.command_server = Arc::new(
+            CommandServer::new(
+                state.kv.clone(),
+                Arc::new(
+                    LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                        .unwrap(),
+                ),
+                Arc::new(NullCommandDispatcher),
+                registry,
+                "http://localhost:0/v1".to_owned(),
+                b"test-signing-key".to_vec(),
+            )
+            .with_clock(Arc::new(move || {
+                Utc.timestamp_opt(server_clock.load(Ordering::SeqCst), 0)
+                    .unwrap()
+            })),
+        );
+        let mut command_ids = Vec::new();
+        for _ in 0..2 {
+            command_ids.push(
+                state
+                    .command_server
+                    .create_command(alien_core::CreateCommandRequest {
+                        deployment_id: deployment_id.clone(),
+                        command: "echo".to_owned(),
+                        params: alien_core::BodySpec::inline(b"hello"),
+                        deadline: None,
+                        idempotency_key: None,
+                        target_resource_id: Some("worker-a".to_owned()),
+                        operation_result_contract: None,
+                    })
+                    .await
+                    .unwrap()
+                    .command_id,
+            );
+        }
+        // The operator's relay capability lasts five minutes. The command it
+        // leases may run for an hour.
+        let issuer = credentials("manager-a", clock.clone());
+        let mut authority = grant(&deployment_id);
+        authority.purpose = RuntimePurpose::ReceiveCommands {
+            target: alien_core::CommandTarget::new(
+                "worker-a",
+                alien_core::CommandTargetType::Worker,
+            ),
+        };
+        let relay_deadline = Utc
+            .timestamp_opt(clock.load(Ordering::SeqCst) + 300, 0)
+            .unwrap();
+        let issued = issuer.issue(authority, relay_deadline).unwrap();
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(issuer, state.auth_validator));
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let response = router.clone().oneshot(Request::builder().method("POST").uri("/v1/commands/leases")
+            .header(header::AUTHORIZATION, format!("Bearer {}", issued.token))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&json!({"deploymentId": deployment_id, "target": {"resourceId": "worker-a", "resourceType": "worker"}, "maxLeases": 2, "leaseSeconds": 3660})).unwrap())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let leases: alien_core::LeaseResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(leases.leases.len(), 2);
+        let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
+        let submit_path = |lease: &alien_core::LeaseInfo| {
+            let callback = base
+                .join(&lease.envelope.response_handling.submit_response_url)
+                .unwrap();
+            format!("{}?{}", callback.path(), callback.query().unwrap())
+        };
+        let submit = |path: String, body: &'static [u8]| {
+            let router = router.clone();
+            async move {
+                router
+                    .oneshot(
+                        Request::builder()
+                            .method("PUT")
+                            .uri(path)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                serde_json::to_vec(&alien_core::SubmitResponseRequest {
+                                    response: alien_core::CommandResponse::success(body),
+                                })
+                                .unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+
+        // Ten minutes in: the relay capability is long gone.
+        clock.fetch_add(600, Ordering::SeqCst);
+        assert_eq!(
+            submit(submit_path(&leases.leases[0]), b"ten minutes").await,
+            StatusCode::OK,
+            "a command still inside its lease must be able to report its result"
+        );
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&leases.leases[0].command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Succeeded
+        );
+
+        // The result credential still ends with the lease.
+        clock.store(
+            leases.leases[1].lease_expires_at.timestamp(),
+            Ordering::SeqCst,
+        );
+        assert_eq!(
+            submit(submit_path(&leases.leases[1]), b"too late").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn command_receiver_is_bound_to_target_deployment_and_five_minutes() {
+        async fn request(
+            router: &axum::Router,
+            bearer: &str,
+            method: &str,
+            path: &str,
+            body: Value,
+        ) -> axum::response::Response {
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+
+        let (mut state, deployment_id, tmp) = state().await;
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target("worker-a", alien_core::CommandTargetType::Worker)
+            .await
+            .unwrap();
+        state.command_server = Arc::new(CommandServer::new(
+            state.kv.clone(),
+            Arc::new(
+                LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                    .unwrap(),
+            ),
+            Arc::new(NullCommandDispatcher),
+            registry,
+            "http://localhost:0/v1".to_owned(),
+            b"test-signing-key".to_vec(),
+        ));
+        let created = state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.clone(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"hello"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some("worker-a".to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.state, alien_core::CommandState::Pending);
+        let clock = Arc::new(AtomicI64::new(1_800_000_000));
+        let credentials = credentials("manager-a", clock.clone());
+        let receiver = |deployment: &str, resource: &str| {
+            let mut grant = grant(deployment);
+            grant.purpose = RuntimePurpose::ReceiveCommands {
+                target: alien_core::CommandTarget::new(
+                    resource,
+                    alien_core::CommandTargetType::Worker,
+                ),
+            };
+            credentials
+                .issue(grant, Utc.timestamp_opt(1_800_003_600, 0).unwrap())
+                .unwrap()
+                .token
+        };
+        let bearer = receiver(&deployment_id, "worker-a");
+        let wrong_target = receiver(&deployment_id, "worker-b");
+        let wrong_deployment = receiver("other-deployment", "worker-a");
+        let mut typed_grant = grant(&deployment_id);
+        typed_grant.purpose = RuntimePurpose::ReceiveCommands {
+            target: alien_core::CommandTarget::new(
+                "worker-a",
+                alien_core::CommandTargetType::Container,
+            ),
+        };
+        let wrong_type = credentials
+            .issue(typed_grant, Utc.timestamp_opt(1_800_003_600, 0).unwrap())
+            .unwrap()
+            .token;
+        let mut reserved = grant(&deployment_id);
+        reserved.purpose = RuntimePurpose::ReceiveCommands {
+            target: alien_core::CommandTarget::new(
+                alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Daemon,
+            ),
+        };
+        assert!(credentials
+            .issue(reserved, Utc.timestamp_opt(1_800_003_600, 0).unwrap())
+            .is_err());
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials.clone(),
+            state.auth_validator.clone(),
+        ));
+        assert_eq!(logs(&state, &bearer).await, StatusCode::FORBIDDEN);
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let lease_body = json!({"deploymentId": deployment_id, "target": {
+            "resourceId": "worker-a", "resourceType": "worker"
+        }, "maxLeases": 1, "leaseSeconds": 60});
+        for denied in [&wrong_target, &wrong_deployment, &wrong_type] {
+            assert_eq!(
+                request(
+                    &router,
+                    denied,
+                    "POST",
+                    "/v1/commands/leases",
+                    lease_body.clone()
+                )
+                .await
+                .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        let response = request(
+            &router,
+            &bearer,
+            "POST",
+            "/v1/commands/leases",
+            lease_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let leases: alien_core::LeaseResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(leases.leases.len(), 1);
+        assert_eq!(leases.leases[0].command_id, created.command_id);
+        assert_eq!(leases.leases[0].envelope.command, "echo");
+        let release_path = format!("/v1/commands/leases/{}/release", leases.leases[0].lease_id);
+        let response_path = format!("/v1/commands/{}/response", created.command_id);
+        let result = serde_json::to_value(alien_core::SubmitResponseRequest {
+            response: alien_core::CommandResponse::success(b"done"),
+        })
+        .unwrap();
+        for denied in [&wrong_target, &wrong_deployment, &wrong_type] {
+            assert_eq!(
+                request(&router, denied, "POST", &release_path, json!({}))
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                request(&router, denied, "PUT", &response_path, result.clone())
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        assert_eq!(
+            request(&router, &bearer, "POST", &release_path, json!({}))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        clock.store(1_800_000_299, Ordering::SeqCst);
+        let response = request(
+            &router,
+            &bearer,
+            "POST",
+            "/v1/commands/leases",
+            lease_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let leases: alien_core::LeaseResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(leases.leases.len(), 1);
+        assert_eq!(leases.leases[0].command_id, created.command_id);
+        let release_path = format!("/v1/commands/leases/{}/release", leases.leases[0].lease_id);
+        let current_lease = leases.leases[0].lease_id.clone();
+        clock.store(1_800_000_300, Ordering::SeqCst);
+        assert_eq!(
+            request(&router, &bearer, "POST", "/v1/commands/leases", lease_body)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(&router, &bearer, "POST", &release_path, json!({}))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(&router, &bearer, "PUT", &response_path, result.clone())
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let fresh = receiver(&deployment_id, "worker-a");
+        assert_eq!(
+            request(
+                &router,
+                &fresh,
+                "PUT",
+                &format!("{response_path}?lease_id={current_lease}"),
+                result,
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let completed = state
+            .command_server
+            .get_command_status_record(&created.command_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed.state, alien_core::CommandState::Succeeded);
+    }
+
+    async fn request(
+        router: &axum::Router,
+        bearer: &str,
+        method: &str,
+        path: &str,
+        body: Value,
+    ) -> axum::response::Response {
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+    async fn lease(
+        router: &axum::Router,
+        bearer: &str,
+        deployment_id: &str,
+    ) -> alien_core::LeaseInfo {
+        let response = request(
+            router,
+            bearer,
+            "POST",
+            "/v1/commands/leases",
+            json!({"deploymentId": deployment_id, "target": {
+                "resourceId": "worker-a", "resourceType": "worker"
+            }, "maxLeases": 1, "leaseSeconds": 60}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut leases: alien_core::LeaseResponse =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(leases.leases.len(), 1);
+        leases.leases.remove(0)
+    }
+    async fn submit(
+        router: &axum::Router,
+        lease: &alien_core::LeaseInfo,
+        body: &[u8],
+    ) -> StatusCode {
+        let base = url::Url::parse("http://localhost/v1/commands/leases").unwrap();
+        let url = base
+            .join(&lease.envelope.response_handling.submit_response_url)
+            .unwrap();
+        let path = format!("{}?{}", url.path(), url.query().unwrap());
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&alien_core::SubmitResponseRequest {
+                            response: alien_core::CommandResponse::success(body),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    async fn command_state(state: &AppState, command_id: &str) -> alien_core::CommandState {
+        state
+            .command_server
+            .get_command_status_record(command_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state
+    }
+
+    /// A command server that knows `worker-a`, and a queued command for it.
+    async fn serve_worker_a_command(
+        state: &mut AppState,
+        deployment_id: &str,
+        dir: &std::path::Path,
+    ) -> alien_core::CreateCommandResponse {
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target("worker-a", alien_core::CommandTargetType::Worker)
+            .await
+            .unwrap();
+        state.command_server = Arc::new(CommandServer::new(
+            state.kv.clone(),
+            Arc::new(
+                LocalStorage::new(dir.join("commands").to_string_lossy().into_owned()).unwrap(),
+            ),
+            Arc::new(NullCommandDispatcher),
+            registry,
+            "http://localhost:0/v1".to_owned(),
+            b"test-signing-key".to_vec(),
+        ));
+        state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.to_owned(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"hello"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some("worker-a".to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    /// The response URL a lease hands out belongs to that lease. When the
+    /// command was released and leased again, the first holder's URL must not
+    /// complete it: the new holder is the one running it.
+    #[tokio::test]
+    async fn a_response_url_completes_only_the_command_its_lease_still_holds() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::DeploymentManager);
+
+        let first = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(
+            request(
+                &router,
+                &bearer,
+                "POST",
+                &format!("/v1/commands/leases/{}/release", first.lease_id),
+                json!({})
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let second = lease(&router, &bearer, &deployment_id).await;
+        assert_ne!(first.lease_id, second.lease_id);
+
+        // The first holder lost the command: it cannot complete it.
+        assert_eq!(
+            submit(&router, &first, b"from the first lease").await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&created.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Dispatched
+        );
+        // The current holder completes it.
+        assert_eq!(
+            submit(&router, &second, b"from the second lease").await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            state
+                .command_server
+                .get_command_status_record(&created.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// A command receiver built before capability files holds one long-lived
+    /// key, in `ALIEN_COMMANDS_TOKEN`. The key leases and answers commands for
+    /// its deployment and does nothing else.
+    #[tokio::test]
+    async fn a_commands_key_reaches_only_the_command_routes_of_its_deployment() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let release = state
+            .release_store
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "default".into(),
+                    stacks: HashMap::from([(
+                        Platform::Kubernetes,
+                        Stack::new("test".to_owned()).build(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let bearer = token(Role::CommandsReceiver);
+        let router = alien_manager::routes::commands::router()
+            .merge(alien_manager::routes::releases::router())
+            .merge(alien_manager::routes::tokens::router())
+            .merge(alien_manager::routes::vault::router())
+            .merge(alien_manager::routes::bindings::router())
+            .merge(alien_manager::routes::deployments::router())
+            .merge(alien_manager::routes::sync::router())
+            .with_state(state.clone());
+
+        let bindings_body =
+            json!({"deploymentId": deployment_id, "resourceId": "storage"}).to_string();
+        let create_body = json!({
+            "deploymentId": deployment_id,
+            "command": "echo",
+            "params": {"mode": "inline", "inlineBase64": "aGVsbG8="},
+            "targetResourceId": "worker-a",
+        })
+        .to_string();
+        let sync_body = json!({
+            "deploymentId": deployment_id,
+            "maxSupportedDeploymentProtocolVersion":
+                alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .to_string();
+        for (method, path, body) in [
+            ("POST", "/v1/commands".to_owned(), create_body.as_str()),
+            ("GET", format!("/v1/commands/{}", created.command_id), ""),
+            ("GET", format!("/v1/releases/{}", release.id), ""),
+            ("GET", format!("/v1/deployments/{deployment_id}"), ""),
+            (
+                "GET",
+                format!("/v1/deployments/{deployment_id}/vault/secrets/secrets/TEST_KEY"),
+                "",
+            ),
+            (
+                "POST",
+                "/v1/bindings/resolve".to_owned(),
+                bindings_body.as_str(),
+            ),
+            ("POST", "/v1/sync".to_owned(), sync_body.as_str()),
+            (
+                "POST",
+                format!("/v1/deployments/{deployment_id}/delete"),
+                r#"{"action":"retain"}"#,
+            ),
+        ] {
+            let response = request(
+                &router,
+                &bearer,
+                method,
+                &path,
+                serde_json::from_str(if body.is_empty() { "null" } else { body }).unwrap(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+        }
+        assert_eq!(logs(&state, &bearer).await, StatusCode::FORBIDDEN);
+        let (status, body) = pull(
+            &state,
+            Role::CommandsReceiver,
+            "alien-operator/manifests/v1",
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        let deployment = state
+            .deployment_store
+            .get_deployment(&Subject::system(), &deployment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deployment.status, "running");
+        assert_eq!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Pending
+        );
+
+        // Another deployment's commands are not its to lease.
+        let other = request(
+            &router,
+            &bearer,
+            "POST",
+            "/v1/commands/leases",
+            json!({"deploymentId": "dep_other", "target": {
+                "resourceId": "worker-a", "resourceType": "worker"
+            }, "maxLeases": 1, "leaseSeconds": 60}),
+        )
+        .await;
+        assert_ne!(other.status(), StatusCode::OK);
+
+        // Its own deployment's commands are.
+        let leased = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(leased.command_id, created.command_id);
+    }
+
+    /// The receiver code that shipped before capability files leases with the
+    /// key as a bearer and answers on the response URL it was handed, with no
+    /// bearer. A receiver that answers with the bearer works too.
+    #[tokio::test]
+    async fn an_old_receiver_runs_a_command_with_only_the_commands_key() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+
+        let leased = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(leased.command_id, created.command_id);
+        assert_eq!(
+            submit(&router, &leased, b"answered on the response URL").await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+
+        let second = state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.clone(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"again"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some("worker-a".to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap();
+        let leased = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(leased.command_id, second.command_id);
+        let response = request(
+            &router,
+            &bearer,
+            "PUT",
+            &format!(
+                "/v1/commands/{}/response?lease_id={}",
+                second.command_id, leased.lease_id
+            ),
+            serde_json::to_value(alien_core::SubmitResponseRequest {
+                response: alien_core::CommandResponse::success(b"answered with the bearer"),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            command_state(&state, &second.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// A KV that hands the command to a new lease right after the lease record
+    /// is first read, the moment between checking a lease and acting on it.
+    #[derive(Debug)]
+    struct RacingKv {
+        inner: Arc<dyn alien_bindings::traits::Kv>,
+        armed: std::sync::atomic::AtomicBool,
+    }
+
+    impl alien_bindings::traits::Binding for RacingKv {}
+
+    #[async_trait]
+    impl alien_bindings::traits::Kv for RacingKv {
+        async fn get(
+            &self,
+            key: &str,
+        ) -> alien_bindings::Result<Option<alien_bindings::traits::KvEntry>> {
+            let entry = self.inner.get(key).await?;
+            if key.starts_with("cmd:")
+                && key.ends_with(":lease")
+                && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                let now = chrono::Utc::now();
+                let racer = json!({
+                    "lease_id": "lease_racer",
+                    "acquired_at": now,
+                    "expires_at": now + chrono::Duration::hours(1),
+                    "owner": "racer",
+                });
+                self.inner.delete(key, None).await?;
+                self.inner
+                    .put(
+                        key,
+                        serde_json::to_vec(&racer).unwrap(),
+                        Some(alien_bindings::traits::PutOptions {
+                            ttl: Some(std::time::Duration::from_secs(3600)),
+                            condition: alien_bindings::traits::PutCondition::Absent,
+                        }),
+                    )
+                    .await?;
+            }
+            Ok(entry)
+        }
+        async fn put(
+            &self,
+            key: &str,
+            value: Vec<u8>,
+            options: Option<alien_bindings::traits::PutOptions>,
+        ) -> alien_bindings::Result<bool> {
+            self.inner.put(key, value, options).await
+        }
+        async fn delete(
+            &self,
+            key: &str,
+            if_version: Option<&str>,
+        ) -> alien_bindings::Result<bool> {
+            self.inner.delete(key, if_version).await
+        }
+        async fn exists(&self, key: &str) -> alien_bindings::Result<bool> {
+            self.inner.exists(key).await
+        }
+        async fn scan_prefix(
+            &self,
+            prefix: &str,
+            limit: Option<usize>,
+            cursor: Option<String>,
+        ) -> alien_bindings::Result<alien_bindings::traits::ScanResult> {
+            self.inner.scan_prefix(prefix, limit, cursor).await
+        }
+    }
+
+    /// A command that is leased to someone else between the lease check and
+    /// the response write must not be completed by the holder it was taken from.
+    #[tokio::test]
+    async fn a_lease_taken_while_a_response_is_checked_refuses_that_response() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let racing = Arc::new(RacingKv {
+            inner: state.kv.clone(),
+            armed: std::sync::atomic::AtomicBool::new(false),
+        });
+        state.kv = racing.clone();
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let held = lease(&router, &bearer, &deployment_id).await;
+
+        racing
+            .armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let response = request(
+            &router,
+            &bearer,
+            "PUT",
+            &format!(
+                "/v1/commands/{}/response?lease_id={}",
+                created.command_id, held.lease_id
+            ),
+            serde_json::to_value(alien_core::SubmitResponseRequest {
+                response: alien_core::CommandResponse::success(b"late"),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded,
+            "the old lease must not complete a command that moved to another lease"
+        );
+    }
+
+    /// The commands key's lease_id is checked against the real lease record: a
+    /// made-up one is refused on a command with an active lease, and on one
+    /// whose lease has expired.
+    #[tokio::test]
+    async fn a_commands_key_with_a_made_up_lease_id_is_refused() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let held = lease(&router, &bearer, &deployment_id).await;
+        let answer = |lease_id: String| {
+            let router = router.clone();
+            let bearer = bearer.clone();
+            let command_id = created.command_id.clone();
+            async move {
+                request(
+                    &router,
+                    &bearer,
+                    "PUT",
+                    &format!("/v1/commands/{command_id}/response?lease_id={lease_id}"),
+                    serde_json::to_value(alien_core::SubmitResponseRequest {
+                        response: alien_core::CommandResponse::success(b"forged"),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .status()
+            }
+        };
+
+        // Active lease: another lease id does not hold it.
+        assert_eq!(
+            answer("lease_made_up".to_string()).await,
+            StatusCode::CONFLICT
+        );
+        // Expired lease: its record is gone, and an unsigned lease id proves nothing.
+        alien_bindings::traits::Kv::delete(
+            state.kv.as_ref(),
+            &format!("cmd:{}:lease", created.command_id),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            answer("lease_made_up".to_string()).await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(answer(held.lease_id).await, StatusCode::CONFLICT);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// An empty lease_id is no lease_id, so the commands key cannot answer a
+    /// command through a claim a response left behind for a command that has no
+    /// lease.
+    #[tokio::test]
+    async fn a_commands_key_with_an_empty_lease_id_is_refused() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let _held = lease(&router, &bearer, &deployment_id).await;
+        // The command now looks pushed: no lease, and a claim left by a response.
+        let key = format!("cmd:{}:lease", created.command_id);
+        alien_bindings::traits::Kv::delete(state.kv.as_ref(), &key, None)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        alien_bindings::traits::Kv::put(
+            state.kv.as_ref(),
+            &key,
+            serde_json::to_vec(&json!({
+                "lease_id": "",
+                "acquired_at": now,
+                "expires_at": now + chrono::Duration::seconds(60),
+                "owner": "response",
+                "completing": true,
+            }))
+            .unwrap(),
+            Some(alien_bindings::traits::PutOptions {
+                ttl: Some(std::time::Duration::from_secs(60)),
+                condition: alien_bindings::traits::PutCondition::Absent,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let response = request(
+            &router,
+            &bearer,
+            "PUT",
+            &format!("/v1/commands/{}/response?lease_id=", created.command_id),
+            serde_json::to_value(alien_core::SubmitResponseRequest {
+                response: alien_core::CommandResponse::success(b"forged"),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// The commands key never reaches the reserved operations targets, so it
+    /// cannot release their leases either.
+    #[tokio::test]
+    async fn a_commands_key_cannot_release_the_lease_of_a_reserved_target() {
+        use alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID;
+        let (mut state, deployment_id, tmp) = state().await;
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target(
+                OPERATOR_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Daemon,
+            )
+            .await
+            .unwrap();
+        state.command_server = Arc::new(CommandServer::new(
+            state.kv.clone(),
+            Arc::new(
+                LocalStorage::new(tmp.path().join("commands").to_string_lossy().into_owned())
+                    .unwrap(),
+            ),
+            Arc::new(NullCommandDispatcher),
+            registry,
+            "http://localhost:0/v1".to_owned(),
+            b"test-signing-key".to_vec(),
+        ));
+        state
+            .command_server
+            .create_command(alien_core::CreateCommandRequest {
+                deployment_id: deployment_id.clone(),
+                command: "echo".to_owned(),
+                params: alien_core::BodySpec::inline(b"hello"),
+                deadline: None,
+                idempotency_key: None,
+                target_resource_id: Some(OPERATOR_COMMAND_TARGET_ID.to_owned()),
+                operation_result_contract: None,
+            })
+            .await
+            .unwrap();
+        let leased = state
+            .command_server
+            .acquire_lease(
+                &deployment_id,
+                &serde_json::from_value(json!({
+                    "deploymentId": deployment_id,
+                    "target": {"resourceId": OPERATOR_COMMAND_TARGET_ID, "resourceType": "daemon"},
+                    "maxLeases": 1,
+                    "leaseSeconds": 60
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(leased.leases.len(), 1);
+
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let response = request(
+            &router,
+            &token(Role::CommandsReceiver),
+            "POST",
+            &format!("/v1/commands/leases/{}/release", leased.leases[0].lease_id),
+            json!({}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Released receivers answer on the response URL they were handed, which
+    /// names their lease, and never with a bearer. So a bearer answer must name
+    /// its lease too: a commands key that leaves it out, or names a lease the
+    /// command has moved on from, cannot complete the command.
+    #[tokio::test]
+    async fn a_commands_key_answers_only_with_the_lease_it_holds() {
+        let (mut state, deployment_id, tmp) = state().await;
+        let created = serve_worker_a_command(&mut state, &deployment_id, tmp.path()).await;
+        let router = alien_manager::routes::commands::router().with_state(state.clone());
+        let bearer = token(Role::CommandsReceiver);
+        let answer = |lease_id: Option<String>| {
+            let path = match &lease_id {
+                Some(lease_id) => format!(
+                    "/v1/commands/{}/response?lease_id={lease_id}",
+                    created.command_id
+                ),
+                None => format!("/v1/commands/{}/response", created.command_id),
+            };
+            let router = router.clone();
+            let bearer = bearer.clone();
+            async move {
+                request(
+                    &router,
+                    &bearer,
+                    "PUT",
+                    &path,
+                    serde_json::to_value(alien_core::SubmitResponseRequest {
+                        response: alien_core::CommandResponse::success(b"answer"),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .status()
+            }
+        };
+
+        let first = lease(&router, &bearer, &deployment_id).await;
+        assert_eq!(answer(None).await, StatusCode::BAD_REQUEST);
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded,
+            "a bearer answer without a lease must not complete the command"
+        );
+
+        // The command is handed to a new holder; the old lease is superseded.
+        state
+            .command_server
+            .release_lease(&created.command_id, &first.lease_id)
+            .await
+            .unwrap();
+        let second = lease(&router, &bearer, &deployment_id).await;
+        assert_ne!(first.lease_id, second.lease_id);
+        assert_eq!(answer(None).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            answer(Some(first.lease_id.clone())).await,
+            StatusCode::CONFLICT
+        );
+        assert_ne!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+        assert_eq!(answer(Some(second.lease_id)).await, StatusCode::OK);
+        assert_eq!(
+            command_state(&state, &created.command_id).await,
+            alien_core::CommandState::Succeeded
+        );
+    }
+
+    /// Clients are generated from the published schema, so a request built
+    /// with the generated types must be accepted for every proof kind.
+    #[tokio::test]
+    async fn exchange_accepts_requests_built_with_the_generated_client_types() {
+        use alien_manager::auth::identity_exchange::{
+            IdentityExchangeRequest, RuntimeIdentityVerifier,
+        };
+        use alien_manager_api::types as sdk;
+
+        struct ProofChecker {
+            deployment: String,
+        }
+        #[async_trait]
+        impl RuntimeIdentityVerifier for ProofChecker {
+            async fn verify(
+                &self,
+                request: &IdentityExchangeRequest,
+                _: &str,
+            ) -> Result<VerifiedRuntimeIdentity, AlienError> {
+                let expected = match &request.proof {
+                    RuntimeIdentityProof::Aws { presigned_url } => presigned_url == "aws-proof",
+                    RuntimeIdentityProof::Gcp { id_token } => id_token == "gcp-proof",
+                    RuntimeIdentityProof::Session { token } => token == "session-proof",
+                    RuntimeIdentityProof::DailyKey { key } => key == "daily-proof",
+                };
+                if !expected {
+                    return Err(
+                        alien_manager::error::ErrorData::unauthorized("wrong proof").into_generic()
+                    );
+                }
+                let mut grant = grant(&self.deployment);
+                grant.purpose = request.purpose.clone();
+                Ok(VerifiedRuntimeIdentity {
+                    grant,
+                    authority_deadline: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+                })
+            }
+        }
+
+        let (state, deployment, _tmp) = state().await;
+        let proofs = [
+            sdk::RuntimeIdentityProof::Aws {
+                presigned_url: "aws-proof".into(),
+            },
+            sdk::RuntimeIdentityProof::Gcp {
+                id_token: "gcp-proof".into(),
+            },
+            sdk::RuntimeIdentityProof::Session {
+                token: "session-proof".into(),
+            },
+            sdk::RuntimeIdentityProof::DailyKey {
+                key: "daily-proof".into(),
+            },
+        ];
+        let purposes = [
+            sdk::RuntimePurpose::Telemetry,
+            sdk::RuntimePurpose::OperationRelay(sdk::CommandTarget {
+                resource_id: "worker-a".into(),
+                resource_type: sdk::CommandTargetType::Worker,
+            }),
+        ];
+        for proof in proofs {
+            for purpose in &purposes {
+                let body = sdk::IdentityExchangeRequest::builder()
+                    .deployment_id(deployment.clone())
+                    .proof(proof.clone())
+                    .purpose(purpose.clone());
+                let body = sdk::IdentityExchangeRequest::try_from(body).unwrap();
+                let router = alien_manager::auth::identity_exchange::router(
+                    credentials("manager-a", Arc::new(AtomicI64::new(1_799_999_000))),
+                    Arc::new(ProofChecker {
+                        deployment: deployment.clone(),
+                    }),
+                )
+                .with_state(state.clone());
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/identity/exchange")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "{:?} with {:?}",
+                    body.proof,
+                    body.purpose
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exchange_refuses_overgrants_and_redacts_provider_errors() {
+        use alien_error::ContextError;
+        use alien_manager::auth::identity_exchange::{
+            IdentityExchangeRequest, RuntimeIdentityVerifier, VerifiedRuntimeIdentity,
+        };
+        const MARKER: &str = "synthetic-proof-do-not-expose";
+        struct FaultyVerifier {
+            deployment: String,
+            scenario: u8,
+        }
+        #[async_trait]
+        impl RuntimeIdentityVerifier for FaultyVerifier {
+            async fn verify(
+                &self,
+                _: &IdentityExchangeRequest,
+                _: &str,
+            ) -> Result<VerifiedRuntimeIdentity, AlienError> {
+                let mut grant = grant(&self.deployment);
+                match self.scenario {
+                    0 => grant.deployment_id = "other-deployment".to_owned(),
+                    1 => {
+                        grant.purpose = RuntimePurpose::ReceiveCommands {
+                            target: alien_core::CommandTarget::new(
+                                "worker",
+                                alien_core::CommandTargetType::Worker,
+                            ),
+                        }
+                    }
+                    2 => {
+                        return Err(
+                            alien_manager::error::ErrorData::unauthorized(MARKER).into_generic()
+                        );
+                    }
+                    3 => {
+                        return Err(alien_manager::error::ErrorData::unauthorized(MARKER)
+                            .context(alien_manager::error::ErrorData::AuthenticationUnavailable)
+                            .into_generic());
+                    }
+                    _ => (),
+                }
+                Ok(VerifiedRuntimeIdentity {
+                    grant,
+                    authority_deadline: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+                })
+            }
+        }
+        #[derive(Clone)]
+        struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Capture(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (state, deployment, _tmp) = state().await;
+        for scenario in 0..5 {
+            let credentials = credentials("manager-a", Arc::new(AtomicI64::new(1_800_000_000)));
+            let router = alien_manager::auth::identity_exchange::router(
+                credentials,
+                Arc::new(FaultyVerifier {
+                    deployment: deployment.clone(),
+                    scenario,
+                }),
+            )
+            .with_state(state.clone());
+            let response = router.oneshot(Request::builder().method("POST").uri("/v1/identity/exchange")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({"deploymentId": deployment, "purpose": {"type": "telemetry"}, "proof": {"type": "session", "token": MARKER}})).unwrap())).unwrap()).await.unwrap();
+            assert_eq!(
+                response.status(),
+                if scenario == 3 {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::UNAUTHORIZED
+                }
+            );
+            let body = to_bytes(response.into_body(), 16384).await.unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains(MARKER));
+            let value: Value = serde_json::from_slice(&body).unwrap();
+            assert!(value.get("token").is_none());
+        }
+        assert!(!String::from_utf8_lossy(&captured.0.lock().unwrap()).contains(MARKER));
     }
 }

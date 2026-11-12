@@ -78,6 +78,238 @@ export type ExternalBindingAi = {
   type: TypeAi;
 };
 
+export const TypeRedis5 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis5 = ClosedEnum<typeof TypeRedis5>;
+
+/**
+ * Local Valkey container.
+ */
+export type ExternalBindingLocalRedis = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: BindingValueStringUnion;
+  password: string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: BindingValueU16Union;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: BindingValueStringUnion;
+  service: "local-redis";
+  type: TypeRedis5;
+};
+
+export type Password3 = ExternalPasswordSecretKeyRef | string;
+
+/**
+ * Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the
+ *
+ * @remarks
+ * password from the Secret as an environment variable, which the SDK inserts after it
+ * parses the binding, so any character is safe.
+ */
+export type Password4 = ExternalPasswordSecretKeyRef | string;
+
+export const TypeRedis4 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis4 = ClosedEnum<typeof TypeRedis4>;
+
+/**
+ * Operator-provided server (Kubernetes, on-prem, or cloud override).
+ */
+export type ExternalBindingExternalRedis = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: BindingValueStringUnion;
+  /**
+   * Password literal or a `secretKeyRef` to a Kubernetes Secret. Kubernetes workloads get the
+   *
+   * @remarks
+   * password from the Secret as an environment variable, which the SDK inserts after it
+   * parses the binding, so any character is safe.
+   */
+  password: ExternalPasswordSecretKeyRef | string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: BindingValueU16Union;
+  /**
+   * Connect over TLS. Defaults to true.
+   */
+  tls?: boolean | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: BindingValueStringUnion;
+  service: "external";
+  type: TypeRedis4;
+};
+
+export const TypeRedis3 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis3 = ClosedEnum<typeof TypeRedis3>;
+
+/**
+ * Azure Managed Redis (private endpoint host + database resource ID).
+ */
+export type ExternalBindingAzureManagedRedis = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  databaseResourceId: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: BindingValueU16Union;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: BindingValueStringUnion;
+  service: "azure-managed-redis";
+  type: TypeRedis3;
+};
+
+export const TypeRedis2 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis2 = ClosedEnum<typeof TypeRedis2>;
+
+/**
+ * GCP Memorystore for Valkey (PSC address + CA + secret name).
+ */
+export type ExternalBindingMemorystore = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  instanceName: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: BindingValueU16Union;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  serverCaCertificates: BindingValueVecStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: BindingValueStringUnion;
+  service: "memorystore";
+  type: TypeRedis2;
+};
+
+export const TypeRedis1 = {
+  Redis: "redis",
+} as const;
+export type TypeRedis1 = ClosedEnum<typeof TypeRedis1>;
+
+/**
+ * AWS ElastiCache for Valkey (primary endpoint + AUTH token secret ARN).
+ */
+export type ExternalBindingElasticache = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretArn: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: BindingValueU16Union;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: BindingValueStringUnion;
+  service: "elasticache";
+  type: TypeRedis1;
+};
+
+/**
+ * External Redis binding (operator-provided Redis-compatible server)
+ */
+export type ExternalBindingUnion7 =
+  | ExternalBindingElasticache
+  | ExternalBindingMemorystore
+  | ExternalBindingAzureManagedRedis
+  | ExternalBindingExternalRedis
+  | ExternalBindingLocalRedis;
+
 export const TypePostgres6 = {
   Postgres: "postgres",
 } as const;
@@ -144,7 +376,7 @@ export type TypePostgres5 = ClosedEnum<typeof TypePostgres5>;
 /**
  * Operator-provided / BYO database (Kubernetes, on-prem, or cloud override).
  */
-export type ExternalBindingExternal = {
+export type ExternalBindingExternalPostgres = {
   /**
    * Represents a value that can be either a concrete value, a template expression,
    *
@@ -403,7 +635,7 @@ export type ExternalBindingUnion6 =
   | ExternalBindingAuroraManaged
   | ExternalBindingCloudSQL
   | ExternalBindingFlexibleServer
-  | ExternalBindingExternal
+  | ExternalBindingExternalPostgres
   | ExternalBindingLocalPostgres;
 
 export const TypeContainerAppsEnvironment = {
@@ -719,7 +951,7 @@ export type TypeKv4 = ClosedEnum<typeof TypeKv4>;
 /**
  * Redis binding (for Kubernetes/local)
  */
-export type ExternalBindingRedis = {
+export type ExternalBindingRedisKv = {
   /**
    * Represents a value that can be either a concrete value, a template expression,
    *
@@ -836,7 +1068,7 @@ export type ExternalBindingUnion3 =
   | ExternalBindingDynamodb
   | ExternalBindingFirestore
   | ExternalBindingTablestorage
-  | ExternalBindingRedis
+  | ExternalBindingRedisKv
   | ExternalBindingLocalKv;
 
 export const TypeQueue5 = {
@@ -1098,7 +1330,7 @@ export type ExternalBindingUnion =
   | ExternalBindingDynamodb
   | ExternalBindingFirestore
   | ExternalBindingTablestorage
-  | ExternalBindingRedis
+  | ExternalBindingRedisKv
   | ExternalBindingLocalKv
   | ExternalBindingEcr
   | ExternalBindingAcr
@@ -1113,8 +1345,13 @@ export type ExternalBindingUnion =
   | ExternalBindingAuroraManaged
   | ExternalBindingCloudSQL
   | ExternalBindingFlexibleServer
-  | ExternalBindingExternal
-  | ExternalBindingLocalPostgres;
+  | ExternalBindingExternalPostgres
+  | ExternalBindingLocalPostgres
+  | ExternalBindingElasticache
+  | ExternalBindingMemorystore
+  | ExternalBindingAzureManagedRedis
+  | ExternalBindingExternalRedis
+  | ExternalBindingLocalRedis;
 
 /** @internal */
 export const TypeAi$inboundSchema: z.ZodEnum<typeof TypeAi> = z.enum(TypeAi);
@@ -1162,6 +1399,418 @@ export function externalBindingAiFromJSON(
     jsonString,
     (x) => ExternalBindingAi$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingAi' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis5$inboundSchema: z.ZodEnum<typeof TypeRedis5> = z.enum(
+  TypeRedis5,
+);
+/** @internal */
+export const TypeRedis5$outboundSchema: z.ZodEnum<typeof TypeRedis5> =
+  TypeRedis5$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocalRedis$inboundSchema: z.ZodType<
+  ExternalBindingLocalRedis,
+  unknown
+> = z.object({
+  host: BindingValueStringUnion$inboundSchema,
+  password: z.string(),
+  port: BindingValueU16Union$inboundSchema,
+  username: BindingValueStringUnion$inboundSchema,
+  service: z.literal("local-redis"),
+  type: TypeRedis5$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocalRedis$Outbound = {
+  host: BindingValueStringUnion$Outbound;
+  password: string;
+  port: BindingValueU16Union$Outbound;
+  username: BindingValueStringUnion$Outbound;
+  service: "local-redis";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocalRedis$outboundSchema: z.ZodType<
+  ExternalBindingLocalRedis$Outbound,
+  ExternalBindingLocalRedis
+> = z.object({
+  host: BindingValueStringUnion$outboundSchema,
+  password: z.string(),
+  port: BindingValueU16Union$outboundSchema,
+  username: BindingValueStringUnion$outboundSchema,
+  service: z.literal("local-redis"),
+  type: TypeRedis5$outboundSchema,
+});
+
+export function externalBindingLocalRedisToJSON(
+  externalBindingLocalRedis: ExternalBindingLocalRedis,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocalRedis$outboundSchema.parse(externalBindingLocalRedis),
+  );
+}
+export function externalBindingLocalRedisFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocalRedis, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocalRedis$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocalRedis' from JSON`,
+  );
+}
+
+/** @internal */
+export const Password3$inboundSchema: z.ZodType<Password3, unknown> = z.union([
+  ExternalPasswordSecretKeyRef$inboundSchema,
+  z.string(),
+]);
+/** @internal */
+export type Password3$Outbound = ExternalPasswordSecretKeyRef$Outbound | string;
+
+/** @internal */
+export const Password3$outboundSchema: z.ZodType<
+  Password3$Outbound,
+  Password3
+> = z.union([ExternalPasswordSecretKeyRef$outboundSchema, z.string()]);
+
+export function password3ToJSON(password3: Password3): string {
+  return JSON.stringify(Password3$outboundSchema.parse(password3));
+}
+export function password3FromJSON(
+  jsonString: string,
+): SafeParseResult<Password3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password3' from JSON`,
+  );
+}
+
+/** @internal */
+export const Password4$inboundSchema: z.ZodType<Password4, unknown> = z.union([
+  ExternalPasswordSecretKeyRef$inboundSchema,
+  z.string(),
+]);
+/** @internal */
+export type Password4$Outbound = ExternalPasswordSecretKeyRef$Outbound | string;
+
+/** @internal */
+export const Password4$outboundSchema: z.ZodType<
+  Password4$Outbound,
+  Password4
+> = z.union([ExternalPasswordSecretKeyRef$outboundSchema, z.string()]);
+
+export function password4ToJSON(password4: Password4): string {
+  return JSON.stringify(Password4$outboundSchema.parse(password4));
+}
+export function password4FromJSON(
+  jsonString: string,
+): SafeParseResult<Password4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password4' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis4$inboundSchema: z.ZodEnum<typeof TypeRedis4> = z.enum(
+  TypeRedis4,
+);
+/** @internal */
+export const TypeRedis4$outboundSchema: z.ZodEnum<typeof TypeRedis4> =
+  TypeRedis4$inboundSchema;
+
+/** @internal */
+export const ExternalBindingExternalRedis$inboundSchema: z.ZodType<
+  ExternalBindingExternalRedis,
+  unknown
+> = z.object({
+  host: BindingValueStringUnion$inboundSchema,
+  password: z.union([ExternalPasswordSecretKeyRef$inboundSchema, z.string()]),
+  port: BindingValueU16Union$inboundSchema,
+  tls: z.boolean().optional(),
+  username: BindingValueStringUnion$inboundSchema,
+  service: z.literal("external"),
+  type: TypeRedis4$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingExternalRedis$Outbound = {
+  host: BindingValueStringUnion$Outbound;
+  password: ExternalPasswordSecretKeyRef$Outbound | string;
+  port: BindingValueU16Union$Outbound;
+  tls?: boolean | undefined;
+  username: BindingValueStringUnion$Outbound;
+  service: "external";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingExternalRedis$outboundSchema: z.ZodType<
+  ExternalBindingExternalRedis$Outbound,
+  ExternalBindingExternalRedis
+> = z.object({
+  host: BindingValueStringUnion$outboundSchema,
+  password: z.union([ExternalPasswordSecretKeyRef$outboundSchema, z.string()]),
+  port: BindingValueU16Union$outboundSchema,
+  tls: z.boolean().optional(),
+  username: BindingValueStringUnion$outboundSchema,
+  service: z.literal("external"),
+  type: TypeRedis4$outboundSchema,
+});
+
+export function externalBindingExternalRedisToJSON(
+  externalBindingExternalRedis: ExternalBindingExternalRedis,
+): string {
+  return JSON.stringify(
+    ExternalBindingExternalRedis$outboundSchema.parse(
+      externalBindingExternalRedis,
+    ),
+  );
+}
+export function externalBindingExternalRedisFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingExternalRedis, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingExternalRedis$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingExternalRedis' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis3$inboundSchema: z.ZodEnum<typeof TypeRedis3> = z.enum(
+  TypeRedis3,
+);
+/** @internal */
+export const TypeRedis3$outboundSchema: z.ZodEnum<typeof TypeRedis3> =
+  TypeRedis3$inboundSchema;
+
+/** @internal */
+export const ExternalBindingAzureManagedRedis$inboundSchema: z.ZodType<
+  ExternalBindingAzureManagedRedis,
+  unknown
+> = z.object({
+  databaseResourceId: BindingValueStringUnion$inboundSchema,
+  host: BindingValueStringUnion$inboundSchema,
+  port: BindingValueU16Union$inboundSchema,
+  username: BindingValueStringUnion$inboundSchema,
+  service: z.literal("azure-managed-redis"),
+  type: TypeRedis3$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAzureManagedRedis$Outbound = {
+  databaseResourceId: BindingValueStringUnion$Outbound;
+  host: BindingValueStringUnion$Outbound;
+  port: BindingValueU16Union$Outbound;
+  username: BindingValueStringUnion$Outbound;
+  service: "azure-managed-redis";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAzureManagedRedis$outboundSchema: z.ZodType<
+  ExternalBindingAzureManagedRedis$Outbound,
+  ExternalBindingAzureManagedRedis
+> = z.object({
+  databaseResourceId: BindingValueStringUnion$outboundSchema,
+  host: BindingValueStringUnion$outboundSchema,
+  port: BindingValueU16Union$outboundSchema,
+  username: BindingValueStringUnion$outboundSchema,
+  service: z.literal("azure-managed-redis"),
+  type: TypeRedis3$outboundSchema,
+});
+
+export function externalBindingAzureManagedRedisToJSON(
+  externalBindingAzureManagedRedis: ExternalBindingAzureManagedRedis,
+): string {
+  return JSON.stringify(
+    ExternalBindingAzureManagedRedis$outboundSchema.parse(
+      externalBindingAzureManagedRedis,
+    ),
+  );
+}
+export function externalBindingAzureManagedRedisFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAzureManagedRedis, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAzureManagedRedis$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAzureManagedRedis' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis2$inboundSchema: z.ZodEnum<typeof TypeRedis2> = z.enum(
+  TypeRedis2,
+);
+/** @internal */
+export const TypeRedis2$outboundSchema: z.ZodEnum<typeof TypeRedis2> =
+  TypeRedis2$inboundSchema;
+
+/** @internal */
+export const ExternalBindingMemorystore$inboundSchema: z.ZodType<
+  ExternalBindingMemorystore,
+  unknown
+> = z.object({
+  host: BindingValueStringUnion$inboundSchema,
+  instanceName: BindingValueStringUnion$inboundSchema,
+  port: BindingValueU16Union$inboundSchema,
+  serverCaCertificates: BindingValueVecStringUnion$inboundSchema,
+  username: BindingValueStringUnion$inboundSchema,
+  service: z.literal("memorystore"),
+  type: TypeRedis2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingMemorystore$Outbound = {
+  host: BindingValueStringUnion$Outbound;
+  instanceName: BindingValueStringUnion$Outbound;
+  port: BindingValueU16Union$Outbound;
+  serverCaCertificates: BindingValueVecStringUnion$Outbound;
+  username: BindingValueStringUnion$Outbound;
+  service: "memorystore";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingMemorystore$outboundSchema: z.ZodType<
+  ExternalBindingMemorystore$Outbound,
+  ExternalBindingMemorystore
+> = z.object({
+  host: BindingValueStringUnion$outboundSchema,
+  instanceName: BindingValueStringUnion$outboundSchema,
+  port: BindingValueU16Union$outboundSchema,
+  serverCaCertificates: BindingValueVecStringUnion$outboundSchema,
+  username: BindingValueStringUnion$outboundSchema,
+  service: z.literal("memorystore"),
+  type: TypeRedis2$outboundSchema,
+});
+
+export function externalBindingMemorystoreToJSON(
+  externalBindingMemorystore: ExternalBindingMemorystore,
+): string {
+  return JSON.stringify(
+    ExternalBindingMemorystore$outboundSchema.parse(externalBindingMemorystore),
+  );
+}
+export function externalBindingMemorystoreFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingMemorystore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingMemorystore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingMemorystore' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeRedis1$inboundSchema: z.ZodEnum<typeof TypeRedis1> = z.enum(
+  TypeRedis1,
+);
+/** @internal */
+export const TypeRedis1$outboundSchema: z.ZodEnum<typeof TypeRedis1> =
+  TypeRedis1$inboundSchema;
+
+/** @internal */
+export const ExternalBindingElasticache$inboundSchema: z.ZodType<
+  ExternalBindingElasticache,
+  unknown
+> = z.object({
+  host: BindingValueStringUnion$inboundSchema,
+  passwordSecretArn: BindingValueStringUnion$inboundSchema,
+  port: BindingValueU16Union$inboundSchema,
+  username: BindingValueStringUnion$inboundSchema,
+  service: z.literal("elasticache"),
+  type: TypeRedis1$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingElasticache$Outbound = {
+  host: BindingValueStringUnion$Outbound;
+  passwordSecretArn: BindingValueStringUnion$Outbound;
+  port: BindingValueU16Union$Outbound;
+  username: BindingValueStringUnion$Outbound;
+  service: "elasticache";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingElasticache$outboundSchema: z.ZodType<
+  ExternalBindingElasticache$Outbound,
+  ExternalBindingElasticache
+> = z.object({
+  host: BindingValueStringUnion$outboundSchema,
+  passwordSecretArn: BindingValueStringUnion$outboundSchema,
+  port: BindingValueU16Union$outboundSchema,
+  username: BindingValueStringUnion$outboundSchema,
+  service: z.literal("elasticache"),
+  type: TypeRedis1$outboundSchema,
+});
+
+export function externalBindingElasticacheToJSON(
+  externalBindingElasticache: ExternalBindingElasticache,
+): string {
+  return JSON.stringify(
+    ExternalBindingElasticache$outboundSchema.parse(externalBindingElasticache),
+  );
+}
+export function externalBindingElasticacheFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingElasticache, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingElasticache$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingElasticache' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingUnion7$inboundSchema: z.ZodType<
+  ExternalBindingUnion7,
+  unknown
+> = z.union([
+  z.lazy(() => ExternalBindingElasticache$inboundSchema),
+  z.lazy(() => ExternalBindingMemorystore$inboundSchema),
+  z.lazy(() => ExternalBindingAzureManagedRedis$inboundSchema),
+  z.lazy(() => ExternalBindingExternalRedis$inboundSchema),
+  z.lazy(() => ExternalBindingLocalRedis$inboundSchema),
+]);
+/** @internal */
+export type ExternalBindingUnion7$Outbound =
+  | ExternalBindingElasticache$Outbound
+  | ExternalBindingMemorystore$Outbound
+  | ExternalBindingAzureManagedRedis$Outbound
+  | ExternalBindingExternalRedis$Outbound
+  | ExternalBindingLocalRedis$Outbound;
+
+/** @internal */
+export const ExternalBindingUnion7$outboundSchema: z.ZodType<
+  ExternalBindingUnion7$Outbound,
+  ExternalBindingUnion7
+> = z.union([
+  z.lazy(() => ExternalBindingElasticache$outboundSchema),
+  z.lazy(() => ExternalBindingMemorystore$outboundSchema),
+  z.lazy(() => ExternalBindingAzureManagedRedis$outboundSchema),
+  z.lazy(() => ExternalBindingExternalRedis$outboundSchema),
+  z.lazy(() => ExternalBindingLocalRedis$outboundSchema),
+]);
+
+export function externalBindingUnion7ToJSON(
+  externalBindingUnion7: ExternalBindingUnion7,
+): string {
+  return JSON.stringify(
+    ExternalBindingUnion7$outboundSchema.parse(externalBindingUnion7),
+  );
+}
+export function externalBindingUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingUnion7' from JSON`,
   );
 }
 
@@ -1307,8 +1956,8 @@ export const TypePostgres5$outboundSchema: z.ZodEnum<typeof TypePostgres5> =
   TypePostgres5$inboundSchema;
 
 /** @internal */
-export const ExternalBindingExternal$inboundSchema: z.ZodType<
-  ExternalBindingExternal,
+export const ExternalBindingExternalPostgres$inboundSchema: z.ZodType<
+  ExternalBindingExternalPostgres,
   unknown
 > = z.object({
   database: BindingValueStringUnion$inboundSchema,
@@ -1325,7 +1974,7 @@ export const ExternalBindingExternal$inboundSchema: z.ZodType<
   type: TypePostgres5$inboundSchema,
 });
 /** @internal */
-export type ExternalBindingExternal$Outbound = {
+export type ExternalBindingExternalPostgres$Outbound = {
   database: BindingValueStringUnion$Outbound;
   host: BindingValueStringUnion$Outbound;
   password:
@@ -1340,9 +1989,9 @@ export type ExternalBindingExternal$Outbound = {
 };
 
 /** @internal */
-export const ExternalBindingExternal$outboundSchema: z.ZodType<
-  ExternalBindingExternal$Outbound,
-  ExternalBindingExternal
+export const ExternalBindingExternalPostgres$outboundSchema: z.ZodType<
+  ExternalBindingExternalPostgres$Outbound,
+  ExternalBindingExternalPostgres
 > = z.object({
   database: BindingValueStringUnion$outboundSchema,
   host: BindingValueStringUnion$outboundSchema,
@@ -1358,20 +2007,22 @@ export const ExternalBindingExternal$outboundSchema: z.ZodType<
   type: TypePostgres5$outboundSchema,
 });
 
-export function externalBindingExternalToJSON(
-  externalBindingExternal: ExternalBindingExternal,
+export function externalBindingExternalPostgresToJSON(
+  externalBindingExternalPostgres: ExternalBindingExternalPostgres,
 ): string {
   return JSON.stringify(
-    ExternalBindingExternal$outboundSchema.parse(externalBindingExternal),
+    ExternalBindingExternalPostgres$outboundSchema.parse(
+      externalBindingExternalPostgres,
+    ),
   );
 }
-export function externalBindingExternalFromJSON(
+export function externalBindingExternalPostgresFromJSON(
   jsonString: string,
-): SafeParseResult<ExternalBindingExternal, SDKValidationError> {
+): SafeParseResult<ExternalBindingExternalPostgres, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ExternalBindingExternal$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindingExternal' from JSON`,
+    (x) => ExternalBindingExternalPostgres$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingExternalPostgres' from JSON`,
   );
 }
 
@@ -1639,7 +2290,7 @@ export const ExternalBindingUnion6$inboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingAuroraManaged$inboundSchema),
   z.lazy(() => ExternalBindingCloudSQL$inboundSchema),
   z.lazy(() => ExternalBindingFlexibleServer$inboundSchema),
-  z.lazy(() => ExternalBindingExternal$inboundSchema),
+  z.lazy(() => ExternalBindingExternalPostgres$inboundSchema),
   z.lazy(() => ExternalBindingLocalPostgres$inboundSchema),
 ]);
 /** @internal */
@@ -1648,7 +2299,7 @@ export type ExternalBindingUnion6$Outbound =
   | ExternalBindingAuroraManaged$Outbound
   | ExternalBindingCloudSQL$Outbound
   | ExternalBindingFlexibleServer$Outbound
-  | ExternalBindingExternal$Outbound
+  | ExternalBindingExternalPostgres$Outbound
   | ExternalBindingLocalPostgres$Outbound;
 
 /** @internal */
@@ -1660,7 +2311,7 @@ export const ExternalBindingUnion6$outboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingAuroraManaged$outboundSchema),
   z.lazy(() => ExternalBindingCloudSQL$outboundSchema),
   z.lazy(() => ExternalBindingFlexibleServer$outboundSchema),
-  z.lazy(() => ExternalBindingExternal$outboundSchema),
+  z.lazy(() => ExternalBindingExternalPostgres$outboundSchema),
   z.lazy(() => ExternalBindingLocalPostgres$outboundSchema),
 ]);
 
@@ -2416,8 +3067,8 @@ export const TypeKv4$outboundSchema: z.ZodEnum<typeof TypeKv4> =
   TypeKv4$inboundSchema;
 
 /** @internal */
-export const ExternalBindingRedis$inboundSchema: z.ZodType<
-  ExternalBindingRedis,
+export const ExternalBindingRedisKv$inboundSchema: z.ZodType<
+  ExternalBindingRedisKv,
   unknown
 > = z.object({
   connectionUrl: BindingValueStringUnion$inboundSchema,
@@ -2427,7 +3078,7 @@ export const ExternalBindingRedis$inboundSchema: z.ZodType<
   type: TypeKv4$inboundSchema,
 });
 /** @internal */
-export type ExternalBindingRedis$Outbound = {
+export type ExternalBindingRedisKv$Outbound = {
   connectionUrl: BindingValueStringUnion$Outbound;
   database?: BindingValueU8Union$Outbound | null | undefined;
   keyPrefix?: BindingValueStringUnion$Outbound | null | undefined;
@@ -2436,9 +3087,9 @@ export type ExternalBindingRedis$Outbound = {
 };
 
 /** @internal */
-export const ExternalBindingRedis$outboundSchema: z.ZodType<
-  ExternalBindingRedis$Outbound,
-  ExternalBindingRedis
+export const ExternalBindingRedisKv$outboundSchema: z.ZodType<
+  ExternalBindingRedisKv$Outbound,
+  ExternalBindingRedisKv
 > = z.object({
   connectionUrl: BindingValueStringUnion$outboundSchema,
   database: z.nullable(BindingValueU8Union$outboundSchema).optional(),
@@ -2447,20 +3098,20 @@ export const ExternalBindingRedis$outboundSchema: z.ZodType<
   type: TypeKv4$outboundSchema,
 });
 
-export function externalBindingRedisToJSON(
-  externalBindingRedis: ExternalBindingRedis,
+export function externalBindingRedisKvToJSON(
+  externalBindingRedisKv: ExternalBindingRedisKv,
 ): string {
   return JSON.stringify(
-    ExternalBindingRedis$outboundSchema.parse(externalBindingRedis),
+    ExternalBindingRedisKv$outboundSchema.parse(externalBindingRedisKv),
   );
 }
-export function externalBindingRedisFromJSON(
+export function externalBindingRedisKvFromJSON(
   jsonString: string,
-): SafeParseResult<ExternalBindingRedis, SDKValidationError> {
+): SafeParseResult<ExternalBindingRedisKv, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ExternalBindingRedis$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindingRedis' from JSON`,
+    (x) => ExternalBindingRedisKv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingRedisKv' from JSON`,
   );
 }
 
@@ -2639,7 +3290,7 @@ export const ExternalBindingUnion3$inboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingDynamodb$inboundSchema),
   z.lazy(() => ExternalBindingFirestore$inboundSchema),
   z.lazy(() => ExternalBindingTablestorage$inboundSchema),
-  z.lazy(() => ExternalBindingRedis$inboundSchema),
+  z.lazy(() => ExternalBindingRedisKv$inboundSchema),
   z.lazy(() => ExternalBindingLocalKv$inboundSchema),
 ]);
 /** @internal */
@@ -2647,7 +3298,7 @@ export type ExternalBindingUnion3$Outbound =
   | ExternalBindingDynamodb$Outbound
   | ExternalBindingFirestore$Outbound
   | ExternalBindingTablestorage$Outbound
-  | ExternalBindingRedis$Outbound
+  | ExternalBindingRedisKv$Outbound
   | ExternalBindingLocalKv$Outbound;
 
 /** @internal */
@@ -2658,7 +3309,7 @@ export const ExternalBindingUnion3$outboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingDynamodb$outboundSchema),
   z.lazy(() => ExternalBindingFirestore$outboundSchema),
   z.lazy(() => ExternalBindingTablestorage$outboundSchema),
-  z.lazy(() => ExternalBindingRedis$outboundSchema),
+  z.lazy(() => ExternalBindingRedisKv$outboundSchema),
   z.lazy(() => ExternalBindingLocalKv$outboundSchema),
 ]);
 
@@ -3283,7 +3934,7 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingDynamodb$inboundSchema),
     z.lazy(() => ExternalBindingFirestore$inboundSchema),
     z.lazy(() => ExternalBindingTablestorage$inboundSchema),
-    z.lazy(() => ExternalBindingRedis$inboundSchema),
+    z.lazy(() => ExternalBindingRedisKv$inboundSchema),
     z.lazy(() => ExternalBindingLocalKv$inboundSchema),
   ]),
   z.union([
@@ -3304,8 +3955,15 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingAuroraManaged$inboundSchema),
     z.lazy(() => ExternalBindingCloudSQL$inboundSchema),
     z.lazy(() => ExternalBindingFlexibleServer$inboundSchema),
-    z.lazy(() => ExternalBindingExternal$inboundSchema),
+    z.lazy(() => ExternalBindingExternalPostgres$inboundSchema),
     z.lazy(() => ExternalBindingLocalPostgres$inboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingElasticache$inboundSchema),
+    z.lazy(() => ExternalBindingMemorystore$inboundSchema),
+    z.lazy(() => ExternalBindingAzureManagedRedis$inboundSchema),
+    z.lazy(() => ExternalBindingExternalRedis$inboundSchema),
+    z.lazy(() => ExternalBindingLocalRedis$inboundSchema),
   ]),
 ]);
 /** @internal */
@@ -3324,7 +3982,7 @@ export type ExternalBindingUnion$Outbound =
   | ExternalBindingDynamodb$Outbound
   | ExternalBindingFirestore$Outbound
   | ExternalBindingTablestorage$Outbound
-  | ExternalBindingRedis$Outbound
+  | ExternalBindingRedisKv$Outbound
   | ExternalBindingLocalKv$Outbound
   | ExternalBindingEcr$Outbound
   | ExternalBindingAcr$Outbound
@@ -3339,8 +3997,13 @@ export type ExternalBindingUnion$Outbound =
   | ExternalBindingAuroraManaged$Outbound
   | ExternalBindingCloudSQL$Outbound
   | ExternalBindingFlexibleServer$Outbound
-  | ExternalBindingExternal$Outbound
-  | ExternalBindingLocalPostgres$Outbound;
+  | ExternalBindingExternalPostgres$Outbound
+  | ExternalBindingLocalPostgres$Outbound
+  | ExternalBindingElasticache$Outbound
+  | ExternalBindingMemorystore$Outbound
+  | ExternalBindingAzureManagedRedis$Outbound
+  | ExternalBindingExternalRedis$Outbound
+  | ExternalBindingLocalRedis$Outbound;
 
 /** @internal */
 export const ExternalBindingUnion$outboundSchema: z.ZodType<
@@ -3366,7 +4029,7 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingDynamodb$outboundSchema),
     z.lazy(() => ExternalBindingFirestore$outboundSchema),
     z.lazy(() => ExternalBindingTablestorage$outboundSchema),
-    z.lazy(() => ExternalBindingRedis$outboundSchema),
+    z.lazy(() => ExternalBindingRedisKv$outboundSchema),
     z.lazy(() => ExternalBindingLocalKv$outboundSchema),
   ]),
   z.union([
@@ -3387,8 +4050,15 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingAuroraManaged$outboundSchema),
     z.lazy(() => ExternalBindingCloudSQL$outboundSchema),
     z.lazy(() => ExternalBindingFlexibleServer$outboundSchema),
-    z.lazy(() => ExternalBindingExternal$outboundSchema),
+    z.lazy(() => ExternalBindingExternalPostgres$outboundSchema),
     z.lazy(() => ExternalBindingLocalPostgres$outboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => ExternalBindingElasticache$outboundSchema),
+    z.lazy(() => ExternalBindingMemorystore$outboundSchema),
+    z.lazy(() => ExternalBindingAzureManagedRedis$outboundSchema),
+    z.lazy(() => ExternalBindingExternalRedis$outboundSchema),
+    z.lazy(() => ExternalBindingLocalRedis$outboundSchema),
   ]),
 ]);
 

@@ -155,6 +155,7 @@ pub enum DeploymentsCmd {
     SetDomains {
         /// Deployment ID or reference
         id: String,
+        /// Resource that serves the endpoints (its ID in the stack)
         #[arg(long)]
         resource: String,
         /// Endpoint name and hostname (repeat for each endpoint)

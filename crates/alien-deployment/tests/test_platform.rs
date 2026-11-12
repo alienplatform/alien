@@ -278,6 +278,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
     DeploymentConfig {
         image_registry: None,
         image_pull_secrets: Vec::new(),
+        runtime_identity_audience: None,
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
