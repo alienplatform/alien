@@ -14,9 +14,6 @@
 /// Digest-pinned probe image (python:3.13-slim, multi-architecture index).
 pub(crate) const PROBE_IMAGE: &str = "docker.io/library/python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f";
 
-/// Runtime class the Kubernetes sandbox controller schedules sessions into.
-const SANDBOX_RUNTIME_CLASS: &str = "gvisor";
-
 /// Pods the probe creates, named `<job>-<role>`.
 const PROBE_ROLES: &[&str] = &[
     "listener",
@@ -28,7 +25,15 @@ const PROBE_ROLES: &[&str] = &[
     "admission-check",
 ];
 
-pub(crate) fn template() -> String {
+/// `sandbox_class_helper` is true when the chart also carries the sandbox RuntimeClass helper. A
+/// chart with only a container that has egress has no sandbox, so the probe runs in the default
+/// runtime class (the value is empty) instead of requiring a helper that chart does not emit.
+pub(crate) fn template(sandbox_class_helper: bool) -> String {
+    let runtime_class = if sandbox_class_helper {
+        r#"{{ include "deployment.sandboxRuntimeClassName" . | quote }}"#
+    } else {
+        r#""""#
+    };
     let script = include_str!("sandbox_cni_probe.py")
         .lines()
         .map(|line| format!("              {line}\n"))
@@ -349,6 +354,10 @@ spec:
               value: {image}
             - name: PROBE_RUNTIME_CLASS
               value: {runtime_class}
+            - name: PROBE_NODE_SELECTOR
+              value: {{{{ toJson (dig "nodeSelector" dict (default dict .Values.sandbox)) | quote }}}}
+            - name: PROBE_TOLERATIONS
+              value: {{{{ toJson (dig "tolerations" list (default dict .Values.sandbox)) | quote }}}}
             - name: PROBE_ADMISSION_POLICY
               value: {{{{ $cluster | quote }}}}
           command:
@@ -358,6 +367,5 @@ spec:
             - |
 {script}"#,
         image = PROBE_IMAGE,
-        runtime_class = SANDBOX_RUNTIME_CLASS,
     )
 }

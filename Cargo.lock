@@ -1389,6 +1389,8 @@ dependencies = [
  "ed25519-compact",
  "futures",
  "httparse",
+ "hyper 1.11.1",
+ "hyper-util",
  "libc",
  "nlink",
  "reqwest 0.12.28",

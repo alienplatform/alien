@@ -53,6 +53,10 @@ def main():
     # Fixed names: the probe's Role may read and delete only these objects.
     prefix = job
     runtime_class = os.environ["PROBE_RUNTIME_CLASS"]
+    # Where sessions run (`sandbox.nodeSelector`, `sandbox.tolerations`): the probe's clients must
+    # be tested on those nodes, not on whichever node the scheduler prefers.
+    node_selector = json.loads(os.environ.get("PROBE_NODE_SELECTOR") or "{}")
+    tolerations = json.loads(os.environ.get("PROBE_TOLERATIONS") or "[]")
     created = []
     deadline = time.monotonic() + 210
     marker = uuid.uuid4().hex
@@ -92,7 +96,12 @@ def main():
         spec = pod_spec(role, code)
         # Clients run in the sandbox runtime class, as sessions do.
         if role != "listener":
-            spec["spec"]["runtimeClassName"] = runtime_class
+            if runtime_class:
+                spec["spec"]["runtimeClassName"] = runtime_class
+            if node_selector:
+                spec["spec"]["nodeSelector"] = node_selector
+            if tolerations:
+                spec["spec"]["tolerations"] = tolerations
         return spec
 
     def pod_spec(role, code):

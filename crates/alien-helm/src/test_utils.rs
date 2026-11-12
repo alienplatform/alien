@@ -63,11 +63,37 @@ impl LinterRun {
     }
 }
 
+/// A chart with sandboxes refuses to render on a cluster whose version string names no vendor
+/// runtime until `sandbox.runtimeClassName` is set. Tests that are not about that choice set it
+/// so the chart renders under the default `helm template` version.
+fn default_sandbox_runtime_args(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+) -> Vec<std::ffi::OsString> {
+    let has_sandbox_values = files
+        .get("values.yaml")
+        .is_some_and(|values| values.contains("\nsandbox:\n"));
+    if has_sandbox_values && !values_yaml.is_some_and(|values| values.contains("runtimeClassName"))
+    {
+        vec![
+            OsStr::new("--set").to_os_string(),
+            OsStr::new("sandbox.runtimeClassName=gvisor").to_os_string(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Run `helm lint` against generated chart files.
 pub fn helm_lint(files: &LinterFiles) -> LinterRun {
     run_when_enabled("helm lint", || {
         let dir = write_files_to_temp_dir(files)?;
-        run_command("helm", [OsStr::new("lint"), dir.path().as_os_str()], None)
+        let mut args = vec![
+            OsStr::new("lint").to_os_string(),
+            dir.path().as_os_str().to_os_string(),
+        ];
+        args.extend(default_sandbox_runtime_args(files, None));
+        run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)
     })
 }
 
@@ -101,6 +127,7 @@ pub fn helm_template_and_validate_for_release(
             args.push(OsStr::new("-f").to_os_string());
             args.push(path.as_os_str().to_os_string());
         }
+        args.extend(default_sandbox_runtime_args(files, values_yaml));
 
         let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;
         let rendered = helm_template_with_debug_on_failure(rendered, &args)?;
@@ -147,6 +174,16 @@ pub fn helm_template_for_release(
     values_yaml: Option<&str>,
     release_name: &str,
 ) -> LinterRun {
+    helm_template_for_kube_version(files, values_yaml, release_name, None)
+}
+
+/// Render a chart as a cluster of the given version string, such as `v1.36.0-eks-abc123`, would.
+pub fn helm_template_for_kube_version(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+    kube_version: Option<&str>,
+) -> LinterRun {
     run_when_enabled("helm template", || {
         let dir = write_files_to_temp_dir(files)?;
         let values_path = if let Some(values) = values_yaml {
@@ -165,6 +202,13 @@ pub fn helm_template_for_release(
         if let Some(path) = &values_path {
             args.push(OsStr::new("-f").to_os_string());
             args.push(path.as_os_str().to_os_string());
+        }
+        match kube_version {
+            Some(version) => {
+                args.push(OsStr::new("--kube-version").to_os_string());
+                args.push(OsStr::new(version).to_os_string());
+            }
+            None => args.extend(default_sandbox_runtime_args(files, values_yaml)),
         }
 
         let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;

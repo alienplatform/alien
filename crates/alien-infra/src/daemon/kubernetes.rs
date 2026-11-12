@@ -1221,7 +1221,7 @@ impl KubernetesDaemonController {
                     message,
                 })
             })?;
-        let pod_spec = PodSpec {
+        let mut pod_spec = PodSpec {
             node_selector,
             priority_class_name,
             service_account_name: service_account_name.map(str::to_owned),
@@ -1234,6 +1234,7 @@ impl KubernetesDaemonController {
             termination_grace_period_seconds: config.stop_grace_period_seconds.map(i64::from),
             ..Default::default()
         };
+        crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         // Roll pods when the env Secret changes (e.g. token rotation) by stamping

@@ -3819,10 +3819,11 @@ impl ChartAnalysis {
             if let Some(container) = entry.config.downcast_ref::<Container>() {
                 fail_if_container_source_remains(resource_id, container)?;
                 if container.egress.is_some() {
-                    analysis.extra_templates.insert(
-                        "sandbox-cni-probe.yaml".into(),
-                        crate::emitters::sandbox_cni::template(),
-                    );
+                    // A sandbox's own probe (which names the sandbox RuntimeClass) wins.
+                    analysis
+                        .extra_templates
+                        .entry("sandbox-cni-probe.yaml".into())
+                        .or_insert_with(|| crate::emitters::sandbox_cni::template(false));
                 }
                 if let Some(endpoint) = container.public_endpoints.first() {
                     analysis.services.push(ServiceValue {
@@ -3843,8 +3844,12 @@ impl ChartAnalysis {
             }
 
             // Frozen resources contribute operator-local infrastructure bindings; live
-            // (workload) resources do not — they ARE the workload.
-            if entry.lifecycle != ResourceLifecycle::Frozen {
+            // (workload) resources do not — they ARE the workload. A sandbox is the exception:
+            // its NetworkPolicy, broker RBAC, RuntimeClass helper and CNI probe belong to the chart
+            // whichever lifecycle it has (the Operator creates the pods, the chart owns the rules
+            // that confine them), and the deployment template refers to the helper unconditionally.
+            let is_sandbox = entry.config.downcast_ref::<alien_core::Sandbox>().is_some();
+            if entry.lifecycle != ResourceLifecycle::Frozen && !is_sandbox {
                 continue;
             }
 
@@ -4249,8 +4254,19 @@ ephemeralStorage:
     if analysis.sandbox_broker {
         yaml.push_str(
             r#"
-# Sandbox sessions.
+# Where sandbox sessions run. The sandbox runtime is the cluster's own vendor runtime; the
+# Operator only checks that the class exists and is sandboxed.
 sandbox:
+  # RuntimeClass every sandbox pod uses. Empty picks it from the Kubernetes version: EKS uses
+  # `isolated-sandbox` (AWS Nitro Sandboxes), GKE uses `gvisor`. Set it on any other cluster
+  # (AKS: `kata-vm-isolation`; on-premises: the gVisor or Kata class your administrator installed).
+  runtimeClassName: ""
+  # Extra scheduling for sandbox pods, applied on top of what the RuntimeClass itself sets.
+  nodeSelector: {}
+  tolerations: []
+  # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is
+  # empty: it starts a pod on demand, which takes as long as the node and image pull need.
+  warmPoolSize: 2
   # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
   # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
   # these addresses and nothing else on private ranges. Find it with:
@@ -4752,6 +4768,10 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+            "runtimeClassName": { "type": "string" },
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array" },
+            "warmPoolSize": { "type": "integer", "minimum": 0 },
             "clusterDNS": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
@@ -6697,11 +6717,18 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: {}\n              value: {{{{ printf \"http://%s.%s.svc:%d\" (include \"deployment.fullname\" .) .Release.Namespace (int .Values.runtime.api.port) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_BROKER_URL
     );
+    let placement = format!(
+        "            - name: {}\n              value: {{{{ include \"deployment.sandboxRuntimeClassName\" . | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}\n            - name: {}\n              value: {{{{ ternary 2 .Values.sandbox.warmPoolSize (kindIs \"invalid\" .Values.sandbox.warmPoolSize) | int | toString | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS,
+        alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR,
+        alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS,
+        alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE
+    );
     let dns = format!(
         "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
     );
-    let broker = format!("{broker}{dns}");
+    let broker = format!("{broker}{placement}{dns}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"

@@ -68,6 +68,33 @@ pub fn review_for(token: &str) -> TokenReview {
     }
 }
 
+/// Builds a review request that accepts the token only if it was issued for `audience`.
+///
+/// Without an audience the API server checks a token against its own, so a ServiceAccount token
+/// mounted by default is accepted by anything that reviews it and is a credential for the API
+/// server as well. A token projected for one audience is useless anywhere else.
+pub fn review_for_audience(token: &str, audience: &str) -> TokenReview {
+    TokenReview {
+        spec: k8s_openapi::api::authentication::v1::TokenReviewSpec {
+            token: Some(token.to_string()),
+            audiences: Some(vec![audience.to_string()]),
+        },
+        ..Default::default()
+    }
+}
+
+/// Whether a verdict authenticated the token for `audience`. The API server reports the audiences
+/// it matched, and a verdict that names none is not one for this audience.
+pub fn authenticated_for_audience(review: &TokenReview, audience: &str) -> bool {
+    review.status.as_ref().is_some_and(|status| {
+        status.authenticated.unwrap_or(false)
+            && status
+                .audiences
+                .as_ref()
+                .is_some_and(|audiences| audiences.iter().any(|candidate| candidate == audience))
+    })
+}
+
 /// The authenticated username from a verdict, or `None` if the token was rejected.
 ///
 /// `None` covers both "not authenticated" and "authenticated with no username", because a caller
