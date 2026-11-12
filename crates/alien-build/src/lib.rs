@@ -93,8 +93,9 @@ struct DedupeKey {
     src: String,
     toolchain_type: ToolchainType,
     binary_name: String,
-    /// Restricted and opted-out containers get different image users, so they never share an image.
-    restricted: bool,
+    /// The `USER` the image is built with (see [`kubernetes_image_user`]). Containers that get
+    /// different users never share an image.
+    image_user: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -106,15 +107,16 @@ enum ToolchainType {
 }
 
 impl DedupeKey {
-    /// The key a container builds under: containers that differ in restricted/opted-out
-    /// get different image users, so they never share an image.
+    /// The key a container builds under: containers whose images get different users (restricted
+    /// default, explicit `runAsUser`, opt-out) never share an image.
     fn for_container(
         src: &str,
         toolchain: &ToolchainConfig,
+        settings: &BuildSettings,
         security: Option<&alien_core::ContainerSecurity>,
     ) -> Self {
         let mut key = Self::from_source_and_toolchain(src, toolchain);
-        key.restricted = alien_core::ContainerSecurity::is_restricted(security);
+        key.image_user = kubernetes_image_user(settings, security);
         key
     }
 
@@ -125,12 +127,12 @@ impl DedupeKey {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Rust,
                 binary_name: binary_name.clone(),
-                restricted: true,
+                image_user: None,
             },
             ToolchainConfig::TypeScript { binary_name } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::TypeScript,
-                restricted: true,
+                image_user: None,
                 binary_name: binary_name.clone().unwrap_or_else(|| "default".to_string()),
             },
             ToolchainConfig::Python {
@@ -140,7 +142,7 @@ impl DedupeKey {
             } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Python,
-                restricted: true,
+                image_user: None,
                 binary_name: format!(
                     "{}\0{}\0{}",
                     python_version.as_deref().unwrap_or_default(),
@@ -151,7 +153,7 @@ impl DedupeKey {
             ToolchainConfig::Docker { dockerfile, .. } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Docker,
-                restricted: true,
+                image_user: None,
                 binary_name: dockerfile
                     .clone()
                     .unwrap_or_else(|| "Dockerfile".to_string()),
@@ -941,7 +943,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         let mut dedupe_groups: HashMap<DedupeKey, Vec<(String, Container)>> = HashMap::new();
         for (resource_id, container, src, toolchain) in containers_to_build {
             let dedupe_key =
-                DedupeKey::for_container(&src, &toolchain, container.security.as_ref());
+                DedupeKey::for_container(
+                &src,
+                &toolchain,
+                &container_settings,
+                container.security.as_ref(),
+            );
             dedupe_groups
                 .entry(dedupe_key.clone())
                 .or_default()
@@ -1033,15 +1040,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Container,
                                 &related_resources,
-                                // One binary serves every container in the group, so it keeps the
-                                // image's own user as soon as any of them opts out.
-                                if containers_group.iter().all(|(_, c)| {
-                                    alien_core::ContainerSecurity::is_restricted(c.security.as_ref())
-                                }) {
-                                    kubernetes_image_user(&settings, None)
-                                } else {
-                                    None
-                                },
+                                // The key groups only containers whose images get the same user.
+                                dedupe_key.image_user,
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for container '{}' was cancelled", container_id);
@@ -5823,9 +5823,21 @@ mod tests {
     }
 
     #[test]
-    fn restricted_and_opted_out_containers_never_share_an_image() {
+    fn containers_with_different_image_users_never_share_an_image() {
         let toolchain = ToolchainConfig::Rust {
             binary_name: "app".to_string(),
+        };
+        let kubernetes = BuildSettings {
+            output_directory: String::new(),
+            platform: PlatformBuildSettings::Kubernetes {
+                base_platform: None,
+            },
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
         let opted_out = alien_core::ContainerSecurity {
             profile: alien_core::ContainerSecurityProfile::Unrestricted,
@@ -5834,15 +5846,18 @@ mod tests {
             read_only_root_filesystem: None,
             writable_paths: vec![],
         };
-        let restricted = DedupeKey::for_container("src", &toolchain, None);
-        assert_eq!(
-            restricted,
-            DedupeKey::for_container("src", &toolchain, None)
-        );
-        assert_ne!(
-            restricted,
-            DedupeKey::for_container("src", &toolchain, Some(&opted_out))
-        );
+        let explicit = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            ..opted_out.clone()
+        };
+        let key = |security| DedupeKey::for_container("src", &toolchain, &kubernetes, security);
+        let restricted = key(None);
+        assert_eq!(restricted, key(None));
+        assert_ne!(restricted, key(Some(&opted_out)));
+        // An explicit runAsUser keeps the image's user, like an opt-out, and unlike the default.
+        assert_ne!(restricted, key(Some(&explicit)));
+        assert_eq!(key(Some(&opted_out)), key(Some(&explicit)));
     }
 
     #[test]
