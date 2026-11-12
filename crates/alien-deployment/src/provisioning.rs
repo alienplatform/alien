@@ -79,7 +79,9 @@ pub async fn handle_provisioning(
 
     // Check the deployer secret slots first: which are filled decides how
     // workloads read them (see inject_environment_variables).
-    runtime_metadata.deployer_secrets = crate::helpers::check_deployer_secrets(
+    crate::helpers::refresh_deployer_secrets(
+        current.status,
+        &mut runtime_metadata,
         &target_stack,
         &stack_state,
         &client_config,
@@ -89,7 +91,7 @@ pub async fn handle_provisioning(
     .await?;
 
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(
+    let injected_deployer_secrets = crate::helpers::inject_environment_variables(
         &mut target_stack,
         &config,
         current.platform,
@@ -121,39 +123,33 @@ pub async fn handle_provisioning(
         info!("Secrets synced to vault successfully");
     }
 
-    // A required deployer secret the customer has not written blocks every
-    // workload start. Nothing is deployed until it is; the reports above say
-    // what is missing and where it goes.
+    // A required deployer secret the customer has not written holds the resources that
+    // read it, and what depends on them. Everything else keeps installing.
     let blocking = crate::helpers::deployer_secrets_blocking_start(
         &target_stack,
         &config,
         current.platform,
         &runtime_metadata.deployer_secrets,
     );
-    if !blocking.is_empty() {
-        let summary = blocking
-            .iter()
-            .map(|report| report.summary())
-            .collect::<Vec<_>>()
-            .join(", ");
-        info!(%summary, "Waiting for deployer secrets before starting workloads");
-
-        next.status = DeploymentStatus::WaitingForSecrets;
-        next.error =
-            Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
-        next.runtime_metadata = Some(runtime_metadata);
-        return Ok(DeploymentStepResult {
-            state: next,
-            suggested_delay_ms: Some(30_000),
-            update_heartbeat: false,
-            heartbeats: vec![],
-            observed_inventory_batches: vec![],
-        });
+    let held = crate::helpers::resources_held_for_missing_secrets(
+        &target_stack,
+        &injected_deployer_secrets,
+        &blocking,
+    );
+    let missing_secrets_summary = blocking
+        .iter()
+        .map(|report| report.summary())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if held.is_empty() {
+        runtime_metadata.resources_waiting_for_secrets.clear();
+        // No required secret is missing (or nothing reads it), so a wait recorded by an
+        // earlier step no longer describes this deployment. Clear it here: a step that is
+        // still in progress carries the previous error forward otherwise.
+        next.error = None;
+    } else {
+        info!(summary = %missing_secrets_summary, held = ?held, "Waiting for deployer secrets before starting the resources that read them");
     }
-    // Every required deployer secret is written now, so a wait recorded by an
-    // earlier step no longer describes this deployment. Clear it here: a step
-    // that is still in progress carries the previous error forward otherwise.
-    next.error = None;
 
     // A failure waiting for setup only reaches Provisioning through setup handing the
     // deployment back: any failure ends Provisioning in the step it happens, and a retry
@@ -182,6 +178,7 @@ pub async fn handle_provisioning(
         .deployment_config(&config)
         .lifecycle_filter(vec![ResourceLifecycle::Live])
         .running_resource_policy(RunningResourcePolicy::OptIn)
+        .held_resources(held.iter().cloned().collect())
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {
@@ -225,7 +222,28 @@ pub async fn handle_provisioning(
     let waiting_for_machines =
         machines_deployment_has_zero_machines(current.platform, &step_result.next_state);
 
-    let result = if waiting_for_machines {
+    let result = if !held.is_empty() && stack_status != StackStatus::Failure {
+        // Held resources keep the deployment from completing. Everything else has been
+        // stepped; an unrelated failure is not hidden behind the wait (it falls through).
+        next.status = DeploymentStatus::WaitingForSecrets;
+        next.stack_state = Some(step_result.next_state);
+        next.error = Some(
+            AlienError::new(ErrorData::DeployerSecretsMissing {
+                summary: missing_secrets_summary,
+            })
+            .into_generic(),
+        );
+        runtime_metadata.resources_waiting_for_secrets = held.into_iter().collect();
+        next.runtime_metadata = Some(runtime_metadata);
+
+        DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(step_result.suggested_delay_ms.unwrap_or(30_000).min(30_000)),
+            update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
+            observed_inventory_batches: vec![],
+        }
+    } else if waiting_for_machines {
         info!("Machines deployment is waiting for the first machine to join");
 
         next.status = DeploymentStatus::WaitingForMachines;
@@ -694,7 +712,9 @@ mod tests {
             controller.transition_to_update().unwrap();
             controller.transition_to_failure();
             dependency.status = controller.get_status();
-            dependency.set_internal_controller(Some(controller)).unwrap();
+            dependency
+                .set_internal_controller(Some(controller))
+                .unwrap();
             dependency.error = Some(
                 AlienError::new(ErrorData::StackExecutionFailed {
                     message: "denied".to_string(),
@@ -733,7 +753,12 @@ mod tests {
         let mut state = handed_back_after_interruption(true).await;
         for _ in 0..8 {
             state = step(state).await;
-            assert_ne!(state.status, DeploymentStatus::UpdateFailed, "{:?}", state.error);
+            assert_ne!(
+                state.status,
+                DeploymentStatus::UpdateFailed,
+                "{:?}",
+                state.error
+            );
             if state.status == DeploymentStatus::Running {
                 break;
             }

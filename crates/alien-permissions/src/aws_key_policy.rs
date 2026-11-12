@@ -191,6 +191,93 @@ pub fn aws_key_policy(
     json!({ "Version": "2012-10-17", "Statement": statements })
 }
 
+/// How a caller names the roles in a key policy: CloudFormation as intrinsic functions,
+/// Terraform as resource references, the key controller as real ARNs.
+pub trait AwsKeyPrincipals {
+    fn account_root(&self) -> Value;
+    /// The management role, when the stack has one.
+    fn management_role(&self) -> Option<Value>;
+    /// Pattern matching every IAM role whose name starts with the stack's prefix.
+    fn stack_role_pattern(&self) -> Value;
+    fn service_account_role(&self, service_account_id: &str) -> Value;
+    /// The Remote Bindings access role, when the stack has one.
+    fn remote_bindings_role(&self) -> Option<Value>;
+}
+
+/// Names roles by the convention the identity controllers follow when Alien creates the roles
+/// itself: `<prefix>-management`, `<prefix>-access` (Remote Bindings) and `<prefix>-<service
+/// account id>`. All of them are known before the roles exist.
+pub struct LiteralAwsPrincipals<'a> {
+    pub partition: &'a str,
+    pub account_id: &'a str,
+    pub prefix: &'a str,
+}
+
+impl LiteralAwsPrincipals<'_> {
+    fn role_arn(&self, name: &str) -> Value {
+        json!(format!(
+            "arn:{}:iam::{}:role/{}",
+            self.partition, self.account_id, name
+        ))
+    }
+
+    pub fn management_role_name(&self) -> String {
+        format!("{}-management", self.prefix)
+    }
+
+    pub fn access_role_name(&self) -> String {
+        format!("{}-access", self.prefix)
+    }
+
+    pub fn service_account_role_name(&self, id: &str) -> String {
+        format!("{}-{id}", self.prefix)
+    }
+}
+
+impl AwsKeyPrincipals for LiteralAwsPrincipals<'_> {
+    fn account_root(&self) -> Value {
+        json!(format!("arn:{}:iam::{}:root", self.partition, self.account_id))
+    }
+
+    fn management_role(&self) -> Option<Value> {
+        Some(self.role_arn(&self.management_role_name()))
+    }
+
+    fn stack_role_pattern(&self) -> Value {
+        self.role_arn(&format!("{}-*", self.prefix))
+    }
+
+    fn service_account_role(&self, id: &str) -> Value {
+        self.role_arn(&self.service_account_role_name(id))
+    }
+
+    fn remote_bindings_role(&self) -> Option<Value> {
+        Some(self.role_arn(&self.access_role_name()))
+    }
+}
+
+/// The key policy for the key an access plan describes.
+pub fn aws_key_policy_for_stack(
+    plan: &crate::key_access::KeyAccessPlan,
+    names: &impl AwsKeyPrincipals,
+) -> Value {
+    let mut runtime_role_arns: Vec<Value> = plan
+        .policy_runtime_accounts
+        .iter()
+        .map(|account| names.service_account_role(account))
+        .collect();
+    if plan.remote_bindings {
+        runtime_role_arns.extend(names.remote_bindings_role());
+    }
+    aws_key_policy(
+        names.account_root(),
+        names.management_role().filter(|_| plan.has_management_identity),
+        names.stack_role_pattern(),
+        plan.native_service_use,
+        runtime_role_arns,
+    )
+}
+
 /// Ids of the service accounts whose runtime roles may use the key: those with
 /// any grant scoped to the key, or a stack-wide grant that allows KMS key use.
 /// Stack-wide grants are judged by the actions they allow, not by their names.

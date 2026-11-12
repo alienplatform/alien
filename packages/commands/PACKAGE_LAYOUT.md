@@ -33,7 +33,7 @@ the same wire protocol.
 
 ### Receiver environment contract
 
-The identity variables are required and one token source is required. An empty,
+The identity variables are required and one credential source is required. An empty,
 missing, or invalid value
 fails fast with `COMMAND_RECEIVER_CONFIG_INVALID`, naming the specific
 variable. The Rust receiver (`alien_commands::Receiver`)
@@ -43,8 +43,11 @@ exactly so the two are behavior-identical twins.
 | Env var | Requirement | Notes |
 |---|---|---|
 | `ALIEN_COMMANDS_URL` | Base URL of the command server. | Pinned since this file's creation. |
-| `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound requests. Required unless `ALIEN_COMMANDS_TOKEN_FILE` is set. | Shared command-auth variable; the receiver uses it only for its outbound lease and response requests. |
+| `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound requests. Required unless `ALIEN_COMMANDS_TOKEN_FILE` is set, or `ALIEN_IDENTITY_PROVIDER=capabilityFile`. | Shared command-auth variable; the receiver uses it only for its outbound lease and response requests. |
 | `ALIEN_COMMANDS_TOKEN_FILE` | File containing the bearer token. Reread once after a 401 to support rotation. | Alternative to the literal token. |
+| `ALIEN_IDENTITY_PROVIDER` | `capabilityFile` selects the capability file below and ignores the two token variables. Any other value is ignored. | Same switch as the Rust receiver. |
+| `ALIEN_COMMANDS_CAPABILITY_FILE` | Required with `capabilityFile`. A private JSON file `{"token": "ax_cap_v1_...", "expiresAt": "<RFC 3339>"}` that the host replaces before expiry. Read on every request; refused when it has other fields, an expired or over-long lifetime, or is readable by other users. After a 401 the file is read again and the refused token is not sent twice. Before a result is submitted, the receiver asks the manager for fresh response authority. | The bounded credential an enrolled Operator mounts. The reader is the twin of the file source in `alien-client-core` `RuntimeCredentials`. |
+| `ALIEN_MANAGER_URL` | Required with `capabilityFile`. HTTPS (HTTP only on loopback). `ALIEN_COMMANDS_URL` must have the same origin. | The capability is sent only to this origin. |
 | `ALIEN_DEPLOYMENT_ID` | Deployment the leased commands belong to. | Reused; lease requests require it. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_ID` | This resource's id within the deployment's stack. | Reused from the existing target-resource variable. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` | `container` \| `daemon`, lowercase; any other value (e.g. `worker`) is rejected. | Lease requests need a typed target and a receiver must not guess it. Worker targets use Worker push delivery; a Container/Daemon receiver gets its type injected. |

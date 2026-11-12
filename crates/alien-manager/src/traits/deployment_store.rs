@@ -431,6 +431,7 @@ pub struct ReconcileInput {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    deployment_token_revocable: bool,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -443,8 +444,19 @@ impl ReconcileInput {
             dynamic_containers: None,
             operations_config: None,
             applied_configuration_revision: None,
+            deployment_token_revocable: false,
             generated_slots: Vec::new(),
         }
+    }
+
+    /// Whether the deployment's static token is safe to revoke. The manager
+    /// sets it when the Operator reported that the pull Secret its Deployment
+    /// references holds its own registry credential (or that no such Secret
+    /// needs one). Command receivers built before capability files do not hold
+    /// the token; they hold the deployment's commands-only key, which the
+    /// manager revokes itself. Embedders that revoke the token wait for this.
+    pub fn deployment_token_revocable(&self) -> bool {
+        self.deployment_token_revocable
     }
 
     /// Secret inputs the manager generated for the deployment, as metadata
@@ -492,6 +504,7 @@ pub struct ReconcileInputBuilder {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    deployment_token_revocable: bool,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -510,6 +523,12 @@ impl ReconcileInputBuilder {
 
     pub fn operations_config(mut self, config: alien_core::OperationsConfig) -> Self {
         self.operations_config = Some(config);
+        self
+    }
+
+    /// Attach whether the deployment's static token is safe to revoke.
+    pub fn deployment_token_revocable(mut self, revocable: bool) -> Self {
+        self.deployment_token_revocable = revocable;
         self
     }
 
@@ -539,6 +558,7 @@ impl ReconcileInputBuilder {
             dynamic_containers: self.dynamic_containers,
             operations_config: self.operations_config,
             applied_configuration_revision: self.applied_configuration_revision,
+            deployment_token_revocable: self.deployment_token_revocable,
             generated_slots: self.generated_slots,
         }
     }
@@ -553,6 +573,10 @@ pub struct ReconcileOutcome {
     pub target_operations_bundle_set: Option<alien_core::sync::TargetOperationsBundleSet>,
     /// Complete container target set supplied by a multi-tenant embedder.
     pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+    /// Operator image this deployment's Operator should run, supplied by a
+    /// multi-tenant embedder. The sync response sends it only when this
+    /// manager serves no charts of its own.
+    pub target_operator_image: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -581,6 +605,19 @@ pub trait DeploymentStore: Send + Sync {
         _caller: &crate::auth::Subject,
         _deployment_id: &str,
         _release_id: &str,
+    ) -> Result<(), AlienError> {
+        Ok(())
+    }
+
+    /// Record the version an Operator reports, without changing anything else
+    /// about the deployment. Used when the sync is rejected (for example a
+    /// protocol the Operator is too old for), so the deployment still shows
+    /// which Operator is stuck. Stores that do not track it keep the default.
+    async fn record_operator_version(
+        &self,
+        _caller: &crate::auth::Subject,
+        _deployment_id: &str,
+        _operator_version: &str,
     ) -> Result<(), AlienError> {
         Ok(())
     }
@@ -656,6 +693,22 @@ pub trait DeploymentStore: Send + Sync {
         deployment_id: &str,
         params: UpdateImportedDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
+
+    /// Persist a cloud-verified setup import. Implementations must lock the
+    /// current deployment assignment and setup binding, then recheck the
+    /// binding revision and authority deadline before committing any change.
+    /// No fallback to the ordinary credential-bearing mutation is permitted.
+    async fn update_verified_setup_import(
+        &self,
+        _caller: &crate::auth::Subject,
+        _authority: &crate::auth::verified_setup::VerifiedSetupImport,
+        _params: UpdateImportedDeploymentParams,
+    ) -> Result<DeploymentRecord, AlienError> {
+        Err(crate::error::ErrorData::forbidden(
+            "This deployment store does not support verified setup imports",
+        )
+        .into_generic())
+    }
 
     async fn get_deployment(
         &self,
@@ -800,6 +853,28 @@ pub trait DeploymentStore: Send + Sync {
         deployment_id: &str,
         release_id: &str,
     ) -> Result<(), AlienError>;
+
+    /// Queue an update to `target_release_id` for a deployment that settled
+    /// Running on `current_release_id` with nothing queued. Returns whether it
+    /// was queued; false when the deployment changed in the meantime.
+    ///
+    /// `routing` is the channel and pin the target was chosen from. A store
+    /// that keeps routing queues the update only while the deployment's routing
+    /// is still that, so a channel or pin change made after the choice is not
+    /// overridden by it.
+    ///
+    /// Stores that decide targets themselves keep the default, which queues
+    /// nothing.
+    async fn retarget_settled_deployment(
+        &self,
+        _caller: &crate::auth::Subject,
+        _deployment_id: &str,
+        _current_release_id: &str,
+        _target_release_id: &str,
+        _routing: Option<crate::traits::DeploymentRouting>,
+    ) -> Result<bool, AlienError> {
+        Ok(false)
+    }
 
     /// Set desired_release_id on eligible deployments when a new release is created.
     async fn set_desired_release(

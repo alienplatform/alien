@@ -2096,3 +2096,110 @@ fn management_roles_require_the_external_id_once_it_is_set() {
         );
     }
 }
+
+/// Stands in for a registered database emitter: the network emitter keys on the stack's frozen
+/// Postgres or Redis, not on what the database emitter renders.
+struct NoDatabaseResources;
+
+impl alien_terraform::TfEmitter for NoDatabaseResources {
+    fn emit(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<alien_terraform::TfFragment> {
+        Ok(alien_terraform::TfFragment::default())
+    }
+
+    fn emit_import_ref(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<hcl::Expression> {
+        Ok(hcl::Expression::Object(hcl::Object::new()))
+    }
+}
+
+/// The text of the Terraform resource block `kind.name` in the rendered module.
+fn resource_block_text(module: &alien_terraform::ModuleFiles, kind: &str, name: &str) -> String {
+    let header = format!("resource \"{kind}\" \"{name}\" {{");
+    module
+        .files
+        .values()
+        .find_map(|file| {
+            let start = file.find(&header)?;
+            let rest = &file[start..];
+            Some(rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_string())
+        })
+        .unwrap_or_else(|| panic!("{kind}.{name} is not in the module"))
+}
+
+/// A setup-created network keeps its VPC and private subnets when the stack has frozen data in
+/// them, because the retained network interfaces live there; gateways and routes stay deletable.
+/// Without a database nothing in the network is kept.
+#[test]
+fn aws_created_network_keeps_vpc_and_private_subnets_only_with_frozen_data() {
+    for (database, with_database) in [("postgres", true), ("redis", true), ("none", false)] {
+        let settings = StackSettings {
+            network: Some(NetworkSettings::Create {
+                cidr: Some("10.42.0.0/16".to_string()),
+                availability_zones: 2,
+            }),
+            ..StackSettings::default()
+        };
+        let mut builder = Stack::new("acme-kept-net".to_string()).add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+        let mut registry = alien_terraform::TfRegistry::built_in();
+        if with_database {
+            builder = if database == "postgres" {
+                registry.register(
+                    alien_core::Postgres::RESOURCE_TYPE,
+                    alien_core::Platform::Aws,
+                    NoDatabaseResources,
+                );
+                builder.add(
+                    alien_core::Postgres::new("database".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+            } else {
+                registry.register(
+                    alien_core::Redis::RESOURCE_TYPE,
+                    alien_core::Platform::Aws,
+                    NoDatabaseResources,
+                );
+                builder.add(
+                    alien_core::Redis::new("cache".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+            };
+        }
+        let stack = builder.build();
+        let module =
+            super::helpers::render_with_registry(&stack, TerraformTarget::Aws, settings, &registry)
+                .expect("module renders");
+        let kept = |kind: &str, name: &str| {
+            resource_block_text(&module, kind, name).contains("prevent_destroy = true")
+        };
+        assert_eq!(
+            kept("aws_vpc", "default_network"),
+            with_database,
+            "{database}: VPC"
+        );
+        assert_eq!(
+            kept("aws_subnet", "default_network_private"),
+            with_database,
+            "{database}: private subnets"
+        );
+        for (kind, name) in [
+            ("aws_internet_gateway", "default_network"),
+            ("aws_route_table", "default_network_private"),
+            ("aws_security_group", "default_network_workload"),
+        ] {
+            assert!(
+                !kept(kind, name),
+                "{database}: {kind}.{name} stays deletable"
+            );
+        }
+    }
+}

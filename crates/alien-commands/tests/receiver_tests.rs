@@ -25,7 +25,8 @@ use alien_commands::{INLINE_MAX_BYTES, PROTOCOL_VERSION};
 use alien_core::presigned::{PresignedOperation, PresignedRequest};
 use alien_core::{
     ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
-    ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_COMMANDS_URL, ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_COMMANDS_TOKEN_FILE, ENV_ALIEN_COMMANDS_URL,
+    ENV_ALIEN_DEPLOYMENT_ID,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tracing_subscriber::fmt::MakeWriter;
@@ -375,6 +376,54 @@ async fn receiver_passes_attempt_through_on_redelivery() {
         first_attempt + 1,
         "redelivered ctx.attempt must be the incremented server attempt"
     );
+
+    shutdown.shutdown();
+    run.await
+        .expect("run task join")
+        .expect("run returns Ok on shutdown");
+}
+
+/// A workload starts before its command credential file exists (the host
+/// writes it after start, or a refresh is late). The receiver keeps polling
+/// with backoff and delivers the command once the file appears.
+#[tokio::test]
+async fn receiver_keeps_polling_until_its_token_file_appears() {
+    let (server, mut env) = pull_server_and_env().await;
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("commands.token");
+    env.remove(ENV_ALIEN_COMMANDS_TOKEN);
+    env.insert(
+        ENV_ALIEN_COMMANDS_TOKEN_FILE.to_string(),
+        path.display().to_string(),
+    );
+
+    let mut receiver = Receiver::from_env_vars(&env)
+        .expect("receiver should build without the file")
+        .with_poll_interval(POLL_INTERVAL)
+        .with_poll_max_interval(POLL_INTERVAL * 2);
+    receiver.command("sync-data", |input: serde_json::Value, _| async move {
+        Ok(input)
+    });
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+
+    let created = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "sync-data"))
+        .await
+        .expect("create");
+    // Several polls fail on the missing file.
+    tokio::time::sleep(POLL_INTERVAL * 6).await;
+    assert!(
+        !run.is_finished(),
+        "a missing credential file must not stop the receiver"
+    );
+
+    std::fs::write(&path, "test-token\n").expect("write token file");
+    let status = server
+        .wait_for_completion(&created.command_id, Duration::from_secs(5))
+        .await
+        .expect("command should complete once the file exists");
+    assert_eq!(status.state, CommandState::Succeeded);
 
     shutdown.shutdown();
     run.await

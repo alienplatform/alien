@@ -13,6 +13,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+
 use super::AppState;
 use crate::auth::{Scope, Subject};
 
@@ -75,6 +77,43 @@ pub async fn serve(
     ) {
         return oci_error(StatusCode::FORBIDDEN, "DENIED", "token cannot pull images");
     }
+    relay_upstream(state, method, path, headers).await
+}
+
+/// Whether the request's Basic password is an unexpired enrollment code.
+pub async fn enrollment_code_pull(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(verifier) = state
+        .charts
+        .as_ref()
+        .and_then(|settings| settings.enrollment_codes.clone())
+    else {
+        return false;
+    };
+    let Some(code) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Basic "))
+        .and_then(|value| STANDARD.decode(value).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|value| value.split_once(':').map(|(_, code)| code.to_string()))
+        .filter(|code| code.starts_with("ax_enroll_"))
+    else {
+        return false;
+    };
+    verifier
+        .enrollment_code_is_live(&code)
+        .await
+        .unwrap_or(false)
+}
+
+/// Pass a pull of `alien-operator/...` through to the upstream image. The
+/// caller has authorized it.
+pub async fn relay_upstream(
+    state: &AppState,
+    method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+) -> Response {
     let Some(upstream) = state
         .charts
         .as_ref()

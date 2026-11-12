@@ -1164,13 +1164,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install zig and cargo-zigbuild
+        if: matrix.os == 'linux'
+        uses: ./.ci-tool-versions/.github/actions/setup-zigbuild
+
       - name: Build addon (${{ matrix.triple }})
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          pnpm --filter @alienplatform/bindings exec napi build \
-            --platform --release --target ${{ matrix.target }} \
-            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+          if [[ "${{ matrix.os }}" == linux ]]; then
+            .ci-tool-versions/packages/bindings/scripts/build-linux-addon.sh ${{ matrix.target }}
+          else
+            pnpm --filter @alienplatform/bindings exec napi build \
+              --platform --release --target ${{ matrix.target }} \
+              --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+          fi
+
+      # Linux addons are built against glibc 2.28 with cargo-zigbuild so they load on Debian 12,
+      # Amazon Linux 2023 and RHEL 9; this fails the leg if that regresses.
+      - name: Verify addon glibc floor and load on older base images
+        if: matrix.os == 'linux'
+        run: .ci-tool-versions/packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
       - name: Stage addon into platform package
         run: |

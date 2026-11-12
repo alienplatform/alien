@@ -22,6 +22,9 @@ pub struct AlienManagerBuilder {
     credential_resolver: Option<Arc<dyn CredentialResolver>>,
     telemetry_backend: Option<Arc<dyn TelemetryBackend>>,
     auth_validator: Option<Arc<dyn AuthValidator>>,
+    runtime_credentials: Option<Arc<crate::auth::runtime_capability::RuntimeCredentials>>,
+    runtime_identity_verifier:
+        Option<Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>>,
     authz: Option<Arc<dyn Authz>>,
     project_store: Option<Arc<dyn ProjectStore>>,
     server_bindings: Option<ServerBindings>,
@@ -84,6 +87,8 @@ impl AlienManagerBuilder {
             credential_resolver: None,
             telemetry_backend: None,
             auth_validator: None,
+            runtime_credentials: None,
+            runtime_identity_verifier: None,
             authz: None,
             project_store: None,
             server_bindings: None,
@@ -219,6 +224,26 @@ impl AlienManagerBuilder {
         self
     }
 
+    /// Accept bounded runtime credentials in addition to the configured validator.
+    /// Issuers and receivers must share this manager's audience and signing key.
+    pub fn runtime_credentials(
+        mut self,
+        credentials: Arc<crate::auth::runtime_capability::RuntimeCredentials>,
+    ) -> Self {
+        self.runtime_credentials = Some(credentials);
+        self
+    }
+
+    /// Enable identity exchange using authoritative component proof verification.
+    /// Requires `runtime_credentials` to configure this manager's issuer/receiver.
+    pub fn runtime_identity_verifier(
+        mut self,
+        verifier: Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>,
+    ) -> Self {
+        self.runtime_identity_verifier = Some(verifier);
+        self
+    }
+
     /// Inject the authorization policy. Default:
     /// [`crate::providers::OssAuthz`].
     pub fn authz(mut self, authz: Arc<dyn Authz>) -> Self {
@@ -351,7 +376,10 @@ impl AlienManagerBuilder {
         // --- Stores (only set if not already provided) ---
         // Channel routing joins the deployments table, so it comes with the
         // SQLite deployment store.
-        if self.deployment_store.is_none() && self.release_channels.is_none() {
+        // Routing is in the deployment store's database only when this builder
+        // creates both; a channel store supplied by the embedder keeps its own.
+        let routing_in_db = self.deployment_store.is_none() && self.release_channels.is_none();
+        if routing_in_db {
             self.release_channels = Some(Arc::new(
                 crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
             ));
@@ -362,9 +390,12 @@ impl AlienManagerBuilder {
             )));
         }
         if self.deployment_store.is_none() {
-            self.deployment_store = Some(Arc::new(
-                crate::stores::sqlite::SqliteDeploymentStore::new(db.clone()),
-            ));
+            let store = crate::stores::sqlite::SqliteDeploymentStore::new(db.clone());
+            self.deployment_store = Some(Arc::new(if routing_in_db {
+                store.with_routing_in_db()
+            } else {
+                store
+            }));
         }
         if self.release_store.is_none() {
             self.release_store = Some(Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(
@@ -815,6 +846,29 @@ impl AlienManagerBuilder {
             });
         }
 
+        // --- Identity exchange: cloud proofs and enrolled operator keys ---
+        if self.runtime_credentials.is_none() && self.runtime_identity_verifier.is_none() {
+            let key = crate::bootstrap::runtime_capability_key(&state_dir_for_db)?;
+            self.runtime_credentials = Some(Arc::new(
+                crate::auth::runtime_capability::RuntimeCredentials::new(
+                    self.config.base_url(),
+                    key,
+                )?,
+            ));
+            self.runtime_identity_verifier = Some(Arc::new(
+                crate::auth::standalone_identity::StandaloneRuntimeIdentity::new(
+                    Arc::new(crate::stores::sqlite::SqliteRuntimeIdentityStore::new(
+                        db.clone(),
+                    )),
+                    self.deployment_store.clone().unwrap(),
+                    self.credential_resolver.clone().unwrap(),
+                )
+                .context(ErrorData::ServerInitFailed {
+                    reason: "Failed to initialize identity exchange".to_string(),
+                })?,
+            ));
+        }
+
         // A manager with no cloud key-value store keeps the digest key next to its
         // state, in a file that appears complete or not at all.
         if !alien_deployment::secrets_digest_key_is_set() {
@@ -868,6 +922,37 @@ impl AlienManagerBuilder {
             require_provider!(self.credential_resolver, "credential_resolver");
         let telemetry_backend = require_provider!(self.telemetry_backend, "telemetry_backend");
         let auth_validator = require_provider!(self.auth_validator, "auth_validator");
+        // Before it enrolls, an operator pulls its own image with its code.
+        let charts = match (self.charts, &self.runtime_identity_verifier) {
+            (Some(charts), Some(verifier)) => {
+                let mut charts = (*charts).clone();
+                charts.enrollment_codes = Some(verifier.clone());
+                Some(Arc::new(charts))
+            }
+            (charts, _) => charts,
+        };
+        let extra_routes = if let Some(verifier) = self.runtime_identity_verifier {
+            let credentials = self.runtime_credentials.clone().ok_or_else(|| {
+                ErrorData::bad_request("Identity exchange requires runtime credentials")
+            })?;
+            let routes = crate::auth::identity_exchange::router(credentials, verifier);
+            Some(match self.extra_routes {
+                Some(existing) => existing.merge(routes),
+                None => routes,
+            })
+        } else {
+            self.extra_routes
+        };
+        let runtime_credentials = self.runtime_credentials.clone();
+        let auth_validator: Arc<dyn AuthValidator> = match self.runtime_credentials {
+            Some(credentials) => {
+                Arc::new(crate::auth::runtime_capability::RuntimeAuthValidator::new(
+                    credentials,
+                    auth_validator,
+                ))
+            }
+            None => auth_validator,
+        };
         let authz: Arc<dyn Authz> = self
             .authz
             .unwrap_or_else(|| Arc::new(crate::providers::OssAuthz));
@@ -906,12 +991,12 @@ impl AlienManagerBuilder {
                 include_initialize: !self.skip_initialize,
                 include_install: !self.skip_install,
             },
-            self.extra_routes,
+            extra_routes,
             self.platform_routes,
             self.dev_status_tx,
             self.import_registry,
             self.tunnels,
-            self.charts,
+            charts,
             self.release_channels,
             self.signing,
             self.bundle_signing_key,
@@ -920,6 +1005,10 @@ impl AlienManagerBuilder {
             value_access,
         )
         .await
+        .map(|mut manager| {
+            manager.runtime_credentials = runtime_credentials;
+            manager
+        })
     }
 }
 
@@ -1177,7 +1266,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
         charts,
-        release_channels,
+        release_channels: release_channels.clone(),
         signing: signing.clone(),
         bundle_signing_key,
         bundle_sources,
@@ -1213,6 +1302,7 @@ async fn finalize(
     );
 
     Ok(AlienManager {
+        runtime_credentials: None,
         config,
         router,
         deployment_store,
@@ -1221,9 +1311,11 @@ async fn finalize(
         server_bindings,
         dev_status_tx,
         log_buffer,
+        token_store,
         command_server,
         signing,
         values,
+        release_channels,
     })
 }
 

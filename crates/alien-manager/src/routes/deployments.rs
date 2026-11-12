@@ -18,7 +18,8 @@ use alien_core::{
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, TokenType,
+    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord,
+    DeploymentRouting, TokenType, DEFAULT_CHANNEL,
 };
 
 use super::{auth, AppState};
@@ -116,6 +117,15 @@ pub struct DeploymentResponse {
     pub environment_info: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_metadata: Option<serde_json::Value>,
+    /// Version of the Operator that last reported this deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+    /// Whether that Operator is older than the Operator this manager's charts
+    /// install, so the next chart version would upgrade it. Absent when the
+    /// Operator version is unknown, isn't a release version, or this manager
+    /// serves no charts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_behind_target: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_release_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,6 +352,18 @@ fn signing_fingerprint(r: &DeploymentRecord) -> Option<String> {
         .map(|signing| signing.fingerprint.clone())
 }
 
+/// Fill in `operator_behind_target` from the Operator image this manager's
+/// charts install.
+fn with_operator_signal(
+    mut response: DeploymentResponse,
+    charts: Option<&super::charts::ChartSettings>,
+) -> DeploymentResponse {
+    response.operator_behind_target = charts
+        .zip(response.operator_version.as_deref())
+        .and_then(|(charts, version)| charts.operator_behind_target(version));
+    response
+}
+
 fn record_to_response(
     r: &DeploymentRecord,
     deployment_group: Option<DeploymentGroupMinimal>,
@@ -384,6 +406,11 @@ fn record_to_response(
             .runtime_metadata
             .as_ref()
             .map(|m| serde_json::to_value(m).unwrap_or_default()),
+        operator_version: r
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.operator_version.clone()),
+        operator_behind_target: None,
         current_release_id: r.current_release_id.clone(),
         desired_release_id: r.desired_release_id.clone(),
         import_source: r.import_source,
@@ -807,6 +834,24 @@ async fn create_deployment(
         }
     }
 
+    // A pin given at creation holds the deployment on that release, as
+    // `PUT /v1/deployments/{id}/pin` does; without one the channel's later
+    // releases would replace it.
+    if let (Some(pinned), Some(channels)) =
+        (req.pinned_release_id.as_deref(), &state.release_channels)
+    {
+        let routing = DeploymentRouting {
+            channel: DEFAULT_CHANNEL.to_string(),
+            pinned_release_id: Some(pinned.to_string()),
+        };
+        if let Err(e) = channels
+            .set_deployment_routing(&deployment.id, &routing)
+            .await
+        {
+            return e.into_response();
+        }
+    }
+
     // Set the desired release if we found one
     if !awaits_registration {
         if let Some(ref release_id) = desired_release_id {
@@ -825,7 +870,10 @@ async fn create_deployment(
         StatusCode::CREATED,
         Json(CreateDeploymentResponse {
             deployment_model: deployment_model_for_record(&deployment),
-            deployment: record_to_response(&deployment, None),
+            deployment: with_operator_signal(
+                record_to_response(&deployment, None),
+                state.charts.as_deref(),
+            ),
             token,
         }),
     )
@@ -977,7 +1025,10 @@ async fn list_deployments(
         } else {
             None
         };
-        items.push(record_to_response(d, dg_minimal));
+        items.push(with_operator_signal(
+            record_to_response(d, dg_minimal),
+            state.charts.as_deref(),
+        ));
     }
 
     Json(ListDeploymentsResponse {
@@ -1021,7 +1072,10 @@ async fn get_deployment(
     }
 
     Json(deployment_response_for_client(
-        record_to_response(&deployment, None),
+        with_operator_signal(
+            record_to_response(&deployment, None),
+            state.charts.as_deref(),
+        ),
         &headers,
     ))
     .into_response()
@@ -1490,6 +1544,24 @@ mod tests {
         async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError> {
             unreachable!("deployment deletion must not list tokens")
         }
+
+        async fn create_commands_key(
+            &self,
+            _deployment_id: &str,
+            _key_prefix: &str,
+            _key_hash: &str,
+            _generation: u64,
+        ) -> Result<Option<TokenRecord>, AlienError> {
+            unreachable!("deployment deletion must not create a commands key")
+        }
+
+        async fn commands_key_generation(&self, _deployment_id: &str) -> Result<u64, AlienError> {
+            unreachable!("deployment deletion must not read a commands key generation")
+        }
+
+        async fn revoke_commands_keys(&self, _deployment_id: &str) -> Result<(), AlienError> {
+            unreachable!("deployment deletion must not revoke commands keys")
+        }
     }
 
     fn deployment_record() -> DeploymentRecord {
@@ -1529,6 +1601,40 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn a_deployment_reports_its_operator_and_whether_it_is_behind_the_charts() {
+        let charts = super::super::charts::ChartSettings::new(
+            Some("ghcr.io/alienplatform/alien-operator:v3.3.59".to_string()),
+            false,
+        );
+        let mut deployment = deployment_record();
+        // No Operator has reported yet.
+        let response = with_operator_signal(record_to_response(&deployment, None), Some(&charts));
+        assert_eq!(response.operator_version, None);
+        assert_eq!(response.operator_behind_target, None);
+
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            operator_version: Some("3.3.40".to_string()),
+            ..Default::default()
+        });
+        let behind = with_operator_signal(record_to_response(&deployment, None), Some(&charts));
+        assert_eq!(behind.operator_version.as_deref(), Some("3.3.40"));
+        assert_eq!(behind.operator_behind_target, Some(true));
+        let json = serde_json::to_value(&behind).unwrap();
+        assert_eq!(json["operatorBehindTarget"], true);
+
+        // A manager that serves no charts has no target to compare with.
+        let no_charts = with_operator_signal(record_to_response(&deployment, None), None);
+        assert_eq!(no_charts.operator_behind_target, None);
+
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            operator_version: Some("3.3.59".to_string()),
+            ..Default::default()
+        });
+        let current = with_operator_signal(record_to_response(&deployment, None), Some(&charts));
+        assert_eq!(current.operator_behind_target, Some(false));
     }
 
     #[test]
@@ -1632,6 +1738,7 @@ mod tests {
                         record: returned,
                         target_operations_bundle_set: None,
                         target_dynamic_containers: None,
+                        target_operator_image: None,
                     })
                 });
             let request = Request::builder()
@@ -1879,9 +1986,7 @@ mod tests {
 
     /// A validator that fails every request with a fixed error, the way an
     /// embedder's validator fails when its identity service answers.
-    struct FailingValidator {
-        retryable: bool,
-    }
+    struct FailingValidator(AlienError);
 
     #[async_trait]
     impl crate::traits::AuthValidator for FailingValidator {
@@ -1889,15 +1994,19 @@ mod tests {
             &self,
             _headers: &http::HeaderMap,
         ) -> Result<Option<Subject>, AlienError> {
-            let mut error = AlienError::new(alien_error::GenericError {
-                message: "identity service answered 503 at http://identity.internal".to_string(),
-            });
-            error.retryable = self.retryable;
-            Err(error)
+            Err(self.0.clone())
         }
     }
 
     async fn list_with_failing_validator(retryable: bool) -> (StatusCode, serde_json::Value) {
+        let mut error = AlienError::new(alien_error::GenericError {
+            message: "identity service answered 503 at http://identity.internal".to_string(),
+        });
+        error.retryable = retryable;
+        list_with_validator_error(error).await
+    }
+
+    async fn list_with_validator_error(error: AlienError) -> (StatusCode, serde_json::Value) {
         // The store must not be reached when authentication fails.
         let deployment_store = MockDeploymentStore::new();
         let request = Request::builder()
@@ -1908,7 +2017,7 @@ mod tests {
             .expect("request should build");
         send_with_validator(
             deployment_store,
-            Arc::new(FailingValidator { retryable }),
+            Arc::new(FailingValidator(error)),
             request,
             true,
         )
@@ -2081,6 +2190,43 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
         assert_eq!(body["code"], "UNAUTHORIZED", "{body}");
         assert_eq!(body["retryable"], false, "{body}");
+    }
+
+    fn refusal(code: &str, message: &str, status: u16, internal: bool) -> AlienError {
+        let mut error = AlienError::new(alien_error::GenericError {
+            message: message.to_string(),
+        });
+        error.code = code.to_string();
+        error.http_status_code = Some(status);
+        error.internal = internal;
+        error
+    }
+
+    #[tokio::test]
+    async fn a_refusal_the_validator_marks_safe_to_show_keeps_its_status_and_message() {
+        let message = "This client is too old. Upgrade it and try again.";
+        let (status, body) =
+            list_with_validator_error(refusal("CLIENT_UPGRADE_REQUIRED", message, 409, false))
+                .await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "CLIENT_UPGRADE_REQUIRED", "{body}");
+        assert_eq!(body["message"], message, "{body}");
+        assert_eq!(body["retryable"], false, "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_internal_or_non_client_refusal_still_gets_a_401() {
+        for error in [
+            refusal("CLIENT_UPGRADE_REQUIRED", "secret details", 409, true),
+            refusal("UPSTREAM_FAILED", "upstream answered 502", 502, false),
+            refusal("UNAUTHORIZED", "token rejected", 401, false),
+        ] {
+            let (status, body) = list_with_validator_error(error).await;
+
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+            assert_eq!(body["code"], "UNAUTHORIZED", "{body}");
+        }
     }
 
     /// `<group>/<name>` specs send the group's name: `alien dev` names its group `local-dev`

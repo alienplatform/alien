@@ -66,6 +66,7 @@ pub(super) fn decide(
     deployment: &DeploymentRecord,
     report: &InstalledSetup,
     target: &Stack,
+    current_chart_version: Option<&str>,
 ) -> ReportDecision {
     let Some(metadata) = deployment.runtime_metadata.as_ref() else {
         return ReportDecision::NoOp;
@@ -83,11 +84,25 @@ pub(super) fn decide(
     }
 
     // Only the release the deployment is waiting for can complete its update.
-    // With no release waiting there is no update to authorize: a chart that
-    // differs then is an older chart (after a rollback) or a newer one the
-    // deployment has not been pointed at yet.
+    // With no release waiting there is no update to authorize. A chart that
+    // differs then is a rollback to an older chart, which the Operator now
+    // runs while the deployment's resources belong to the current release: the
+    // owner must upgrade back to the current release's chart. A newer chart the
+    // deployment has not been pointed at yet differs too, and the same
+    // instruction applies until the deployment is pointed at it.
     let Some(waiting) = deployment.desired_release_id.as_deref() else {
-        return ReportDecision::NoOp;
+        return match deployment.current_release_id.as_deref() {
+            Some(current) if current != report.release_id => {
+                let chart = current_chart_version
+                    .map(|version| format!("chart version {version}"))
+                    .unwrap_or_else(|| "the chart".to_string());
+                ReportDecision::Refuse(format!(
+                    "The installed chart (release {}) has a different setup than release {current}, which this deployment runs. Upgrade to {chart} for release {current}.",
+                    report.release_id
+                ))
+            }
+            _ => ReportDecision::NoOp,
+        };
     };
     if waiting != report.release_id {
         return ReportDecision::Refuse(format!(
@@ -219,7 +234,8 @@ async fn apply_report(
     // With no release waiting there is no update to authorize, so nothing in
     // the release is needed: an idle sync only records the Helm release name.
     let Some(waiting) = deployment.desired_release_id.as_deref() else {
-        return record_match(state, subject, deployment, report, true).await;
+        return record_without_waiting(state, subject, deployment, report, settings, stack_state)
+            .await;
     };
 
     // Whether a chart can carry the waiting release depends on the release,
@@ -266,7 +282,7 @@ async fn apply_report(
         Err(reason) => return record_refusal(state, subject, deployment, report, reason).await,
     };
 
-    match decide(deployment, report, &target) {
+    match decide(deployment, report, &target, None) {
         ReportDecision::NoOp => record_match(state, subject, deployment, report, false).await,
         ReportDecision::Refuse(reason) => {
             record_refusal(state, subject, deployment, report, reason).await
@@ -293,6 +309,63 @@ async fn apply_report(
             write(state, subject, deployment, report, metadata, true).await
         }
     }
+}
+
+/// A report with no release waiting. It matches unless the installed chart's
+/// setup differs from the current release's, as after `helm rollback` to an
+/// older chart: then the refusal names the chart to upgrade back to.
+async fn record_without_waiting(
+    state: &AppState,
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+    report: &InstalledSetup,
+    settings: &alien_core::StackSettings,
+    stack_state: &alien_core::StackState,
+) -> Result<bool, AlienError> {
+    // A report for the current release, or one with the fingerprint the
+    // deployment already holds, is the idle case: it needs no release read.
+    let may_differ = deployment
+        .current_release_id
+        .as_deref()
+        .is_some_and(|current| current != report.release_id)
+        && deployment.setup_fingerprint.as_deref() != Some(report.setup_fingerprint.as_str());
+    if may_differ {
+        // A reported release that is unknown or cannot be prepared says
+        // nothing about the setup, so it is treated as a match.
+        if let Ok(target) = target_of_release(
+            state,
+            subject,
+            deployment,
+            settings,
+            stack_state,
+            &report.release_id,
+        )
+        .await?
+        {
+            let current_chart = current_chart_version(state, subject, deployment).await;
+            if let ReportDecision::Refuse(reason) =
+                decide(deployment, report, &target, current_chart.as_deref())
+            {
+                return record_refusal(state, subject, deployment, report, reason).await;
+            }
+        }
+    }
+    record_match(state, subject, deployment, report, true).await
+}
+
+/// The chart version this manager serves for the deployment's current release.
+async fn current_chart_version(
+    state: &AppState,
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+) -> Option<String> {
+    let current = deployment.current_release_id.as_deref()?;
+    let release = state
+        .release_store
+        .get_release(subject, current)
+        .await
+        .ok()??;
+    super::charts::served_chart_version(state, subject, &release).await
 }
 
 /// The stack `release_id` prepares to for this deployment, or the reason it
@@ -499,6 +572,9 @@ async fn write(
         return Ok(false);
     };
     let lane_known = deployment.setup_target.is_some();
+    // A refused chart's fingerprint is not stored as the deployment's: the next
+    // report would match it and clear the refusal while the chart still differs.
+    let chart_accepted = runtime_metadata.setup_report_refusal.is_none();
     let result = state
         .deployment_store
         .update_imported_stack_state(
@@ -516,7 +592,7 @@ async fn write(
                 } else {
                     report.setup_target.clone()
                 },
-                setup_fingerprint: if schedule_reconciliation || !lane_known {
+                setup_fingerprint: if schedule_reconciliation || (!lane_known && chart_accepted) {
                     report.setup_fingerprint.clone()
                 } else {
                     deployment.setup_fingerprint.clone().unwrap_or_default()
@@ -724,7 +800,12 @@ pub(super) mod tests {
     fn a_chart_that_adds_a_chart_rendered_resource_mints_for_exactly_that_change() {
         let installed = baseline();
         let target = with_service_account(&installed);
-        let decision = decide(&deployment(installed.clone()), &report("rel_2"), &target);
+        let decision = decide(
+            &deployment(installed.clone()),
+            &report("rel_2"),
+            &target,
+            None,
+        );
 
         let ReportDecision::Mint(authorization) = decision else {
             panic!("expected a mint, got {decision:?}");
@@ -754,7 +835,7 @@ pub(super) mod tests {
             ..Default::default()
         });
 
-        let decision = decide(&protected, &report("rel_2"), &target);
+        let decision = decide(&protected, &report("rel_2"), &target, None);
 
         assert!(
             matches!(&decision, ReportDecision::Refuse(reason) if reason.contains("protected")),
@@ -769,7 +850,7 @@ pub(super) mod tests {
             let mut record = deployment(installed.clone());
             record.status = status.to_string();
             assert_eq!(
-                decide(&record, &report("rel_2"), &installed),
+                decide(&record, &report("rel_2"), &installed, None),
                 ReportDecision::NoOp,
                 "status {status}"
             );
@@ -777,14 +858,34 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_chart_that_differs_while_no_release_waits_mints_nothing() {
+    fn a_chart_for_an_older_release_after_a_rollback_is_refused_with_the_current_chart() {
+        // The deployment runs rel_1 with nothing waiting; the Operator was
+        // rolled back to a chart whose setup differs from rel_1's.
+        let installed = baseline();
+        let rolled_back = with_service_account(&installed);
+        let mut record = deployment(installed);
+        record.desired_release_id = None;
+        record.status = "running".to_string();
+        let ReportDecision::Refuse(reason) =
+            decide(&record, &report("rel_0"), &rolled_back, Some("1.0.3"))
+        else {
+            panic!("a rollback across a setup change must be recorded, not ignored");
+        };
+        assert!(
+            reason.contains("1.0.3") && reason.contains("rel_1") && reason.contains("rel_0"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_chart_for_the_current_release_while_no_release_waits_mints_nothing() {
         let installed = baseline();
         let target = with_service_account(&installed);
         let mut record = deployment(installed);
         record.desired_release_id = None;
         record.status = "running".to_string();
         assert_eq!(
-            decide(&record, &report("rel_1"), &target),
+            decide(&record, &report("rel_1"), &target, None),
             ReportDecision::NoOp
         );
     }
@@ -794,7 +895,7 @@ pub(super) mod tests {
         let installed = baseline();
         let target = with_service_account(&installed);
         let ReportDecision::Refuse(reason) =
-            decide(&deployment(installed), &report("rel_0"), &target)
+            decide(&deployment(installed), &report("rel_0"), &target, None)
         else {
             panic!("expected a refusal");
         };
@@ -809,7 +910,7 @@ pub(super) mod tests {
         let installed = baseline();
         let target = with_storage(&installed);
         let ReportDecision::Refuse(reason) =
-            decide(&deployment(installed), &report("rel_2"), &target)
+            decide(&deployment(installed), &report("rel_2"), &target, None)
         else {
             panic!("expected a refusal");
         };
@@ -826,7 +927,8 @@ pub(super) mod tests {
         let target = with_service_account(&installed);
         let mut on_cloud = deployment(installed);
         on_cloud.base_platform = Some(Platform::Aws);
-        let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), &target) else {
+        let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), &target, None)
+        else {
             panic!("expected a refusal");
         };
         assert!(reason.contains("reader-sa"), "{reason}");
@@ -841,12 +943,12 @@ pub(super) mod tests {
         record.setup_target = Some("cloudformation".to_string());
         record.setup_fingerprint_version = Some(1);
         assert!(matches!(
-            decide(&record, &report("rel_2"), &target),
+            decide(&record, &report("rel_2"), &target, None),
             ReportDecision::Refuse(_)
         ));
         record.setup_target = Some("helm".to_string());
         assert!(matches!(
-            decide(&record, &report("rel_2"), &target),
+            decide(&record, &report("rel_2"), &target, None),
             ReportDecision::Mint(_)
         ));
     }
@@ -934,6 +1036,8 @@ pub(super) mod tests {
         installed_release: String,
         waiting_release: String,
         written: std::sync::Arc<std::sync::Mutex<Vec<alien_core::RuntimeMetadata>>>,
+        /// The (lane, fingerprint) each write would store on the deployment.
+        stored_setup: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
         db: std::sync::Arc<crate::stores::sqlite::SqliteDatabase>,
         _temp: tempfile::TempDir,
     }
@@ -1008,11 +1112,17 @@ pub(super) mod tests {
             .prepared_stack = Some(prepared);
 
         let written = Arc::new(Mutex::new(Vec::new()));
+        let stored_setup = Arc::new(Mutex::new(Vec::new()));
         let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
         let sink = written.clone();
+        let setup_sink = stored_setup.clone();
         store
             .expect_update_imported_stack_state()
             .returning(move |_, _, params| {
+                setup_sink
+                    .lock()
+                    .expect("log")
+                    .push((params.setup_target, params.setup_fingerprint));
                 sink.lock().expect("log").push(params.runtime_metadata);
                 Err(if conflict {
                     AlienError::new(crate::error::ErrorData::DeploymentChangedConcurrently {
@@ -1049,6 +1159,7 @@ pub(super) mod tests {
             installed_release,
             waiting_release,
             written,
+            stored_setup,
             db,
             _temp: temp,
         }
@@ -1073,6 +1184,76 @@ pub(super) mod tests {
             .expect("the verdict is recorded");
         assert_eq!(required.release_id, f.waiting_release);
         assert!(required.reason.contains("archive"), "{}", required.reason);
+    }
+
+    /// After `helm rollback` to a chart with another setup, nothing waits: the
+    /// refusal is stored for the owner instead of the report being ignored.
+    #[tokio::test]
+    async fn a_rollback_across_a_setup_change_is_stored_as_a_refusal() {
+        let mut f = waiting_fixture().await;
+        f.record.desired_release_id = None;
+        f.record.status = "running".to_string();
+        f.record.current_release_id = Some(f.installed_release.clone());
+        // The Operator runs a chart whose setup differs from the current release's.
+        let mut rolled_back = report(&f.waiting_release);
+        rolled_back.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
+
+        let written = f.written.lock().expect("log");
+        assert_eq!(written.len(), 1);
+        let refusal = written[0]
+            .setup_report_refusal
+            .as_ref()
+            .expect("the refusal is recorded");
+        assert_eq!(refusal.reported_release_id, f.waiting_release);
+        assert!(
+            refusal.reason.contains(&f.installed_release),
+            "{}",
+            refusal.reason
+        );
+        drop(written);
+
+        // The next sync sees the record that write produced, on a deployment
+        // whose lane was not known before. The refused chart's fingerprint is
+        // not what the deployment holds, so the report is judged again and the
+        // refusal stays.
+        let (target, fingerprint) = f.stored_setup.lock().expect("log")[0].clone();
+        f.record.setup_target = Some(target);
+        f.record.setup_fingerprint = Some(fingerprint);
+        f.record.setup_fingerprint_version = Some(rolled_back.setup_fingerprint_version);
+        f.record.runtime_metadata = Some(f.written.lock().expect("log")[0].clone());
+        handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
+        let written = f.written.lock().expect("log");
+        assert!(
+            written.iter().all(|m| m.setup_report_refusal.is_some()),
+            "a later sync must not clear the refusal"
+        );
+    }
+
+    /// A first install that failed setup still reports its installed setup: the
+    /// manager records the verdict and the rollback refusal as it does for a
+    /// running deployment, and may repair setup from this state.
+    #[tokio::test]
+    async fn a_report_is_accepted_while_the_first_install_has_failed_setup() {
+        let mut f = waiting_fixture().await;
+        f.record.status = "initial-setup-failed".to_string();
+        assert!(crate::routes::stack::can_reconcile_after_import(&f.record));
+        let mut stale = report(&f.installed_release);
+        stale.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &stale).await;
+        {
+            let written = f.written.lock().expect("log");
+            assert_eq!(written.len(), 1, "the report is recorded");
+            assert!(written[0].cloud_setup_required.is_some());
+        }
+        f.record.desired_release_id = None;
+        f.record.current_release_id = Some(f.installed_release.clone());
+        let mut rolled_back = report(&f.waiting_release);
+        rolled_back.release_name = None;
+        handle_installed_setup(&f.state, &f.subject, &f.record, &rolled_back).await;
+        let written = f.written.lock().expect("log");
+        assert_eq!(written.len(), 2);
+        assert!(written[1].setup_report_refusal.is_some());
     }
 
     /// The verdict is recorded; the installed chart keeps reporting what runs.
@@ -1182,16 +1363,14 @@ pub(super) mod tests {
         body
     }
 
-    /// What the Operator installed from the chart this manager serves for
-    /// `release_id` would report: the chart is pulled over the registry
-    /// routes, rendered with `helm template`, and the report is read from the
-    /// Operator container's environment and the chart's ConfigMap, the way the
-    /// Operator reads them.
-    async fn report_from_served_chart(
+    /// The chart archive this manager serves for `release_id`, pulled over the
+    /// registry routes as Helm does.
+    async fn served_chart_archive(
         state: &AppState,
         chart_name: &str,
         release_id: &str,
-    ) -> InstalledSetup {
+        directory: &std::path::Path,
+    ) -> std::path::PathBuf {
         let tags: serde_json::Value = serde_json::from_slice(
             &pull_chart_path(state, &format!("charts/{chart_name}/tags/list")).await,
         )
@@ -1211,10 +1390,21 @@ pub(super) mod tests {
             }
         }
         let chart = chart.unwrap_or_else(|| panic!("no chart is served for {release_id}"));
-
-        let directory = tempfile::tempdir().expect("chart directory");
-        let archive = directory.path().join("chart.tgz");
+        let archive = directory.join(format!("{release_id}.tgz"));
         std::fs::write(&archive, chart).expect("write chart");
+        archive
+    }
+
+    /// What the Operator installed from the chart this manager serves for
+    /// `release_id` would report: the chart is rendered with `helm template`
+    /// and the report is read the way the Operator reads it.
+    async fn report_from_served_chart(
+        state: &AppState,
+        chart_name: &str,
+        release_id: &str,
+    ) -> InstalledSetup {
+        let directory = tempfile::tempdir().expect("chart directory");
+        let archive = served_chart_archive(state, chart_name, release_id, directory.path()).await;
         let output = std::process::Command::new("helm")
             .arg("template")
             .arg("shop")
@@ -1233,9 +1423,13 @@ pub(super) mod tests {
             "helm template failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        report_from_manifests(&rendered, release_id)
+    }
 
-        // `- name: X` followed by `value: "..."`, as the chart renders env
-        // entries; the ConfigMap holds the release in `setup-release-id`.
+    /// The report the Operator makes from manifests: `- name: X` followed by
+    /// `value: "..."` for env entries; the ConfigMap holds the release in
+    /// `setup-release-id`. Works on `helm template` and `kubectl get -o yaml`.
+    fn report_from_manifests(rendered: &str, release_id: &str) -> InstalledSetup {
         let unquote = |value: &str| value.trim().trim_matches('"').to_string();
         let mut env = BTreeMap::new();
         let mut release_file = None;
@@ -1280,6 +1474,363 @@ pub(super) mod tests {
             .await
             .expect("read deployment")
             .expect("deployment exists")
+    }
+
+    /// A manager with two published releases and one Helm-installed deployment
+    /// (no setup lane yet) in the SQLite store. The deployment's prepared
+    /// stack is `first`'s when `on_second` is false, else `second`'s; it waits
+    /// for `second` when `waits_for_second` is set.
+    struct World {
+        state: AppState,
+        deployments: Arc<SqliteDeploymentStore>,
+        operator: Subject,
+        deployment_id: String,
+        first: String,
+        second: String,
+        _temp: tempfile::TempDir,
+    }
+
+    async fn store_world(
+        first: Stack,
+        second: Stack,
+        status: &str,
+        on_second: bool,
+        waits_for_second: bool,
+    ) -> World {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let deployments = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let publish = |stack: Stack| {
+            let releases = releases.clone();
+            async move {
+                releases
+                    .create_release(
+                        &Subject::system(),
+                        CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: std::collections::HashMap::from([(
+                                Platform::Kubernetes,
+                                stack,
+                            )]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                            setup_templates: Default::default(),
+                            signed_stacks: Default::default(),
+                        },
+                    )
+                    .await
+                    .expect("release")
+            }
+        };
+        let first = publish(first).await;
+        let second = publish(second).await;
+        let group = deployments
+            .create_deployment_group(
+                &Subject::system(),
+                CreateDeploymentGroupParams {
+                    name: "customers".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .expect("deployment group");
+        let template = deployment(baseline());
+        let installed = if on_second { &second } else { &first };
+        let prepared = prepare_target(
+            installed,
+            &template,
+            template.stack_settings.as_ref().expect("settings"),
+            template.stack_state.as_ref().expect("stack state"),
+        )
+        .await
+        .expect("prepared installed release");
+        let created = deployments
+            .create_with_state(
+                &Subject::system(),
+                CreateImportedDeploymentParams {
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    name: template.name.clone(),
+                    deployment_group_id: group.id,
+                    platform: Platform::Kubernetes,
+                    base_platform: None,
+                    stack_settings: Default::default(),
+                    stack_state: StackState::new(Platform::Kubernetes),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata {
+                        prepared_stack: Some(prepared),
+                        ..RuntimeMetadata::default()
+                    },
+                    status: status.to_string(),
+                    current_release_id: Some(installed.id.clone()),
+                    desired_release_id: waits_for_second.then(|| second.id.clone()),
+                    import_source: None,
+                    setup_metadata: None,
+                    setup_target: String::new(),
+                    setup_fingerprint: String::new(),
+                    setup_fingerprint_version: 0,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .expect("deployment");
+        // A Helm install registers without a setup lane; its first report
+        // records one.
+        db.execute(
+            "UPDATE deployments SET setup_target = NULL, setup_fingerprint = NULL, setup_fingerprint_version = NULL",
+        )
+        .await
+        .expect("clear the setup lane");
+        let mut state = crate::routes::sync::tests::test_app_state(
+            temp.path(),
+            deployments.clone(),
+            releases.clone(),
+            Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    temp.path().to_path_buf(),
+                ),
+            ),
+            db.clone(),
+        )
+        .await;
+        state.charts = Some(Arc::new(ChartSettings::new(
+            Some("alien-operator:test".to_string()),
+            false,
+        )));
+        let operator = Subject {
+            scope: Scope::Deployment {
+                project_id: created.project_id.clone(),
+                deployment_id: created.id.clone(),
+            },
+            ..Subject::system()
+        };
+        World {
+            state,
+            deployments,
+            operator,
+            deployment_id: created.id,
+            first: first.id,
+            second: second.id,
+            _temp: temp,
+        }
+    }
+
+    impl World {
+        async fn sync(&self, report: &InstalledSetup) -> DeploymentRecord {
+            handle_installed_setup(
+                &self.state,
+                &self.operator,
+                &stored(&self.deployments, &self.deployment_id).await,
+                report,
+            )
+            .await;
+            stored(&self.deployments, &self.deployment_id).await
+        }
+    }
+
+    /// `helm rollback` to the chart for release 1 while the deployment runs
+    /// release 3, which adds a service account. Nothing waits. The charts are
+    /// pulled from the manager and rendered with helm, the deployment is
+    /// stored in SQLite, and two syncs report the rolled-back chart: the
+    /// refusal naming the current release's chart is stored and survives.
+    #[tokio::test]
+    async fn a_helm_rollback_across_a_setup_change_stays_refused_in_the_store() {
+        let world = store_world(
+            baseline(),
+            with_service_account(&baseline()),
+            "running",
+            true,
+            false,
+        )
+        .await;
+        let rolled_back = report_from_served_chart(&world.state, "app", &world.first).await;
+        let current_chart = report_from_served_chart(&world.state, "app", &world.second).await;
+        assert_ne!(
+            rolled_back.setup_fingerprint,
+            current_chart.setup_fingerprint
+        );
+        assert_rollback_stays_refused(&world, &rolled_back).await;
+    }
+
+    async fn assert_rollback_stays_refused(world: &World, rolled_back: &InstalledSetup) {
+        for sync in 1..=2 {
+            let record = world.sync(rolled_back).await;
+            assert_eq!(record.status, "running");
+            let refusal = record
+                .runtime_metadata
+                .expect("metadata")
+                .setup_report_refusal
+                .unwrap_or_else(|| panic!("sync {sync}: the rollback must stay refused"));
+            assert_eq!(refusal.reported_release_id, world.first);
+            assert!(refusal.reason.contains(&world.second), "{}", refusal.reason);
+        }
+    }
+
+    fn helm(args: &[&str]) -> String {
+        let output = std::process::Command::new("helm")
+            .args(args)
+            .output()
+            .expect("run helm");
+        assert!(
+            output.status.success(),
+            "helm {args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// What the Operator would report from the chart installed in the cluster:
+    /// the Deployment's environment and the setup ConfigMap, read with kubectl.
+    fn report_from_cluster(namespace: &str, release_id: &str) -> InstalledSetup {
+        let output = std::process::Command::new("kubectl")
+            .args([
+                "-n",
+                namespace,
+                "get",
+                "deployments,configmaps",
+                "-o",
+                "yaml",
+            ])
+            .output()
+            .expect("run kubectl");
+        assert!(output.status.success(), "kubectl get failed");
+        report_from_manifests(&String::from_utf8_lossy(&output.stdout), release_id)
+    }
+
+    const KIND_INSTALL_ARGS: [&str; 4] = [
+        "--set",
+        "management.token=ax_dg_example",
+        "--set",
+        "runtime.encryption.key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ];
+
+    /// Real `helm install`, `helm upgrade` and `helm rollback` on a Kind
+    /// cluster with the charts this manager serves. The rolled-back chart's
+    /// setup is read from the cluster, and the manager keeps the deployment
+    /// running with the refusal stored. Run with `kubectl` pointed at a
+    /// disposable cluster:
+    /// `cargo test -p alien-manager --lib kind_ -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "needs a disposable Kind cluster, helm and kubectl"]
+    async fn kind_a_real_helm_rollback_across_a_setup_change_is_refused() {
+        const NAMESPACE: &str = "alien-setup-rollback";
+        const RELEASE: &str = "shop";
+        let world = store_world(
+            baseline(),
+            with_service_account(&baseline()),
+            "running",
+            true,
+            false,
+        )
+        .await;
+        let charts = tempfile::tempdir().expect("chart directory");
+        let r1 = served_chart_archive(&world.state, "app", &world.first, charts.path()).await;
+        let r3 = served_chart_archive(&world.state, "app", &world.second, charts.path()).await;
+        let (r1, r3) = (
+            r1.to_string_lossy().into_owned(),
+            r3.to_string_lossy().into_owned(),
+        );
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
+        let mut install = vec![
+            "install",
+            RELEASE,
+            r1.as_str(),
+            "-n",
+            NAMESPACE,
+            "--create-namespace",
+        ];
+        install.extend(KIND_INSTALL_ARGS);
+        helm(&install);
+        let mut upgrade = vec!["upgrade", RELEASE, r3.as_str(), "-n", NAMESPACE];
+        upgrade.extend(KIND_INSTALL_ARGS);
+        helm(&upgrade);
+        let upgraded = report_from_cluster(NAMESPACE, &world.second);
+        println!("after helm upgrade the cluster reports {upgraded:?}");
+        assert_eq!(upgraded.release_id, world.second);
+
+        helm(&["rollback", RELEASE, "1", "-n", NAMESPACE]);
+        let rolled_back = report_from_cluster(NAMESPACE, &world.first);
+        println!("after helm rollback the cluster reports {rolled_back:?}");
+        assert_eq!(rolled_back.release_id, world.first);
+        assert_ne!(rolled_back.setup_fingerprint, upgraded.setup_fingerprint);
+        assert_rollback_stays_refused(&world, &rolled_back).await;
+        let record = stored(&world.deployments, &world.deployment_id).await;
+        println!(
+            "the manager keeps status {} and stores {:?}",
+            record.status,
+            record.runtime_metadata.and_then(|m| m.setup_report_refusal)
+        );
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
+    }
+
+    /// A first install whose release 1 includes a frozen service account fails
+    /// setup; release 2 drops it and is pinned. Pin and retry cannot change the
+    /// installed chart's setup, so the way out is `helm upgrade` to release 2's
+    /// chart, whose report the manager must accept in initial-setup-failed.
+    /// Real helm install and upgrade on a Kind cluster.
+    #[tokio::test]
+    #[ignore = "needs a disposable Kind cluster, helm and kubectl"]
+    async fn kind_helm_upgrade_moves_a_failed_first_install_to_the_pinned_release() {
+        const NAMESPACE: &str = "alien-setup-first-install";
+        const RELEASE: &str = "shop";
+        let world = store_world(
+            with_service_account(&baseline()),
+            baseline(),
+            "initial-setup-failed",
+            false,
+            true,
+        )
+        .await;
+        let charts = tempfile::tempdir().expect("chart directory");
+        let r1 = served_chart_archive(&world.state, "app", &world.first, charts.path()).await;
+        let r2 = served_chart_archive(&world.state, "app", &world.second, charts.path()).await;
+        let (r1, r2) = (
+            r1.to_string_lossy().into_owned(),
+            r2.to_string_lossy().into_owned(),
+        );
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
+        let mut install = vec![
+            "install",
+            RELEASE,
+            r1.as_str(),
+            "-n",
+            NAMESPACE,
+            "--create-namespace",
+        ];
+        install.extend(KIND_INSTALL_ARGS);
+        helm(&install);
+        let installed = report_from_cluster(NAMESPACE, &world.first);
+        println!("release 1's chart reports {installed:?}");
+        let record = world.sync(&installed).await;
+        println!("status after release 1's report: {}", record.status);
+
+        let mut upgrade = vec!["upgrade", RELEASE, r2.as_str(), "-n", NAMESPACE];
+        upgrade.extend(KIND_INSTALL_ARGS);
+        helm(&upgrade);
+        let upgraded = report_from_cluster(NAMESPACE, &world.second);
+        println!("release 2's chart reports {upgraded:?}");
+        assert_eq!(upgraded.release_id, world.second);
+        let record = world.sync(&upgraded).await;
+        let metadata = record.runtime_metadata.expect("metadata");
+        println!(
+            "status {}; authorization {:?}; refusal {:?}",
+            record.status, metadata.setup_update_authorization, metadata.setup_report_refusal
+        );
+        let authorization = metadata
+            .setup_update_authorization
+            .expect("the upgrade to the pinned release's chart is accepted");
+        assert_eq!(authorization.release_id, world.second);
+        assert!(metadata.setup_report_refusal.is_none());
+        let _ = helm(&["uninstall", RELEASE, "-n", NAMESPACE, "--ignore-not-found"]);
     }
 
     /// A Helm install of the standalone manager's own chart, paused on a

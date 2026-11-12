@@ -27,6 +27,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 alien-signing = { workspace = true }
+base64 = { workspace = true }
 alien-preflights = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 alien-terraform = { workspace = true }

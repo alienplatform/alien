@@ -24,11 +24,36 @@
             "frozen"
           ]
         },
+        "models": {
+          "description": "The models the app calls. A deployment checks that the cloud lets it use each one.\nOmitted from the serialized stack when empty, so existing stacks do not change.",
+          "items": {
+            "$ref": "#/definitions/AiModel"
+          },
+          "type": "array"
+        },
         "remote-access": {
           "type": "boolean"
         }
       },
       "required": [],
+      "type": "object"
+    },
+    "AiModel": {
+      "additionalProperties": false,
+      "description": "A model the app calls through an AI resource.",
+      "properties": {
+        "id": {
+          "description": "The model identifier as the app uses it, for example `claude-sonnet-4-6`.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether the app's main feature needs this model. A refused required model is reported\nas needing attention; it never blocks the deployment.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
       "type": "object"
     },
     "Architecture": {
@@ -864,6 +889,10 @@
           },
           "type": "array"
         },
+        "commands-capability-file": {
+          "description": "Set by `alien build` when the container's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.",
+          "type": "boolean"
+        },
         "commands-enabled": {
           "default": false,
           "description": "Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.",
@@ -1109,6 +1138,10 @@
             ]
           },
           "type": "array"
+        },
+        "priority": {
+          "$ref": "#/definitions/WorkloadPriority",
+          "description": "Relative scheduling importance. On Kubernetes the cluster administrator maps each\nlevel to a PriorityClass at install time; unset leaves the pod without one. Other\nplatforms ignore it."
         },
         "public-endpoints": {
           "additionalProperties": {
@@ -1489,6 +1522,10 @@
           },
           "type": "array"
         },
+        "commands-capability-file": {
+          "description": "Set by `alien build` when the daemon's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.",
+          "type": "boolean"
+        },
         "commands-enabled": {
           "default": false,
           "description": "Whether an app-owned command receiver can lease pending commands for\nthis Daemon and execute registered handlers.",
@@ -1614,6 +1651,10 @@
         },
         "pool": {
           "type": "string"
+        },
+        "priority": {
+          "$ref": "#/definitions/WorkloadPriority",
+          "description": "Relative scheduling importance. On Kubernetes the cluster administrator maps each\nlevel to a PriorityClass at install time; unset leaves the pod without one. Other\nplatforms ignore it."
         },
         "public-endpoints": {
           "additionalProperties": {
@@ -3545,6 +3586,10 @@
         "remote-access": {
           "type": "boolean"
         },
+        "runtime-identity-exchange": {
+          "description": "Set by `alien build` when the Worker image was built on a runtime that\nexchanges its cloud identity for telemetry credentials. Absent means the\nimage may be older and still reads `ALIEN_RUNTIME_SECRETS`, so a deployer\nin identity mode keeps providing them. Build output replaces any value\nwritten in the stack definition.",
+          "type": "boolean"
+        },
         "timeout": {
           "anyOf": [
             {
@@ -3625,6 +3670,16 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadPriority": {
+      "description": "Relative scheduling importance of a workload.\n\nOn Kubernetes the deployment's cluster administrator maps each level to a\nPriorityClass at install time. Other platforms ignore it.",
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low"
+      ],
+      "type": "string"
     }
   },
   "description": "An Alien stack written in TOML.",

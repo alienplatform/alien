@@ -18,6 +18,7 @@ mod generator;
 mod inline_policy;
 mod json_text;
 mod registry;
+mod setup_intent;
 mod template;
 #[doc(hidden)]
 pub mod test_utils;
@@ -31,3 +32,5 @@ pub use generator::{
 };
 pub use registry::CfRegistry;
 pub use template::{CfExpression, CfOutput, CfParameter, CfResource, CfTemplate};
+
+pub use setup_intent::{add_verified_setup_intent, MAX_SETUP_INTENT_BYTES};

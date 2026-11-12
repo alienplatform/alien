@@ -230,6 +230,9 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
                 "runtime.cleanup.onUninstall.enabled=false",
                 "--set-string",
                 "management.defaultUrl=https://manager.example.test",
+                // Kind is neither EKS nor GKE, so the chart cannot choose the class itself.
+                "--set-string",
+                "sandbox.runtimeClassName=gvisor",
             ],
         );
     }

@@ -1,10 +1,11 @@
+use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
-    delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
+    direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
     pod_template_annotations, projected_env_vars,
     reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
@@ -59,10 +60,25 @@ pub struct KubernetesDaemonController {
     /// Public endpoint state (Service/route names, resolved public URL).
     #[serde(default)]
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
+    /// PriorityClass name applied to the pod spec last. The chart's class mapping is read at
+    /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_priority_class: Option<String>,
+    /// Kubernetes' explanation for a DaemonSet that cannot create pods.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) workload_failure: Option<String>,
 }
 
 #[controller]
 impl KubernetesDaemonController {
+    fn get_progress(&self) -> Option<&str> {
+        match self.state {
+            KubernetesDaemonState::WaitingForDaemonSet
+            | KubernetesDaemonState::WaitingForUpdate => self.workload_failure.as_deref(),
+            _ => None,
+        }
+    }
+
     #[flow_entry(Create)]
     #[handler(
         state = CreateStart,
@@ -136,13 +152,25 @@ impl KubernetesDaemonController {
             }
         };
 
-        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &daemon_set_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Daemon,
+        )
+        .await?;
+        let proxy_image = match &config.code {
+            DaemonCode::Image { image }
+                if ctx.deployment_config.runtime_identity_audience.is_none()
+                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+            {
+                Some(image)
+            }
+            _ => None,
+        };
+        let image_pull_secret_name = if let Some(image) = proxy_image {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -153,7 +181,7 @@ impl KubernetesDaemonController {
                 &namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -180,6 +208,13 @@ impl KubernetesDaemonController {
         )
         .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
 
         let daemonset = self
             .build_daemonset(
@@ -263,6 +298,7 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        self.record_workload_failure(ctx).await;
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -307,6 +343,24 @@ impl KubernetesDaemonController {
             )?;
         }
         let live = self.read_daemonset(ctx).await?;
+        if let (Some(name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            crate::kubernetes_runtime_credentials::reconcile(
+                ctx,
+                namespace,
+                name,
+                &config.id,
+                alien_core::commands_types::CommandTargetType::Daemon,
+            )
+            .await?;
+            if let DaemonCode::Image { image } = &config.code {
+                crate::kubernetes_registry::refresh_pull_secret(
+                    ctx, namespace, name, &config.id, image,
+                )
+                .await?;
+            }
+        }
+
         // A linked resource can change what its binding publishes without this daemon being
         // updated, such as a sandbox reading its broker address again on its own Ready. Compare
         // before readiness: a stale binding can be why a pod is not ready.
@@ -516,13 +570,25 @@ impl KubernetesDaemonController {
         let service_account_name = config
             .get_permissions()
             .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
-        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &daemon_set_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Daemon,
+        )
+        .await?;
+        let proxy_image = match &config.code {
+            DaemonCode::Image { image }
+                if ctx.deployment_config.runtime_identity_audience.is_none()
+                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+            {
+                Some(image)
+            }
+            _ => None,
+        };
+        let image_pull_secret_name = if let Some(image) = proxy_image {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -533,7 +599,7 @@ impl KubernetesDaemonController {
                 namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -558,6 +624,13 @@ impl KubernetesDaemonController {
         )
         .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
 
         let mut new_daemonset = self
             .build_daemonset(
@@ -601,6 +674,7 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        self.record_workload_failure(ctx).await;
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -909,6 +983,16 @@ impl KubernetesDaemonController {
             return Ok(false);
         };
         let config = ctx.desired_resource_config::<Daemon>()?;
+        let desired_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        if desired_priority_class != self.applied_priority_class {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -989,6 +1073,26 @@ impl KubernetesDaemonController {
             &mut self.public_endpoint,
         )
         .await
+    }
+
+    /// Remember why pods cannot be created, when the mapped PriorityClass is missing.
+    async fn record_workload_failure(&mut self, ctx: &ResourceControllerContext<'_>) {
+        self.workload_failure = match (
+            ctx.desired_resource_config::<Daemon>(),
+            self.namespace.as_deref(),
+            self.daemon_set_name.as_deref(),
+        ) {
+            (Ok(config), Some(namespace), Some(name)) => {
+                crate::kubernetes_priority_events::missing_priority_class_progress(
+                    ctx,
+                    config.priority,
+                    namespace,
+                    name,
+                )
+                .await
+            }
+            _ => None,
+        };
     }
 
     async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
@@ -1153,8 +1257,16 @@ impl KubernetesDaemonController {
                 message,
             })
         })?;
-        let pod_spec = PodSpec {
+        let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        let mut pod_spec = PodSpec {
             node_selector,
+            priority_class_name,
             service_account_name: service_account_name.map(str::to_owned),
             automount_service_account_token: service_account_name.is_none().then_some(false),
             containers: vec![container],
@@ -1165,7 +1277,15 @@ impl KubernetesDaemonController {
             termination_grace_period_seconds: config.stop_grace_period_seconds.map(i64::from),
             ..Default::default()
         };
+        crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
+        if ctx.deployment_config.runtime_identity_audience.is_some() {
+            crate::kubernetes_runtime_credentials::mount(
+                &mut pod_spec,
+                DAEMON_CONTAINER_NAME,
+                daemon_set_name,
+            )?;
+        }
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         // Roll pods when the env Secret changes (e.g. token rotation) by stamping
         // its checksum onto the pod template — matches the container controller.
@@ -1439,6 +1559,49 @@ mod tests {
             pod_template_checksum_annotation(&daemonset.spec.expect("spec").template),
             Some(plan.checksum)
         );
+    }
+
+    #[tokio::test]
+    async fn daemonset_pod_spec_carries_the_class_mapped_to_the_declared_priority() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let render = |priority: Option<alien_core::WorkloadPriority>| async move {
+            let mut config = manifest_test_daemon(&[]);
+            config.priority = priority;
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let pod = manifest_test_controller()
+                .build_daemonset(
+                    &config,
+                    "agent",
+                    "test-ns",
+                    Some("agent-sa"),
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("daemonset manifest")
+                .spec
+                .expect("spec")
+                .template
+                .spec
+                .expect("pod spec");
+            (
+                pod.priority_class_name.clone(),
+                serde_json::to_string(&pod).unwrap(),
+            )
+        };
+        use alien_core::WorkloadPriority::*;
+        assert_eq!(render(Some(Low)).await.0.as_deref(), Some("vendor-batch"));
+        let (unmapped, unmapped_json) = render(Some(High)).await;
+        let (none, none_json) = render(None).await;
+        assert_eq!((unmapped, none), (None, None));
+        assert_eq!(unmapped_json, none_json);
+        assert!(!none_json.contains("priorityClassName"));
     }
 
     /// The runtime-less daemon contract on Kubernetes: `command` overrides

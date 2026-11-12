@@ -151,6 +151,10 @@ pub struct OperatorConfig {
     /// Operator updates its own image to the one the manager targets.
     pub self_update_deployment: Option<String>,
 
+    /// Pull Secret of this Operator's own pod (in `namespace`). Once enrolled,
+    /// the Operator keeps it filled with its registry pull credential.
+    pub registry_secret: Option<String>,
+
     /// Prefix for resources this Operator names (Kubernetes service accounts
     /// among them), as the chart configured it.
     pub resource_prefix: Option<String>,

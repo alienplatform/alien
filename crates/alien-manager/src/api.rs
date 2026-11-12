@@ -36,6 +36,10 @@ impl Modify for BearerSecurity {
         // Health
         crate::routes::health::health,
         // Identity
+        crate::auth::identity_exchange::exchange,
+        crate::auth::identity_exchange::enroll,
+        crate::auth::identity_exchange::rotate,
+        crate::auth::identity_exchange::issue_enrollment_code,
         crate::routes::whoami::whoami,
         crate::routes::manager_info::manager_info,
         crate::routes::logs::recent_logs,
@@ -118,6 +122,15 @@ impl Modify for BearerSecurity {
         crate::traits::PendingChangeStatus,
         alien_core::SignedStatement,
         alien_signing::Signature,
+        crate::auth::identity_exchange::IdentityExchangeRequest,
+        crate::auth::identity_exchange::RuntimeIdentityProof,
+        crate::auth::identity_exchange::IdentityEnrollmentRequest,
+        crate::auth::identity_exchange::IdentityEnrollmentResponse,
+        crate::auth::identity_exchange::IdentityRotationRequest,
+        crate::auth::identity_exchange::IdentityRotationResponse,
+        crate::auth::identity_exchange::IssuedEnrollmentCode,
+        crate::auth::runtime_capability::RuntimePurpose,
+        crate::auth::runtime_capability::IssuedRuntimeCredential,
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
         crate::routes::deployments::SetQuotaWarningOverridesRequest,

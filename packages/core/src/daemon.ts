@@ -8,6 +8,7 @@ import {
   type PublicEndpoint,
   type ResourceSpec,
   type ResourceType,
+  type WorkloadPriority,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
@@ -131,6 +132,18 @@ export class Daemon extends ResourceBuilder {
    */
   public stopGracePeriod(seconds: number): this {
     this._config.stopGracePeriodSeconds = seconds
+    return this
+  }
+
+  /**
+   * Sets how important this daemon is relative to the deployment's other workloads.
+   *
+   * On Kubernetes the cluster administrator maps each level to a PriorityClass when
+   * installing the Helm chart (`runtime.workloadPriority.classes`). Levels nobody mapped, and
+   * every other platform, ignore it. Unset leaves the pod without a PriorityClass.
+   */
+  public priority(level: WorkloadPriority): this {
+    this._config.priority = level
     return this
   }
 

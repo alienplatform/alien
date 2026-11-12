@@ -158,7 +158,7 @@ impl AzureServiceActivationMutation {
                         "Microsoft.Storage".to_string(),
                     );
                 }
-                "vault" => {
+                "vault" | "key" => {
                     services.insert(
                         "enable-keyvault".to_string(),
                         "Microsoft.KeyVault".to_string(),

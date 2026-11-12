@@ -5,6 +5,7 @@ pub mod deployment;
 pub mod migrations;
 pub mod release;
 pub mod signing;
+pub mod runtime_identity;
 pub mod token;
 pub mod values;
 
@@ -14,5 +15,6 @@ pub use database::SqliteDatabase;
 pub use deployment::SqliteDeploymentStore;
 pub use release::SqliteReleaseStore;
 pub use signing::SqliteSigningStore;
+pub use runtime_identity::SqliteRuntimeIdentityStore;
 pub use token::SqliteTokenStore;
 pub use values::SqliteValueBackend;

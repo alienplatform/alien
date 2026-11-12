@@ -486,7 +486,7 @@ pub async fn handle_updating(
     let mut next = current.clone();
 
     // Stack state is required
-    let mut stack_state = current.stack_state.ok_or_else(|| {
+    let stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for updating".to_string(),
         })
@@ -498,6 +498,40 @@ pub async fn handle_updating(
             message: "Runtime metadata with prepared stack required for updating".to_string(),
         })
     })?;
+
+    // A deployment that waits for a secret never converges, so the check for a newer target
+    // after convergence would never run. Take the newer release now: prepare it from
+    // UpdatePending, as a superseded failure does. What the wait installed stays installed.
+    if current.status == DeploymentStatus::WaitingForSecrets {
+        let waiting_release_id = runtime_metadata.pending_prepared_release_id.as_ref();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_ref());
+        if let (Some(waiting), Some(target)) = (waiting_release_id, target_release_id) {
+            if waiting != target {
+                info!(
+                    waiting_release_id = %waiting,
+                    target_release_id = %target,
+                    "A newer release arrived while waiting for secrets; preparing it"
+                );
+                runtime_metadata.pending_prepared_stack = None;
+                runtime_metadata.pending_prepared_release_id = None;
+                runtime_metadata.resources_waiting_for_secrets.clear();
+                next.status = DeploymentStatus::UpdatePending;
+                next.error = None;
+                next.stack_state = Some(stack_state);
+                next.runtime_metadata = Some(runtime_metadata);
+                return Ok(DeploymentStepResult {
+                    state: next,
+                    suggested_delay_ms: None,
+                    update_heartbeat: false,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                });
+            }
+        }
+    }
 
     // Use the prepared stack from UpdatePending phase (already mutated)
     let mut target_stack = runtime_metadata
@@ -559,7 +593,9 @@ pub async fn handle_updating(
     runtime_metadata.pending_prepared_stack = Some(target_stack.clone());
     // Check the deployer secret slots first: which are filled decides how
     // workloads read them (see inject_environment_variables).
-    runtime_metadata.deployer_secrets = crate::helpers::check_deployer_secrets(
+    crate::helpers::refresh_deployer_secrets(
+        current.status,
+        &mut runtime_metadata,
         &target_stack,
         &stack_state,
         &client_config,
@@ -569,7 +605,7 @@ pub async fn handle_updating(
     .await?;
 
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(
+    let injected_deployer_secrets = crate::helpers::inject_environment_variables(
         &mut target_stack,
         &config,
         current.platform,
@@ -604,52 +640,46 @@ pub async fn handle_updating(
         debug!("Secrets already synced, continuing with update");
     }
 
-    let executor = StackExecutor::builder(&target_stack, client_config)
-        .deployment_config(&config)
-        .resume_unchanged_failed_resources(true)
-        .running_resource_policy(RunningResourcePolicy::OptIn)
-        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
-        .service_provider(service_provider)
-        .build()
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to create stack executor for update".to_string(),
-        })?;
-
-    // A required deployer secret the customer has not written blocks every
-    // workload start. Nothing is deployed until it is; the reports above say
-    // what is missing and where it goes.
+    // A required deployer secret the customer has not written holds the resources that
+    // read it, and what depends on them. Everything else keeps updating; held resources
+    // that are running keep serving their installed release.
     let blocking = crate::helpers::deployer_secrets_blocking_start(
         &target_stack,
         &config,
         current.platform,
         &runtime_metadata.deployer_secrets,
     );
-    if !blocking.is_empty() {
-        let summary = blocking
-            .iter()
-            .map(|report| report.summary())
-            .collect::<Vec<_>>()
-            .join(", ");
-        info!(%summary, "Waiting for deployer secrets before starting workloads");
-
-        let heartbeats = untouched_heartbeats(&executor, &mut stack_state, &[]).await;
-        next.stack_state = Some(stack_state);
-        next.status = DeploymentStatus::WaitingForSecrets;
-        next.error =
-            Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
-        next.runtime_metadata = Some(runtime_metadata);
-        return Ok(DeploymentStepResult {
-            state: next,
-            suggested_delay_ms: Some(30_000),
-            update_heartbeat: false,
-            heartbeats,
-            observed_inventory_batches: vec![],
-        });
+    let held = crate::helpers::resources_held_for_missing_secrets(
+        &target_stack,
+        &injected_deployer_secrets,
+        &blocking,
+    );
+    let missing_secrets_summary = blocking
+        .iter()
+        .map(|report| report.summary())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if held.is_empty() {
+        runtime_metadata.resources_waiting_for_secrets.clear();
+        // No required secret is missing (or nothing reads it), so a wait recorded by an
+        // earlier step no longer describes this deployment. Clear it here: a step that is
+        // still in progress carries the previous error forward otherwise.
+        next.error = None;
+    } else {
+        info!(summary = %missing_secrets_summary, held = ?held, "Waiting for deployer secrets before updating the resources that read them");
     }
-    // Every required deployer secret is written now, so a wait recorded by an
-    // earlier step no longer describes this deployment. Clear it here: a step
-    // that is still in progress carries the previous error forward otherwise.
-    next.error = None;
+
+    let executor = StackExecutor::builder(&target_stack, client_config)
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .held_resources(held.iter().cloned().collect())
+        .service_provider(service_provider)
+        .build()
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to create stack executor for update".to_string(),
+        })?;
 
     // Captured before stepping: completion is judged over exactly what this executor
     // reconciles, so the two cannot disagree about which resources are in scope.
@@ -696,7 +726,32 @@ pub async fn handle_updating(
     let waiting_for_machines =
         machines_deployment_has_zero_machines(current.platform, &step_result.next_state);
 
-    let result = if waiting_for_machines {
+    let result = if !held.is_empty() && stack_status != StackStatus::Failure {
+        // Held resources keep the update from completing. Everything else has been
+        // stepped; an unrelated failure is not hidden behind the wait (it falls through).
+        let mut heartbeats = step_result.heartbeats;
+        let untouched =
+            untouched_heartbeats(&executor, &mut step_result.next_state, &heartbeats).await;
+        heartbeats.extend(untouched);
+        next.status = DeploymentStatus::WaitingForSecrets;
+        next.stack_state = Some(step_result.next_state);
+        next.error = Some(
+            AlienError::new(ErrorData::DeployerSecretsMissing {
+                summary: missing_secrets_summary,
+            })
+            .into_generic(),
+        );
+        runtime_metadata.resources_waiting_for_secrets = held.into_iter().collect();
+        next.runtime_metadata = Some(runtime_metadata);
+
+        DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(step_result.suggested_delay_ms.unwrap_or(30_000).min(30_000)),
+            update_heartbeat: false,
+            heartbeats,
+            observed_inventory_batches: vec![],
+        }
+    } else if waiting_for_machines {
         info!("Machines update is waiting for the first machine to join");
 
         let mut heartbeats = step_result.heartbeats;

@@ -206,22 +206,28 @@ async fn an_unchanged_resource_reports_once_while_an_update_is_in_progress() {
 }
 
 #[tokio::test]
-async fn an_unchanged_resource_reports_while_an_update_waits_for_a_secret() {
+async fn a_missing_secret_that_nothing_reads_does_not_hold_the_update() {
+    // The secret maps to workloads only and this stack has none, so nothing is held: the update
+    // finishes instead of waiting for the customer. Held readers are covered in test_platform.
     let mut deployment = Deployment::running().await;
     deployment.start_update(required_secret_stack());
     let steps = step_until(&mut deployment, |status| {
-        status == DeploymentStatus::WaitingForSecrets
+        status == DeploymentStatus::Running
     })
     .await;
-    assert_eq!(
-        reports_of(&steps, DeploymentStatus::WaitingForSecrets, "kept"),
-        1,
+    assert!(
+        steps
+            .iter()
+            .all(|(status, _)| *status != DeploymentStatus::WaitingForSecrets),
         "{steps:?}"
     );
-
-    // Waiting again, right away, does not read it a second time.
-    let again = deployment.step().await;
-    assert_eq!(deployment.state.status, DeploymentStatus::WaitingForSecrets);
-    assert!(again.is_empty(), "{again:?}");
+    assert_eq!(
+        deployment
+            .state
+            .current_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref()),
+        Some("two")
+    );
     deployment.bindings.shutdown().await;
 }

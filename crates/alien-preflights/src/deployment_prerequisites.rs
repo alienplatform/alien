@@ -933,6 +933,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             release_statements: None,
             signed_config: None,

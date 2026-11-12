@@ -62,4 +62,4 @@ rcgen = "0.13.2"
 
 [features]
 default = []
-test-utils = ["dep:mockall"]
+test-utils = ["dep:mockall", "tokio/net"]

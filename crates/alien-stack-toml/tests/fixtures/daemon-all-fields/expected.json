@@ -96,6 +96,7 @@
         },
         "permissions": "agent",
         "pool": "edge",
+        "priority": "low",
         "publicEndpoints": [
           {
             "hostLabel": "status",

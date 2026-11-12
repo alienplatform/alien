@@ -2,9 +2,7 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::permissions::ManagementPermissions;
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
-use alien_core::sandbox_egress::{
-    has_internet_sandbox, is_managed_gateway, SANDBOX_EGRESS_GATEWAY_ID,
-};
+use alien_core::sandbox_egress::{has_internet_sandbox, SANDBOX_EGRESS_GATEWAY_ID};
 use alien_core::{Platform, SigningVerifier, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
 use std::collections::HashSet;
 
@@ -128,9 +126,11 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
-            // Log consumers treat this resource as Alien's own (`is_managed_gateway`), so an
-            // application resource must never hold the id while it is reserved.
-            if is_managed_gateway(stack, resource_id) {
+            // Alien's own resource: log consumers and deployment environment variables
+            // (`environment_variable_applies`) treat the id as the gateway whether or not
+            // the stack has an internet sandbox yet, so an application resource must
+            // never hold it.
+            if resource_id == SANDBOX_EGRESS_GATEWAY_ID {
                 errors.push(format!(
                     "Resource ID '{resource_id}' is reserved for the sandbox gateway"
                 ));
@@ -266,6 +266,37 @@ mod tests {
         let result = check.check(&stack, Platform::Aws).await.unwrap();
         assert!(result.success);
         assert!(result.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_gateway_id_is_reserved_even_without_an_internet_sandbox() {
+        let container = alien_core::Container::new(SANDBOX_EGRESS_GATEWAY_ID.to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "app:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "256Mi".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("reserved for the sandbox gateway")));
     }
 
     #[tokio::test]

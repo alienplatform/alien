@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 use alien_core::{Platform, SignedStatement, Stack};
-use alien_error::AlienError;
+use alien_error::{AlienError, GenericError};
 use alien_signing::{Kind, ReleaseBody};
 
 /// Setup template bytes by template name (`cloudformation`, `helm`, ...),
@@ -55,6 +55,20 @@ pub struct CreateReleaseParams {
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,
+}
+
+/// The bytes of one served Helm chart version, kept so the version never
+/// changes content. Digests are the SHA-256 of these bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredChart {
+    pub release_id: String,
+    /// Chart version, `1.<release n>.<operator>`.
+    pub version: String,
+    /// OCI manifest JSON; names the config and archive by digest.
+    pub manifest: Vec<u8>,
+    pub config: Vec<u8>,
+    /// Chart archive (`.tgz`).
+    pub archive: Vec<u8>,
 }
 
 /// Which release a protected setup installs when it registers without a
@@ -120,10 +134,44 @@ pub trait ReleaseStore: Send + Sync {
         id: &str,
     ) -> Result<Option<ReleaseRecord>, AlienError>;
 
+    /// Read only the release pinned by a verified setup intent. This is an
+    /// internal import read, not permission to list/export release contents.
+    async fn get_verified_setup_release(
+        &self,
+        authority: &crate::auth::verified_setup::VerifiedSetupImport,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        if !authority.is_current() {
+            return Err(
+                crate::error::ErrorData::forbidden("Verified setup authority expired")
+                    .into_generic(),
+            );
+        }
+        let release = self
+            .get_release(&authority.subject(), &authority.release_id)
+            .await?;
+        Ok(release.filter(|release| {
+            release.id == authority.release_id
+                && release.workspace_id == authority.workspace_id
+                && release.project_id == authority.project_id
+        }))
+    }
+
     async fn get_latest_release(
         &self,
         caller: &crate::auth::Subject,
     ) -> Result<Option<ReleaseRecord>, AlienError>;
+
+    /// Id of the latest release. Stores override this to avoid loading the
+    /// release's stacks.
+    async fn latest_release_id(
+        &self,
+        caller: &crate::auth::Subject,
+    ) -> Result<Option<String>, AlienError> {
+        Ok(self
+            .get_latest_release(caller)
+            .await?
+            .map(|release| release.id))
+    }
 
     /// Resolve the release used when a project-scoped operation omits an
     /// explicit release. Standalone stores have one release stream, so the
@@ -155,5 +203,30 @@ pub trait ReleaseStore: Send + Sync {
             .into_iter()
             .filter(|release| query.matches(release))
             .max_by_key(|release| release.created_at))
+    }
+
+    /// Keep `chart` for its release and version unless one is already kept,
+    /// and return the kept copy. Insert-if-absent, so two managers serving
+    /// the same version at once keep one copy and both return it.
+    ///
+    /// Stores that don't keep charts return an error: a manager that serves
+    /// charts needs durable copies, or a version could change content.
+    async fn store_chart_if_absent(
+        &self,
+        _caller: &crate::auth::Subject,
+        _chart: StoredChart,
+    ) -> Result<StoredChart, AlienError> {
+        Err(AlienError::new(GenericError {
+            message: "this release store cannot keep chart versions".to_string(),
+        }))
+    }
+
+    /// Every kept chart version of the releases in `release_ids`.
+    async fn stored_charts(
+        &self,
+        _caller: &crate::auth::Subject,
+        _release_ids: &[String],
+    ) -> Result<Vec<StoredChart>, AlienError> {
+        Ok(Vec::new())
     }
 }

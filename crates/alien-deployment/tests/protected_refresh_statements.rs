@@ -170,6 +170,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         },
         external_bindings: alien_core::ExternalBindings::default(),
         base_platform: None,
+        runtime_identity_audience: None,
         label_domain: None,
         observe_label_selector: None,
         observe_all_namespaces: false,

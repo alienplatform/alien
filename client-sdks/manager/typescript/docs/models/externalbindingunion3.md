@@ -55,11 +55,16 @@ const value: models.ExternalBindingTablestorage = {
 };
 ```
 
-### `models.ExternalBindingRedis`
+### `models.ExternalBindingRedisKv`
 
 ```typescript
-const value: models.ExternalBindingRedis = {
-  connectionUrl: "https://warm-ribbon.biz",
+const value: models.ExternalBindingRedisKv = {
+  connectionUrl: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
   service: "redis",
   type: "kv",
 };

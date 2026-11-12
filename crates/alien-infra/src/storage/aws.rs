@@ -534,6 +534,26 @@ impl AwsStorageController {
             })
         })?;
 
+        // Applied first: nothing may be written to the bucket under S3's default key.
+        if let Some(key_ref) = &config.encryption_key {
+            let key = ctx.require_dependency::<crate::key::AwsKeyController>(key_ref)?;
+            let key_arn = key.key_arn.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: config.id.clone(),
+                    dependency_id: key_ref.id().to_string(),
+                })
+            })?;
+            client
+                .put_bucket_kms_encryption(bucket_name, &key_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to encrypt S3 bucket '{bucket_name}' with its customer key"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
+
         if config.versioning {
             info!(bucket=%bucket_name, "Configuring bucket versioning");
 
@@ -2182,6 +2202,41 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    // ─────────────── CUSTOMER KEY TESTS ──────────────────────────────
+
+    /// A bucket naming a key is encrypted with that key before anything else is configured:
+    /// a bucket under S3's default key would report success and not use the customer's key.
+    #[tokio::test]
+    async fn a_bucket_naming_a_key_is_encrypted_with_it() {
+        const KEY_ARN: &str =
+            "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000001";
+        let key = alien_core::Key::new("data-key".to_string()).build();
+        let storage = Storage::new("data".to_string())
+            .encryption_key(alien_core::ResourceRef::new(
+                alien_core::Key::RESOURCE_TYPE,
+                "data-key",
+            ))
+            .build();
+        let account = account_with(None);
+        let mut s3 = fake_s3(account.clone(), Fault::None);
+        s3.expect_put_bucket_kms_encryption()
+            .times(1)
+            .withf(|bucket, key| bucket == "test-data" && key == KEY_ARN)
+            .returning(|_, _| Ok(()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .with_dependency(key, crate::key::AwsKeyController::mock_ready(KEY_ARN))
+            .service_provider(setup_mock_service_provider(Arc::new(s3)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
     // ─────────────── OWNERSHIP TESTS ──────────────────────────────────

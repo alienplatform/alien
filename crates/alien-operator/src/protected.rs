@@ -796,6 +796,8 @@ fn protect_config(
         // Resources outside this cluster bind only to values the signed
         // config names; the manager's are ignored.
         external_bindings: signed_external_bindings(stack, signed_config)?,
+        // The Operator fills this from the identity it enrolled with, never from a manager's value.
+        runtime_identity_audience: None,
         base_platform: None,
         label_domain: None,
         observe_label_selector: None,

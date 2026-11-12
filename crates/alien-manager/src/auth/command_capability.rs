@@ -231,6 +231,39 @@ pub fn receiver_deployment_decision(
     )
 }
 
+/// Decide access for the commands-only key of a receiver built before
+/// capability files ([`Role::CommandsReceiver`]).
+///
+/// `None` means the subject does not hold the key. The key is bound to one
+/// deployment and covers that deployment's receivers: it leases and answers
+/// commands there and nothing else, so an `Authz` that wants the key to work
+/// must ask this before its ordinary receiver and execution checks, and must
+/// refuse the role everywhere else. The reserved operations targets are not a
+/// stack receiver's, so the key never reaches them; see
+/// [`commands_key_may_use_target`].
+pub fn commands_key_deployment_decision(
+    subject: &Subject,
+    deployment: &DeploymentRecord,
+) -> Option<bool> {
+    if subject.role != Role::CommandsReceiver {
+        return None;
+    }
+    Some(
+        subject.workspace_id == deployment.workspace_id
+            && matches!(
+                &subject.scope,
+                Scope::Deployment { project_id, deployment_id }
+                    if project_id == &deployment.project_id && deployment_id == &deployment.id
+            ),
+    )
+}
+
+/// Whether `subject` may act on a command for `target`. Everything but the
+/// commands-only key passes; the key never reaches a reserved operations target.
+pub fn commands_key_may_use_target(subject: &Subject, target: &CommandTarget) -> bool {
+    subject.role != Role::CommandsReceiver || !is_operations_command_target(&target.resource_id)
+}
+
 /// Authorize response and release operations from canonical command data.
 pub fn receiver_context_allowed(subject: &Subject, command: &CommandAccessContext) -> bool {
     matches!(

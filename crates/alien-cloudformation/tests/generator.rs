@@ -15,6 +15,7 @@ mod generator {
     pub mod aws_data_layer_tests;
     pub mod aws_email_tests;
     pub mod aws_full_stack_tests;
+    pub mod aws_key_policy_differential_tests;
     pub mod aws_open_search_tests;
     pub mod aws_sandbox_gateway_tests;
     pub mod aws_sandbox_tests;
@@ -35,6 +36,7 @@ mod generator {
     pub mod registration_delete_order_tests;
     pub mod registration_tests;
     pub mod resource_metadata_tests;
+    pub mod setup_intent_tests;
     pub mod stack_input_tests;
     pub mod volume_key_dependency_tests;
 }

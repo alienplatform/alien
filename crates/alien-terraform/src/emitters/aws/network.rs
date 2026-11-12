@@ -57,6 +57,17 @@ impl TfEmitter for AwsNetworkEmitter {
                 availability_zones,
             } => {
                 let mut fragment = create_topology(ctx, label, cidr.clone(), *availability_zones);
+                if stack_has_retained_database(ctx) {
+                    // A retained Aurora cluster or ElastiCache group keeps network interfaces in
+                    // the private subnets, and AWS refuses to delete a subnet or VPC that still
+                    // has them. Keep the VPC and those subnets, like Azure keeps its resource
+                    // group. Gateways, route tables and the workload security group go.
+                    let private = format!("{label}_private");
+                    fragment.retain_resources(|kind, name| {
+                        (kind == "aws_vpc" && name == label)
+                            || (kind == "aws_subnet" && name == private)
+                    });
+                }
                 if stack_needs_default_network_data(ctx) {
                     fragment.extend(default_network_data(
                         label,
@@ -231,6 +242,15 @@ fn stack_has_managed_eks(ctx: &EmitContext<'_>) -> bool {
                     cluster.provider == alien_core::KubernetesClusterProvider::Eks
                         && cluster.ownership == alien_core::KubernetesClusterOwnership::Managed
                 })
+    })
+}
+
+/// Whether the stack has a frozen Postgres or Redis, whose data survives uninstall.
+fn stack_has_retained_database(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_, entry)| {
+        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+            && (entry.config.downcast_ref::<alien_core::Postgres>().is_some()
+                || entry.config.downcast_ref::<alien_core::Redis>().is_some())
     })
 }
 

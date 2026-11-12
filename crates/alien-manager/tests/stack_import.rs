@@ -1480,6 +1480,55 @@ async fn re_import_advances_setup_registration_replay_baseline() {
     assert_eq!(status, StatusCode::OK, "exact retry body = {json:#}");
 }
 
+/// A setup source that rolls back to what is installed sends an unchanged
+/// import under a new registration operation, often while the deployment is
+/// still busy. Refusing it fails the rollback, so it succeeds and writes nothing.
+#[tokio::test]
+async fn unchanged_import_with_a_new_operation_succeeds_while_reconciling() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut request = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    request.setup_metadata = Some(serde_json::json!({
+        "setupRegistrationOperationId": "operation-1"
+    }));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let imported: StackImportResponse = serde_json::from_value(json).unwrap();
+    let read = || async {
+        fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &imported.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist")
+    };
+    let before = read().await;
+    assert!(
+        !matches!(
+            before.status.as_str(),
+            "running" | "update-failed" | "provisioning-failed"
+        ),
+        "the deployment must still be reconciling, got {}",
+        before.status
+    );
+
+    request.setup_metadata = Some(serde_json::json!({
+        "setupRegistrationOperationId": "operation-2"
+    }));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+
+    let after = read().await;
+    assert_eq!(after.status, before.status);
+    assert_eq!(after.setup_metadata, before.setup_metadata);
+    assert_eq!(
+        serde_json::to_value(&after.stack_state).unwrap(),
+        serde_json::to_value(&before.stack_state).unwrap()
+    );
+}
+
 #[tokio::test]
 async fn explicit_release_id_is_persisted() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;

@@ -19,6 +19,9 @@ lognorm = { workspace = true }
 # Alien crates
 alien-core = { workspace = true }
 alien-signing = { workspace = true }
+alien-client-core = { workspace = true }
+alien-aws-clients = { workspace = true }
+getrandom = { workspace = true }
 alien-error = { workspace = true }
 alien-deployment = { workspace = true }
 alien-infra = { workspace = true, features = ["all-platforms", "local"] }

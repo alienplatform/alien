@@ -1116,6 +1116,7 @@ async fn apply_render_mutations_with_management_config(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
@@ -2412,6 +2413,7 @@ async fn terraform_kubernetes_stack_for_target(
 
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig {
+        runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
@@ -2507,7 +2509,7 @@ async fn write_manager_fetch_values(
             deployment_id: &deployment.id,
             deployment_name: &deployment.name,
             manager_url: &prepared.manager.public_url,
-            deployment_token: &deployment.token,
+            credential: alien_helm::ManagementCredential::Token(&deployment.token),
             runtime_encryption_key: &crate::operator::generate_encryption_key(),
             stack: &stack,
             stack_state,

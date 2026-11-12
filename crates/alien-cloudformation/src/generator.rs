@@ -1501,10 +1501,13 @@ fn retain_data_network_dependencies(template: &mut CfTemplate) {
 /// role and its permissions. If those are deleted first, the ENI stays and the
 /// private subnets and security group it sits in can never be deleted. The
 /// created network's private subnets and security group therefore depend on
-/// every IAM role and policy, so CloudFormation deletes IAM last. Skipped:
-/// conditional IAM resources (`DependsOn` cannot name a resource whose
-/// condition is false) and IAM resources that already depend on the network,
-/// such as an IRSA role trusting a cluster placed in it.
+/// the roles of the Lambda resources that place ENIs in it (a Worker's profile role,
+/// a VPC function's `Role`, a network connector's `OperatorRole`) and the policies attached to
+/// those roles, so CloudFormation deletes those last. A stack without such a
+/// resource gets no edges. Skipped: conditional IAM resources (`DependsOn`
+/// cannot name a resource whose condition is false) and IAM resources that
+/// already depend on the network, such as an IRSA role trusting a cluster
+/// placed in it.
 fn apply_network_iam_dependencies(
     stack: &Stack,
     emitted_resource_ids: &IndexMap<String, Vec<String>>,
@@ -1580,12 +1583,29 @@ fn apply_network_iam_dependencies(
         }
         false
     };
+    // A Live Worker is not in this template (it is created after setup), but its Lambda
+    // places ENIs in the network with its profile's service account role, which is.
+    let worker_profile_roles: Vec<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Worker>())
+        .flat_map(|worker| {
+            emitted_resource_ids
+                .get(&format!("{}-sa", worker.permissions))
+                .into_iter()
+                .flatten()
+                .filter(|logical_id| logical_id.ends_with("Role"))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let eni_role_ids = eni_holder_role_ids(template, &worker_profile_roles);
     let iam_logical_ids: Vec<String> = template
         .resources
         .iter()
         .filter(|(logical_id, resource)| {
             IAM_TYPES.contains(&resource.resource_type.as_str())
                 && resource.condition.is_none()
+                && eni_role_ids.contains(*logical_id)
                 && !reaches_target(logical_id)
         })
         .map(|(logical_id, _)| logical_id.clone())
@@ -1601,6 +1621,69 @@ fn apply_network_iam_dependencies(
             }
         }
     }
+}
+
+/// The IAM resources Lambda needs alive while it deletes the network interfaces it placed in
+/// the stack's network: the role of each Worker's profile (Live Workers are created after
+/// setup, so the stack names them, not the template), VPC function or network connector, and every policy
+/// attached to one of those roles (an inline or managed policy naming it in `Roles`, or a
+/// managed policy the role lists in `ManagedPolicyArns`).
+fn eni_holder_role_ids(
+    template: &CfTemplate,
+    worker_profile_roles: &[String],
+) -> std::collections::HashSet<String> {
+    let roles: Vec<&String> = template
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.resource_type == "AWS::IAM::Role")
+        .map(|(logical_id, _)| logical_id)
+        .collect();
+    let mut needed: std::collections::HashSet<String> = worker_profile_roles
+        .iter()
+        .filter(|role| roles.contains(role))
+        .cloned()
+        .collect();
+    for resource in template.resources.values() {
+        let role_property = match resource.resource_type.as_str() {
+            "AWS::Lambda::Function" if resource.properties.contains_key("VpcConfig") => "Role",
+            "AWS::Lambda::NetworkConnector" => "OperatorRole",
+            _ => continue,
+        };
+        let Some(expression) = resource.properties.get(role_property) else {
+            continue;
+        };
+        for role in &roles {
+            if expression_references(expression, role) {
+                needed.insert((*role).clone());
+            }
+        }
+    }
+    let role_ids: Vec<String> = needed.iter().cloned().collect();
+    for (logical_id, resource) in &template.resources {
+        let attached_by_policy = matches!(
+            resource.resource_type.as_str(),
+            "AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy"
+        ) && resource.properties.get("Roles").is_some_and(|roles| {
+            role_ids
+                .iter()
+                .any(|role| expression_references(roles, role))
+        });
+        if attached_by_policy {
+            needed.insert(logical_id.clone());
+        }
+        if resource.resource_type == "AWS::IAM::Role" && role_ids.contains(logical_id) {
+            if let Some(managed) = resource.properties.get("ManagedPolicyArns") {
+                for (other_id, other) in &template.resources {
+                    if other.resource_type == "AWS::IAM::ManagedPolicy"
+                        && expression_references(managed, other_id)
+                    {
+                        needed.insert(other_id.clone());
+                    }
+                }
+            }
+        }
+    }
+    needed
 }
 
 fn apply_resource_dependencies(

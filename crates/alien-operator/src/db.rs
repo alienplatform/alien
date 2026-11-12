@@ -12,7 +12,7 @@ use alien_core::{
     sync::{SyncExecutionClaim, TargetDeployment},
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
 };
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -152,9 +152,171 @@ pub struct Approval {
 pub struct OperatorDb {
     conn: Arc<Mutex<Connection>>,
     sync_requested: tokio::sync::Notify,
+    pub(crate) daily_identity_operation: Arc<Mutex<()>>,
+    pub(crate) published_runtime_credentials:
+        Mutex<std::collections::HashMap<String, crate::daily_identity::PublishedCapability>>,
+    pub(crate) runtime_credentials: Mutex<
+        std::collections::HashMap<
+            String,
+            Arc<alien_client_core::runtime_credentials::RuntimeCredentials>,
+        >,
+    >,
+    /// Whether the last pull Secret refresh of this process left the Secret
+    /// holding the Operator's own credential. Kept in memory: the refresh
+    /// runs again on the first sync after a restart.
+    pull_secret_refreshed: std::sync::atomic::AtomicBool,
 }
 
 impl OperatorDb {
+    pub(crate) fn pull_secret_refreshed(&self) -> bool {
+        self.pull_secret_refreshed
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_pull_secret_refreshed(&self, refreshed: bool) {
+        self.pull_secret_refreshed
+            .store(refreshed, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) async fn read_daily_identity(
+        &self,
+    ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
+        let conn = self.conn.lock().await;
+        read_json(&conn, "daily_identity").await
+    }
+
+    /// The daily identity, once its enrollment is confirmed. A candidate key
+    /// saved before then (its enrollment answer was lost) is no identity to
+    /// authenticate with, so every caller that asks "is this Operator enrolled"
+    /// reads it through here and stays in token mode until it is confirmed.
+    pub(crate) async fn read_enrolled_daily_identity(
+        &self,
+    ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
+        Ok(self
+            .read_daily_identity()
+            .await?
+            .filter(|identity| !identity.deployment_id.is_empty()))
+    }
+
+    pub(crate) async fn write_daily_identity(
+        &self,
+        state: &crate::daily_identity::DailyIdentityState,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        // A successful save must survive process loss before the server CAS.
+        conn.execute("PRAGMA synchronous = FULL", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Enabling durable component identity writes"))?;
+        write_json(&conn, "daily_identity", state).await
+    }
+
+    /// Drop a saved key that never finished enrolling. An enrolled identity
+    /// is kept.
+    pub(crate) async fn clear_unenrolled_daily_identity(&self) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM state WHERE key = 'daily_identity'
+             AND COALESCE(json_extract(value, '$.deploymentId'), '') = ''",
+            (),
+        )
+        .await
+        .into_alien_error()
+        .context(database_error("Clearing an unfinished enrollment"))?;
+        Ok(())
+    }
+
+    /// Repair only the canonical ID for an already enrolled identity. A saved
+    /// key may have advanced since enrollment was read; never write it back.
+    pub(crate) async fn repair_enrolled_deployment_id(
+        &self,
+        state: &crate::daily_identity::DailyIdentityState,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute("PRAGMA synchronous = FULL", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Enabling durable enrollment repair"))?;
+        let changed = conn
+            .execute(
+                "INSERT INTO state (key, value, updated_at)
+             SELECT 'deployment_id', ?1, datetime('now')
+             WHERE ?1 <> '' AND EXISTS (
+                SELECT 1 FROM state WHERE key = 'daily_identity'
+                AND json_extract(value, '$.deploymentId') = ?1
+                AND json_extract(value, '$.managerUrl') = ?2
+                AND json_extract(value, '$.audience') = ?3
+             )
+             ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at
+             WHERE state.value = excluded.value",
+                (
+                    state.deployment_id.as_str(),
+                    state.manager_url.as_str(),
+                    state.audience.as_str(),
+                ),
+            )
+            .await
+            .into_alien_error()
+            .context(database_error("Repairing canonical deployment identity"))?;
+        if changed != 1 {
+            return Err(alien_error::AlienError::new(
+                ErrorData::ConfigurationError {
+                    message: "Saved enrollment no longer matches the operator identity".into(),
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    /// Commit the enrolled key and its canonical deployment ID together. The
+    /// conditional write also repairs older partial enrollments without replacing
+    /// an identity belonging to a different deployment.
+    pub(crate) async fn persist_enrolled_identity(
+        &self,
+        state: &crate::daily_identity::DailyIdentityState,
+    ) -> Result<()> {
+        if state.deployment_id.is_empty() {
+            return Err(alien_error::AlienError::new(
+                ErrorData::ConfigurationError {
+                    message: "Enrolled identity requires a deployment ID".into(),
+                },
+            ));
+        }
+        let serialized = serde_json::to_string(state)
+            .into_alien_error()
+            .context(database_error("Serializing enrolled identity"))?;
+        let conn = self.conn.lock().await;
+        conn.execute("PRAGMA synchronous = FULL", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Enabling durable enrollment writes"))?;
+        let changed = conn
+            .execute(
+                "WITH enrolled(key, value) AS (
+                VALUES ('daily_identity', ?1), ('deployment_id', ?2)
+             )
+             INSERT INTO state (key, value, updated_at)
+             SELECT key, value, datetime('now') FROM enrolled
+             WHERE NOT EXISTS (
+                SELECT 1 FROM state WHERE key = 'deployment_id' AND value <> ?2
+             )
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value, updated_at = excluded.updated_at",
+                (serialized, state.deployment_id.as_str()),
+            )
+            .await
+            .into_alien_error()
+            .context(database_error("Persisting enrolled identity atomically"))?;
+        if changed != 2 {
+            return Err(alien_error::AlienError::new(
+                ErrorData::ConfigurationError {
+                    message: "Saved operator belongs to another deployment".into(),
+                },
+            ));
+        }
+        Ok(())
+    }
+
     /// Create or open the operator database with encryption
     pub async fn new(data_dir: &str, encryption_key: &str) -> Result<Self> {
         if encryption_key.len() != 64 || !encryption_key.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -204,6 +366,10 @@ impl OperatorDb {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             sync_requested: tokio::sync::Notify::new(),
+            daily_identity_operation: Arc::new(Mutex::new(())),
+            published_runtime_credentials: Mutex::new(std::collections::HashMap::new()),
+            runtime_credentials: Mutex::new(std::collections::HashMap::new()),
+            pull_secret_refreshed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -448,15 +614,19 @@ impl OperatorDb {
         if !Self::compare_and_set_deployment_state_locked(&conn, expected, next).await? {
             return Ok(false);
         }
-        conn.execute(
-            "DELETE FROM state WHERE key = ?",
-            (Self::KEY_DEPLOYMENT_CONFIG,),
-        )
-        .await
-        .into_alien_error()
-        .context(ErrorData::DatabaseError {
-            message: "Failed to clear deployment_config".to_string(),
-        })?;
+        let config: Option<DeploymentConfig> =
+            read_json(&conn, Self::KEY_DEPLOYMENT_CONFIG).await?;
+        if config.is_none_or(|config| config.runtime_identity_audience.is_none()) {
+            conn.execute(
+                "DELETE FROM state WHERE key = ?",
+                (Self::KEY_DEPLOYMENT_CONFIG,),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to clear deployment_config".to_string(),
+            })?;
+        }
         Ok(true)
     }
 
@@ -1846,6 +2016,65 @@ impl OperatorDb {
             }
             None => Ok(None),
         }
+    }
+
+    /// The secret an enrolled Operator gives its command-enabled Workers as
+    /// `ALIEN_COMMANDS_TOKEN`. Worker runtimes that predate capability files
+    /// accept a command push only with this bearer. It is random, kept here,
+    /// and grants nothing at the manager. Created once and then reused, so a
+    /// rollout does not change it.
+    pub async fn worker_push_secret(&self) -> Result<String> {
+        let mut random = [0u8; 32];
+        getrandom::fill(&mut random).map_err(|_| {
+            AlienError::new(ErrorData::DatabaseError {
+                message: "Cannot generate the Worker push secret".to_string(),
+            })
+        })?;
+        let candidate = format!(
+            "ax_push_v1_{}",
+            random
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('worker_push_secret', ?, datetime('now'))
+             ON CONFLICT(key) DO NOTHING",
+            (candidate,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to store worker_push_secret".to_string(),
+        })?;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'worker_push_secret'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query worker_push_secret".to_string(),
+            })?;
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch worker_push_secret row".to_string(),
+            })?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DatabaseError {
+                    message: "worker_push_secret was not stored".to_string(),
+                })
+            })?;
+        row.get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read worker_push_secret value".to_string(),
+            })
     }
 
     /// Persist the deployment-scoped sync token returned by initialization.

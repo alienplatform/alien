@@ -36,6 +36,7 @@ alien-core = { workspace = true, features = ["bundle-signature"] }
 alien-signing = { workspace = true }
 alien-cli-common = { workspace = true }
 alien-cloudformation = { workspace = true }
+alien-client-core = { workspace = true }
 alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local-artifact-registry"] }
@@ -151,3 +152,6 @@ base64 = { workspace = true }
 ngrok = { workspace = true }
 url = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+flate2 = { workspace = true }
+semver = { workspace = true }
+tar = { workspace = true }

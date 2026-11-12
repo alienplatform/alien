@@ -225,6 +225,16 @@ pub trait KeyVaultSecretsApi: Send + Sync + std::fmt::Debug {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait KeyVaultKeysApi: Send + Sync + std::fmt::Debug {
     async fn get_key(&self, key_id: &str) -> Result<KeyBundle>;
+    /// Creates a key (a new version when the name exists). `vault_uri` is the vault's data-plane URL.
+    async fn create_key(
+        &self,
+        vault_uri: &str,
+        key_name: &str,
+        request: CreateKeyRequest,
+    ) -> Result<KeyBundle>;
+    /// Who the credential is, from the claims of its Key Vault token: the object id role
+    /// assignments name, and whether it is an app (service principal) or a user.
+    async fn caller_identity(&self) -> Result<CallerIdentity>;
     async fn encrypt(
         &self,
         key_id: &str,
@@ -253,6 +263,28 @@ pub struct KeyOperationResponse {
 pub struct KeyBundle {
     pub key: JsonWebKey,
     pub attributes: KeyAttributes,
+    #[serde(default)]
+    pub tags: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateKeyRequest {
+    pub kty: String,
+    pub key_size: u32,
+    pub key_ops: Vec<String>,
+    pub attributes: CreateKeyAttributes,
+    pub tags: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateKeyAttributes {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallerIdentity {
+    pub object_id: String,
+    pub is_app: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -261,6 +293,9 @@ pub struct JsonWebKey {
     pub kty: String,
     #[serde(default)]
     pub key_ops: Vec<String>,
+    /// RSA modulus, base64url; its length is the key size.
+    #[serde(default)]
+    pub n: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -983,6 +1018,80 @@ impl KeyVaultKeysApi for AzureKeyVaultKeysClient {
             .await
             .into_alien_error()
             .context(key_vault_parse_error("GetKey", &url))
+    }
+
+    async fn create_key(
+        &self,
+        vault_uri: &str,
+        key_name: &str,
+        request: CreateKeyRequest,
+    ) -> Result<KeyBundle> {
+        let base = match self.token_cache.get_service_endpoint("keyvault") {
+            Some(override_url) => override_url.trim_end_matches('/').to_string(),
+            None => vault_uri.trim_end_matches('/').to_string(),
+        };
+        let mut url = url::Url::parse(&format!("{base}/keys/{key_name}/create"))
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                message: "Azure Key Vault URL is not valid".to_string(),
+                field_name: Some("vaultUri".to_string()),
+            })?;
+        url.query_pairs_mut().append_pair("api-version", "7.4");
+        let response = send_key_vault_request(
+            &self.token_cache,
+            self.client.post(url.clone()).json(&request),
+            "CreateKey",
+        )
+        .await?;
+        if !response.status().is_success() {
+            return Err(key_vault_response_error(
+                response.status(),
+                "CreateKey",
+                "Azure Key Vault Key",
+                key_name,
+                &url,
+            ));
+        }
+        response
+            .json::<KeyBundle>()
+            .await
+            .into_alien_error()
+            .context(key_vault_parse_error("CreateKey", &url))
+    }
+
+    async fn caller_identity(&self) -> Result<CallerIdentity> {
+        use base64::Engine as _;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(KEY_VAULT_SCOPE)
+            .await?;
+        let claims = token
+            .split('.')
+            .nth(1)
+            .and_then(|payload| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(payload.trim_end_matches('='))
+                    .ok()
+            })
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let object_id = claims
+            .as_ref()
+            .and_then(|claims| claims.get("oid"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidInput {
+                    message: "The Azure credential's token carries no object id".to_string(),
+                    field_name: None,
+                })
+            })?;
+        // Service principals and managed identities carry `idtyp: app`; users carry none.
+        let is_app = claims
+            .as_ref()
+            .and_then(|claims| claims.get("idtyp"))
+            .and_then(serde_json::Value::as_str)
+            == Some("app");
+        Ok(CallerIdentity { object_id, is_app })
     }
 
     async fn encrypt(

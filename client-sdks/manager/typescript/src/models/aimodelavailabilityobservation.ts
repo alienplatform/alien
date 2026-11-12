@@ -12,6 +12,11 @@ import {
   AiModelAvailability,
   AiModelAvailability$outboundSchema,
 } from "./aimodelavailability.js";
+import {
+  AiQuotaWarning,
+  AiQuotaWarning$Outbound,
+  AiQuotaWarning$outboundSchema,
+} from "./aiquotawarning.js";
 import { ClientApi, ClientApi$outboundSchema } from "./clientapi.js";
 
 export type AiModelAvailabilityObservation = {
@@ -21,7 +26,21 @@ export type AiModelAvailabilityObservation = {
   clientApis: Array<ClientApi>;
   errorCode?: string | null | undefined;
   publicModelId: string;
+  /**
+   * Applied quotas far below the cloud's default for this model. Empty when none were read
+   *
+   * @remarks
+   * or none are low.
+   */
+  quotaWarnings?: Array<AiQuotaWarning> | undefined;
   testedAt?: Date | null | undefined;
+  /**
+   * Requests the cloud throttled for this model in the last hour, from the cloud's own
+   *
+   * @remarks
+   * metrics. `None` when not read; `Some(0)` is a real zero.
+   */
+  throttledLastHour?: number | null | undefined;
 };
 
 /** @internal */
@@ -32,7 +51,9 @@ export type AiModelAvailabilityObservation$Outbound = {
   clientApis: Array<string>;
   errorCode?: string | null | undefined;
   publicModelId: string;
+  quotaWarnings?: Array<AiQuotaWarning$Outbound> | undefined;
   testedAt?: string | null | undefined;
+  throttledLastHour?: number | null | undefined;
 };
 
 /** @internal */
@@ -46,7 +67,9 @@ export const AiModelAvailabilityObservation$outboundSchema: z.ZodType<
   clientApis: z.array(ClientApi$outboundSchema),
   errorCode: z.nullable(z.string()).optional(),
   publicModelId: z.string(),
+  quotaWarnings: z.array(AiQuotaWarning$outboundSchema).optional(),
   testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+  throttledLastHour: z.nullable(z.int()).optional(),
 });
 
 export function aiModelAvailabilityObservationToJSON(

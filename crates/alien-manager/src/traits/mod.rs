@@ -42,6 +42,7 @@ pub use release_channel_store::{
 };
 pub use release_store::{
     CreateReleaseParams, ProtectedSetupQuery, ReleaseRecord, ReleaseStore, SetupTemplateBytes,
+    StoredChart,
 };
 pub use server_bindings::ServerBindings;
 pub use signing_store::{

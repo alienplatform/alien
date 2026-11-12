@@ -935,17 +935,33 @@ pub async fn deploy_test_app(
         }
     }
 
-    // Step 3: Re-serialize the pushed stack into StackByPlatform and create a release
-    let pushed_stack_json =
-        serde_json::to_value(&pushed_stack).context("Failed to serialize pushed stack")?;
+    let deployment = create_release_and_deployment(
+        manager,
+        platform,
+        model,
+        &pushed_stack,
+        deployment_name,
+        deployment_environment_variables(app),
+    )
+    .await?;
+
+    Ok((deployment, pushed_stack))
+}
+
+/// Push `stack` as a release (POST /v1/releases) and return the release id.
+pub async fn create_release(
+    manager: &Arc<TestManager>,
+    platform: Platform,
+    stack: &Stack,
+) -> anyhow::Result<String> {
+    let platform_key = platform.as_str();
+    let pushed_stack_json = serde_json::to_value(stack).context("Failed to serialize stack")?;
     let stack_by_platform = serde_json::json!({
         platform_key: pushed_stack_json,
     });
-
     let stack_by_platform_sdk: alien_manager_api::types::StackByPlatform =
         serde_json::from_value(stack_by_platform)
             .context("Failed to convert stack to SDK StackByPlatform")?;
-
     let release = manager
         .client()
         .create_release()
@@ -961,7 +977,21 @@ pub async fn deploy_test_app(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create release: {}", e))?
         .into_inner();
-    let release_id = &release.id;
+    Ok(release.id.to_string())
+}
+
+/// Steps 3-5 of [`deploy_test_app`] for a stack whose images are already in place: create the
+/// release, a deployment group and the deployment.
+pub async fn create_release_and_deployment(
+    manager: &Arc<TestManager>,
+    platform: Platform,
+    model: DeploymentModel,
+    pushed_stack: &Stack,
+    deployment_name: String,
+    environment_variables: Option<Vec<alien_manager_api::types::EnvironmentVariable>>,
+) -> anyhow::Result<TestDeployment> {
+    let config = TestConfig::from_env();
+    let release_id = &create_release(manager, platform, pushed_stack).await?;
     info!(%release_id, "Release created");
 
     // Step 4: Create a deployment group
@@ -1040,7 +1070,7 @@ pub async fn deploy_test_app(
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),
         stack_settings: Some(stack_settings),
-        environment_variables: deployment_environment_variables(app),
+        environment_variables,
         resource_prefix: Some(resource_prefix),
         input_values: Default::default(),
     };
@@ -1067,7 +1097,7 @@ pub async fn deploy_test_app(
         manager.clone(),
     );
 
-    Ok((deployment, pushed_stack))
+    Ok(deployment)
 }
 
 // ---------------------------------------------------------------------------
