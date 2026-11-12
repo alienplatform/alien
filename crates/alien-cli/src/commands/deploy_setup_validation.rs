@@ -23,6 +23,7 @@ fn prepare_stack_body(
     let mut body = serde_json::json!({
         "platform": resolved.platform,
         "setupMethod": "cli",
+        "setupCapabilities": super::SETUP_CAPABILITIES,
         "stackSettings": deployment_stack_settings_json(resolved, args)?,
         // Validate the Release this deployment will install: the one on its channel.
         "releaseChannel": args.channel,

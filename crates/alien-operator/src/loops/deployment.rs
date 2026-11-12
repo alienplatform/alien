@@ -1285,10 +1285,22 @@ mod tests {
             .await
             .unwrap(),
         );
-        let mut stack = Stack::new("secret-test".into()).build();
+        // One Worker reads the secret; only it is held while the key is missing.
+        let mut stack = Stack::new("secret-test".into())
+            .add(
+                alien_core::Worker::new("reader".into())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "test:latest".into(),
+                    })
+                    .permissions("default".into())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
         stack.inputs = vec![serde_json::from_value(serde_json::json!({
             "id": "key", "kind": "secret", "providedBy": ["deployer"],
-            "required": true, "label": "Test key", "description": ""
+            "required": true, "label": "Test key", "description": "",
+            "env": [{"name": "KEY", "targetResources": ["reader"]}]
         }))
         .unwrap()];
         let mut vault = StackResourceState::new_pending(

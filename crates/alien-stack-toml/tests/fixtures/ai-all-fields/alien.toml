@@ -7,6 +7,10 @@ description = "The ai the acme services share."
 lifecycle = "live"
 remote-access = true
 enabled-when = "ai_enabled"
+models = [
+  { id = "claude-sonnet-4-6", required = true },
+  { id = "claude-haiku-4-5" },
+]
 
 [input.ai_enabled]
 kind = "boolean"

@@ -415,6 +415,23 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             channel TEXT NOT NULL,
             pinned_release_id TEXT
         )",
+        "CREATE TABLE IF NOT EXISTS release_charts (
+            release_id TEXT NOT NULL,
+            version TEXT NOT NULL,
+            manifest BLOB NOT NULL,
+            config BLOB NOT NULL,
+            archive BLOB NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (release_id, version)
+        )",
+        "CREATE TABLE IF NOT EXISTS deployment_values (
+            scope TEXT NOT NULL,
+            slot TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (scope, slot)
+        )",
         // One-use operator enrollment codes and daily operator keys, hashed.
         "CREATE TABLE IF NOT EXISTS runtime_enrollment_codes (
             code_hash TEXT PRIMARY KEY,
@@ -432,14 +449,6 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "CREATE TABLE IF NOT EXISTS commands_key_generations (
             deployment_id TEXT PRIMARY KEY,
             generation INTEGER NOT NULL
-        )",
-        "CREATE TABLE IF NOT EXISTS deployment_values (
-            scope TEXT NOT NULL,
-            slot TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            value TEXT NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (scope, slot)
         )",
     ];
     for sql in channel_statements {

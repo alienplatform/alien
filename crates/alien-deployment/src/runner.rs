@@ -540,7 +540,20 @@ async fn run_step_loop_body(
         // Capture step metadata before overwriting state.
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
-        let heartbeats = step_result.heartbeats.clone();
+        let mut heartbeats = step_result.heartbeats.clone();
+        if let Some(metadata) = step_result.state.runtime_metadata.as_ref() {
+            let stack = step_result
+                .state
+                .target_release
+                .as_ref()
+                .or(step_result.state.current_release.as_ref())
+                .map(|release| &release.stack);
+            crate::ai_access_check::apply_checks(
+                &mut heartbeats,
+                &metadata.ai_access_checks,
+                stack,
+            );
+        }
         let observed_inventory_batches = step_result.observed_inventory_batches.clone();
 
         // A rejected/cancelled protocol checkpoint must leave the caller's old
@@ -680,10 +693,28 @@ fn failed_state_for_step_failure(
     error: alien_error::AlienError,
 ) -> DeploymentState {
     let mut next = current.clone();
-    next.status = failed_status_for_deployment_error(current.status);
+    next.status = failed_status_for_deployment_state(current);
     next.error = Some(error);
     next.retry_requested = false;
     next
+}
+
+/// [`failed_status_for_deployment_error`] for a state the caller holds. A wait that stepped an
+/// update (a prepared target is pending, the rule `step` uses to choose a handler) fails as an
+/// update, not as a first install.
+pub fn failed_status_for_deployment_state(state: &DeploymentState) -> DeploymentStatus {
+    let updating = matches!(
+        state.status,
+        DeploymentStatus::WaitingForSecrets | DeploymentStatus::WaitingForMachines
+    ) && state
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
+    if updating {
+        DeploymentStatus::UpdateFailed
+    } else {
+        failed_status_for_deployment_error(state.status)
+    }
 }
 
 pub fn failed_status_for_deployment_error(status: DeploymentStatus) -> DeploymentStatus {

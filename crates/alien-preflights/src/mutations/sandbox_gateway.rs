@@ -311,14 +311,16 @@ mod tests {
         assert!(is_managed_gateway(&prepared, SANDBOX_EGRESS_GATEWAY_ID));
         assert!(!is_managed_gateway(&prepared, "subject"));
 
-        // Without an internet sandbox the id is an ordinary application id.
+        // The id is reserved without an internet sandbox too: deployment environment
+        // variables never apply to it, so an application resource holding it would
+        // silently lose them.
         let mut application_stack = Stack::new("example".into()).build();
         application_stack.resources.insert(
             SANDBOX_EGRESS_GATEWAY_ID.into(),
             application_container(SANDBOX_EGRESS_GATEWAY_ID),
         );
         assert!(
-            AllowedUserResourcesCheck
+            !AllowedUserResourcesCheck
                 .check(&application_stack, Platform::Aws)
                 .await
                 .unwrap()

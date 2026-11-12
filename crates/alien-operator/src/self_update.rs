@@ -2,8 +2,10 @@
 //!
 //! The manager advertises the Operator image its charts install. An Operator
 //! installed with `OPERATOR_SELF_UPDATE_DEPLOYMENT` updates its own
-//! Deployment to that image; Kubernetes rolls the new pod out and keeps the
-//! old one until the new one is ready. The chart is installed once and the
+//! Deployment to that image. The Deployment uses the Recreate strategy (the
+//! Operator holds an exclusive lock on its state directory), so the old pod
+//! stops before the new one starts, and an image that can't start leaves no
+//! Operator running until it is fixed. The chart is installed once and the
 //! Operator still moves forward with the manager.
 
 use std::collections::BTreeMap;

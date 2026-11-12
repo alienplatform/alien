@@ -91,10 +91,23 @@ impl KubernetesServiceAccountController {
         state = CreateFailed,
         status = ResourceStatus::ProvisionFailed
     );
-    terminal_state!(
+    /// The chart may provide the account again (a `helm upgrade` after a rollback), so a
+    /// failed check keeps looking instead of staying failed until someone retries.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.observe(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: Some(Duration::from_secs(30)),
+        })
+    }
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
@@ -134,12 +147,36 @@ impl KubernetesServiceAccountController {
             client.get_base_url()
         );
         let request = client.client().request(Method::GET, url);
-        let account: KubernetesServiceAccount = sign_send_json(request, &client.auth_config())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Helm-owned ServiceAccount {namespace}/{name} is unavailable"),
-                resource_id: Some(config.id().to_string()),
-            })?;
+        let account: KubernetesServiceAccount =
+            match sign_send_json(request, &client.auth_config()).await {
+                Ok(account) => account,
+                // The chart creates the account before the Operator runs, so a missing
+                // one is not a race to wait out: the installed chart no longer provides it
+                // (for example after a rollback). Failing at once lets the health check
+                // report it, instead of spending its retry budget while the deployment
+                // still shows Running.
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                        resource_id: config.id().to_string(),
+                        message: format!(
+                            "Helm-owned ServiceAccount {namespace}/{name} is unavailable: the installed chart does not provide it"
+                        ),
+                    }));
+                }
+                Err(error) => {
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Helm-owned ServiceAccount {namespace}/{name} is unavailable"
+                        ),
+                        resource_id: Some(config.id().to_string()),
+                    });
+                }
+            };
         if account.metadata.name.as_deref() != Some(&name) {
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id().to_string(),

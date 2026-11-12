@@ -15,14 +15,15 @@ use alien_aws_clients::{
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
     eks::{EksApi, EksClient},
+    elasticache::{ElastiCacheApi, ElastiCacheClient},
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
     kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
     lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient},
-    elasticache::{ElastiCacheApi, ElastiCacheClient},
     rds::{RdsApi, RdsClient},
+    resourcegroupstagging::{ResourceGroupsTaggingApi, ResourceGroupsTaggingClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
     service_quotas::{ServiceQuotasApi, ServiceQuotasClient},
@@ -43,8 +44,6 @@ use alien_azure_clients::{
     disks::{AzureManagedDisksClient, ManagedDisksApi},
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
-    managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
-    monitor::{AzureMonitorClient, MonitorApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
         AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
@@ -54,6 +53,8 @@ use alien_azure_clients::{
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
     managed_clusters::{AzureManagedClustersClient, ManagedClustersApi},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
+    managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
+    monitor::{AzureMonitorClient, MonitorApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
     private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
     resource_skus::{AzureResourceSkusClient, ResourceSkusApi},
@@ -76,10 +77,6 @@ use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
-    monitoring::{MonitoringApi, MonitoringClient},
-    memorystore::{
-        MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
-    },
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
@@ -88,7 +85,12 @@ use alien_gcp_clients::{
     firestore::{FirestoreApi, FirestoreClient},
     gcs::{GcsApi, GcsClient},
     iam::{IamApi as GcpIamApi, IamClient as GcpIamClient},
+    memorystore::{
+        MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi,
+        ServiceConnectionPolicyClient,
+    },
     model_garden::{ModelGardenApi, ModelGardenClient},
+    monitoring::{MonitoringApi, MonitoringClient},
     pubsub::{PubSubApi, PubSubClient},
     resource_manager::{ResourceManagerApi, ResourceManagerClient},
     secret_manager::{SecretManagerApi, SecretManagerClient},
@@ -278,6 +280,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
     async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
+    async fn get_aws_resource_groups_tagging_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>>;
     async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>>;
 
     // GCP clients
@@ -307,8 +313,12 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>>;
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>>;
-    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>>;
-    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>>;
+    fn get_gcp_memorystore_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn MemorystoreApi>>;
+    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig)
+        -> Result<Arc<dyn MonitoringApi>>;
     fn get_gcp_service_connection_policy_client(
         &self,
         config: &GcpClientConfig,
@@ -817,6 +827,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_resource_groups_tagging_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ResourceGroupsTaggingClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>> {
         let credentials = AwsCredentialProvider::from_config(config.clone())
             .await
@@ -1266,14 +1292,20 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
-    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>> {
+    fn get_gcp_memorystore_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn MemorystoreApi>> {
         Ok(Arc::new(MemorystoreClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))
     }
 
-    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>> {
+    fn get_gcp_monitoring_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn MonitoringApi>> {
         Ok(Arc::new(MonitoringClient::new(
             reqwest::Client::new(),
             config.clone(),

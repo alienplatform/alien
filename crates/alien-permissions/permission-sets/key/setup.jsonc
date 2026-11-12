@@ -1,0 +1,164 @@
+{
+  "id": "key/setup",
+  "description": "Allows a direct setup to create an encryption key and set its policy. Only the setup identity holds it; management and runtime roles never create, change the policy of, disable or delete a key.",
+  // Setup credentials only. `setup` sets are never granted to the management identity, which
+  // must not be able to rewrite a key policy or create a key it could then use.
+  "platforms": {
+    "aws": [
+      // Creating a tagged key needs both actions, and both are limited to this deployment's
+      // tags: the stack tag names the deployment and the managed-by tag the runtime kind.
+      {
+        "label": "create-key",
+        "description": "Create a KMS key carrying this deployment's tags.",
+        "grant": {
+          "actions": ["kms:CreateKey"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // A tagged CreateKey is also authorized as TagResource on the new key, whose ARN is not
+      // known yet. A key that already carries another stack's tag cannot be retagged.
+      {
+        "label": "tag-created-key",
+        "description": "Tag a key being created with this deployment's tags.",
+        "grant": {
+          "actions": ["kms:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      // Everything after the create is limited to keys that carry this deployment's tags.
+      // PutKeyPolicy is needed twice: KMS's lockout check at creation, and when a rerun
+      // re-applies the policy to a key it adopts.
+      {
+        "label": "configure-key",
+        "description": "Turn on rotation, read and set the policy of this deployment's keys.",
+        "grant": {
+          "actions": [
+            "kms:EnableKeyRotation",
+            "kms:GetKeyRotationStatus",
+            "kms:PutKeyPolicy",
+            "kms:GetKeyPolicy",
+            "kms:DescribeKey",
+            "kms:ListResourceTags"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:kms:${awsRegion}:${awsAccountId}:key/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Finds this deployment's key after a rerun. The tagging API has no resource-level
+      // permissions.
+      {
+        "label": "find-tagged-key",
+        "description": "List keys by tag so a rerun adopts its earlier key.",
+        "grant": {
+          "actions": ["tag:GetResources"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // The ring is named `<stack prefix>-<key id>-<digest>`, so one condition limits every call
+      // to this deployment's rings. Checked against a real project: the condition allows
+      // `keyRings.create` under the prefix and denies it elsewhere.
+      {
+        "label": "create-key",
+        "description": "Create a key ring and crypto key under this deployment's prefix, and set the key's IAM policy.",
+        "grant": {
+          "permissions": [
+            "cloudkms.keyRings.create",
+            "cloudkms.keyRings.get",
+            "cloudkms.cryptoKeys.create",
+            "cloudkms.cryptoKeys.get",
+            "cloudkms.cryptoKeys.update",
+            "cloudkms.cryptoKeys.getIamPolicy",
+            "cloudkms.cryptoKeys.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SetupKeys",
+              "expression": "resource.name.startsWith(\"projects/${projectName}/locations/${region}/keyRings/${stackPrefix}-\")"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      // The vault lives in its own `<prefix>-keys` group so that erasing the deployment's
+      // group never deletes the key. A group that does not exist yet cannot be a scope, so the
+      // group's own create is bound at the subscription, as `azure-resource-group/provision`.
+      {
+        "label": "create-keys-group",
+        "description": "Create the group that holds the key vault.",
+        "grant": {
+          "actions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/write",
+            "Microsoft.Resources/subscriptions/resourceGroups/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}"
+          }
+        }
+      },
+      // Creating the vault, and the role assignment that lets setup create the key in it (a
+      // vault with role-based access gives its creator no data-plane rights). Key data-plane
+      // access comes from that self-assigned Key Vault Crypto Officer role, not from this set.
+      {
+        "label": "create-key-vault",
+        "description": "Create and read the key vault, and assign roles on it.",
+        "grant": {
+          "actions": [
+            "Microsoft.KeyVault/vaults/write",
+            "Microsoft.KeyVault/vaults/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-keys"
+          }
+        }
+      }
+    ]
+  }
+}

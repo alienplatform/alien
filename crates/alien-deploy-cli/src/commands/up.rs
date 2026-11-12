@@ -7,6 +7,10 @@
 
 mod setup_update;
 
+/// Identifies this binary and its version to the platform, as `alien-cli/<version>` does.
+pub(crate) const DEPLOY_CLI_USER_AGENT: &str =
+    concat!("alien-deploy-cli/", env!("CARGO_PKG_VERSION"));
+
 use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
@@ -6091,7 +6095,7 @@ async fn fetch_deployment_info(
                     message: "Invalid token format".to_string(),
                 })?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
         reqwest::Client::builder()
             .default_headers(headers)
@@ -6514,7 +6518,7 @@ async fn discover_manager_install_context(
                     message: "Invalid token format".to_string(),
                 })?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
         reqwest::Client::builder()
             .default_headers(headers)
@@ -6612,7 +6616,7 @@ pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client>
                 message: "Invalid token format".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+    headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
     reqwest::Client::builder()
         .default_headers(headers)
@@ -8458,6 +8462,27 @@ async fn push_initial_setup_targeted(
             has_runtime_metadata = state.runtime_metadata.is_some(),
             "push_initial_setup: state after re-fetch (before step loop)"
         );
+
+        // With the admin's setup credentials in hand, ask the cloud whether each model the app
+        // declares can be called. The answer rides in the runtime metadata (checkpointed with the
+        // setup steps); the AI controller reports it. A refusal never fails the setup.
+        if let Some(stack) = state.target_release.as_ref().map(|r| r.stack.clone()) {
+            let checks =
+                alien_deployment::check_declared_ai_models(
+                &stack,
+                platform,
+                &client_config,
+                &config.external_bindings,
+            )
+            .await;
+            // Replace the earlier answers: a model no longer declared must not keep one.
+            if !checks.is_empty() || state.runtime_metadata.is_some() {
+                state
+                    .runtime_metadata
+                    .get_or_insert_with(Default::default)
+                    .ai_access_checks = checks;
+            }
+        }
 
         // Run the shared step loop with per-step reconciliation via the manager API
         let transport = SetupRevisionTransport {

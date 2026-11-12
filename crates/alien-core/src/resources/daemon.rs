@@ -2,7 +2,7 @@ use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
     ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, PublicEndpointOutput,
-    ResourceSpec, ToolchainConfig, APEX_HOST_LABEL,
+    ResourceSpec, ToolchainConfig, WorkloadPriority, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use bon::Builder;
@@ -103,6 +103,11 @@ pub struct Daemon {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 86400))]
     pub stop_grace_period_seconds: Option<u32>,
+    /// Relative scheduling importance. On Kubernetes the cluster administrator maps each
+    /// level to a PriorityClass at install time; unset leaves the pod without one. Other
+    /// platforms ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<WorkloadPriority>,
     /// Optional backend runtime settings for trusted daemons.
     ///
     /// These settings are intended for daemon-style infrastructure that must

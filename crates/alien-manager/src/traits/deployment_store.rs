@@ -609,6 +609,19 @@ pub trait DeploymentStore: Send + Sync {
         Ok(())
     }
 
+    /// Record the version an Operator reports, without changing anything else
+    /// about the deployment. Used when the sync is rejected (for example a
+    /// protocol the Operator is too old for), so the deployment still shows
+    /// which Operator is stuck. Stores that do not track it keep the default.
+    async fn record_operator_version(
+        &self,
+        _caller: &crate::auth::Subject,
+        _deployment_id: &str,
+        _operator_version: &str,
+    ) -> Result<(), AlienError> {
+        Ok(())
+    }
+
     /// Whether acquisition honors excluded IDs before applying its limit.
     /// Stores must opt in after their entire acquisition path supports exclusions.
     /// Other stores retain candidate-list filtering to avoid reacquiring skipped

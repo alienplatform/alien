@@ -5,6 +5,27 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/components/schemas/AiModel"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AiModel": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -1004,6 +1025,16 @@
           },
           "type": "array"
         },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/WorkloadPriority"
+            }
+          ]
+        },
         "publicEndpoints": {
           "items": {
             "$ref": "#/components/schemas/PublicEndpoint"
@@ -1356,6 +1387,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/WorkloadPriority"
+            }
           ]
         },
         "publicEndpoints": {
@@ -3162,6 +3203,15 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadPriority": {
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low"
+      ],
+      "type": "string"
     }
   }
 }

@@ -1,19 +1,31 @@
 //! Helm charts served from the manager's OCI registry.
 //!
 //! Every release with a Kubernetes stack has an installable chart at
-//! `oci://<manager>/charts/<stack-id>`, version `1.0.<n>` for the n-th
-//! release. The chart comes pre-wired to this manager: its management URL,
-//! the Operator image, and pod log collection are defaults, so a customer
-//! installs it with a deployment-group token and their own infrastructure
-//! values only.
+//! `oci://<manager>/charts/<stack-id>`. The chart comes pre-wired to this
+//! manager: its management URL, the Operator image, and pod log collection
+//! are defaults, so a customer installs it with a deployment-group token and
+//! their own infrastructure values only.
 //!
-//! Charts are rendered on request from the release; rendering is
-//! deterministic, so the same release always yields the same digests.
-
-use std::{
-    collections::HashMap,
-    sync::{Arc, LazyLock, Mutex},
-};
+//! A chart is rendered the first time its version is served, and the manager
+//! keeps its manifest, config and archive bytes in the release store. From
+//! then on it serves the kept bytes, so a version keeps its digest across
+//! manager upgrades. The chart version names the release and the Operator
+//! image, `1.<n>.<operator>` for the n-th release, so GitOps tools that pin
+//! or compare versions see an Operator upgrade as a new, higher version:
+//!
+//! - `<n>` counts every release, oldest first, so a newer release sorts
+//!   above an older one under any Operator image.
+//! - `<operator>` is the Operator image's release version as one number,
+//!   `MAJOR * 1_000_000 + MINOR * 1_000 + PATCH` (`v3.3.59` is `3003059`).
+//!   An image tag that isn't a release version (`dev`, `latest`) is `0`:
+//!   such a tag can move to other content, so its charts can't be immutable
+//!   either.
+//!
+//! A manager renders only versions for its own Operator image, and serves
+//! versions of other Operator images only from its store (they were served by
+//! an earlier manager). The `1.0.<n>` versions earlier managers served were
+//! never kept, so they are unknown: serving another chart under them is what
+//! made versions mutable.
 
 use alien_core::{DeploymentModel, Platform, StackSettings};
 use alien_helm::{
@@ -30,7 +42,10 @@ use sha2::{Digest, Sha256};
 use super::AppState;
 use crate::{
     auth::{Scope, Subject},
-    traits::{deploy_cli_downloads, BundleSource, BundleSources, ReleaseRecord, SourceCredentials},
+    traits::{
+        deploy_cli_downloads, BundleSource, BundleSources, ReleaseRecord, SourceCredentials,
+        StoredChart,
+    },
 };
 
 /// Repository namespace for charts in the manager's registry.
@@ -96,6 +111,38 @@ impl ChartSettings {
         }
     }
 
+    /// What to tell an Operator that is too old for this manager: the Operator
+    /// this manager serves and the chart versions that carry it, with how to
+    /// move to one. `None` for the Operator version in use when unknown.
+    pub fn operator_upgrade_message(&self, current: Option<&str>) -> String {
+        let current = current.map_or("this Operator".to_string(), |v| format!("Operator {v}"));
+        format!(
+            "{current} is too old for this deployment. Operator {tag} accepts it, and chart \
+             versions 1.<release>.{number} carry it: run `helm upgrade <release> <chart> \
+             --version 1.<release>.{number}`, or raise the chart version in your GitOps source \
+             (Flux `semver: \"1.x\"` and Argo CD `targetRevision: \"1.*\"` pick it up by themselves).",
+            tag = self.operator_tag(),
+            number = operator_number(self.operator_tag()),
+        )
+    }
+
+    /// Whether an Operator at `reported` (`v3.3.40` or `3.3.40`) is older than
+    /// the Operator image this manager's charts install. `None` when either
+    /// isn't a release version (`dev`, `latest`), which can't be compared.
+    pub fn operator_behind_target(&self, reported: &str) -> Option<bool> {
+        let reported = operator_number(reported);
+        let target = operator_number(self.operator_tag());
+        (reported != 0 && target != 0).then_some(reported < target)
+    }
+
+    /// Tag of the Operator image charts install.
+    fn operator_tag(&self) -> &str {
+        match &self.operator_upstream {
+            Some(upstream) => &upstream.tag,
+            None => split_image(&self.operator_image).1,
+        }
+    }
+
     /// The Operator image reference deployments run, given this manager's
     /// public URL: through the manager when an upstream is set.
     pub fn deployed_operator_image(&self, manager_url: &str) -> String {
@@ -108,35 +155,6 @@ impl ChartSettings {
             ),
             None => self.operator_image.clone(),
         }
-    }
-}
-
-struct Blob {
-    media_type: &'static str,
-    bytes: Arc<Vec<u8>>,
-}
-
-/// Rendered blobs by digest (manifests, configs and chart archives). Content
-/// addressed, so entries never go stale.
-static BLOBS: LazyLock<Mutex<HashMap<String, Blob>>> = LazyLock::new(Default::default);
-
-/// Digests of each rendered chart, by release ID and chart version.
-static RENDERED: LazyLock<Mutex<HashMap<(String, String), ChartDigests>>> =
-    LazyLock::new(Default::default);
-
-/// The three blobs that make up one chart version.
-#[derive(Clone)]
-struct ChartDigests {
-    manifest: String,
-    config: String,
-    chart: String,
-}
-
-impl ChartDigests {
-    fn contains(&self, digest: &str) -> bool {
-        [&self.manifest, &self.config, &self.chart]
-            .iter()
-            .any(|known| known.as_str() == digest)
     }
 }
 
@@ -162,7 +180,7 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
         None => return oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path"),
     };
 
-    let charts = match chart_releases(state, subject, name).await {
+    let charts = match chart_releases(state, &settings, subject, name).await {
         Ok(charts) => charts,
         Err(response) => return response,
     };
@@ -182,24 +200,24 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
 
     if let Some(reference) = operation.strip_prefix("manifests/") {
         if reference.starts_with("sha256:") {
-            return visible_blob(state, &settings, &charts, method, reference);
+            return visible_blob(state, subject, &charts, method, reference).await;
         }
         let Some((version, release)) = charts.iter().find(|(version, _)| version == reference)
         else {
-            return oci_error(
-                StatusCode::NOT_FOUND,
-                "MANIFEST_UNKNOWN",
-                format!("chart '{name}' has no version '{reference}'"),
-            );
+            // A version of an earlier Operator image is served from the store.
+            return match kept_version(state, subject, &charts, reference).await {
+                Ok(Some(chart)) => blob_response(method, MANIFEST_MEDIA_TYPE, &chart.manifest),
+                Ok(None) => unknown_version(&settings, name, reference),
+                Err(response) => response,
+            };
         };
-        return match render(state, &settings, release, version) {
-            Ok(digests) => blob_response(method, &digests.manifest),
+        return match chart_version(state, &settings, subject, release, version).await {
+            Ok(chart) => blob_response(method, MANIFEST_MEDIA_TYPE, &chart.manifest),
             Err(response) => response,
         };
     }
-
     if let Some(digest) = operation.strip_prefix("blobs/") {
-        return visible_blob(state, &settings, &charts, method, digest);
+        return visible_blob(state, subject, &charts, method, digest).await;
     }
 
     oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path")
@@ -213,9 +231,9 @@ pub(crate) async fn served_bundle_sources(
     subject: &Subject,
     release: &ReleaseRecord,
 ) -> Result<Option<BundleSources>, Response> {
-    if state.charts.is_none() {
+    let Some(settings) = state.charts.as_deref() else {
         return Ok(None);
-    }
+    };
     let Some(stack) = release.stacks.get(&Platform::Kubernetes) else {
         return Err(oci_error(
             StatusCode::BAD_REQUEST,
@@ -224,7 +242,7 @@ pub(crate) async fn served_bundle_sources(
         ));
     };
     let name = stack.id().to_string();
-    let charts = chart_releases(state, subject, &name).await?;
+    let charts = chart_releases(state, settings, subject, &name).await?;
     let Some((version, _)) = charts.iter().find(|(_, r)| r.id == release.id) else {
         return Err(oci_error(
             StatusCode::NOT_FOUND,
@@ -243,21 +261,52 @@ pub(crate) async fn served_bundle_sources(
     }))
 }
 
-/// Serve `digest` only if it belongs to one of `charts`, the charts this
-/// caller may read. The blob cache is shared across callers, so a digest
-/// alone must not grant access.
-fn visible_blob(
+/// The chart version this manager serves for `release_id`, when it serves
+/// charts and the release has one.
+pub(crate) async fn served_chart_version(
     state: &AppState,
-    settings: &ChartSettings,
+    subject: &Subject,
+    release: &ReleaseRecord,
+) -> Option<String> {
+    let settings = state.charts.clone()?;
+    let name = release.stacks.get(&Platform::Kubernetes)?.id().to_string();
+    let charts = chart_releases(state, &settings, subject, &name)
+        .await
+        .ok()?;
+    charts
+        .into_iter()
+        .find(|(_, r)| r.id == release.id)
+        .map(|(version, _)| version)
+}
+
+/// Serve `digest` only if it belongs to a chart kept for one of `charts`'
+/// releases, the charts this caller may read. A digest alone must not grant
+/// access. A digest comes from a manifest, which is kept when first served.
+async fn visible_blob(
+    state: &AppState,
+    subject: &Subject,
     charts: &[(String, ReleaseRecord)],
     method: &Method,
     digest: &str,
 ) -> Response {
-    for (version, release) in charts {
-        match render(state, settings, release, version) {
-            Ok(digests) if digests.contains(digest) => return blob_response(method, digest),
-            Ok(_) => {}
-            Err(response) => return response,
+    let release_ids: Vec<String> = charts.iter().map(|(_, r)| r.id.clone()).collect();
+    let kept = match state
+        .release_store
+        .stored_charts(subject, &release_ids)
+        .await
+    {
+        Ok(kept) => kept,
+        Err(e) => return store_failed("read kept charts", e),
+    };
+    for chart in &kept {
+        for (media_type, bytes) in [
+            (MANIFEST_MEDIA_TYPE, &chart.manifest),
+            (CONFIG_MEDIA_TYPE, &chart.config),
+            (CHART_MEDIA_TYPE, &chart.archive),
+        ] {
+            if sha256_digest(bytes) == digest {
+                return blob_response(method, media_type, bytes);
+            }
         }
     }
     oci_error(
@@ -267,10 +316,65 @@ fn visible_blob(
     )
 }
 
+/// The kept chart for `reference`, a version of an Operator image this
+/// manager doesn't serve now: it belongs to the release with the same number
+/// among `charts`.
+async fn kept_version(
+    state: &AppState,
+    subject: &Subject,
+    charts: &[(String, ReleaseRecord)],
+    reference: &str,
+) -> Result<Option<StoredChart>, Response> {
+    let release_part = |version: &str| {
+        version
+            .rsplit_once('.')
+            .map(|(release, _)| release.to_string())
+    };
+    let Some(wanted) = release_part(reference) else {
+        return Ok(None);
+    };
+    let Some((_, release)) = charts
+        .iter()
+        .find(|(version, _)| release_part(version).as_ref() == Some(&wanted))
+    else {
+        return Ok(None);
+    };
+    let kept = state
+        .release_store
+        .stored_charts(subject, std::slice::from_ref(&release.id))
+        .await
+        .map_err(|e| store_failed("read kept charts", e))?;
+    Ok(kept.into_iter().find(|chart| chart.version == reference))
+}
+
+fn unknown_version(settings: &ChartSettings, name: &str, reference: &str) -> Response {
+    oci_error(
+        StatusCode::NOT_FOUND,
+        "MANIFEST_UNKNOWN",
+        format!(
+            "chart '{name}' has no version '{reference}'; this manager serves \
+             versions 1.<release>.{} for its Operator image {}, and versions it served \
+             before. Versions 1.0.<n> from earlier managers are no longer served: pin \
+             1.<release>.<operator> instead, or a range such as 1.x",
+            operator_number(settings.operator_tag()),
+            settings.operator_image
+        ),
+    )
+}
+
+fn store_failed(action: &str, error: alien_error::AlienError) -> Response {
+    oci_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "UNKNOWN",
+        format!("failed to {action}: {error}"),
+    )
+}
+
 /// Releases the caller may read whose Kubernetes stack is named `name`,
 /// oldest first, with the chart version each one publishes.
 async fn chart_releases(
     state: &AppState,
+    settings: &ChartSettings,
     subject: &Subject,
     name: &str,
 ) -> Result<Vec<(String, ReleaseRecord)>, Response> {
@@ -287,6 +391,7 @@ async fn chart_releases(
         })?;
     releases.retain(|release| state.authz.can_read_release(subject, release));
     releases.sort_by_key(|release| release.created_at);
+    let operator = operator_number(settings.operator_tag());
     Ok(releases
         .into_iter()
         .enumerate()
@@ -296,21 +401,43 @@ async fn chart_releases(
                 .get(&Platform::Kubernetes)
                 .is_some_and(|stack| stack.id() == name)
         })
-        .map(|(index, release)| (format!("1.0.{}", index + 1), release))
+        .map(|(index, release)| (format!("1.{}.{operator}", index + 1), release))
         .collect())
 }
 
-/// Render a release's chart once, cache its blobs, and return their digests.
+/// The chart of `release` at `version`: the kept copy, or, the first time
+/// the version is served, a render that is kept before it is returned. The
+/// store keeps the first copy when managers race, and every one returns it.
+async fn chart_version(
+    state: &AppState,
+    settings: &ChartSettings,
+    subject: &Subject,
+    release: &ReleaseRecord,
+    version: &str,
+) -> Result<StoredChart, Response> {
+    let kept = state
+        .release_store
+        .stored_charts(subject, std::slice::from_ref(&release.id))
+        .await
+        .map_err(|e| store_failed("read kept charts", e))?;
+    if let Some(chart) = kept.into_iter().find(|chart| chart.version == version) {
+        return Ok(chart);
+    }
+    let rendered = render(state, settings, release, version)?;
+    state
+        .release_store
+        .store_chart_if_absent(subject, rendered)
+        .await
+        .map_err(|e| store_failed("keep the chart", e))
+}
+
+/// Render a release's chart.
 fn render(
     state: &AppState,
     settings: &ChartSettings,
     release: &ReleaseRecord,
     version: &str,
-) -> Result<ChartDigests, Response> {
-    let key = (release.id.clone(), version.to_string());
-    if let Some(digests) = rendered().get(&key) {
-        return Ok(digests.clone());
-    }
+) -> Result<StoredChart, Response> {
     let render_failed =
         |message: String| oci_error(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", message);
     let stack = release
@@ -338,10 +465,11 @@ fn render(
         "{registry_host}/{}",
         super::operator_image::OPERATOR_REPOSITORY
     );
-    let (repository, tag) = match &settings.operator_upstream {
-        Some(upstream) => (proxied_repository.as_str(), upstream.tag.as_str()),
-        None => split_image(&settings.operator_image),
+    let repository = match &settings.operator_upstream {
+        Some(_) => proxied_repository.as_str(),
+        None => split_image(&settings.operator_image).0,
     };
+    let tag = settings.operator_tag();
     // The setup the chart carries lets a `helm upgrade` to it complete a
     // pending setup update: the Operator reports it and the manager authorizes
     // the change. A setup change also changes the Operator's pod template, so
@@ -379,8 +507,8 @@ fn render(
     .to_string()
     .into_bytes();
 
-    let config_digest = store(CONFIG_MEDIA_TYPE, config.clone());
-    let chart_digest = store(CHART_MEDIA_TYPE, archive.clone());
+    let config_digest = sha256_digest(&config);
+    let chart_digest = sha256_digest(&archive);
     let manifest = serde_json::json!({
         "schemaVersion": 2,
         "mediaType": MANIFEST_MEDIA_TYPE,
@@ -402,59 +530,54 @@ fn render(
     })
     .to_string()
     .into_bytes();
-    let digests = ChartDigests {
-        manifest: store(MANIFEST_MEDIA_TYPE, manifest),
-        config: config_digest,
-        chart: chart_digest,
-    };
-    rendered().insert(key, digests.clone());
-    Ok(digests)
+    Ok(StoredChart {
+        release_id: release.id.clone(),
+        version: version.to_string(),
+        manifest,
+        config,
+        archive,
+    })
 }
 
-fn rendered() -> std::sync::MutexGuard<'static, HashMap<(String, String), ChartDigests>> {
-    RENDERED
-        .lock()
-        .expect("rendered chart index is never held across a panic")
+fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn store(media_type: &'static str, bytes: Vec<u8>) -> String {
-    let digest = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
-    blobs().entry(digest.clone()).or_insert(Blob {
-        media_type,
-        bytes: Arc::new(bytes),
-    });
-    digest
-}
-
-fn blob_response(method: &Method, digest: &str) -> Response {
-    let Some((media_type, bytes)) = blobs()
-        .get(digest)
-        .map(|blob| (blob.media_type, blob.bytes.clone()))
-    else {
-        return oci_error(
-            StatusCode::NOT_FOUND,
-            "BLOB_UNKNOWN",
-            format!("unknown digest {digest}"),
-        );
-    };
+fn blob_response(method: &Method, media_type: &'static str, bytes: &[u8]) -> Response {
     let mut response = if *method == Method::HEAD {
         Response::new(Body::empty())
     } else {
-        Response::new(Body::from(bytes.as_ref().clone()))
+        Response::new(Body::from(bytes.to_vec()))
     };
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes.len()));
-    if let Ok(value) = HeaderValue::from_str(digest) {
+    if let Ok(value) = HeaderValue::from_str(&sha256_digest(bytes)) {
         headers.insert("docker-content-digest", value);
     }
     response
 }
 
-fn blobs() -> std::sync::MutexGuard<'static, HashMap<String, Blob>> {
-    BLOBS
-        .lock()
-        .expect("chart blob cache is never held across a panic")
+/// The Operator release version in `tag` (`v3.3.59` or `3.3.59`) as one
+/// number that sorts like the version: `3003059`. `0` for a tag that isn't a
+/// release version, or whose minor or patch doesn't fit in three digits.
+fn operator_number(tag: &str) -> u64 {
+    let numbers: Option<Vec<u64>> = tag
+        .strip_prefix('v')
+        .unwrap_or(tag)
+        .split('.')
+        .map(|part| {
+            let digits =
+                !part.is_empty() && part.len() <= 6 && part.bytes().all(|b| b.is_ascii_digit());
+            digits.then(|| part.parse().ok()).flatten()
+        })
+        .collect();
+    match numbers.as_deref() {
+        Some(&[major, minor, patch]) if minor < 1_000 && patch < 1_000 => {
+            major * 1_000_000 + minor * 1_000 + patch
+        }
+        _ => 0,
+    }
 }
 
 /// Split `repository:tag` (the tag after the last `:` that follows the last `/`).
@@ -473,7 +596,40 @@ fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>)
 
 #[cfg(test)]
 mod tests {
-    use super::split_image;
+    use super::{operator_number, split_image};
+
+    #[test]
+    fn operator_numbers_sort_like_operator_versions() {
+        assert_eq!(operator_number("v3.3.59"), 3_003_059);
+        assert_eq!(operator_number("3.3.59"), 3_003_059);
+        assert_eq!(operator_number("v0.0.1"), 1);
+        let ordered = [
+            "v3.3.57", "v3.3.59", "v3.3.999", "v3.4.0", "v3.10.2", "v4.0.0",
+        ];
+        for pair in ordered.windows(2) {
+            assert!(
+                operator_number(pair[0]) < operator_number(pair[1]),
+                "{} must sort below {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        for tag in [
+            "dev",
+            "latest",
+            "sha-0123abc",
+            "v3.3",
+            "v3.3.59.1",
+            "v3.3.59-rc.1",
+            "v3.3.1000",
+            "v3.1000.0",
+            "v+3.3.59",
+            "v3..59",
+            "v1234567.0.0",
+        ] {
+            assert_eq!(operator_number(tag), 0, "{tag}");
+        }
+    }
 
     #[test]
     fn splits_image_references_with_registry_ports() {
@@ -489,5 +645,29 @@ mod tests {
             ("host.example.com:5050/alien-operator", "latest")
         );
         assert_eq!(split_image("alien-operator:dev"), ("alien-operator", "dev"));
+    }
+}
+
+#[cfg(test)]
+mod upgrade_message_tests {
+    use super::ChartSettings;
+
+    #[test]
+    fn the_message_names_the_operator_and_the_chart_versions_that_carry_it() {
+        let settings = ChartSettings::new(
+            Some("ghcr.io/alienplatform/alien-operator:v3.3.59".to_string()),
+            false,
+        );
+        let message = settings.operator_upgrade_message(Some("v3.3.40"));
+        assert!(message.contains("Operator v3.3.40"), "{message}");
+        assert!(message.contains("Operator v3.3.59 accepts it"), "{message}");
+        assert!(message.contains("1.<release>.3003059"), "{message}");
+        assert!(
+            message.contains("--version 1.<release>.3003059"),
+            "{message}"
+        );
+        assert!(settings
+            .operator_upgrade_message(None)
+            .starts_with("this Operator is too old"));
     }
 }

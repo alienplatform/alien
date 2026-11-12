@@ -107,6 +107,15 @@ pub struct DeploymentResponse {
     pub environment_info: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_metadata: Option<serde_json::Value>,
+    /// Version of the Operator that last reported this deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+    /// Whether that Operator is older than the Operator this manager's charts
+    /// install, so the next chart version would upgrade it. Absent when the
+    /// Operator version is unknown, isn't a release version, or this manager
+    /// serves no charts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_behind_target: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_release_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,6 +335,18 @@ pub fn router() -> Router<AppState> {
 
 // --- Helpers ---
 
+/// Fill in `operator_behind_target` from the Operator image this manager's
+/// charts install.
+fn with_operator_signal(
+    mut response: DeploymentResponse,
+    charts: Option<&super::charts::ChartSettings>,
+) -> DeploymentResponse {
+    response.operator_behind_target = charts
+        .zip(response.operator_version.as_deref())
+        .and_then(|(charts, version)| charts.operator_behind_target(version));
+    response
+}
+
 fn record_to_response(
     r: &DeploymentRecord,
     deployment_group: Option<DeploymentGroupMinimal>,
@@ -366,6 +387,11 @@ fn record_to_response(
             .runtime_metadata
             .as_ref()
             .map(|m| serde_json::to_value(m).unwrap_or_default()),
+        operator_version: r
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.operator_version.clone()),
+        operator_behind_target: None,
         current_release_id: r.current_release_id.clone(),
         desired_release_id: r.desired_release_id.clone(),
         import_source: r.import_source,
@@ -825,7 +851,10 @@ async fn create_deployment(
         StatusCode::CREATED,
         Json(CreateDeploymentResponse {
             deployment_model: deployment_model_for_record(&deployment),
-            deployment: record_to_response(&deployment, None),
+            deployment: with_operator_signal(
+                record_to_response(&deployment, None),
+                state.charts.as_deref(),
+            ),
             token,
         }),
     )
@@ -977,7 +1006,10 @@ async fn list_deployments(
         } else {
             None
         };
-        items.push(record_to_response(d, dg_minimal));
+        items.push(with_operator_signal(
+            record_to_response(d, dg_minimal),
+            state.charts.as_deref(),
+        ));
     }
 
     Json(ListDeploymentsResponse {
@@ -1021,7 +1053,10 @@ async fn get_deployment(
     }
 
     Json(deployment_response_for_client(
-        record_to_response(&deployment, None),
+        with_operator_signal(
+            record_to_response(&deployment, None),
+            state.charts.as_deref(),
+        ),
         &headers,
     ))
     .into_response()
@@ -1547,6 +1582,40 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn a_deployment_reports_its_operator_and_whether_it_is_behind_the_charts() {
+        let charts = super::super::charts::ChartSettings::new(
+            Some("ghcr.io/alienplatform/alien-operator:v3.3.59".to_string()),
+            false,
+        );
+        let mut deployment = deployment_record();
+        // No Operator has reported yet.
+        let response = with_operator_signal(record_to_response(&deployment, None), Some(&charts));
+        assert_eq!(response.operator_version, None);
+        assert_eq!(response.operator_behind_target, None);
+
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            operator_version: Some("3.3.40".to_string()),
+            ..Default::default()
+        });
+        let behind = with_operator_signal(record_to_response(&deployment, None), Some(&charts));
+        assert_eq!(behind.operator_version.as_deref(), Some("3.3.40"));
+        assert_eq!(behind.operator_behind_target, Some(true));
+        let json = serde_json::to_value(&behind).unwrap();
+        assert_eq!(json["operatorBehindTarget"], true);
+
+        // A manager that serves no charts has no target to compare with.
+        let no_charts = with_operator_signal(record_to_response(&deployment, None), None);
+        assert_eq!(no_charts.operator_behind_target, None);
+
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            operator_version: Some("3.3.59".to_string()),
+            ..Default::default()
+        });
+        let current = with_operator_signal(record_to_response(&deployment, None), Some(&charts));
+        assert_eq!(current.operator_behind_target, Some(false));
     }
 
     #[test]

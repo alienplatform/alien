@@ -3957,3 +3957,97 @@ async fn setup_run_claims_a_failure_that_asks_for_setup() {
     assert_eq!(retried.len(), 1);
     assert!(retried[0].deployment.retry_requested);
 }
+
+#[tokio::test]
+async fn reconcile_records_the_version_of_the_operator_that_reported() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+    assert!(dep
+        .runtime_metadata
+        .as_ref()
+        .is_none_or(|metadata| metadata.operator_version.is_none()));
+
+    let mut data = test_reconcile_data(&dep.id, "agent-sync", DeploymentStatus::Running, None);
+    data.operator_version = Some("3.3.40".to_string());
+    store.reconcile(&test_subject(), data).await.unwrap();
+
+    let stored = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored
+            .runtime_metadata
+            .and_then(|metadata| metadata.operator_version)
+            .as_deref(),
+        Some("3.3.40")
+    );
+
+    // A report that doesn't carry a version keeps the recorded one.
+    let data = test_reconcile_data(&dep.id, "agent-sync", DeploymentStatus::Running, None);
+    store.reconcile(&test_subject(), data).await.unwrap();
+    let stored = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored
+            .runtime_metadata
+            .and_then(|metadata| metadata.operator_version)
+            .as_deref(),
+        Some("3.3.40")
+    );
+}
+
+#[tokio::test]
+async fn newer_release_reaches_a_deployment_waiting_for_secrets_without_changing_its_status() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "waiting", Platform::Aws).await;
+    store
+        .reconcile(
+            &test_subject(),
+            ReconcileData {
+                deployment_id: dep.id.clone(),
+                session: "step".to_string(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::WaitingForSecrets,
+                    platform: Platform::Aws,
+                    current_release: None,
+                    target_release: None,
+                    stack_state: None,
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: None,
+                    retry_requested: false,
+                    protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                },
+                update_heartbeat: false,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                suggested_delay_ms: None,
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .set_desired_release(&test_subject(), "newer-release", Some(Platform::Aws))
+        .await
+        .unwrap();
+    let dep = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(dep.status, "waiting-for-secrets");
+    assert_eq!(dep.desired_release_id.as_deref(), Some("newer-release"));
+}
