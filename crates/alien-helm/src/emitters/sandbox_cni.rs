@@ -7,7 +7,7 @@
 //! The probe must create pods and NetworkPolicies, which Kubernetes RBAC cannot restrict
 //! by content. Two ValidatingAdmissionPolicies, created before the probe's account and
 //! bound to it alone, admit only the probe's own token-less, unprivileged pods of the
-//! pinned image and its two deny-all policies over those pods. The probe refuses to start
+//! pinned image and its deny-all policy over those pods. The probe refuses to start
 //! unless each policy demonstrably rejects a request it should. The admission policy API needs Kubernetes 1.30 or later;
 //! an older API server refuses the install.
 
@@ -112,7 +112,7 @@ spec:
 ---
 # NetworkPolicy creation cannot be scoped by RBAC either. Policies are additive, so an
 # allow rule selecting sandbox or gateway pods would outlive the hook: admit only the
-# probe's two deny-all policies over the probe's own pods.
+# probe's deny-all policy over the probe's own pods.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -133,9 +133,9 @@ spec:
     - name: probe-account
       expression: {{{{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s'" .Release.Namespace $name | quote }}}}
   validations:
-    - expression: {{{{ printf "object.metadata.name in ['%s', '%s-ingress']" $name $name | quote }}}}
+    - expression: {{{{ printf "object.metadata.name == '%s'" $name | quote }}}}
       message: probe NetworkPolicies use the probe's own names
-    - expression: {{{{ printf "!has(object.spec.podSelector.matchExpressions) && has(object.spec.podSelector.matchLabels) && size(object.spec.podSelector.matchLabels) == 2 && 'alien.dev/cni-probe' in object.spec.podSelector.matchLabels && object.spec.podSelector.matchLabels['alien.dev/cni-probe'] == '%s' && 'alien.dev/cni-role' in object.spec.podSelector.matchLabels && object.spec.podSelector.matchLabels['alien.dev/cni-role'] in ['denied', 'listener']" $name | quote }}}}
+    - expression: {{{{ printf "!has(object.spec.podSelector.matchExpressions) && has(object.spec.podSelector.matchLabels) && size(object.spec.podSelector.matchLabels) == 2 && 'alien.dev/cni-probe' in object.spec.podSelector.matchLabels && object.spec.podSelector.matchLabels['alien.dev/cni-probe'] == '%s' && 'alien.dev/cni-role' in object.spec.podSelector.matchLabels && object.spec.podSelector.matchLabels['alien.dev/cni-role'] == 'denied'" $name | quote }}}}
       message: probe NetworkPolicies select only probe pods
     - expression: "(!has(object.spec.ingress) || size(object.spec.ingress) == 0) && (!has(object.spec.egress) || size(object.spec.egress) == 0)"
       message: probe NetworkPolicies only deny
@@ -189,7 +189,7 @@ rules:
     verbs: [create]
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
-    resourceNames: [{{{{ $name | quote }}}}, {{{{ printf "%s-ingress" $name | quote }}}}]
+    resourceNames: [{{{{ $name | quote }}}}]
     verbs: [get, delete]
   - apiGroups: [batch]
     resources: [jobs]
@@ -214,6 +214,95 @@ roleRef:
   kind: Role
   name: {{{{ $name }}}}
 ---
+# Clusters that deny pod traffic by default (EKS Auto Mode strict network policy) leave
+# every pod without a policy with no network at all, so the probe's own traffic is
+# allowed explicitly and by role. No allow rule selects the `denied` pod: with default deny it
+# is refused, and elsewhere the probe's deny-all policy refuses it. Policies are additive, so
+# none may select it. The `ingress-denied` pod is selected on purpose by the `-egress` policy
+# (it may send to the listener); the listener's ingress allow list is what refuses it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ $name }}}}-runner
+  namespace: {{{{ .Release.Namespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  podSelector:
+    matchLabels:
+      alien.dev/cni-probe-runner: {{{{ $name }}}}
+  policyTypes: [Egress]
+  egress:
+    # The API server: its service address is translated to a node-network address on 443
+    # (6443 on kubeadm control planes); no other egress. The port list is required: measured
+    # on EKS Auto Mode, a runner rule that admits every destination with no port list stopped
+    # the network policy agent from refusing the `denied` probe pod. The rule has no `to`
+    # block on purpose: a CIDR rule does not match node addresses on Cilium (its default), and
+    # the API server often runs on a node. An API server on another port fails closed.
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ $name }}}}-egress
+  namespace: {{{{ .Release.Namespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  podSelector:
+    matchLabels:
+      alien.dev/cni-probe: {{{{ $name }}}}
+    matchExpressions:
+      - key: alien.dev/cni-role
+        operator: NotIn
+        values: [denied, listener]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              alien.dev/cni-probe: {{{{ $name }}}}
+              alien.dev/cni-role: listener
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ $name }}}}-listener
+  namespace: {{{{ .Release.Namespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  podSelector:
+    matchLabels:
+      alien.dev/cni-probe: {{{{ $name }}}}
+      alien.dev/cni-role: listener
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              alien.dev/cni-probe: {{{{ $name }}}}
+            matchExpressions:
+              - key: alien.dev/cni-role
+                operator: In
+                values: [control, control-after, ingress-control-after, denied]
+      ports:
+        - protocol: TCP
+          port: 8080
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -228,6 +317,9 @@ spec:
   activeDeadlineSeconds: 300
   ttlSecondsAfterFinished: 600
   template:
+    metadata:
+      labels:
+        alien.dev/cni-probe-runner: {{{{ $name }}}}
     spec:
       serviceAccountName: {{{{ $name }}}}
       restartPolicy: Never

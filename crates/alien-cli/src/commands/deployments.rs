@@ -3998,6 +3998,7 @@ async fn create_deployment_task(
         deployment_group_external_id: None,
         installation: None,
         base_platform: None,
+        setup_capabilities: Vec::new(),
         setup_item: None,
         name: alien_platform_api::types::NewDeploymentRequestName::try_from(name.to_string())
             .into_alien_error()

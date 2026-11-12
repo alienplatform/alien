@@ -38,7 +38,17 @@ def main():
 
     pods = f"/api/v1/namespaces/{namespace}/pods"
     policies = f"/apis/networking.k8s.io/v1/namespaces/{namespace}/networkpolicies"
-    owner = request("GET", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
+    # A cluster that denies pod traffic by default admits this pod's API calls only once the
+    # CNI has applied the runner policy, shortly after the pod starts.
+    start = time.monotonic()
+    while True:
+        try:
+            owner = request("GET", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
+            break
+        except (urllib.error.URLError, TimeoutError) as error:
+            if isinstance(error, urllib.error.HTTPError) or time.monotonic() - start > 60:
+                raise
+            time.sleep(2)
     owner_ref = [{"apiVersion": "batch/v1", "kind": "Job", "name": job,
                   "uid": owner["metadata"]["uid"]}]
     # Fixed names: the probe's Role may read and delete only these objects.
@@ -197,19 +207,10 @@ def main():
         for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
             create(pods, pod(role, f"DENIED={denied!r}\n" + probe))
             wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        # An egress-only implementation must not pass the ingress endpoint gate.
-        ingress_name = prefix + "-ingress"
-        create(policies, {
-            "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
-            "metadata": {"name": ingress_name},
-            "spec": {"podSelector": {"matchLabels": {
-                "alien.dev/cni-probe": prefix, "alien.dev/cni-role": "listener"}},
-                "policyTypes": ["Ingress"], "ingress": []},
-        })
+        # An egress-only implementation must not pass the ingress endpoint gate: this pod may
+        # leave its own node, but the listener's ingress allow list does not admit it.
         create(pods, pod("ingress-denied", "DENIED=True\n" + probe))
         wait("ingress-denied", lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        request("DELETE", policies + "/" + ingress_name, {"gracePeriodSeconds": 0})
-        time.sleep(2)
         create(pods, pod("ingress-control-after", "DENIED=False\nRECOVER=True\n" + probe))
         wait("ingress-control-after", lambda p: p.get("status", {}).get("phase") == "Succeeded")
         print("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
