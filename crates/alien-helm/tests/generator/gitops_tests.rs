@@ -443,6 +443,41 @@ fn the_operator_network_policy_names_what_it_allows() {
         .collect();
     assert_eq!(ports, [443, 5432, 6379, 8443]);
 
+    // The packaged manager URL (management.defaultUrl) counts too, not only management.url.
+    let default_url = test_utils::helm_template(
+        &chart,
+        Some("management:\n  token: test-credential\n  defaultUrl: https://manager.example.test:9443\nruntime:\n  networkPolicy:\n    enabled: true\n"),
+    );
+    default_url.assert_ok("network policy default url");
+    let policy = yaml_documents(&default_url.stdout)
+        .into_iter()
+        .find(|document| document["kind"] == "NetworkPolicy")
+        .unwrap();
+    assert!(
+        policy["spec"]["egress"][1]["ports"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|port| port["port"] == 9443),
+        "{}",
+        to_yaml(&policy)
+    );
+
+    // GKE credentials come from the metadata server: allowed on GCP, absent elsewhere.
+    let gcp = test_utils::helm_template(
+        &chart,
+        Some("management:\n  token: test-credential\nbasePlatform: gcp\nbasePlatformConfig:\n  gcp:\n    projectId: p\n    region: us-central1\nruntime:\n  networkPolicy:\n    enabled: true\n"),
+    );
+    gcp.assert_ok("network policy gcp");
+    let gcp_policy = to_yaml(
+        &yaml_documents(&gcp.stdout)
+            .into_iter()
+            .find(|document| document["kind"] == "NetworkPolicy")
+            .unwrap(),
+    );
+    assert!(gcp_policy.contains("169.254.169.254/32"), "{gcp_policy}");
+    assert!(!to_yaml(&policy).contains("169.254.169.254"));
+
     // An installation adds what it needs, such as a database port.
     let with_database = render(
         "    egress:\n      extraRules:\n        - ports:\n            - protocol: TCP\n              port: 5432\n",

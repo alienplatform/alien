@@ -7588,13 +7588,32 @@ spec:
     # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
     # ports the bindings use (a database, a cache) and the manager's own port.
     {{- $ports := .Values.runtime.networkPolicy.egress.ports | default list }}
-    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" .Values.management.url)).host) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" (include "deployment.managementUrl" .))).host) }}
     {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}{{- end }}
     - ports:
         {{- range $ports | uniq }}
         - protocol: TCP
           port: {{ . }}
         {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "gcp" }}
+    # GKE: the Operator's cloud credentials come from the metadata server
+    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
+    # with the Workload Identity metadata server on dataplane v1).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
     {{- with .Values.runtime.networkPolicy.egress.extraRules }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
