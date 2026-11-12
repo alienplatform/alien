@@ -12,7 +12,7 @@ health-check = { path = "/ready" }
 
 [daemon.everything]
 image = "ghcr.io/acme/everything:1.0.0"
-health-check = { path = "/status", port = 8081, method = "POST", timeout = "5s", failure-threshold = 2 }
+health-check = { path = "/status", port = 8081, method = "POST", timeout = "5s", failure-threshold = 2, startup-timeout = "30m" }
 
 # Without a health check the field stays unset.
 [daemon.unchecked]

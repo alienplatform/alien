@@ -1996,6 +1996,19 @@
           "minimum": 0,
           "type": "integer"
         },
+        "startup-timeout": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+              "type": "string"
+            }
+          ],
+          "description": "Daemons only: how long a replica may run without passing its health check before the\nupdate fails, in seconds, counted from when the replica first reports running.\nDefaults to 600 (10 minutes); at most 86400 (24 hours)."
+        },
         "timeout": {
           "anyOf": [
             {
