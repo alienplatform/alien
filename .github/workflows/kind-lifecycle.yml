@@ -128,6 +128,33 @@ jobs:
             --ignored --nocapture --test-threads=1 --exact \
             allow_egress_install_is_refused_where_network_policy_is_not_enforced
 
+      # A third disposable cluster with Cilium, which does not match node addresses with a CIDR
+      # rule (its default). The probe's runner must still reach an API server on the node.
+      - name: Sandbox allow egress proceeds on Cilium
+        env:
+          ALIEN_RUN_ALLOW_EGRESS_KIND_E2E: "1"
+        run: |
+          kind="$RUNNER_TEMP/kind-v0.32.0"
+          cluster=alien-allow-egress-cilium
+          export KUBECONFIG="$RUNNER_TEMP/$cluster.kubeconfig"
+          trap '"$kind" delete cluster --name "$cluster"; rm -f "$KUBECONFIG"' EXIT
+          cat > "$RUNNER_TEMP/$cluster.yaml" <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          networking:
+            disableDefaultCNI: true
+            podSubnet: 10.244.0.0/16
+          EOF
+          "$kind" create cluster --name "$cluster" --config "$RUNNER_TEMP/$cluster.yaml"
+          helm repo add cilium https://helm.cilium.io
+          helm install cilium cilium/cilium --version 1.16.5 --namespace kube-system \
+            --set ipam.mode=kubernetes --wait --timeout 8m
+          kubectl wait --for=condition=Ready node --all --timeout=180s
+          kubectl --namespace kube-system rollout status deployment/coredns --timeout=180s
+          cargo test --locked -p alien-helm --test sandbox_allow_egress_kind -- \
+            --ignored --nocapture --test-threads=1 --exact \
+            allow_egress_install_proceeds_on_cilium
+
       - name: Start disposable Kubernetes cluster
         uses: helm/kind-action@v1.14.0
         with:
