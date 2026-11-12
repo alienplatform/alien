@@ -183,20 +183,19 @@ async fn target(
         Ok(management_config) => management_config,
         Err(error) => return error.into_response(),
     };
-    let mut target: TargetDeployment =
-        match super::sync::build_pull_target(
-            &state,
-            &deployment,
-            release,
-            management_config,
-            None,
-            true,
-        )
-            .await
-        {
-            Ok(target) => target,
-            Err(response) => return response,
-        };
+    let mut target: TargetDeployment = match super::sync::build_pull_target(
+        &state,
+        &deployment,
+        release,
+        management_config,
+        None,
+        true,
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
     // Workloads can't reach this manager to export telemetry; the Operator
     // buffers it for the next sync instead.
     target.config.monitoring = None;

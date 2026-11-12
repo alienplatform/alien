@@ -174,6 +174,52 @@ pub fn root_image_blocked(
     })
 }
 
+/// A progress hint (not a failure) for pods of the desired `template` that crash-loop while the
+/// restricted profile mounts the root filesystem read-only. An app that writes outside `/tmp`
+/// crashes this way after an upgrade; the hint names the fix. A crash loop has other causes too,
+/// so this never fails the step.
+pub fn read_only_crash_hint(
+    pods: &[Pod],
+    template: &PodTemplateSpec,
+    resource_id: &str,
+) -> Option<String> {
+    let read_only = template.spec.as_ref().is_some_and(|spec| {
+        spec.containers.iter().any(|container| {
+            container
+                .security_context
+                .as_ref()
+                .and_then(|context| context.read_only_root_filesystem)
+                == Some(true)
+        })
+    });
+    let crash_looping = read_only
+        && pods
+            .iter()
+            .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+            .filter(|pod| pod_runs_template(pod, template))
+            .any(|pod| {
+                pod.status
+                    .as_ref()
+                    .and_then(|status| status.container_statuses.as_deref())
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(|status| {
+                        status
+                            .state
+                            .as_ref()
+                            .and_then(|state| state.waiting.as_ref())
+                            .and_then(|waiting| waiting.reason.as_deref())
+                            == Some("CrashLoopBackOff")
+                    })
+            });
+    crash_looping.then(|| {
+        format!(
+            "'{resource_id}' keeps crashing under the restricted profile, which mounts the root filesystem read-only. \
+             If it writes files, list those directories in security.writablePaths, or opt out with {SECURITY_OPT_OUT}."
+        )
+    })
+}
+
 /// Whether `pod` was created from `template`: its containers run the template's images, and
 /// the user settings the kubelet checks are the template's.
 fn pod_runs_template(pod: &Pod, template: &PodTemplateSpec) -> bool {
@@ -212,16 +258,17 @@ fn pod_runs_template(pod: &Pod, template: &PodTemplateSpec) -> bool {
 
 /// Fail the controller step when a pod of the workload cannot start because
 /// its image runs as root, so the error names the opt-out instead of the
-/// step timing out.
+/// step timing out. Returns a progress hint when the pods crash-loop under the
+/// read-only root filesystem (see [`read_only_crash_hint`]).
 pub async fn fail_if_root_image_blocked(
     ctx: &ResourceControllerContext<'_>,
     namespace: &str,
     selector: &BTreeMap<String, String>,
     template: &PodTemplateSpec,
     resource_id: &str,
-) -> Result<()> {
+) -> Result<Option<String>> {
     if selector.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let pods = ctx
         .service_provider
@@ -238,7 +285,7 @@ pub async fn fail_if_root_image_blocked(
             resource_id: resource_id.to_string(),
             message,
         })),
-        None => Ok(()),
+        None => Ok(read_only_crash_hint(&pods.items, template, resource_id)),
     }
 }
 
@@ -295,6 +342,53 @@ mod tests {
             k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(k8s_openapi::chrono::Utc::now()),
         );
         assert!(root_image_blocked(&[deleting], &template("app:v2"), "api").is_none());
+    }
+
+    #[test]
+    fn a_crash_looping_read_only_pod_names_writable_paths() {
+        use k8s_openapi::api::core::v1::{
+            Container, ContainerState, ContainerStateWaiting, ContainerStatus, PodSpec, PodStatus,
+        };
+        let template = |read_only: bool| PodTemplateSpec {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "api".to_string(),
+                    image: Some("app:v2".to_string()),
+                    security_context: Some(SecurityContext {
+                        read_only_root_filesystem: Some(read_only),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let crashing = |read_only: bool| Pod {
+            spec: template(read_only).spec,
+            status: Some(PodStatus {
+                container_statuses: Some(vec![ContainerStatus {
+                    name: "api".to_string(),
+                    state: Some(ContainerState {
+                        waiting: Some(ContainerStateWaiting {
+                            reason: Some("CrashLoopBackOff".to_string()),
+                            message: None,
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let hint = read_only_crash_hint(&[crashing(true)], &template(true), "api").expect("hint");
+        assert!(
+            hint.contains("writablePaths") && hint.contains("unrestricted"),
+            "{hint}"
+        );
+        // Not read-only, so the filesystem is not the likely cause.
+        assert!(read_only_crash_hint(&[crashing(false)], &template(false), "api").is_none());
     }
 
     #[test]

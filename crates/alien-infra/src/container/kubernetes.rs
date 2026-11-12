@@ -777,7 +777,7 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
-        if let Some(template) = &template {
+        let restricted_hint = if let Some(template) = &template {
             crate::core::fail_if_root_image_blocked(
                 ctx,
                 namespace,
@@ -785,18 +785,24 @@ impl KubernetesContainerController {
                 template,
                 &config.id,
             )
-            .await?;
-        }
-        if self.is_stateful {
-            self.workload_failure =
-                crate::kubernetes_priority_events::missing_priority_class_progress(
-                    ctx,
-                    config.priority,
-                    namespace,
-                    workload_name,
-                )
-                .await;
-        }
+            .await?
+        } else {
+            None
+        };
+        let priority_failure = if self.is_stateful {
+            crate::kubernetes_priority_events::missing_priority_class_progress(
+                ctx,
+                config.priority,
+                namespace,
+                workload_name,
+            )
+            .await
+        } else {
+            None
+        };
+        self.workload_failure = priority_failure
+            .or(restricted_hint)
+            .or(self.workload_failure.take());
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1518,12 +1524,14 @@ impl KubernetesContainerController {
             .await?;
 
         let desired_replicas = config.replicas.unwrap_or(1) as i32;
+        let mut template = None;
         let (ready_replicas, replicas, rollout_complete) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
+                    template = statefulset.spec.as_ref().map(|spec| spec.template.clone());
                     let ready = statefulset
                         .status
                         .as_ref()
@@ -1556,6 +1564,7 @@ impl KubernetesContainerController {
             {
                 Ok(deployment) => {
                     self.workload_failure = deployment_failure_progress(&deployment);
+                    template = deployment.spec.as_ref().map(|spec| spec.template.clone());
                     let ready = deployment
                         .status
                         .as_ref()
@@ -1599,16 +1608,34 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
-        if self.is_stateful {
-            self.workload_failure =
-                crate::kubernetes_priority_events::missing_priority_class_progress(
-                    ctx,
-                    config.priority,
-                    namespace,
-                    workload_name,
-                )
-                .await;
-        }
+        // A re-rendered workload can start refusing an image or filesystem the old one allowed:
+        // say so instead of waiting out the rollout.
+        let restricted_hint = if let Some(template) = &template {
+            crate::core::fail_if_root_image_blocked(
+                ctx,
+                namespace,
+                &self.workload_labels(ctx, &config.id, self.build_labels(workload_name)),
+                template,
+                &config.id,
+            )
+            .await?
+        } else {
+            None
+        };
+        let priority_failure = if self.is_stateful {
+            crate::kubernetes_priority_events::missing_priority_class_progress(
+                ctx,
+                config.priority,
+                namespace,
+                workload_name,
+            )
+            .await
+        } else {
+            None
+        };
+        self.workload_failure = priority_failure
+            .or(restricted_hint)
+            .or(self.workload_failure.take());
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),

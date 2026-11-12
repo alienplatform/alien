@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::{
     delete_environment_secret, kubernetes_cleanup_resource_labels, linked_bindings,
@@ -306,10 +306,13 @@ impl KubernetesWorkerController {
                     .as_ref()
                     .and_then(|spec| Some((spec.selector.match_labels.as_ref()?, &spec.template)))
                 {
-                    crate::core::fail_if_root_image_blocked(
+                    if let Some(hint) = crate::core::fail_if_root_image_blocked(
                         ctx, namespace, selector, template, &config.id,
                     )
-                    .await?;
+                    .await?
+                    {
+                        warn!(id=%config.id, "{hint}");
+                    }
                 }
             }
             Err(e)

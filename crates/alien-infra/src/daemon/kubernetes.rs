@@ -287,6 +287,7 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        let mut restricted_hint = None;
         if let (Some(namespace), Some((selector, template))) = (
             self.namespace.as_deref(),
             self.read_daemonset(ctx).await?.and_then(|daemonset| {
@@ -295,12 +296,15 @@ impl KubernetesDaemonController {
             }),
         ) {
             let config = ctx.desired_resource_config::<Daemon>()?;
-            crate::core::fail_if_root_image_blocked(
+            restricted_hint = crate::core::fail_if_root_image_blocked(
                 ctx, namespace, &selector, &template, &config.id,
             )
             .await?;
         }
         self.record_workload_failure(ctx).await;
+        if self.workload_failure.is_none() {
+            self.workload_failure = restricted_hint;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),

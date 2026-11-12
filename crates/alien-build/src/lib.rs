@@ -942,8 +942,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         // Group containers by dedupe key (src, toolchain_type, binary_name)
         let mut dedupe_groups: HashMap<DedupeKey, Vec<(String, Container)>> = HashMap::new();
         for (resource_id, container, src, toolchain) in containers_to_build {
-            let dedupe_key =
-                DedupeKey::for_container(
+            let dedupe_key = DedupeKey::for_container(
                 &src,
                 &toolchain,
                 &container_settings,
