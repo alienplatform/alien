@@ -7277,6 +7277,10 @@ spec:
         checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
         - operator: Exists
       securityContext:
@@ -7700,6 +7704,10 @@ spec:
         k8s-app: metrics-server
     spec:
       serviceAccountName: metrics-server
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: metrics-server
           image: {{ include "deployment.mirroredImage" (dict "root" $ "image" (default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image)) | quote }}
@@ -9856,6 +9864,51 @@ logCollector:
                 "{label}: the Operator runs by digest from the mirror: {images:?}"
             );
         }
+    }
+
+    #[test]
+    fn log_collector_and_metrics_server_pull_with_the_install_pull_secrets() {
+        // With a private mirror every rewritten image needs the pull Secret.
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  imagePullSecrets:
+    - name: site-registry
+logCollector:
+  enabled: true
+  mode: nodeAgent
+clusterBootstrap:
+  metricsServer:
+    enabled: true
+"#;
+        let chart = sample_product_chart();
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("pull secrets");
+        let mut checked = Vec::new();
+        for doc in parse_manifest_docs(&rendered.stdout) {
+            let name = doc["metadata"]["name"].as_str().unwrap_or_default();
+            if !matches!(yaml_str(&doc, "kind"), Some("DaemonSet" | "Deployment"))
+                || !(yaml_str(&doc, "kind") == Some("DaemonSet") || name == "metrics-server")
+            {
+                continue;
+            }
+            let secrets: Vec<&str> = doc["spec"]["template"]["spec"]["imagePullSecrets"]
+                .as_sequence()
+                .map(|s| s.iter().filter_map(|s| s["name"].as_str()).collect())
+                .unwrap_or_default();
+            assert!(
+                secrets.contains(&"site-registry"),
+                "{name} lacks the pull Secret"
+            );
+            checked.push(name.to_string());
+        }
+        assert_eq!(checked.len(), 2, "expected both workloads: {checked:?}");
     }
 
     #[test]

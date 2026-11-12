@@ -2373,6 +2373,10 @@ spec:
         checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
         - operator: Exists
       securityContext:
@@ -3370,6 +3374,10 @@ spec:
         k8s-app: metrics-server
     spec:
       serviceAccountName: metrics-server
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: metrics-server
           image: {{ include "deployment.mirroredImage" (dict "root" $ "image" (default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image)) | quote }}
