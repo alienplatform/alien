@@ -564,6 +564,51 @@ mod tests {
         }
     }
 
+    /// The GCP machine marker is the `alien-signed` key of the instance template the verifier
+    /// writes. Everything that could write, strip or bypass it is a family action, so management
+    /// holds none of them.
+    #[test]
+    fn gcp_machine_marker_writes_are_family_actions() {
+        for permission in [
+            "compute.instanceTemplates.create",
+            "compute.instanceTemplates.useReadOnly",
+            "compute.instanceGroupManagers.create",
+            "compute.instanceGroupManagers.update",
+            "compute.instances.create",
+            "compute.instances.setMetadata",
+            "compute.instances.setServiceAccount",
+            "compute.instances.setTags",
+            "compute.instances.attachDisk",
+            "compute.instances.detachDisk",
+            "compute.instances.stop",
+            "compute.projects.setCommonInstanceMetadata",
+            "compute.instances.setIamPolicy",
+        ] {
+            assert!(
+                gcp_family(permission).is_some(),
+                "{permission} must be in a family"
+            );
+        }
+    }
+
+    /// The Azure machine marker is the scale set tag the verifier writes with the identity it
+    /// attached. Writing the scale set, its tags or its identity assignment is in a family.
+    #[test]
+    fn azure_machine_marker_writes_are_family_actions() {
+        for action in [
+            "Microsoft.Compute/virtualMachineScaleSets/write",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+            "Microsoft.Compute/virtualMachines/write",
+            "Microsoft.Resources/tags/write",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+        ] {
+            assert!(
+                azure_family(action).is_some(),
+                "{action} must be in a family"
+            );
+        }
+    }
+
     /// A Live sandbox's image decides what its sessions run: building it, rolling it and
     /// handing it its build role are the verifier's, so management holds none of them.
     #[test]
