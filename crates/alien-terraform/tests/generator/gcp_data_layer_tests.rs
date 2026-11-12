@@ -61,7 +61,8 @@ fn gcp_key_used_by_a_volume_is_usable_by_the_compute_service_agent() {
     assert!(rendered.contains(
         "member = \"serviceAccount:service-${data.google_project.customer_key_project.number}@compute-system.iam.gserviceaccount.com\""
     ), "{rendered}");
-    assert!(!rendered.contains("google_project_service_identity"), "{rendered}");
+    // The grant waits for the agent to exist (first Compute use in a project creates it).
+    assert!(rendered.contains("depends_on = [ google_project_service_identity.customer_key_compute_agent ]"), "{rendered}");
     assert_terraform_valid(&module, "gcp_key_with_volume");
 
     // A key no volume uses gets no Compute grant.

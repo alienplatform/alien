@@ -116,7 +116,23 @@ impl TfEmitter for GcpKeyEmitter {
         if volumes_use_key(ctx) {
             // The agent is `service-<project number>@compute-system.iam.gserviceaccount.com`.
             // `google_project_service_identity` cannot name it: for Compute it returns a null
-            // email, which `terraform validate` accepts and only `apply` rejects.
+            // email, which `terraform validate` accepts and only `apply` rejects. It still
+            // creates the agent, so the grant waits for it: a project that never used Compute
+            // has no agent until then, and Google rejects a grant to a missing account.
+            let agent_label = format!("{label}_compute_agent");
+            fragment.resource_blocks.push(resource_block(
+                "google_project_service_identity",
+                &agent_label,
+                [
+                    // Service agents exist only in the google-beta provider.
+                    attr("provider", expr::raw("google-beta")),
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "service",
+                        Expression::String("compute.googleapis.com".to_string()),
+                    ),
+                ],
+            ));
             let project_label = format!("{label}_project");
             fragment.data_blocks.push(data_block(
                 "google_project",
@@ -142,6 +158,10 @@ impl TfEmitter for GcpKeyEmitter {
                         expr::template(format!(
                             "serviceAccount:service-${{data.google_project.{project_label}.number}}@compute-system.iam.gserviceaccount.com"
                         )),
+                    ),
+                    attr(
+                        "depends_on",
+                        expr::raw(format!("[google_project_service_identity.{agent_label}]")),
                     ),
                 ],
             ));
