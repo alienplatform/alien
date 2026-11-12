@@ -9,6 +9,7 @@ pub mod debug;
 pub mod debug_tunnel;
 pub mod deploy;
 mod deployment_actions;
+mod deployment_manager_move;
 mod deployment_move;
 pub mod deployments;
 pub mod destroy;

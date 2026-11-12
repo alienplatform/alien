@@ -1870,7 +1870,10 @@ async fn parse_api_response<T: for<'de> Deserialize<'de>>(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("{message} (HTTP {status}): {body}{}", old_platform_hint(&body)),
+            message: format!(
+                "{message} (HTTP {status}): {body}{}",
+                old_platform_hint(&body)
+            ),
         }));
     }
 
