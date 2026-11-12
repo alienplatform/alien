@@ -6,7 +6,7 @@
  * (`bun test`).
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AlienError } from "@alienplatform/core"
@@ -995,26 +995,45 @@ describe("CommandReceiver.run", () => {
     }
   })
 
-  it("run rejects a terminal missing-token-file error", async () => {
+  it("keeps polling until its token file appears", async () => {
     const directory = await mkdtemp(join(tmpdir(), "alien-command-token-missing-"))
     const tokenFile = join(directory, "token")
     try {
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      route = req => {
+        if (req.method === "POST" && req.path === "/v1/commands/leases") {
+          expect(req.headers.authorization).toBe("Bearer host-token")
+          return { json: { leases: [lease(env)] } }
+        }
+        return { status: 200 }
+      }
       const envWithoutToken: Record<string, string | undefined> = {
         ...FULL_ENV,
+        ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/`,
         ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
       }
       envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined
       const r = createCommandReceiver({
         env: envWithoutToken,
         pollIntervalMs: 5,
+        pollMaxIntervalMs: 10,
         pollJitter: 0,
       })
-
-      await expect(r.run()).rejects.toMatchObject({
-        code: "COMMAND_RECEIVER_CONFIG_INVALID",
-        retryable: false,
-        context: { envVar: "ALIEN_COMMANDS_TOKEN_FILE" },
+      r.handleRaw("echo", () => ({ ok: true }))
+      receiverStop = () => r.stop()
+      let stopped = false
+      running = r.run().finally(() => {
+        stopped = true
       })
+
+      // Several polls fail on the missing file; the receiver keeps running.
+      await new Promise(resolve => setTimeout(resolve, 60))
+      expect(stopped).toBe(false)
+      await writeFile(tokenFile, "host-token\n")
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+      r.stop()
+      await running
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -1377,6 +1396,328 @@ describe("resolveEnvelopeUrls", () => {
     resolveEnvelopeUrls(absolute, "https://edge.example.com/tenant/v1/commands/leases")
     expect(absolute.responseHandling.storageUploadRequest.backend).toMatchObject({
       url: cloudUrl,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Capability file (the bounded credential an enrolled Operator mounts)
+// ---------------------------------------------------------------------------
+
+describe("CommandReceiver with a capability file", () => {
+  const LEASES_PATH = "/v1/commands/leases"
+
+  /** The JSON the Rust runtime reads: `{token, expiresAt}`, mode 0600. */
+  async function writeCapability(
+    file: string,
+    token: string,
+    lifetimeMs = 10 * 60_000,
+  ): Promise<void> {
+    await writeFile(
+      file,
+      JSON.stringify({ token, expiresAt: new Date(Date.now() + lifetimeMs).toISOString() }),
+      { mode: 0o600 },
+    )
+    await chmod(file, 0o600)
+  }
+
+  function capabilityEnv(baseUrl: string, file: string): Record<string, string | undefined> {
+    return {
+      ALIEN_COMMANDS_URL: `${baseUrl}/v1/`,
+      ALIEN_IDENTITY_PROVIDER: "capabilityFile",
+      ALIEN_MANAGER_URL: baseUrl,
+      ALIEN_MANAGER_AUDIENCE: "manager-identity",
+      ALIEN_COMMANDS_CAPABILITY_FILE: file,
+      ALIEN_DEPLOYMENT_ID: "dep-123",
+      ALIEN_COMMANDS_TARGET_RESOURCE_ID: "agent",
+      ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: "daemon",
+    }
+  }
+
+  async function withDirectory(run: (directory: string) => Promise<void>): Promise<void> {
+    const directory = await mkdtemp(join(tmpdir(), "alien-command-capability-"))
+    try {
+      await run(directory)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+
+  /** Serves the refreshed response authority the capability receiver asks for. */
+  function responseContext(env: Envelope, req: CapturedRequest): RouteResult | undefined {
+    if (req.method === "GET" && req.path.startsWith("/v1/commands/cmd_1/response-context")) {
+      return { json: env.responseHandling }
+    }
+    return undefined
+  }
+
+  function leaseAuthorizations(): (string | string[] | undefined)[] {
+    return (server?.requests ?? [])
+      .filter(req => req.method === "POST" && req.path === LEASES_PATH)
+      .map(req => req.headers.authorization)
+  }
+
+  function startReceiver(env: Record<string, string | undefined>) {
+    const r = createCommandReceiver({
+      env,
+      pollIntervalMs: 5,
+      pollMaxIntervalMs: 10,
+      pollJitter: 0,
+    })
+    r.handleRaw("echo", () => ({ ok: true }))
+    receiverStop = () => r.stop()
+    let stopped = false
+    running = r.run().finally(() => {
+      stopped = true
+    })
+    return { receiver: r, hasStopped: () => stopped }
+  }
+
+  it("starts with only the capability file and polls with its token", async () => {
+    await withDirectory(async directory => {
+      const file = join(directory, "commands.json")
+      await writeCapability(file, "ax_cap_v1_first")
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      const serve = leaseOnce([lease(env)])
+      route = req => serve(req) ?? responseContext(env, req) ?? { status: 200 }
+
+      startReceiver(capabilityEnv(server.baseUrl, file))
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+
+      expect(leaseAuthorizations()[0]).toBe("Bearer ax_cap_v1_first")
+      expect(submitBody("cmd_1")).toMatchObject({ status: "success" })
+    })
+  })
+
+  it("uses a rewritten capability on the next poll", async () => {
+    await withDirectory(async directory => {
+      const file = join(directory, "commands.json")
+      await writeCapability(file, "ax_cap_v1_first")
+      server = await openServer()
+      route = req => {
+        if (req.method === "POST" && req.path === LEASES_PATH) return { json: { leases: [] } }
+        return { status: 404 }
+      }
+
+      startReceiver(capabilityEnv(server.baseUrl, file))
+      await waitFor(() => leaseAuthorizations().length >= 2)
+      await writeCapability(file, "ax_cap_v1_second")
+      const seen = leaseAuthorizations().length
+      await waitFor(() => leaseAuthorizations().length >= seen + 2)
+
+      expect(leaseAuthorizations()).toContain("Bearer ax_cap_v1_first")
+      expect(leaseAuthorizations().at(-1)).toBe("Bearer ax_cap_v1_second")
+    })
+  })
+
+  it("retries once with the replacement when the manager refuses the capability", async () => {
+    await withDirectory(async directory => {
+      const file = join(directory, "commands.json")
+      await writeCapability(file, "ax_cap_v1_old")
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      route = async req => {
+        if (req.method === "POST" && req.path === LEASES_PATH) {
+          if (req.headers.authorization === "Bearer ax_cap_v1_old") {
+            await writeCapability(file, "ax_cap_v1_new")
+            return { status: 401 }
+          }
+          return { json: { leases: [lease(env)] } }
+        }
+        return responseContext(env, req) ?? { status: 200 }
+      }
+
+      startReceiver(capabilityEnv(server.baseUrl, file))
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+
+      expect(leaseAuthorizations().slice(0, 2)).toEqual([
+        "Bearer ax_cap_v1_old",
+        "Bearer ax_cap_v1_new",
+      ])
+    })
+  })
+
+  it("never sends a refused capability again and recovers when the file is replaced", async () => {
+    await withDirectory(async directory => {
+      const file = join(directory, "commands.json")
+      await writeCapability(file, "ax_cap_v1_refused")
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      let answered = false
+      route = req => {
+        if (req.method === "POST" && req.path === LEASES_PATH) {
+          if (req.headers.authorization === "Bearer ax_cap_v1_refused") return { status: 401 }
+          if (answered) return { json: { leases: [] } }
+          answered = true
+          return { json: { leases: [lease(env)] } }
+        }
+        return responseContext(env, req) ?? { status: 200 }
+      }
+
+      const { hasStopped } = startReceiver(capabilityEnv(server.baseUrl, file))
+      await new Promise(resolve => setTimeout(resolve, 80))
+      expect(hasStopped()).toBe(false)
+      // One refused request, then the file is not read for the same token again.
+      expect(leaseAuthorizations()).toEqual(["Bearer ax_cap_v1_refused"])
+
+      await writeCapability(file, "ax_cap_v1_replacement")
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+      expect(leaseAuthorizations().at(-1)).toBe("Bearer ax_cap_v1_replacement")
+    })
+  })
+
+  const unusableFiles: [string, (file: string) => Promise<void>][] = [
+    ["an expired capability", file => writeCapability(file, "ax_cap_v1_late", -1000)],
+    [
+      "a capability that lives longer than an hour",
+      file => writeCapability(file, "ax_cap_v1_long", 3 * 3_600_000),
+    ],
+    ["a token without the capability prefix", file => writeCapability(file, "legacy-token")],
+    [
+      "a file with unknown fields",
+      async file => {
+        await writeFile(
+          file,
+          JSON.stringify({
+            token: "ax_cap_v1_extra",
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            note: "x",
+          }),
+          { mode: 0o600 },
+        )
+      },
+    ],
+    ["a file that is not JSON", file => writeFile(file, "ax_cap_v1_plain\n", { mode: 0o600 })],
+    [
+      "a file other users can read",
+      async file => {
+        await writeCapability(file, "ax_cap_v1_open")
+        await chmod(file, 0o644)
+      },
+    ],
+  ]
+  for (const [name, write] of unusableFiles) {
+    it(`sends nothing for ${name} and keeps polling until the file is replaced`, async () => {
+      await withDirectory(async directory => {
+        const file = join(directory, "commands.json")
+        await write(file)
+        server = await openServer()
+        route = req => {
+          if (req.method === "POST" && req.path === LEASES_PATH) return { json: { leases: [] } }
+          return { status: 404 }
+        }
+
+        const { hasStopped } = startReceiver(capabilityEnv(server.baseUrl, file))
+        await new Promise(resolve => setTimeout(resolve, 60))
+        expect(hasStopped()).toBe(false)
+        expect(leaseAuthorizations()).toEqual([])
+
+        await writeCapability(file, "ax_cap_v1_good")
+        await waitFor(() => leaseAuthorizations().length > 0)
+        expect(leaseAuthorizations()[0]).toBe("Bearer ax_cap_v1_good")
+      })
+    })
+  }
+
+  it("ignores a legacy token in the environment", async () => {
+    await withDirectory(async directory => {
+      const file = join(directory, "commands.json")
+      await writeCapability(file, "ax_cap_v1_file")
+      server = await openServer()
+      route = () => ({ json: { leases: [] } })
+
+      startReceiver({
+        ...capabilityEnv(server.baseUrl, file),
+        ALIEN_COMMANDS_TOKEN: "legacy-token",
+      })
+      await waitFor(() => leaseAuthorizations().length > 0)
+      expect(leaseAuthorizations()[0]).toBe("Bearer ax_cap_v1_file")
+    })
+  })
+
+  it("refuses a commands URL outside the manager origin", () => {
+    let err: unknown
+    try {
+      createCommandReceiver({
+        env: {
+          ...capabilityEnv("http://127.0.0.1:1", "/tmp/unused"),
+          ALIEN_COMMANDS_URL: "http://127.0.0.1:2/v1/",
+        },
+      })
+    } catch (error) {
+      err = error
+    }
+    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
+    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" })
+  })
+
+  it("names the capability file and the manager URL when they are missing", () => {
+    for (const missing of ["ALIEN_COMMANDS_CAPABILITY_FILE", "ALIEN_MANAGER_URL"]) {
+      const env = capabilityEnv("http://127.0.0.1:1", "/tmp/unused")
+      delete env[missing]
+      let err: unknown
+      try {
+        createCommandReceiver({ env })
+      } catch (error) {
+        err = error
+      }
+      expect((err as AlienError).context).toMatchObject({ envVar: missing })
+    }
+  })
+
+  it("refreshes the response authority before submitting a result", async () => {
+    await withDirectory(async directory => {
+      const file = join(directory, "commands.json")
+      await writeCapability(file, "ax_cap_v1_first")
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      // The lease's own response authority is dead. Only the refreshed one works.
+      env.responseHandling.submitResponseUrl = `${server.baseUrl}/v1/commands/cmd_1/response?stale=1`
+      const serve = leaseOnce([lease(env)])
+      route = req => {
+        const served = serve(req)
+        if (served !== undefined) return served
+        if (req.method === "GET" && req.path.startsWith("/v1/commands/cmd_1/response-context")) {
+          return {
+            json: {
+              maxInlineBytes: 150_000,
+              submitResponseUrl: "/v1/commands/cmd_1/response?fresh=1",
+              storageUploadRequest: env.responseHandling.storageUploadRequest,
+            },
+          }
+        }
+        return { status: 200 }
+      }
+
+      startReceiver(capabilityEnv(server.baseUrl, file))
+      await waitFor(() => (server?.requests ?? []).some(req => req.method === "PUT"))
+
+      const refresh = server.requests.find(req => req.method === "GET")
+      expect(refresh?.path).toBe("/v1/commands/cmd_1/response-context?leaseId=lease_1")
+      expect(refresh?.headers.authorization).toBe("Bearer ax_cap_v1_first")
+      const put = server.requests.find(req => req.method === "PUT")
+      expect(put?.path).toBe("/v1/commands/cmd_1/response?fresh=1")
+    })
+  })
+
+  it("leaves a token file working when a host supplies both files", async () => {
+    await withDirectory(async directory => {
+      const tokenFile = join(directory, "commands.token")
+      await writeFile(tokenFile, "host-token\n")
+      server = await openServer()
+      route = () => ({ json: { leases: [] } })
+
+      const env: Record<string, string | undefined> = {
+        ...FULL_ENV,
+        ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/`,
+        ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
+        ALIEN_COMMANDS_CAPABILITY_FILE: join(directory, "commands.json"),
+      }
+      env.ALIEN_COMMANDS_TOKEN = undefined
+      startReceiver(env)
+      await waitFor(() => leaseAuthorizations().length > 0)
+      expect(leaseAuthorizations()[0]).toBe("Bearer host-token")
     })
   })
 })

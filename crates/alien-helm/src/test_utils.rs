@@ -168,13 +168,19 @@ pub fn helm_template(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRu
     helm_template_for_release(files, values_yaml, "test-release")
 }
 
+/// Render a chart with `helm template --is-upgrade`, as `helm upgrade` would
+/// for an existing release.
+pub fn helm_template_as_upgrade(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRun {
+    helm_template_with_options(files, values_yaml, "test-release", &["--is-upgrade"], None)
+}
+
 /// Render a chart with `helm template` for an explicit release name.
 pub fn helm_template_for_release(
     files: &LinterFiles,
     values_yaml: Option<&str>,
     release_name: &str,
 ) -> LinterRun {
-    helm_template_for_kube_version(files, values_yaml, release_name, None)
+    helm_template_with_options(files, values_yaml, release_name, &[], None)
 }
 
 /// Render a chart as a cluster of the given version string, such as `v1.36.0-eks-abc123`, would.
@@ -182,6 +188,16 @@ pub fn helm_template_for_kube_version(
     files: &LinterFiles,
     values_yaml: Option<&str>,
     release_name: &str,
+    kube_version: Option<&str>,
+) -> LinterRun {
+    helm_template_with_options(files, values_yaml, release_name, &[], kube_version)
+}
+
+fn helm_template_with_options(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+    flags: &[&str],
     kube_version: Option<&str>,
 ) -> LinterRun {
     run_when_enabled("helm template", || {
@@ -199,6 +215,9 @@ pub fn helm_template_for_kube_version(
             OsStr::new(release_name).to_os_string(),
             dir.path().as_os_str().to_os_string(),
         ];
+        for flag in flags {
+            args.push(OsStr::new(flag).to_os_string());
+        }
         if let Some(path) = &values_path {
             args.push(OsStr::new("-f").to_os_string());
             args.push(path.as_os_str().to_os_string());

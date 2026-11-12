@@ -48,6 +48,15 @@ pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
 /// file after an unauthorized response so controllers can rotate credentials
 /// without restarting the workload.
 pub const ENV_ALIEN_COMMANDS_TOKEN_FILE: &str = "ALIEN_COMMANDS_TOKEN_FILE";
+/// File holding a short-lived command credential as `{"token","expiresAt"}`,
+/// written and refreshed by the host or operator that runs the workload.
+pub const ENV_ALIEN_COMMANDS_CAPABILITY_FILE: &str = "ALIEN_COMMANDS_CAPABILITY_FILE";
+/// Where a Container or Daemon on a machine with a runtime identity finds its
+/// command credential (`ALIEN_COMMANDS_CAPABILITY_FILE`). The machine writes it.
+pub const HOST_COMMANDS_CAPABILITY_FILE: &str = "/var/run/alien-runtime/commands.json";
+/// The same credential as plain text (`ALIEN_COMMANDS_TOKEN_FILE`), for
+/// receivers that read only a token file.
+pub const HOST_COMMANDS_TOKEN_FILE: &str = "/var/run/alien-runtime/commands.token";
 /// Lease duration requested by app-owned command receivers, in seconds.
 pub const ENV_ALIEN_COMMANDS_LEASE_SECONDS: &str = "ALIEN_COMMANDS_LEASE_SECONDS";
 /// Maximum command leases requested by an app-owned receiver per poll.
@@ -506,6 +515,11 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT"
                 | ENV_ALIEN_DEPLOYMENT_TOKEN
                 | ENV_ALIEN_MANAGER_URL
+                | "ALIEN_IDENTITY_PROVIDER"
+                | "ALIEN_MANAGER_AUDIENCE"
+                | "ALIEN_SESSION_FILE"
+                | ENV_ALIEN_COMMANDS_CAPABILITY_FILE
+                | "ALIEN_TELEMETRY_CAPABILITY_FILE"
                 | ENV_ALIEN_RESOURCE_ID
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS

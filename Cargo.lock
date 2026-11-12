@@ -604,6 +604,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "backon",
+ "chrono",
  "quick-xml 0.41.0",
  "reqwest 0.12.28",
  "serde",
@@ -932,6 +933,7 @@ dependencies = [
  "alien-permissions",
  "alien-preflights",
  "alien-terraform",
+ "base64 0.22.1",
  "flate2",
  "indexmap 2.14.1",
  "insta",
@@ -1117,6 +1119,7 @@ dependencies = [
  "alien-azure-clients",
  "alien-bindings",
  "alien-client-config",
+ "alien-client-core",
  "alien-commands",
  "alien-core",
  "alien-deployment",
@@ -1248,8 +1251,10 @@ name = "alien-operator"
 version = "3.3.62"
 dependencies = [
  "aegis",
+ "alien-aws-clients",
  "alien-bindings",
  "alien-client-config",
+ "alien-client-core",
  "alien-commands",
  "alien-core",
  "alien-deployment",
@@ -1271,6 +1276,7 @@ dependencies = [
  "flate2",
  "fs2",
  "futures",
+ "getrandom 0.3.4",
  "hostname 0.4.2",
  "http 1.5.0",
  "k8s-openapi",
@@ -1633,7 +1639,9 @@ dependencies = [
 name = "alien-worker-runtime"
 version = "3.3.62"
 dependencies = [
+ "alien-aws-clients",
  "alien-bindings",
+ "alien-client-core",
  "alien-commands",
  "alien-core",
  "alien-error",
@@ -1666,6 +1674,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "opentelemetry-appender-tracing",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "pin-project-lite",

@@ -36,6 +36,9 @@
   ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
+  "alien": {
+    "commandsCapabilityFile": true
+  },
   "description": "Pure-TypeScript command sender and pull receiver for the Alien platform, over fetch",
   "homepage": "https://alien.dev",
   "repository": {

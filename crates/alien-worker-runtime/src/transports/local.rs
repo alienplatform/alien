@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use alien_client_core::runtime_credentials::RuntimeCredentials;
 use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::Body,
@@ -55,9 +56,15 @@ const DEFAULT_HTTP_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 struct CommandPushConfig {
-    token: String,
+    credential: CommandPushCredential,
     deployment_id: String,
     worker_resource_id: String,
+}
+
+#[derive(Clone)]
+pub(crate) enum CommandPushCredential {
+    Legacy(String),
+    File(Arc<RuntimeCredentials>),
 }
 
 impl LocalTransport {
@@ -116,13 +123,26 @@ impl LocalTransport {
     /// Enable authenticated, resource-scoped command pushes on the
     /// runtime-owned endpoint.
     pub fn with_command_push(
-        mut self,
+        self,
         token: String,
         deployment_id: String,
         worker_resource_id: String,
     ) -> Self {
+        self.with_command_push_credential(
+            CommandPushCredential::Legacy(token),
+            deployment_id,
+            worker_resource_id,
+        )
+    }
+
+    pub(crate) fn with_command_push_credential(
+        mut self,
+        credential: CommandPushCredential,
+        deployment_id: String,
+        worker_resource_id: String,
+    ) -> Self {
         self.command_push = Some(CommandPushConfig {
-            token,
+            credential,
             deployment_id,
             worker_resource_id,
         });
@@ -313,7 +333,14 @@ async fn handle_command_push(
     let Some(command_push) = state.command_push.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if !command_push_authorized(&headers, &command_push.token) {
+    let token = match &command_push.credential {
+        CommandPushCredential::Legacy(token) => token.clone(),
+        CommandPushCredential::File(credentials) => match credentials.token().await {
+            Ok(token) => token,
+            Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        },
+    };
+    if !command_push_authorized(&headers, &token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if envelope.validate().is_err() {
@@ -688,6 +715,123 @@ mod tests {
             "the accepted command must terminalize before transport exit"
         );
         response_server.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_push_observes_replaced_capability_after_original_expiry() {
+        use alien_client_core::runtime_credentials::{RuntimeCapability, RuntimeCredentialConfig};
+        use chrono::{TimeZone, Utc};
+        use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicI64};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("commands.json");
+        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
+        let start = clock.load(Ordering::SeqCst);
+        let write = |token: &str, expires_at: i64| {
+            let temporary = directory.path().join("next.json");
+            std::fs::write(
+                &temporary,
+                serde_json::to_vec(&RuntimeCapability {
+                    token: token.into(),
+                    expires_at: Utc.timestamp_opt(expires_at, 0).unwrap(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::rename(temporary, &path).unwrap();
+        };
+        write("ax_cap_v1_first", start + 10);
+        let controlled = clock.clone();
+        let credentials = RuntimeCredentials::from_capability_file(RuntimeCredentialConfig {
+            manager_url: "https://manager.example".into(), audience:"manager-one".into(),
+            deployment_id:"deployment".into(), purpose:serde_json::json!({"type":"receiveCommands","target":{"resourceId":"reports","resourceType":"worker"}}),
+        }, path.clone()).unwrap().with_clock(Arc::new(move || Utc.timestamp_opt(controlled.load(Ordering::SeqCst), 0).unwrap()));
+        let response_count = Arc::new(AtomicUsize::new(0));
+        let response_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let response_address = response_listener.local_addr().unwrap();
+        let response_counter = response_count.clone();
+        let response_server = tokio::spawn(async move {
+            axum::serve(
+                response_listener,
+                AxumRouter::new()
+                    .route("/response", put(record_terminal_response))
+                    .with_state(response_counter),
+            )
+            .await
+            .unwrap();
+        });
+        let control = Arc::new(ControlGrpcServer::new());
+        let tasks = control
+            .wait_for_tasks(TonicRequest::new(WaitForTasksRequest {
+                application_id: "app".into(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let application = control.clone();
+        let app = tokio::spawn(async move {
+            tokio::pin!(tasks);
+            for _ in 0..2 {
+                let task = tasks.next().await.unwrap().unwrap();
+                application
+                    .send_task_result(TonicRequest::new(SendTaskResultRequest {
+                        task_id: task.task_id,
+                        result: Some(TaskResult::Success(TaskSuccess {
+                            response_data: b"{}".to_vec(),
+                        })),
+                    }))
+                    .await
+                    .unwrap();
+            }
+        });
+        let port = unused_port().await;
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let transport = LocalTransport::new(port, control, shutdown_rx)
+            .with_command_timeout(Duration::from_secs(2))
+            .with_command_push_credential(
+                CommandPushCredential::File(Arc::new(credentials)),
+                "deployment".into(),
+                "reports".into(),
+            );
+        let server = tokio::spawn(async move { transport.run().await });
+        wait_for_port(port).await;
+        let client = reqwest::Client::new();
+        for (index, token, expected) in [
+            (0, "ax_cap_v1_first", StatusCode::ACCEPTED),
+            (1, "ax_cap_v1_first", StatusCode::UNAUTHORIZED),
+            (2, "ax_cap_v1_first", StatusCode::UNAUTHORIZED),
+            (3, "ax_cap_v1_next", StatusCode::ACCEPTED),
+        ] {
+            if index == 1 {
+                clock.store(start + 10, Ordering::SeqCst);
+            }
+            if index == 2 {
+                write("ax_cap_v1_next", start + 300);
+            }
+            let mut pushed = envelope(CommandTarget::new("reports", CommandTargetType::Worker));
+            pushed.command_id = format!("command-{index}");
+            pushed.response_handling.submit_response_url =
+                format!("http://{response_address}/response");
+            let response = client
+                .post(format!(
+                    "http://127.0.0.1:{port}{}",
+                    alien_commands::WORKER_COMMAND_PUSH_PATH
+                ))
+                .bearer_auth(token)
+                .json(&pushed)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        shutdown_tx.send(()).unwrap();
+        server.await.unwrap().unwrap();
+        app.await.unwrap();
+        assert_eq!(response_count.load(Ordering::SeqCst), 2);
+        response_server.abort();
+        assert!(response_server.await.unwrap_err().is_cancelled());
     }
 
     #[tokio::test]

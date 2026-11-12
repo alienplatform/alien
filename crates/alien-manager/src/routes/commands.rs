@@ -256,6 +256,9 @@ async fn require_command_execution_context(
         };
     }
 
+    if !crate::auth::command_capability::commands_key_may_use_target(subject, &command.target) {
+        return Err(ErrorData::forbidden("Access denied").into_response());
+    }
     require_command_execution_access(state, subject, &command.deployment_id).await
 }
 
@@ -270,6 +273,10 @@ pub fn router() -> Router<AppState> {
             post(upload_complete),
         )
         .route("/v1/commands/{command_id}/response", put(submit_response))
+        .route(
+            "/v1/commands/{command_id}/response-context",
+            get(response_context),
+        )
         .route(
             "/v1/commands/{command_id}/payload",
             get(get_command_payload).put(store_command_payload),
@@ -416,12 +423,15 @@ async fn upload_complete(
 struct SubmitResponseQuery {
     response_token: Option<String>,
     expires: Option<i64>,
+    /// The lease the response URL was issued for. The signature covers it, so
+    /// it cannot be dropped or swapped. A bearer caller may name its lease too.
+    lease_id: Option<String>,
 }
 
 /// Submit response from deployment.
 ///
 /// Auth: Bearer token (Admin/Deployment) OR presigned URL query params
-/// (`response_token` + `expires`). The presigned URL approach is used by
+/// (`response_token` + `expires`, plus `lease_id` when the URL was issued with a lease). The presigned URL approach is used by
 /// push-mode runtimes (Lambda, Cloud Run, Container Apps) that have no
 /// pre-existing auth token — the signed URL is embedded in the command envelope.
 async fn submit_response(
@@ -431,12 +441,15 @@ async fn submit_response(
     Query(query): Query<SubmitResponseQuery>,
     Json(request): Json<SubmitResponseRequest>,
 ) -> Response {
+    // An empty lease_id names no lease.
+    let lease_id = query.lease_id.clone().filter(|id| !id.is_empty());
     // Try Bearer token auth first (used by polling-mode runtimes and admin callers).
     let bearer_auth = match auth::extract_auth(&state, &headers).await {
         Ok(subject) => subject,
         Err(e) => return e.into_response(),
     };
 
+    let via_bearer = bearer_auth.is_some();
     if let Some(subject) = bearer_auth {
         // Standard Bearer auth path — commands-only receiver credentials are
         // bound to the exact command target, while legacy/admin credentials
@@ -460,6 +473,24 @@ async fn submit_response(
         if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
             return e;
         }
+        // A bearer answer must name its lease, or a holder whose lease was
+        // superseded could complete the command by leaving the lease out.
+        // Released receivers never answer with a bearer: they answer on the
+        // response URL the manager handed them, which already names the lease.
+        // So nothing that works today is refused. A command that was never
+        // leased (push delivery) has no lease to name.
+        if lease_id.is_none() {
+            let leased = match state.command_server.command_is_leased(&command_id).await {
+                Ok(leased) => leased,
+                Err(e) => return e.into_response(),
+            };
+            if leased || subject.role == crate::auth::Role::CommandsReceiver {
+                return ErrorData::bad_request(
+                    "lease_id is required to answer a leased command with a bearer token",
+                )
+                .into_response();
+            }
+        }
     } else {
         // No Bearer token — try presigned URL auth from query parameters.
         let (Some(token), Some(expires)) = (&query.response_token, query.expires) else {
@@ -467,21 +498,77 @@ async fn submit_response(
                 .into_response();
         };
 
-        if !state
-            .command_server
-            .verify_response_token(&command_id, token, expires)
-        {
+        if !state.command_server.verify_response_token(
+            &command_id,
+            lease_id.as_deref(),
+            token,
+            expires,
+        ) {
             return ErrorData::unauthorized("Invalid or expired response token").into_response();
         }
     }
 
+    // A response is applied under the lease it names, or under "never leased"
+    // when it names none. The lease is checked in the same conditional write
+    // that claims it, so a lease taken a moment earlier cannot be overtaken.
+    let expected = match (lease_id, via_bearer) {
+        (Some(lease_id), true) => alien_commands::server::ExpectedLease::HeldLease(lease_id),
+        (Some(lease_id), false) => alien_commands::server::ExpectedLease::Lease(lease_id),
+        (None, _) => alien_commands::server::ExpectedLease::NeverLeased,
+    };
     match state
         .command_server
-        .submit_command_response(&command_id, request.response)
+        .submit_command_response_for_lease(&command_id, request.response, expected)
         .await
     {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResponseContextQuery {
+    lease_id: String,
+}
+
+/// Issue fresh response credentials to the authorized receiver of a running
+/// command. The operational lease can outlast its original bearer credential.
+async fn response_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(command_id): Path<String>,
+    Query(query): Query<ResponseContextQuery>,
+) -> Response {
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
+    let command = match state
+        .command_server
+        .get_command_access_context(&command_id)
+        .await
+    {
+        Ok(Some(command)) => command,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if let Err(response) = require_command_execution_context(&state, &subject, &command).await {
+        return response;
+    }
+    let deadline = match state.auth_validator.authority_deadline(&subject) {
+        Ok(deadline) => deadline,
+        Err(error) => return error.into_response(),
+    };
+    match state
+        .command_server
+        .refresh_response_handling(&command_id, &query.lease_id, deadline)
+        .await
+    {
+        Ok(handling) => {
+            ([(http::header::CACHE_CONTROL, "no-store")], Json(handling)).into_response()
+        }
+        Err(error) => error.into_response(),
     }
 }
 
@@ -621,9 +708,13 @@ async fn acquire_leases(
         return response;
     }
 
+    let deadline = match state.auth_validator.authority_deadline(&subject) {
+        Ok(deadline) => deadline,
+        Err(error) => return error.into_response(),
+    };
     match state
         .command_server
-        .acquire_lease(&lease_request.deployment_id, &lease_request)
+        .acquire_lease_with_deadline(&lease_request.deployment_id, &lease_request, deadline)
         .await
     {
         Ok(response) => Json(response).into_response(),
@@ -657,26 +748,37 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
+    let command = match state
+        .command_server
+        .get_command_access_context(&command_id)
+        .await
+    {
+        Ok(command) => command,
+        Err(e) => return e.into_response(),
+    };
     if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
-        let command = match state
-            .command_server
-            .get_command_access_context(&command_id)
-            .await
-        {
-            Ok(Some(command)) => command,
-            Ok(None) => {
-                return alien_error::AlienError::new(
-                    alien_commands::error::ErrorData::CommandNotFound { command_id },
-                )
-                .into_response();
-            }
-            Err(e) => return e.into_response(),
+        let Some(command) = command else {
+            return alien_error::AlienError::new(
+                alien_commands::error::ErrorData::CommandNotFound { command_id },
+            )
+            .into_response();
         };
         if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
             return e;
         }
-    } else if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
-        return e;
+    } else {
+        // The commands-only key never reaches a reserved operations target.
+        if let Some(command) = &command {
+            if !crate::auth::command_capability::commands_key_may_use_target(
+                &subject,
+                &command.target,
+            ) {
+                return ErrorData::forbidden("Access denied").into_response();
+            }
+        }
+        if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
+            return e;
+        }
     }
 
     match state.command_server.release_lease_by_id(&lease_id).await {

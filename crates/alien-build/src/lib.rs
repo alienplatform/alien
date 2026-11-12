@@ -1,4 +1,5 @@
 pub(crate) mod command_output;
+mod commands_receiver;
 pub mod dependencies;
 mod dockerignore;
 pub mod error;
@@ -258,6 +259,18 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
     let stack_id = stack.id().to_string();
 
+    // Only this build may say a receiver reads the capability file: drop any
+    // value the stack definition carried, then set it for what is built below.
+    for (_, entry) in stack.resources_mut() {
+        if let Some(container) = entry.config.downcast_mut::<Container>() {
+            container.commands_capability_file = false;
+        } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+            daemon.commands_capability_file = false;
+        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
+            worker.runtime_identity_exchange = false;
+        }
+    }
+
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
     let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
@@ -514,6 +527,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         Ok(image_uri) => {
                             // Success - update the function
                             let mut updated_func = func;
+                            if let WorkerCode::Source { toolchain, .. } = &updated_func.code {
+                                updated_func.runtime_identity_exchange =
+                                    worker_runtime_exchanges_identity(toolchain, settings);
+                            }
                             updated_func.code = WorkerCode::Image { image: image_uri };
                             build_results.push((resource_id, updated_func));
                             completed_tasks += 1;
@@ -675,6 +692,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 Ok((resource_id, daemon, build_result)) => match build_result {
                     Ok(image_uri) => {
                         let mut updated_daemon = daemon;
+                        updated_daemon.commands_capability_file = updated_daemon.commands_enabled
+                            && match &updated_daemon.code {
+                                DaemonCode::Source { src, toolchain } => {
+                                    commands_receiver::receiver_reads_capability_file(
+                                        src, toolchain, &settings.get_targets(),
+                                    )
+                                    .await
+                                }
+                                DaemonCode::Image { .. } => false,
+                            };
                         updated_daemon.code = DaemonCode::Image { image: image_uri };
                         build_results.push((resource_id, updated_daemon));
                         completed_tasks += 1;
@@ -1072,8 +1099,20 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     match build_result {
                         Ok(image_uri) => {
                             // Success - update ALL containers in this group with the same image
+                            // One binary serves the group, so one answer does too.
+                            let reads_capability_file = match &containers_group[0].1.code {
+                                ContainerCode::Source { src, toolchain } => {
+                                    commands_receiver::receiver_reads_capability_file(
+                                        src, toolchain, &settings.get_targets(),
+                                    )
+                                    .await
+                                }
+                                ContainerCode::Image { .. } => false,
+                            };
                             for (resource_id, container) in containers_group {
                                 let mut updated_container = container;
+                                updated_container.commands_capability_file =
+                                    updated_container.commands_enabled && reads_capability_file;
                                 updated_container.code = ContainerCode::Image {
                                     image: image_uri.clone(),
                                 };
@@ -3810,6 +3849,24 @@ fn toolchain_name(toolchain: &ToolchainConfig) -> &'static str {
     }
 }
 
+/// Whether a Worker built from source runs on this build's own runtime base, which
+/// exchanges its cloud identity for telemetry credentials. A Dockerfile controls its
+/// own image and a base override is not known to carry the exchange, so both are
+/// left unmarked; deployers then keep giving those Workers `ALIEN_RUNTIME_SECRETS`.
+fn worker_runtime_exchanges_identity(
+    toolchain: &alien_core::ToolchainConfig,
+    settings: &BuildSettings,
+) -> bool {
+    match toolchain {
+        alien_core::ToolchainConfig::Docker { .. } => false,
+        alien_core::ToolchainConfig::TypeScript { .. } => {
+            std::env::var("ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE")
+                .map_or(true, |image| image.is_empty())
+        }
+        _ => settings.override_base_image.is_none(),
+    }
+}
+
 /// Apply a feature-versioned generic runtime base only to non-TypeScript
 /// Workers. TypeScript has its own language-base override, resolved by
 /// `typescript_worker_base_images`, so a mixed-language stack never places
@@ -4582,6 +4639,34 @@ mod tests {
                 Some(vec!["serve".to_string()])
             )
         );
+    }
+
+    #[test]
+    fn only_the_standard_runtime_base_is_recorded_as_exchanging_identity() {
+        let settings = |override_base_image: Option<&str>| BuildSettings {
+            override_base_image: override_base_image.map(str::to_string),
+            platform: PlatformBuildSettings::Gcp {},
+            output_directory: "out".to_string(),
+            targets: None,
+            cache_url: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let rust = alien_core::ToolchainConfig::Rust {
+            binary_name: "worker".to_string(),
+        };
+        let docker = alien_core::ToolchainConfig::Docker {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        assert!(worker_runtime_exchanges_identity(&rust, &settings(None)));
+        assert!(!worker_runtime_exchanges_identity(
+            &rust,
+            &settings(Some("example.com/base:v1"))
+        ));
+        assert!(!worker_runtime_exchanges_identity(&docker, &settings(None)));
     }
 
     #[test]

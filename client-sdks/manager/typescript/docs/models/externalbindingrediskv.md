@@ -1,14 +1,19 @@
-# ExternalBindingRedis
+# ExternalBindingRedisKv
 
 Redis binding (for Kubernetes/local)
 
 ## Example Usage
 
 ```typescript
-import { ExternalBindingRedis } from "@alienplatform/manager-api/models";
+import { ExternalBindingRedisKv } from "@alienplatform/manager-api/models";
 
-let value: ExternalBindingRedis = {
-  connectionUrl: "https://warm-ribbon.biz",
+let value: ExternalBindingRedisKv = {
+  connectionUrl: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
   service: "redis",
   type: "kv",
 };

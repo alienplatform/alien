@@ -16,6 +16,13 @@ export type ManagerCapabilities = {
    * Requests into deployments through `/v1/deployments/{id}/tunnels/...`.
    */
   tunnels: boolean;
+  /**
+   * Deployment values held by this manager at `/v1/values/{scope}`. The
+   *
+   * @remarks
+   * number is the version of that API; absent when values are not served.
+   */
+  values?: number | null | undefined;
 };
 
 /** @internal */
@@ -25,6 +32,7 @@ export const ManagerCapabilities$inboundSchema: z.ZodType<
 > = z.object({
   charts: z.boolean(),
   tunnels: z.boolean(),
+  values: z.nullable(z.int()).optional(),
 });
 
 export function managerCapabilitiesFromJSON(

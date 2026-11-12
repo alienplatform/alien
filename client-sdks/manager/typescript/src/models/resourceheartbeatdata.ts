@@ -84,6 +84,11 @@ import {
   QueueHeartbeatData$outboundSchema,
 } from "./queueheartbeatdata.js";
 import {
+  RedisHeartbeatData,
+  RedisHeartbeatData$Outbound,
+  RedisHeartbeatData$outboundSchema,
+} from "./redisheartbeatdata.js";
+import {
   RemoteStackManagementHeartbeatData,
   RemoteStackManagementHeartbeatData$Outbound,
   RemoteStackManagementHeartbeatData$outboundSchema,
@@ -197,6 +202,17 @@ export type ResourceHeartbeatDataVault = {
   resourceType: "vault";
 };
 
+export type ResourceHeartbeatDataRedis = {
+  /**
+   * Heartbeat data for a Redis resource. Everything comes from the cloud's
+   *
+   * @remarks
+   * management and metrics APIs; the manager never opens a Redis connection.
+   */
+  data: RedisHeartbeatData;
+  resourceType: "redis";
+};
+
 export type ResourceHeartbeatDataPostgres = {
   data: PostgresHeartbeatData;
   resourceType: "postgres";
@@ -252,6 +268,7 @@ export type ResourceHeartbeatData =
   | ResourceHeartbeatDataQueue
   | ResourceHeartbeatDataKv
   | ResourceHeartbeatDataPostgres
+  | ResourceHeartbeatDataRedis
   | ResourceHeartbeatDataVault
   | ResourceHeartbeatDataServiceAccount
   | ResourceHeartbeatDataNetwork
@@ -619,6 +636,29 @@ export function resourceHeartbeatDataVaultToJSON(
 }
 
 /** @internal */
+export type ResourceHeartbeatDataRedis$Outbound = {
+  data: RedisHeartbeatData$Outbound;
+  resourceType: "redis";
+};
+
+/** @internal */
+export const ResourceHeartbeatDataRedis$outboundSchema: z.ZodType<
+  ResourceHeartbeatDataRedis$Outbound,
+  ResourceHeartbeatDataRedis
+> = z.object({
+  data: RedisHeartbeatData$outboundSchema,
+  resourceType: z.literal("redis"),
+});
+
+export function resourceHeartbeatDataRedisToJSON(
+  resourceHeartbeatDataRedis: ResourceHeartbeatDataRedis,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatDataRedis$outboundSchema.parse(resourceHeartbeatDataRedis),
+  );
+}
+
+/** @internal */
 export type ResourceHeartbeatDataPostgres$Outbound = {
   data: PostgresHeartbeatData$Outbound;
   resourceType: "postgres";
@@ -851,6 +891,7 @@ export type ResourceHeartbeatData$Outbound =
   | ResourceHeartbeatDataQueue$Outbound
   | ResourceHeartbeatDataKv$Outbound
   | ResourceHeartbeatDataPostgres$Outbound
+  | ResourceHeartbeatDataRedis$Outbound
   | ResourceHeartbeatDataVault$Outbound
   | ResourceHeartbeatDataServiceAccount$Outbound
   | ResourceHeartbeatDataNetwork$Outbound
@@ -880,6 +921,7 @@ export const ResourceHeartbeatData$outboundSchema: z.ZodType<
   z.lazy(() => ResourceHeartbeatDataQueue$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataKv$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataPostgres$outboundSchema),
+  z.lazy(() => ResourceHeartbeatDataRedis$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataVault$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataServiceAccount$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataNetwork$outboundSchema),

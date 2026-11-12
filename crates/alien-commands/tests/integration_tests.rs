@@ -1383,6 +1383,61 @@ mod tests {
         }
     }
 
+    /// A command delivered by push has no lease. If its response fails once
+    /// after the claim was written, the runtime's retry must complete it, not
+    /// be refused against the claim the first attempt left behind.
+    #[tokio::test]
+    async fn a_push_response_retried_after_a_server_error_completes_the_command() {
+        use alien_commands::server::ExpectedLease;
+        let server = TestCommandServer::builder()
+            .with_pull_mode()
+            .with_fault_injection()
+            .build()
+            .await;
+        let fault_kv = server
+            .fault_kv
+            .clone()
+            .expect("fault injection was requested");
+        let request = test_inline_create_command("push-agent", "push-command");
+        server.create_command(request).await.unwrap();
+        let lease = server
+            .acquire_single_lease("push-agent")
+            .await
+            .unwrap()
+            .unwrap();
+        // Delivered and not leased: drop the lease record the pull path made.
+        alien_bindings::traits::Kv::delete(
+            server.kv.as_ref(),
+            &format!("cmd:{}:lease", lease.command_id),
+            None,
+        )
+        .await
+        .unwrap();
+
+        fault_kv.arm_response_store_failure();
+        let response = test_json_success_response(&serde_json::json!({ "result": "ok" }));
+        assert!(server
+            .command_server
+            .submit_command_response_for_lease(
+                &lease.command_id,
+                response.clone(),
+                ExpectedLease::NeverLeased,
+            )
+            .await
+            .is_err());
+        server
+            .command_server
+            .submit_command_response_for_lease(
+                &lease.command_id,
+                response,
+                ExpectedLease::NeverLeased,
+            )
+            .await
+            .expect("the retry completes the command");
+        let status = server.get_command_status(&lease.command_id).await.unwrap();
+        assert_eq!(status.state, CommandState::Succeeded);
+    }
+
     /// Regression: a failure partway through response cleanup must not strand the
     /// command as non-terminal with an invisible response, and must not fail the
     /// `submit_command_response` call either.

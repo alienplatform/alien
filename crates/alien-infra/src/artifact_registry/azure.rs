@@ -34,6 +34,10 @@ pub struct AzureArtifactRegistryController {
     pub(crate) login_server: Option<String>,
     /// The Azure subscription ID (stored for output generation)
     pub(crate) subscription_id: Option<String>,
+    /// Setup-owned identity; runtime must verify its current principal and grant.
+    pub(crate) pull_identity_resource_id: Option<String>,
+    pub(crate) pull_principal_id: Option<String>,
+    pub(crate) pull_role_assignment_id: Option<String>,
 }
 
 #[controller]
@@ -600,6 +604,9 @@ impl AzureArtifactRegistryController {
             resource_group_name: Some(resource_group_name.to_string()),
             login_server: Some(login_server.to_string()),
             subscription_id: Some("mock-subscription-id".to_string()),
+            pull_identity_resource_id: None,
+            pull_principal_id: None,
+            pull_role_assignment_id: None,
             _internal_stay_count: None,
         }
     }

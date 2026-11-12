@@ -35,6 +35,7 @@ use crate::{
 pub struct FaultInjectingKv {
     inner: Arc<LocalKv>,
     fail_pending_scan: AtomicBool,
+    fail_next_response_store: AtomicBool,
     idempotency_get_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
 }
 
@@ -43,6 +44,7 @@ impl FaultInjectingKv {
         Self {
             inner,
             fail_pending_scan: AtomicBool::new(false),
+            fail_next_response_store: AtomicBool::new(false),
             idempotency_get_barrier: Mutex::new(None),
         }
     }
@@ -52,6 +54,12 @@ impl FaultInjectingKv {
     /// scans the same prefix.
     pub fn arm_pending_scan_failure(&self) {
         self.fail_pending_scan.store(true, Ordering::SeqCst);
+    }
+
+    /// Arm the fault: the next write of a command's stored response fails, like
+    /// a transient server error after the lease was claimed.
+    pub fn arm_response_store_failure(&self) {
+        self.fail_next_response_store.store(true, Ordering::SeqCst);
     }
 
     /// Hold the first `parties` absent idempotency reads until all concurrent
@@ -91,6 +99,14 @@ impl Kv for FaultInjectingKv {
         value: Vec<u8>,
         options: Option<PutOptions>,
     ) -> alien_bindings::Result<bool> {
+        if key.ends_with(":response") && self.fail_next_response_store.swap(false, Ordering::SeqCst)
+        {
+            return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
+                operation: "put".to_string(),
+                key: key.to_string(),
+                reason: "injected fault: response store failure".to_string(),
+            }));
+        }
         self.inner.put(key, value, options).await
     }
 

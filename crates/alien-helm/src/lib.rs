@@ -27,7 +27,7 @@ pub use generator::{
     generate_operator_manifest_with_image_identity, generate_product_helm_chart,
     generate_product_helm_chart_with_image_identity, generate_product_operator_manifest,
     generate_product_operator_manifest_with_image_identity, render_manager_fetch_values, HelmChart,
-    HelmOptions, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
+    HelmOptions, ManagementCredential, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
     OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
     OperatorScope, ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
 };
