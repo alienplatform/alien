@@ -160,19 +160,12 @@ mod tests {
             .expect("check runs")
     }
 
+    /// The gate's platform scope is read for the deployment's platform: an input scoped to
+    /// another platform declines the sandbox, and one scoped to AWS keeps it. The check itself
+    /// applies to AWS only, so any other deployment platform passes.
     #[tokio::test]
     async fn scoped_gate_uses_the_deployment_platform_for_compatibility() {
         let old = Stack::new("stack".into()).build();
-        let mut new = stack(Some(REPO_A), BUNDLE_V1);
-        new.resources.get_mut("agents").unwrap().enabled_when = Some("enabled".into());
-        let mut input = alien_core::StackInputDefinition::deployer_boolean(
-            "enabled",
-            "Enabled",
-            "Enable sandbox",
-            Some(true),
-        );
-        input.platforms = Some(vec![alien_core::Platform::Gcp]);
-        new.inputs.push(input);
         let config = DeploymentConfig::builder()
             .stack_settings(Default::default())
             .environment_variables(alien_core::EnvironmentVariablesSnapshot {
@@ -183,17 +176,34 @@ mod tests {
             .external_bindings(Default::default())
             .allow_frozen_changes(false)
             .build();
-        for platform in [alien_core::Platform::Aws, alien_core::Platform::Gcp] {
+        for (scoped_to, aws_passes) in [
+            (alien_core::Platform::Gcp, true),
+            (alien_core::Platform::Aws, false),
+        ] {
+            let mut new = stack(Some(REPO_A), BUNDLE_V1);
+            new.resources.get_mut("agents").unwrap().enabled_when = Some("enabled".into());
+            let mut input = alien_core::StackInputDefinition::deployer_boolean(
+                "enabled",
+                "Enabled",
+                "Enable sandbox",
+                Some(true),
+            );
+            input.platforms = Some(vec![scoped_to]);
+            new.inputs.push(input);
             let result = SandboxSetupInputsUnchangedCheck
-                .check_with_config(&old, &new, &config, platform)
+                .check_with_config(&old, &new, &config, alien_core::Platform::Aws)
                 .await
                 .unwrap();
             assert_eq!(
-                result.success,
-                platform == alien_core::Platform::Aws,
-                "{:?}",
+                result.success, aws_passes,
+                "{scoped_to:?}: {:?}",
                 result.errors
             );
+            let other = SandboxSetupInputsUnchangedCheck
+                .check_with_config(&old, &new, &config, alien_core::Platform::Gcp)
+                .await
+                .unwrap();
+            assert!(other.success, "{:?}", other.errors);
         }
     }
 
