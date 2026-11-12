@@ -72,15 +72,12 @@ async fn create_registry_pull_secret(
     .await
 }
 
-/// The container's image when the deployment token must become pull
-/// credentials for it. With a token (every connected deployment), that is
-/// every image. Without one (an air-gapped deployment), images from another
-/// registry, such as the environment's own, are pulled with the access the
-/// cluster already has; an image still pointing at the manager is returned
-/// so the missing token fails loudly.
+/// The container's image when it is served by the manager's registry, whose pull needs the
+/// deployment's token. An image from any other registry is pulled with the access the cluster
+/// already has: no Secret is created and the token is never offered to that registry. With no
+/// token, an image on the manager's registry is still returned so the missing token fails loudly.
 fn image_needing_pull_secret<'a>(
     code: &'a ContainerCode,
-    has_deployment_token: bool,
     manager_url: Option<&str>,
     mirrored: bool,
 ) -> Option<&'a str> {
@@ -92,12 +89,7 @@ fn image_needing_pull_secret<'a>(
     if mirrored {
         return None;
     }
-    if has_deployment_token {
-        return Some(image);
-    }
-    let Some(manager_url) = manager_url else {
-        return Some(image);
-    };
+    let manager_url = manager_url?;
     let manager_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
     let image_host = image.split('/').next().unwrap_or_default();
     (image_host == manager_host).then_some(image.as_str())
@@ -390,8 +382,6 @@ impl KubernetesContainerController {
         .await?;
         let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
             &config.code,
-            ctx.deployment_config.deployment_token.is_some()
-                || ctx.deployment_config.runtime_identity_audience.is_some(),
             ctx.deployment_config.manager_url.as_deref(),
             ctx.deployment_config.image_registry.is_some(),
         ) {
@@ -1405,8 +1395,6 @@ impl KubernetesContainerController {
         .await?;
         let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
             &config.code,
-            ctx.deployment_config.deployment_token.is_some()
-                || ctx.deployment_config.runtime_identity_audience.is_some(),
             ctx.deployment_config.manager_url.as_deref(),
             ctx.deployment_config.image_registry.is_some(),
         ) {
@@ -3174,6 +3162,26 @@ impl KubernetesContainerController {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_images_on_the_manager_registry_get_a_pull_secret() {
+        let image = |name: &str| ContainerCode::Image {
+            image: name.to_string(),
+        };
+        let manager = Some("https://manager.example.test");
+        assert_eq!(
+            image_needing_pull_secret(&image("manager.example.test/app:1"), manager, false),
+            Some("manager.example.test/app:1")
+        );
+        assert_eq!(
+            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), manager, false),
+            None
+        );
+        assert_eq!(
+            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), None, false),
+            None
+        );
+    }
+
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
 
@@ -3254,11 +3262,11 @@ mod tests {
             image: "manager.example.com/app@sha256:abc".to_string(),
         };
         assert!(
-            image_needing_pull_secret(&code, true, Some("https://manager.example.com"), false)
+            image_needing_pull_secret(&code, Some("https://manager.example.com"), false)
                 .is_some()
         );
         assert!(
-            image_needing_pull_secret(&code, true, Some("https://manager.example.com"), true)
+            image_needing_pull_secret(&code, Some("https://manager.example.com"), true)
                 .is_none()
         );
     }
