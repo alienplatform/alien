@@ -663,16 +663,20 @@ impl Sandbox for KubernetesSandbox {
     }
 
     /// Any process of the deployment can look a session up by id: the broker reads it off the pod.
-    /// An id no pod carries is `None`.
+    /// An id no pod carries is `None`. Like `get_or_create`, this asks the broker every time: a
+    /// cached capability only says the pod existed when it was minted, and another process may
+    /// have ended the session since. It also waits for a creator that is still setting the
+    /// session up.
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
-        Ok(self
-            .claimed(sandbox_id)
-            .await?
-            .map(|claim| SandboxInstance {
-                sandbox_id: claim.session_id,
-                state: SandboxState::Running,
-                generation: claim.generation,
-            }))
+        let Some(claim) = self.claimed_by_broker(sandbox_id).await? else {
+            return Ok(None);
+        };
+        let claim = self.after_setup(claim).await?;
+        Ok(Some(SandboxInstance {
+            sandbox_id: claim.session_id,
+            state: SandboxState::Running,
+            generation: claim.generation,
+        }))
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -1214,20 +1218,9 @@ mod tests {
             .expect("an unknown id is not an error")
             .is_none());
 
-        // A second call is served from the capability this process now holds.
+        // Every `get` asks the broker; the capability it returns is remembered for later calls.
         sandbox.get("known").await.unwrap().unwrap();
-        assert_eq!(*lookups.lock().unwrap(), 2, "one lookup per id");
-
-        // Close to expiry, the next use asks the broker again.
-        sandbox
-            .claims
-            .lock()
-            .unwrap()
-            .get_mut("known")
-            .unwrap()
-            .expires_at = chrono::Utc::now().timestamp() + 10;
-        sandbox.get("known").await.unwrap().unwrap();
-        assert_eq!(*lookups.lock().unwrap(), 3, "refreshed before it expired");
+        assert_eq!(*lookups.lock().unwrap(), 3, "one lookup per call");
     }
 
     fn session_body(session: &str, pending: bool, deadline: Option<i64>) -> serde_json::Value {
@@ -1346,10 +1339,33 @@ mod tests {
             "the session ended; a replacement is created"
         );
 
-        // `get` stops trusting a cached session at its recorded deadline.
-        let past = chrono::Utc::now().timestamp() - 1;
-        sandbox.remember(serde_json::from_value(session_body("s1", false, Some(past))).unwrap());
+        // `get` does not trust a cached session either: it was terminated by another process.
+        sandbox.remember(serde_json::from_value(session_body("s1", false, None)).unwrap());
         assert!(sandbox.get("s1").await.unwrap().is_none());
+    }
+
+    /// `get` waits for a creator that is still setting the session up, as `get_or_create` does.
+    #[tokio::test]
+    async fn get_waits_for_a_session_that_is_still_being_set_up() {
+        use axum::routing::get;
+        let lookups = Arc::new(Mutex::new(0));
+        let seen = Arc::clone(&lookups);
+        let broker = serve(Router::new().route(
+            BROKER_RELEASE_ROUTE,
+            get(move |Path((_, session)): Path<(String, String)>| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    let mut lookups = seen.lock().unwrap();
+                    *lookups += 1;
+                    Json(session_body(&session, *lookups <= 2, None))
+                }
+            }),
+        ))
+        .await;
+        let token = tempfile::NamedTempFile::new().unwrap();
+        let sandbox = sandbox_over(broker, &token);
+        sandbox.get("s1").await.unwrap().expect("found after setup");
+        assert_eq!(*lookups.lock().unwrap(), 3);
     }
 
     /// A new SDK with an Operator that predates lookups by id: the lookup answers 405, and the
