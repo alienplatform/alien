@@ -55,11 +55,13 @@ fn gcp_key_used_by_a_volume_is_usable_by_the_compute_service_agent() {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    assert!(rendered.contains("service = \"compute.googleapis.com\""), "{rendered}");
     assert!(rendered.contains("resource \"google_kms_crypto_key_iam_member\" \"customer_key_compute_disks\""));
+    // `google_project_service_identity` returns a null email for Compute: `terraform validate`
+    // accepts that and only `apply` fails, so the member is built from the project number.
     assert!(rendered.contains(
-        "member = \"serviceAccount:${google_project_service_identity.customer_key_compute_agent.email}\""
-    ));
+        "member = \"serviceAccount:service-${data.google_project.customer_key_project.number}@compute-system.iam.gserviceaccount.com\""
+    ), "{rendered}");
+    assert!(!rendered.contains("google_project_service_identity"), "{rendered}");
     assert_terraform_valid(&module, "gcp_key_with_volume");
 
     // A key no volume uses gets no Compute grant.

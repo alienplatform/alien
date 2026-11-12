@@ -1,5 +1,5 @@
 use crate::{
-    block::{attr, nested, resource_block},
+    block::{attr, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{downcast, labels, required_label, service_account_member_for_label},
     expr,
@@ -114,19 +114,14 @@ impl TfEmitter for GcpKeyEmitter {
         // which wraps the disk's data key as its own service agent. Setup grants that agent the
         // key because the runtime never edits key policy.
         if volumes_use_key(ctx) {
-            let agent_label = format!("{label}_compute_agent");
-            fragment.resource_blocks.push(resource_block(
-                "google_project_service_identity",
-                &agent_label,
-                [
-                    // Service agents exist only in the google-beta provider.
-                    attr("provider", expr::raw("google-beta")),
-                    attr("project", expr::raw("var.gcp_project")),
-                    attr(
-                        "service",
-                        Expression::String("compute.googleapis.com".to_string()),
-                    ),
-                ],
+            // The agent is `service-<project number>@compute-system.iam.gserviceaccount.com`.
+            // `google_project_service_identity` cannot name it: for Compute it returns a null
+            // email, which `terraform validate` accepts and only `apply` rejects.
+            let project_label = format!("{label}_project");
+            fragment.data_blocks.push(data_block(
+                "google_project",
+                &project_label,
+                [attr("project_id", expr::raw("var.gcp_project"))],
             ));
             fragment.resource_blocks.push(resource_block(
                 "google_kms_crypto_key_iam_member",
@@ -145,7 +140,7 @@ impl TfEmitter for GcpKeyEmitter {
                     attr(
                         "member",
                         expr::template(format!(
-                            "serviceAccount:${{google_project_service_identity.{agent_label}.email}}"
+                            "serviceAccount:service-${{data.google_project.{project_label}.number}}@compute-system.iam.gserviceaccount.com"
                         )),
                     ),
                 ],
