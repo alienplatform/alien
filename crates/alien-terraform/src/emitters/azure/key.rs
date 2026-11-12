@@ -257,6 +257,10 @@ fn emit_disk_encryption_set(ctx: &EmitContext<'_>, label: &str, fragment: &mut T
                 "key_vault_key_id",
                 expr::traversal(["azurerm_key_vault_key", label, "versionless_id"]),
             ),
+            // The provider only accepts the versionless key URL when the set
+            // rotates to the key's newest version itself (checked on a real
+            // subscription: false is rejected with "expected a versioned ID").
+            attr("auto_key_rotation_enabled", Expression::Bool(true)),
             nested(crate::block::block(
                 "identity",
                 [attr("type", Expression::String("SystemAssigned".to_string()))],

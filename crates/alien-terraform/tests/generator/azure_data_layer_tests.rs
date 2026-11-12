@@ -252,6 +252,7 @@ fn azure_key_used_by_a_volume_gets_a_disk_encryption_set_and_exports_its_id() {
         .collect::<Vec<_>>()
         .join(" ");
 
+    assert!(rendered.contains("auto_key_rotation_enabled = true"), "versionless key id needs auto rotation");
     assert!(
         rendered.contains("resource \"azurerm_disk_encryption_set\" \"customer_key_disks\""),
         "{rendered}"
