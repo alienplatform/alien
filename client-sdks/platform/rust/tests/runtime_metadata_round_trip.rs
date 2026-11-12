@@ -157,3 +157,130 @@ fn deployment_round_trip(source: RuntimeMetadata) -> RuntimeMetadata {
     )
     .expect("runtime metadata decodes")
 }
+
+// A manager writes `DeploymentState` through the generated `DeploymentState` type on every
+// checkpoint and refuses the write when the conversion would drop anything. This builds a
+// state with every optional field set and every list non-empty, so a field added to
+// `alien_core` and not to the vendored `openapi.json` fails here instead of in a running
+// manager. Struct literals on purpose: a new field stops this compiling until it is set.
+#[cfg(feature = "full-api")]
+fn fully_populated_state() -> alien_core::DeploymentState {
+    use alien_core::{
+        AiAccessCheck, AiAccessCheckResult, AirgappedReportMetadata, AwsSandboxEgressScaffolding,
+        CredentialRetry, DeletionPolicy, DeploymentState, DeploymentStatus, InitialSetupAuthority,
+        Platform, RegistryAccess, ReleaseInfo, SetupScaffolding,
+    };
+    let at: chrono::DateTime<chrono::Utc> = "2026-11-10T00:00:00Z".parse().unwrap();
+    let stack: alien_core::Stack = serde_json::from_value(json!({
+        "id": "demo",
+        "resources": {},
+        "supportedPlatforms": ["aws"],
+        "dynamicContainerRepositories": ["repo"],
+    }))
+    .expect("stack decodes");
+    let mut metadata = helm_setup_update_metadata();
+    metadata.deletion_policy = DeletionPolicy::Erase;
+    metadata.airgapped_report = Some(AirgappedReportMetadata {
+        written_at: Some(at),
+        received_at: at,
+    });
+    metadata.operator_version = Some("3.3.61".to_string());
+    metadata.credential_retry = Some(CredentialRetry {
+        started_at: at,
+        status: DeploymentStatus::Provisioning,
+    });
+    metadata.initial_setup_authority = InitialSetupAuthority::default();
+    metadata.automatic_setup = true;
+    metadata.last_synced_env_vars_hash = Some("hash".to_string());
+    metadata.last_synced_secret_names = vec!["DB_PASSWORD".to_string()];
+    metadata.vault_credentials_revoked = true;
+    metadata.retained_storage_protection_hash = Some("hash".to_string());
+    metadata.retained_storage_protection_confirmed_at = Some(at);
+    metadata.retained_data_protection_started_at = Some(at);
+    metadata.prepared_stack = Some(stack.clone());
+    metadata.persisted_gate_answers = [("gate".to_string(), true)].into_iter().collect();
+    metadata.pending_prepared_stack = Some(stack.clone());
+    metadata.pending_prepared_release_id = Some("rel_dddddddddddddddddddddddddddd".to_string());
+    metadata.direct_setup_revision = Some("rev".to_string());
+    metadata.registry_access_granted = true;
+    metadata.registry_access = Some(RegistryAccess {
+        repositories: vec!["repo".to_string()],
+        ..RegistryAccess::default()
+    });
+    metadata.setup_scaffolding = [(
+        "worker".to_string(),
+        SetupScaffolding::AwsSandbox {
+            build_role_name: "build".to_string(),
+            egress: Some(AwsSandboxEgressScaffolding {
+                operator_role_name: "operator".to_string(),
+                security_group_id: Some("sg-1".to_string()),
+                connector_arn: Some("arn:aws:lambda:us-east-1:1:connector".to_string()),
+                connector_request: Some("request".to_string()),
+            }),
+            image_arn: Some("arn:aws:lambda:us-east-1:1:image".to_string()),
+        },
+    )]
+    .into_iter()
+    .collect();
+    metadata.deployer_secrets = vec![fully_populated_deployer_secret()];
+    metadata.ai_access_checks = vec![AiAccessCheck {
+        resource_id: "ai".to_string(),
+        model_id: "claude-sonnet-5".to_string(),
+        result: AiAccessCheckResult::Refused,
+        detail: Some("not enabled".to_string()),
+        tested_at: at,
+    }];
+    metadata.deployer_secrets_checked_at = Some(at);
+    metadata.resources_waiting_for_secrets = vec!["reader".to_string()];
+
+    let release = ReleaseInfo {
+        release_id: Some("rel_eeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string()),
+        version: Some("1.0.0".to_string()),
+        description: Some("release".to_string()),
+        stack,
+    };
+    DeploymentState {
+        status: DeploymentStatus::Updating,
+        platform: Platform::Aws,
+        current_release: Some(release.clone()),
+        target_release: Some(release),
+        stack_state: Some(
+            serde_json::from_value(json!({
+                "platform": "aws", "resourcePrefix": "demo", "resources": {}
+            }))
+            .expect("stack state decodes"),
+        ),
+        error: Some(
+            serde_json::from_value(json!({
+                "code": "SOME_ERROR", "message": "failed", "retryable": true,
+                "internal": false, "httpStatusCode": 500, "context": {"k": "v"}
+            }))
+            .expect("error decodes"),
+        ),
+        environment_info: Some(alien_core::EnvironmentInfo::Aws(
+            serde_json::from_value(json!({"accountId": "123", "region": "us-east-1"}))
+                .expect("environment decodes"),
+        )),
+        runtime_metadata: Some(metadata),
+        retry_requested: true,
+        protocol_version: 1,
+    }
+}
+
+#[cfg(feature = "full-api")]
+#[test]
+fn fully_populated_deployment_state_survives_the_reconcile_request() {
+    let source = serde_json::to_value(fully_populated_state()).expect("state serializes");
+    let request: alien_platform_api::types::SyncReconcileRequest = serde_json::from_value(json!({
+        "deploymentId": "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": source.clone(),
+    }))
+    .expect("reconcile request decodes");
+    let encoded = serde_json::to_value(&request).expect("reconcile request encodes");
+    let round_tripped: alien_core::DeploymentState =
+        serde_json::from_value(encoded["state"].clone()).expect("core state decodes");
+    assert_eq!(
+        serde_json::to_value(round_tripped).expect("core state serializes"),
+        source
+    );
+}
