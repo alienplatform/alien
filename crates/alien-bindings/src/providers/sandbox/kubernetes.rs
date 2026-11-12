@@ -173,34 +173,53 @@ impl super::interactive::BoundAgent for SessionAgent {
 
 /// What a broker answer that is not a success means to the caller.
 ///
-/// A 401 is the broker refusing the token itself. The broker accepts only a token projected for
-/// its own audience, which a workload that links the sandbox has mounted; a pod started before the
-/// sandbox was linked, or before an upgrade, has none until it is rolled, so the message says what
-/// to look for and that retrying after the roll is the fix.
+/// A 401 is the broker refusing the token itself: neither the token projected for the broker's
+/// audience nor the default ServiceAccount token was accepted for this deployment.
 fn broker_refusal(status: reqwest::StatusCode, body: &str) -> String {
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return format!(
-            "the sandbox broker refused this workload's token ({status}). The broker accepts \
-             only a ServiceAccount token projected for the audience `{}`, mounted at the \
-             sandbox binding's token path in every workload that links the sandbox. A workload \
-             started before that link or before the last upgrade has none until it is \
-             restarted; try again once it has been rolled",
-            "alien-sandbox-broker"
+            "the sandbox broker refused this workload's token ({status}). It accepts the \
+             ServiceAccount token projected for the audience `alien-sandbox-broker` (mounted at \
+             the sandbox binding's token path in every workload that links the sandbox) and, \
+             until the workload is rolled, the default ServiceAccount token of a workload of \
+             this deployment"
         );
     }
     format!("the sandbox broker returned {status}: {body}")
 }
 
+/// The ServiceAccount token the kubelet mounts in every pod.
+const DEFAULT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
 /// Reads the pod's ServiceAccount token. Per call: Kubernetes rotates projected tokens in place.
+///
+/// A workload started before it was linked to the sandbox, or before an upgrade, has no projected
+/// token at `token_path`; it falls back to the default mount, which the broker still accepts, so
+/// the workload keeps working until it is rolled.
 async fn read_identity_token(token_path: &str, binding_name: &str) -> Result<String> {
-    tokio::fs::read_to_string(token_path)
-        .await
-        .into_alien_error()
-        .context(ErrorData::BindingConfigInvalid {
-            binding_name: binding_name.to_string(),
-            env_var: alien_core::bindings::binding_env_var_name(binding_name),
-            reason: format!("could not read the ServiceAccount token at '{token_path}'"),
-        })
+    match tokio::fs::read_to_string(token_path).await {
+        Ok(token) => Ok(token),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tokio::fs::read_to_string(DEFAULT_TOKEN_PATH)
+                .await
+                .into_alien_error()
+                .context(ErrorData::BindingConfigInvalid {
+                    binding_name: binding_name.to_string(),
+                    env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                    reason: format!(
+                        "could not read the ServiceAccount token at '{token_path}' or at \
+                         '{DEFAULT_TOKEN_PATH}'"
+                    ),
+                })
+        }
+        Err(error) => Err(error)
+            .into_alien_error()
+            .context(ErrorData::BindingConfigInvalid {
+                binding_name: binding_name.to_string(),
+                env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                reason: format!("could not read the ServiceAccount token at '{token_path}'"),
+            }),
+    }
 }
 
 /// A Sandbox backed by pods under a sandboxed runtime class.
@@ -427,11 +446,7 @@ impl KubernetesSandbox {
 
     /// An existing session answers only to the tenant key it was created with. A request with a
     /// different key, or with none for a keyed session (or the reverse), is refused.
-    fn require_same_tenant(
-        &self,
-        claim: &ClaimResponse,
-        requested: Option<&str>,
-    ) -> Result<()> {
+    fn require_same_tenant(&self, claim: &ClaimResponse, requested: Option<&str>) -> Result<()> {
         if claim.tenant_key.as_deref() == requested {
             return Ok(());
         }
@@ -773,13 +788,54 @@ impl Sandbox for KubernetesSandbox {
 
 #[cfg(test)]
 mod tests {
+    /// An Operator that predates `tenantKey` and `timeoutMs` rejects unknown fields, so a caller
+    /// that sets neither must send neither: the body is what an old Operator accepts.
+    #[test]
+    fn a_claim_omits_the_fields_the_caller_did_not_set() {
+        let body = serde_json::to_value(ClaimRequest {
+            sandbox_id: "sbx",
+            session_id: "s1",
+            tenant_key: None,
+            timeout_ms: None,
+        })
+        .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"sandboxId": "sbx", "sessionId": "s1"})
+        );
+        let body = serde_json::to_value(ClaimRequest {
+            sandbox_id: "sbx",
+            session_id: "s1",
+            tenant_key: Some("t"),
+            timeout_ms: Some(5),
+        })
+        .unwrap();
+        assert_eq!(
+            body["tenantKey"], "t",
+            "a tenant the caller set is never dropped"
+        );
+        assert_eq!(body["timeoutMs"], 5);
+    }
+
+    #[tokio::test]
+    async fn the_token_falls_back_to_the_default_mount_when_the_projected_file_is_missing() {
+        let error = read_identity_token("/nonexistent/alien/token", "sbx")
+            .await
+            .expect_err("neither file exists in the test environment");
+        let message = format!("{error:?}");
+        assert!(message.contains(DEFAULT_TOKEN_PATH), "{message}");
+    }
+
     use super::*;
 
     #[test]
-    fn a_refused_token_names_the_audience_and_says_to_retry_after_the_roll() {
+    fn a_refused_token_names_the_audience_and_the_accepted_tokens() {
         let message = broker_refusal(reqwest::StatusCode::UNAUTHORIZED, "");
         assert!(message.contains("alien-sandbox-broker"), "{message}");
-        assert!(message.contains("try again"), "{message}");
+        assert!(
+            message.contains("default ServiceAccount token"),
+            "{message}"
+        );
         assert_eq!(
             broker_refusal(reqwest::StatusCode::NOT_FOUND, "no such pod"),
             "the sandbox broker returned 404 Not Found: no such pod"
@@ -1149,10 +1205,7 @@ mod tests {
             .get_or_create(request("keyed", Some("a")))
             .await
             .is_ok());
-        assert!(sandbox
-            .get_or_create(request("open", None))
-            .await
-            .is_ok());
+        assert!(sandbox.get_or_create(request("open", None)).await.is_ok());
         assert!(sandbox
             .get_or_create(request("raced", Some("a")))
             .await
