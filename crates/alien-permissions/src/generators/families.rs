@@ -342,6 +342,9 @@ const GCP_REACH_PREFIXES: &[&str] = &[
     "pubsub.subscriptions.create",
     "pubsub.subscriptions.update",
     "pubsub.topics.attachSubscription",
+    // A schedule job decides what is called, and with an OIDC token as whom.
+    "cloudscheduler.jobs.create",
+    "cloudscheduler.jobs.update",
     "cloudsql.instances.create",
     "cloudsql.instances.update",
     "cloudsql.instances.restore",
@@ -677,6 +680,8 @@ mod tests {
             ("pubsub.subscriptions.create", Family::Reach),
             ("pubsub.topics.attachSubscription", Family::Reach),
             ("cloudsql.instances.update", Family::Reach),
+            ("cloudscheduler.jobs.create", Family::Reach),
+            ("cloudscheduler.jobs.update", Family::Reach),
             ("run.*", Family::Run),
         ] {
             assert_eq!(gcp_family(permission), Some(family), "{permission}");

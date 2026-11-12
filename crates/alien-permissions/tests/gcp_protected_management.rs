@@ -199,6 +199,8 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             "aiplatform.sandboxEnvironments.create",
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
+            "cloudscheduler.jobs.create",
+            "cloudscheduler.jobs.update",
             "compute.instanceGroupManagers.create",
             "compute.instanceGroupManagers.update",
             "compute.instanceTemplates.create",
