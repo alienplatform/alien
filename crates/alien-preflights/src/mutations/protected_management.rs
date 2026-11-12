@@ -133,23 +133,21 @@ impl StackMutation for ProtectedManagementRefusalMutation {
                 ));
             }
         }
-        // A live database is created by the controller: its master password, security group and
-        // subnet group are writes only setup may make on a protected install. A frozen one is
-        // created by the setup package, which manages the password itself.
-        if runs_on_platform_or_base(stack_state, config, Platform::Aws) {
-            if let Some((id, _)) = stack.resources().find(|(_, entry)| {
-                entry.lifecycle == ResourceLifecycle::Live
-                    && entry.config.downcast_ref::<Postgres>().is_some()
-            }) {
-                return Err(refusal(
-                    format!(
-                        "the Postgres database '{id}' is live. On a protected AWS install the \
-                         database has to be created by setup: change its lifecycle to frozen, or \
-                         install without release signing"
-                    ),
-                    id,
-                ));
-            }
+        // A live database is created and resized by the controller: its password, network
+        // placement and access rules are writes only setup may make on a protected install. A
+        // frozen one is created by the setup package, which manages those itself.
+        if let Some((id, _)) = stack.resources().find(|(_, entry)| {
+            entry.lifecycle == ResourceLifecycle::Live
+                && entry.config.downcast_ref::<Postgres>().is_some()
+        }) {
+            return Err(refusal(
+                format!(
+                    "the Postgres database '{id}' is live. On a protected install the database \
+                     has to be frozen, so setup creates it: change its lifecycle to frozen, or \
+                     install without release signing"
+                ),
+                id,
+            ));
         }
         match stack.management() {
             ManagementPermissions::Auto => {}
@@ -386,34 +384,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_postgres_is_refused_on_protected_aws_only() {
+    async fn a_live_postgres_is_refused_on_every_protected_cloud_install() {
         let stack = |lifecycle| {
             Stack::new("shop".to_string())
                 .add(Postgres::new("db".to_string()).build(), lifecycle)
                 .build()
         };
-        let error = prepared(
-            stack(ResourceLifecycle::Live),
-            Platform::Aws,
-            config(true, SetupManagement::Manual),
-        )
-        .await
-        .expect_err("a live database is created by the controller");
-        assert!(error.contains("'db'") && error.contains("frozen"), "{error}");
-        prepared(
-            stack(ResourceLifecycle::Frozen),
-            Platform::Aws,
-            config(true, SetupManagement::Manual),
-        )
-        .await
-        .expect("a frozen database is created by setup");
-        prepared(
-            stack(ResourceLifecycle::Live),
-            Platform::Aws,
-            config(false, SetupManagement::Manual),
-        )
-        .await
-        .expect("an unprotected install keeps a live database");
+        let kubernetes_on = |cloud| {
+            let mut config = config(true, SetupManagement::Manual);
+            config.base_platform = Some(cloud);
+            config
+        };
+        let cases = [
+            (Platform::Aws, config(true, SetupManagement::Manual)),
+            (Platform::Gcp, config(true, SetupManagement::Manual)),
+            (Platform::Azure, config(true, SetupManagement::Manual)),
+            (Platform::Kubernetes, kubernetes_on(Platform::Aws)),
+            (Platform::Kubernetes, kubernetes_on(Platform::Gcp)),
+            (Platform::Kubernetes, kubernetes_on(Platform::Azure)),
+        ];
+        for (platform, protected) in cases {
+            let label = format!("{platform:?}/{:?}", protected.base_platform);
+            let error = prepared(stack(ResourceLifecycle::Live), platform, protected.clone())
+                .await
+                .expect_err(&format!("{label}: a live database is refused"));
+            assert!(
+                error.contains("'db'") && error.contains("frozen") && error.contains("signing"),
+                "{label}: {error}"
+            );
+            prepared(stack(ResourceLifecycle::Frozen), platform, protected)
+                .await
+                .unwrap_or_else(|error| panic!("{label}: a frozen database is accepted: {error}"));
+        }
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            prepared(
+                stack(ResourceLifecycle::Live),
+                platform,
+                config(false, SetupManagement::Manual),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{platform:?}: unsigned keeps a live database: {error}"));
+        }
     }
-
 }
