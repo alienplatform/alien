@@ -426,4 +426,25 @@ mod tests {
             .unwrap_or_else(|error| panic!("{platform:?}: unsigned keeps a live database: {error}"));
         }
     }
+
+    #[tokio::test]
+    async fn an_extend_naming_postgres_management_is_refused_on_every_protected_cloud() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let named = || {
+                extending(PermissionSetReference::Name(
+                    "postgres/management".to_string(),
+                ))
+            };
+            let error = prepared(named(), platform, config(true, SetupManagement::Manual))
+                .await
+                .expect_err(&format!("{platform:?}: the set modifies the database"));
+            assert!(
+                error.contains("'postgres/management'") && error.contains("REACH"),
+                "{platform:?}: {error}"
+            );
+            prepared(named(), platform, config(false, SetupManagement::Manual))
+                .await
+                .unwrap_or_else(|error| panic!("{platform:?}: unsigned keeps it: {error}"));
+        }
+    }
 }

@@ -453,6 +453,8 @@ const AZURE_REACH_FRAGMENTS: &[&str] = &[
     "/networksecuritygroups/",
     "/securityrules/",
     "/eventsubscriptions/",
+    "/firewallrules/",
+    "/administrators/",
 ];
 
 /// Whole-resource writes that carry a public-access field.
@@ -461,6 +463,8 @@ const AZURE_REACH_WRITES: &[&str] = &[
     "microsoft.storage/storageaccounts/blobservices/containers/write",
     "microsoft.containerregistry/registries/write",
     "microsoft.keyvault/vaults/write",
+    "microsoft.dbforpostgresql/flexibleservers/write",
+    "microsoft.dbforpostgresql/flexibleservers/configurations/write",
 ];
 
 /// The concrete Azure actions the REACH fragments above name for network resources. A predefined

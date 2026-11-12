@@ -968,11 +968,8 @@ fn no_built_in_set_gives_a_protected_azure_management_identity_a_family_action()
     let mut offenders = Vec::new();
     for id in list_permission_set_ids() {
         let set = get_permission_set(id).expect("listed set");
-        // A protected Azure install refuses vaults until the signing vault has its own resource
-        // group, so the vault sets render nothing there yet.
         // Management never holds the sets that execute or call into a deployment.
         if set.platforms.azure.is_none()
-            || id.starts_with("vault/")
             || id.ends_with("/execute")
             || id.ends_with("/remote-execute")
             || id.ends_with("/invoke")
@@ -1040,6 +1037,55 @@ fn every_azure_built_in_management_role_is_a_registry_role_without_family_action
                 || role.contains("Pull")
                 || role.contains("User"),
             "{role} looks like a role that can write the control plane"
+        );
+    }
+}
+
+#[test]
+fn protected_azure_management_holds_no_write_on_a_postgres_server() {
+    let set = get_permission_set("postgres/management").expect("set");
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let plan = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(set, target, &azure_context(true))
+            .expect("the read actions remain");
+        let actions: Vec<String> = plan
+            .custom_roles
+            .iter()
+            .flat_map(|role| role.role_definition.actions.clone())
+            .collect();
+        assert!(
+            actions
+                .iter()
+                .any(|action| action == "Microsoft.DBforPostgreSQL/flexibleServers/read"),
+            "{target:?}: {actions:?}"
+        );
+        for action in &actions {
+            let lower = action.to_ascii_lowercase();
+            assert!(
+                lower.ends_with("/read"),
+                "{target:?}: protected management holds {action} on a Postgres server"
+            );
+        }
+        // Unprotected installs keep the grant.
+        let unprotected = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(set, target, &azure_context(false))
+            .expect("unprotected plan");
+        assert!(unprotected
+            .custom_roles
+            .iter()
+            .flat_map(|role| &role.role_definition.actions)
+            .any(|action| action == "Microsoft.DBforPostgreSQL/flexibleServers/write"));
+    }
+    for action in [
+        "Microsoft.DBforPostgreSQL/flexibleServers/write",
+        "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write",
+        "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules/write",
+        "Microsoft.DBforPostgreSQL/flexibleServers/administrators/write",
+    ] {
+        assert_eq!(
+            alien_permissions::generators::azure_family(action),
+            Some(alien_permissions::generators::Family::Reach),
+            "{action}"
         );
     }
 }
