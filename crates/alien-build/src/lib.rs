@@ -3492,9 +3492,15 @@ fn kubernetes_image_user(
     settings: &BuildSettings,
     security: Option<&alien_core::ContainerSecurity>,
 ) -> Option<&'static str> {
+    // A positive numeric `runAsUser` overrides the image's user at pod start, so the image
+    // needs no rewrite and a Dockerfile `USER name` is not a problem.
+    let explicit_uid = security
+        .and_then(|security| security.run_as_user)
+        .is_some_and(|uid| uid > 0);
     (settings.platform.runtime_platform() == Platform::Kubernetes
-        && alien_core::ContainerSecurity::is_restricted(security))
-    .then_some(KUBERNETES_IMAGE_USER)
+        && alien_core::ContainerSecurity::is_restricted(security)
+        && !explicit_uid)
+        .then_some(KUBERNETES_IMAGE_USER)
 }
 
 /// An artifact built with a `USER` is a different artifact from the same source without one.
@@ -5866,6 +5872,12 @@ mod tests {
             Some("65532:65532")
         );
         assert_eq!(kubernetes_image_user(&kubernetes, Some(&opted_out)), None);
+        let explicit = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            ..opted_out.clone()
+        };
+        assert_eq!(kubernetes_image_user(&kubernetes, Some(&explicit)), None);
         for other in [
             PlatformBuildSettings::Gcp {},
             PlatformBuildSettings::Azure {},
