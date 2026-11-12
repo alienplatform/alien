@@ -7,6 +7,7 @@
 //! so PR review can diff a complete module in one place.
 
 mod generator {
+    pub mod gcp_derived_grant_drift_tests;
     pub mod helpers;
     pub mod network_inputs_tests;
     pub mod protected_registration_tests;
