@@ -52,6 +52,9 @@ pub struct PreviewAuthority {
     boot_id: String,
     /// Fixed by the first grant: one boot serves one sandbox.
     sandbox: Mutex<Option<String>>,
+    /// Every port the agent itself listens on. A preview forward connects from the agent's own
+    /// uid, so previewing one of these would hand the holder the agent's API.
+    own_ports: std::sync::OnceLock<Vec<u16>>,
 }
 
 impl Default for PreviewAuthority {
@@ -73,7 +76,20 @@ impl PreviewAuthority {
             key,
             boot_id,
             sandbox: Mutex::new(None),
+            own_ports: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Records the ports the agent binds. Set once at startup; later calls are ignored.
+    pub fn set_own_ports(&self, ports: &[u16]) {
+        let _ = self.own_ports.set(ports.to_vec());
+    }
+
+    /// The ports that can never be previewed: the agent's default port and every bound one.
+    pub fn own_ports(&self) -> Vec<u16> {
+        let mut ports = self.own_ports.get().cloned().unwrap_or_default();
+        ports.push(AGENT_PORT);
+        ports
     }
 
     fn mac(&self, sandbox: &str, port: u16, expires_at: i64) -> HmacSha256 {
@@ -98,7 +114,7 @@ impl PreviewAuthority {
         deadline: Option<i64>,
         now: i64,
     ) -> Result<Grant, PreviewRefusal> {
-        if port == AGENT_PORT || !declared.contains(&port) {
+        if self.own_ports().contains(&port) || !declared.contains(&port) {
             return Err(PreviewRefusal::PortNotPreviewable);
         }
         {
@@ -267,5 +283,20 @@ mod tests {
                 PreviewRefusal::PortNotPreviewable
             );
         }
+    }
+
+    #[test]
+    fn a_port_the_agent_listens_on_is_never_granted() {
+        let authority = PreviewAuthority::new("boot-1".into());
+        authority.set_own_ports(&[8080]);
+        assert_eq!(
+            authority
+                .grant("sandbox-a", 8080, &[8080, 9000], None, NOW)
+                .err(),
+            Some(PreviewRefusal::PortNotPreviewable)
+        );
+        assert!(authority
+            .grant("sandbox-a", 9000, &[8080, 9000], None, NOW)
+            .is_ok());
     }
 }

@@ -1959,6 +1959,12 @@ async fn preview_passes_an_upgrade_through_as_a_byte_stream() {
 /// and the agent issues and verifies its own preview capabilities.
 #[cfg(target_os = "linux")]
 async fn transport_agent() -> (String, TempDir) {
+    transport_agent_listening_on(&[]).await
+}
+
+/// A transport agent that records `own_ports` as the ports it itself listens on.
+#[cfg(target_os = "linux")]
+async fn transport_agent_listening_on(own_ports: &[u16]) -> (String, TempDir) {
     let dir = TempDir::new().expect("temp dir");
     let root = dir.path().canonicalize().expect("canonical root");
     let state = Arc::new(AgentState {
@@ -1976,6 +1982,7 @@ async fn transport_agent() -> (String, TempDir) {
         preview: Default::default(),
         agent_binary: agent_binary(),
     });
+    state.preview.set_own_ports(own_ports);
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
         .await
         .expect("bind loopback");
@@ -2300,4 +2307,49 @@ async fn transport_preview_refusals_never_connect_to_the_daemon() {
         0,
         "no refused call may open a connection to the daemon"
     );
+}
+
+/// The agent's own listener is not previewable even when the sandbox declares it: a forward
+/// connects as the agent's uid, so it would reach the agent's API. A stub standing in for the
+/// agent's port must see no connection from the grant or the route.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_never_reaches_the_agents_own_listener() {
+    let _env = PREVIEW_ENV.lock().await;
+    let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind own-port stub");
+    let own = listener.local_addr().unwrap().port();
+    {
+        let accepted = accepted.clone();
+        tokio::spawn(async move {
+            loop {
+                if listener.accept().await.is_ok() {
+                    accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+    }
+    let (base, _dir) = transport_agent_listening_on(&[own]).await;
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", format!("{own},8971"));
+
+    for port in [own, 8971] {
+        assert_eq!(
+            grant(&base, "sandbox-a", port).await.status(),
+            403,
+            "{port}"
+        );
+        // A capability minted under another configuration is refused by the route too.
+        let forged = format!("v1.{}.{}", i64::MAX / 2, "00".repeat(32));
+        let response = reqwest::Client::new()
+            .get(format!("{base}/v1/preview/{port}/"))
+            .header("x-alien-preview-port", port.to_string())
+            .header("x-alien-preview-capability", forged)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 403, "route {port}");
+    }
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

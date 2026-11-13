@@ -1086,7 +1086,11 @@ async fn preview(
     // The capability names the port it admits, and the sandbox names the ports it declared; the
     // path is neither, so it is checked against both.
     if !claims.admits_port(port)
-        || !crate::preview::port_is_declared(port, &crate::preview::declared_ports())
+        || !crate::preview::port_is_declared(
+            port,
+            &crate::preview::declared_ports(),
+            &state.preview.own_ports(),
+        )
     {
         return Err(ApiError {
             status: StatusCode::FORBIDDEN,
@@ -1103,6 +1107,7 @@ async fn preview(
         target,
         claims.expires_at,
         crate::preview::CallerAuth::Drop,
+        &state.preview.own_ports(),
     )
     .await)
 }
@@ -1132,7 +1137,11 @@ fn preview_by_header(
         let named: Option<u16> = header(alien_core::sandbox_image::PREVIEW_PORT_HEADER)
             .and_then(|value| value.parse().ok());
         if named != Some(port)
-            || !crate::preview::port_is_declared(port, &crate::preview::declared_ports())
+            || !crate::preview::port_is_declared(
+                port,
+                &crate::preview::declared_ports(),
+                &state.preview.own_ports(),
+            )
         {
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
@@ -1150,6 +1159,7 @@ fn preview_by_header(
                 }
             })
     })();
+    let own_ports = state.preview.own_ports();
     let target = match request.uri().query() {
         Some(query) => format!("/{rest}?{query}"),
         None => format!("/{rest}"),
@@ -1162,6 +1172,7 @@ fn preview_by_header(
             target,
             expires_at,
             crate::preview::CallerAuth::from_env(),
+            &own_ports,
         )
         .await)
     }

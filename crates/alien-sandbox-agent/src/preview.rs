@@ -43,8 +43,8 @@ pub fn declared_ports() -> Vec<u16> {
 }
 
 /// Whether `port` may be previewed on this pod.
-pub fn port_is_declared(port: u16, declared: &[u16]) -> bool {
-    port != AGENT_PORT && declared.contains(&port)
+pub fn port_is_declared(port: u16, declared: &[u16], own_ports: &[u16]) -> bool {
+    port != AGENT_PORT && !own_ports.contains(&port) && declared.contains(&port)
 }
 
 fn fail(status: StatusCode, message: &str) -> Response<Body> {
@@ -111,7 +111,13 @@ pub async fn forward(
     path_and_query: String,
     close_at: i64,
     caller_auth: CallerAuth,
+    own_ports: &[u16],
 ) -> Response<Body> {
+    // Defense in depth: this connection runs as the agent's uid, so it must never be made to
+    // the agent's own listeners, whatever the caller verified before.
+    if port == AGENT_PORT || own_ports.contains(&port) {
+        return fail(StatusCode::FORBIDDEN, "that port is not previewable");
+    }
     let caller_bearer = {
         let headers = request.headers();
         let own = headers.get(header::AUTHORIZATION);
@@ -441,7 +447,15 @@ mod tests {
         )
         .await;
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let response = forward(request, port, "/".to_string(), i64::MAX, CallerAuth::Drop).await;
+        let response = forward(
+            request,
+            port,
+            "/".to_string(),
+            i64::MAX,
+            CallerAuth::Drop,
+            &[],
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
@@ -485,8 +499,9 @@ mod tests {
 
     #[test]
     fn the_agents_own_port_and_undeclared_ports_are_never_previewable() {
-        assert!(port_is_declared(8080, &[8080]));
-        assert!(!port_is_declared(8081, &[8080]));
-        assert!(!port_is_declared(AGENT_PORT, &[AGENT_PORT, 8080]));
+        assert!(port_is_declared(8080, &[8080], &[]));
+        assert!(!port_is_declared(8081, &[8080], &[]));
+        assert!(!port_is_declared(8080, &[8080], &[8080]));
+        assert!(!port_is_declared(AGENT_PORT, &[AGENT_PORT, 8080], &[]));
     }
 }
