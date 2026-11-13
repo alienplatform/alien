@@ -528,6 +528,16 @@ pub(crate) fn render_terraform_module(
     // missing provider block fails at `terraform init` rather than at plan, which reads as a
     // broken package rather than a missing declaration.
     let emits_azapi_resource = has_resource_type(&per_resource, "azapi_resource");
+    let emits_gcp_project_role_grants = per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .any(|resource| {
+            resource.identifier.as_str() == "resource"
+                && resource.labels.first().map(|label| label.as_str())
+                    == Some("google_project_iam_custom_role")
+                && resource.labels.get(1).map(|label| label.as_str())
+                    == Some("gcp_role_project_iam_write")
+        });
     let emits_azure_kv_tables = platform == alien_core::Platform::Azure
         && stack.resources().any(|(id, entry)| {
             entry.config.resource_type() == Kv::RESOURCE_TYPE && per_resource.contains_key(id)
@@ -800,6 +810,7 @@ pub(crate) fn render_terraform_module(
             &stack_inputs,
             emits_azapi_resource,
             emits_azure_kv_tables,
+            emits_gcp_project_role_grants,
             profile,
         ),
     );
@@ -5000,6 +5011,7 @@ fn readme_md(
     stack_inputs: &[StackInputDefinition],
     emits_azapi_resource: bool,
     emits_azure_kv_tables: bool,
+    emits_gcp_project_role_grants: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> String {
     let required_env = if registration.is_some() {
@@ -5147,6 +5159,11 @@ fn readme_md(
     } else {
         ""
     };
+    let gcp_project_role_grants_note = if emits_gcp_project_role_grants {
+        "## Project role grants\n\nThis module declares every project custom role the application's service accounts are bound to, and a role that lets the management identity change the project IAM policy (`google_project_iam_custom_role.gcp_role_project_iam_write`, titled \"<deployment>: Project role grants\"). The bindings of that role carry conditions naming the roles management may grant or remove, which include the predefined roles the application uses. Management can grant those roles to any principal, including its own identity. It cannot create or change custom roles.\n\nWhen `gcp_manage_custom_roles` is false, the module creates none of these roles. Before applying, create or update each one it declares, with at least its role id and permissions.\n\nWhen `gcp_manage_custom_roles` is true (the default) and the deployment was set up by an earlier version of this module, the management identity may already have created some of these roles, and applying fails on each one that exists. Run `terraform plan` and import each `google_project_iam_custom_role` it plans to create whose `role_id` already exists in the project:\n\n```bash\nterraform import 'google_project_iam_custom_role.<label>[0]' projects/<project>/roles/<role_id>\n```\n\nThen plan again. It must show only in-place updates to those roles. If it plans to replace one, stop: replacing a role removes it from every identity bound to it. Leave alone any role the module does not declare.\n\n"
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -5154,7 +5171,7 @@ Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
 {resource_inventory}## Inputs\n\n\
 {inputs}\n\n\
-{azure_sandbox_note}{azure_identity_note}{azure_kv_note}## Run\n\n\
+{azure_sandbox_note}{azure_identity_note}{azure_kv_note}{gcp_project_role_grants_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
@@ -5175,7 +5192,8 @@ Use your organization's normal backend and approval workflow. A typical local re
         kubernetes_operations = kubernetes_operations,
         azure_sandbox_note = azure_sandbox_note,
         azure_identity_note = azure_identity_note,
-        azure_kv_note = azure_kv_note
+        azure_kv_note = azure_kv_note,
+        gcp_project_role_grants_note = gcp_project_role_grants_note
     )
 }
 

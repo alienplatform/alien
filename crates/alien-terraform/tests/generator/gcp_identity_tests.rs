@@ -247,3 +247,122 @@ fn gcp_emits_no_ungated_management_grant_for_a_gated_worker() {
 
     assert_terraform_valid(&module, "gcp_gated_worker_management_grants");
 }
+
+/// A management grant that can create service accounts must not let management write roles or
+/// grant any role on the project. The module creates the roles the application binds, and a mocked
+/// plan shows management's project policy write is bound only under conditions naming them.
+#[test]
+fn gcp_management_service_account_grant_is_limited_to_application_roles() {
+    let stack = Stack::new("acme-auto".to_string())
+        .add(
+            alien_core::Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().global(["storage/data-read"]),
+        ))
+        .management(ManagementPermissions::Extend(
+            PermissionProfile::new().global(["service-account/provision"]),
+        ))
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    assert_terraform_valid(&module, "gcp management service account grant");
+
+    let main: String = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, content)| content.as_str())
+        .collect();
+    // No role management holds can write a role or the project policy, except the dedicated role.
+    for block in main.split("\nresource ").filter(|block| {
+        block.starts_with("\"google_project_iam_custom_role\"")
+            && !block.contains("project_iam_write")
+    }) {
+        for write in [
+            "\"iam.roles.create\"",
+            "\"iam.roles.delete\"",
+            "\"iam.roles.update\"",
+            "\"iam.roles.undelete\"",
+            "\"resourcemanager.projects.setIamPolicy\"",
+        ] {
+            assert!(!block.contains(write), "{write} granted by {block}");
+        }
+    }
+
+    // Installers upgrading an earlier installation must learn that the roles now come from setup.
+    let readme = module.get("README.md").expect("every package has a README");
+    assert!(
+        readme.contains("## Project role grants")
+            && readme.contains("`google_project_iam_custom_role.gcp_role_project_iam_write`")
+            && readme.contains("terraform import 'google_project_iam_custom_role.<label>[0]'"),
+        "the README must explain the project role grants and the upgrade:\n{readme}"
+    );
+    let without_grant = render(
+        &Stack::new("acme-plain".to_string())
+            .add(
+                alien_core::Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build(),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    assert!(
+        !without_grant
+            .get("README.md")
+            .expect("every package has a README")
+            .contains("## Project role grants"),
+        "a module whose management grants no project roles has no such section"
+    );
+
+    let mut files = super::helpers::linter_files(&module);
+    files.insert(
+        "tests/grants.tftest.hcl".to_string(),
+        r#"
+mock_provider "google" {
+  mock_data "google_project" { defaults = { number = "123456789012" } }
+}
+variables {
+  name = "acme-auto"
+  gcp_project = "proj-a"
+  gcp_region = "us-central1"
+  resource_prefix = "acme1"
+  deployment_id = "dep_a"
+  managing_oidc_issuer = "https://issuer.example.test"
+  managing_oidc_subject = "management"
+}
+run "grants" {
+  command = plan
+  assert {
+    condition = google_project_iam_custom_role.gcp_role_project_iam_write[0].role_id == "role_acme1_project_iam_write"
+    error_message = "management's project policy write sits in its own role"
+  }
+  assert {
+    condition = contains(google_project_iam_custom_role.gcp_role_project_iam_write[0].permissions, "resourcemanager.projects.setIamPolicy")
+    error_message = "the dedicated role holds the project policy write"
+  }
+  assert {
+    condition = google_project_iam_member.gcp_role_project_iam_write_management_binding_0.condition[0].expression == "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(['projects/proj-a/roles/role_acme1_read_cloud_storage_objects'])"
+    error_message = "the write is admitted only for the application's roles, named as created"
+  }
+  assert {
+    condition = google_project_iam_custom_role.gcp_role_read_cloud_storage_objects[0].role_id == "role_acme1_read_cloud_storage_objects"
+    error_message = "setup creates the application's roles"
+  }
+}
+"#
+        .to_string(),
+    );
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("management service account grant plan");
+}

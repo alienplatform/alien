@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 use tracing::info;
 
@@ -18,10 +19,15 @@ use alien_macros::controller;
 #[cfg(test)]
 use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpGrantPlan, GcpRuntimePermissionsGenerator},
+    generators::{
+        custom_role_prefix, gcp_project_iam_write_role, gcp_project_role_grant_conditions,
+        gcp_runtime_roles, strip_gcp_management_iam_writes, GcpBindingTargetScope, GcpCustomRole,
+        GcpGrantPlan, GcpRuntimePermissionsGenerator, GcpRuntimeRoles,
+    },
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 
 /// Generates the GCP service account ID for RemoteStackManagement.
 pub(crate) fn get_gcp_management_service_account_id(prefix: &str) -> String {
@@ -51,7 +57,22 @@ pub struct GcpRemoteStackManagementController {
     /// controllers from before revisions were recorded.
     #[serde(default)]
     pub(crate) management_permissions_revision: Option<String>,
+    /// [`GCP_MANAGEMENT_ROLE_LAYOUT`] of the roles last bound. 0 on controllers saved before the
+    /// layout was recorded.
+    #[serde(default)]
+    pub(crate) role_layout: u32,
+    /// Revision of the runtime roles setup last created and let management grant. `None` when
+    /// management holds no project IAM write.
+    #[serde(default)]
+    pub(crate) runtime_roles_revision: Option<String>,
+    /// Project roles management may grant, as last bound.
+    #[serde(default)]
+    pub(crate) admitted_project_roles: BTreeSet<String>,
 }
+
+/// Raised when setup changes how it grants the management identity its roles, so the next setup
+/// run rebinds them even when no permission set changed.
+pub(crate) const GCP_MANAGEMENT_ROLE_LAYOUT: u32 = 1;
 
 #[controller]
 impl GcpRemoteStackManagementController {
@@ -218,9 +239,10 @@ impl GcpRemoteStackManagementController {
         )
         .await?;
         let mut new_bindings = Vec::new();
+        let mut project_iam_write = false;
 
         for permission_set in &stack_sets {
-            let grant_plan = generator
+            let mut grant_plan = generator
                 .generate_grant_plan(permission_set, BindingTarget::Stack, &permission_context)
                 .context(ErrorData::InfrastructureError {
                     message: format!(
@@ -230,6 +252,7 @@ impl GcpRemoteStackManagementController {
                     operation: Some("binding_role".to_string()),
                     resource_id: Some(config.id.clone()),
                 })?;
+            project_iam_write |= strip_gcp_management_iam_writes(&mut grant_plan);
             ResourcePermissionsHelper::ensure_all_gcp_custom_roles(
                 ctx,
                 &permission_set.id,
@@ -263,8 +286,26 @@ impl GcpRemoteStackManagementController {
             service_account_id,
             &mut new_bindings,
             &mut owned_role_prefixes,
+            &mut project_iam_write,
         )
         .await?;
+        let member = format!("serviceAccount:{service_account_email}");
+        let write_role = gcp_project_iam_write_role(&permission_context);
+        // Always owned, so a run that no longer grants the write removes its earlier bindings.
+        owned_role_prefixes.push(write_role.name.clone());
+        let runtime = if project_iam_write {
+            Some(
+                Self::create_runtime_roles(
+                    ctx,
+                    &config.id,
+                    &permission_context,
+                    write_role.clone(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
 
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
@@ -279,7 +320,35 @@ impl GcpRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        let member = format!("serviceAccount:{service_account_email}");
+        let admitted_project_roles = match &runtime {
+            Some(runtime) => {
+                let admitted = Self::admitted_project_roles(
+                    runtime,
+                    &self.admitted_project_roles,
+                    &current_policy.bindings,
+                    &member,
+                    &format!(
+                        "projects/{project_id}/roles/{}",
+                        custom_role_prefix(&permission_context)
+                    ),
+                );
+                for condition in gcp_project_role_grant_conditions(&admitted) {
+                    new_bindings.push(Binding {
+                        role: write_role.name.clone(),
+                        members: vec![member.clone()],
+                        condition: Some(alien_gcp_clients::iam::Expr {
+                            expression: condition.expression,
+                            title: Some(condition.title),
+                            description: Some(condition.description),
+                            location: None,
+                        }),
+                    });
+                }
+                admitted
+            }
+            None => BTreeSet::new(),
+        };
+
         let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         // Vault controllers own this member's bindings conditioned on their
         // namespace, and they can share predefined roles with the stack-wide
@@ -346,6 +415,9 @@ impl GcpRemoteStackManagementController {
 
         self.role_bound = true;
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
+        self.role_layout = GCP_MANAGEMENT_ROLE_LAYOUT;
+        self.runtime_roles_revision = runtime.as_ref().map(runtime_roles_revision);
+        self.admitted_project_roles = admitted_project_roles;
 
         Ok(HandlerAction::Continue {
             state: GrantingFederation,
@@ -665,6 +737,8 @@ impl GcpRemoteStackManagementController {
     );
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        // Management's own changes first: one can drop its project IAM write, after which the
+        // runtime roles no longer matter.
         Ok(super::management_permissions_need_refresh(
             ctx,
             self.management_permissions_revision.as_deref(),
@@ -672,7 +746,7 @@ impl GcpRemoteStackManagementController {
             ctx,
             self.federation_access.as_ref(),
             &RemoteStackManagement::RESOURCE_TYPE,
-        )?)
+        )? || self.management_roles_need_rebind(ctx)?)
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -920,6 +994,99 @@ impl GcpRemoteStackManagementController {
         Ok(result)
     }
 
+    /// Create every custom role the runtime binds, and the role that holds management's project
+    /// IAM write.
+    async fn create_runtime_roles(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        permission_context: &PermissionContext,
+        write_role: GcpCustomRole,
+    ) -> Result<GcpRuntimeRoles> {
+        let runtime = gcp_runtime_roles(ctx.desired_stack, permission_context).context(
+            ErrorData::ResourceConfigInvalid {
+                message: "Cannot resolve the roles the runtime binds".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            },
+        )?;
+        ResourcePermissionsHelper::ensure_gcp_custom_roles(
+            ctx,
+            resource_id,
+            runtime.custom_roles.clone(),
+        )
+        .await?;
+        ResourcePermissionsHelper::ensure_gcp_custom_roles(ctx, resource_id, vec![write_role])
+            .await?;
+        Ok(runtime)
+    }
+
+    /// The project roles management may grant: those the runtime binds now, and this deployment's
+    /// custom roles an earlier run admitted that an identity other than management still holds.
+    /// The runtime removes such a stale grant in a policy write that names its role, so it stays
+    /// admitted until then. A controller bound before roles were admitted has none recorded, so
+    /// a grant left from then is not admitted, and removing it waits for an IAM edit by hand.
+    fn admitted_project_roles(
+        runtime: &GcpRuntimeRoles,
+        previously_admitted: &BTreeSet<String>,
+        current_bindings: &[Binding],
+        management_member: &str,
+        custom_role_name_prefix: &str,
+    ) -> BTreeSet<String> {
+        let mut admitted = runtime.project_roles.clone();
+        admitted.extend(
+            current_bindings
+                .iter()
+                .filter(|binding| {
+                    // Only this deployment's custom roles: the runtime removes a stale grant
+                    // of those, never of a predefined role.
+                    binding.role.starts_with(custom_role_name_prefix)
+                        && previously_admitted.contains(&binding.role)
+                        && binding
+                            .members
+                            .iter()
+                            .any(|member| member != management_member)
+                })
+                .map(|binding| binding.role.clone()),
+        );
+        admitted
+    }
+
+    /// Whether a setup run must rebind management for a reason its permission sets do not show.
+    fn management_roles_need_rebind(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            || !ctx.deployment_config.setup_run
+        {
+            return Ok(false);
+        }
+        // Earlier setups let management write roles and the project policy unconditioned. The
+        // permission sets did not change, so the revision alone would not rebind them.
+        if self.role_layout < GCP_MANAGEMENT_ROLE_LAYOUT {
+            return Ok(true);
+        }
+        // A release that adds or changes a runtime role needs it made and admitted. The runtime
+        // cannot do either, so its refused step waits for this setup run.
+        let Some(revision) = self.runtime_roles_revision.as_deref() else {
+            return Ok(false);
+        };
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        let email = self.service_account_email.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Management service account email not available".to_string(),
+                operation: Some("needs_update".to_string()),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        let account_id = email.split('@').next().unwrap_or(email);
+        let context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
+            .with_service_account_name(account_id.to_string());
+        let runtime = gcp_runtime_roles(ctx.desired_stack, &context).context(
+            ErrorData::ResourceConfigInvalid {
+                message: "Cannot resolve the roles the runtime binds".to_string(),
+                resource_id: Some(config.id.clone()),
+            },
+        )?;
+        Ok(runtime_roles_revision(&runtime) != revision)
+    }
+
     fn global_management_role_prefixes(permission_context: &PermissionContext) -> Vec<String> {
         ResourcePermissionsHelper::gcp_permission_set_custom_role_name_prefixes(
             permission_context,
@@ -937,6 +1104,7 @@ impl GcpRemoteStackManagementController {
         service_account_id: &str,
         new_bindings: &mut Vec<Binding>,
         owned_role_prefixes: &mut Vec<String>,
+        project_iam_write: &mut bool,
     ) -> Result<()> {
         let Some(management_profile) = ctx.desired_stack.management().profile() else {
             return Ok(());
@@ -970,7 +1138,7 @@ impl GcpRemoteStackManagementController {
                     continue;
                 }
 
-                let grant_plan = generator
+                let mut grant_plan = generator
                     .generate_grant_plan(
                         &permission_set,
                         BindingTarget::Resource,
@@ -985,6 +1153,7 @@ impl GcpRemoteStackManagementController {
                         resource_id: Some(resource_id.clone()),
                     })?;
 
+                *project_iam_write |= strip_gcp_management_iam_writes(&mut grant_plan);
                 let project_bindings =
                     grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
                 ResourcePermissionsHelper::ensure_all_gcp_custom_roles(
@@ -1067,9 +1236,37 @@ impl GcpRemoteStackManagementController {
             federation_access: Some(access),
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             management_permissions_revision: None,
+            role_layout: GCP_MANAGEMENT_ROLE_LAYOUT,
+            runtime_roles_revision: None,
+            admitted_project_roles: BTreeSet::new(),
             _internal_stay_count: None,
         }
     }
+}
+
+/// A digest of the runtime roles setup creates and admits, so a setup run notices a release that
+/// adds or changes one.
+fn runtime_roles_revision(runtime: &GcpRuntimeRoles) -> String {
+    let mut custom: Vec<_> = runtime
+        .custom_roles
+        .iter()
+        .map(|role| {
+            serde_json::json!([
+                role.role_id,
+                role.title,
+                role.description,
+                role.included_permissions,
+            ])
+            .to_string()
+        })
+        .collect();
+    custom.sort();
+    let digest = serde_json::json!({
+        "custom": custom,
+        "project": runtime.project_roles,
+    })
+    .to_string();
+    format!("{:x}", Sha256::digest(digest.as_bytes()))
 }
 
 #[cfg(test)]
@@ -1080,6 +1277,8 @@ mod tests {
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use alien_gcp_clients::iam::{ListRolesResponse, MockIamApi, Role};
     use alien_gcp_clients::resource_manager::MockResourceManagerApi;
+    use alien_gcp_clients::GcpClientConfigExt as _;
+    use alien_permissions::generators::GCP_ROLE_DEFINITION_WRITES;
 
     const PROJECT: &str = "test-project-123";
 
@@ -1837,6 +2036,398 @@ mod tests {
                 "management is bound to {role_id}: {member_roles:?}"
             );
         }
+    }
+
+    async fn direct_setup_run(
+        controller: GcpRemoteStackManagementController,
+        app_sets: &[&str],
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .resource_prefix("acme")
+            .client_config(alien_core::ClientConfig::Gcp(Box::new({
+                let mut client = alien_core::GcpClientConfig::mock();
+                client.project_number = Some("123456789012".to_string());
+                client
+            })))
+            .stack_settings(alien_core::StackSettings {
+                setup_management: alien_core::SetupManagement::Automatic,
+                ..Default::default()
+            })
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .setup_run(true)
+            .with_stack_resource(
+                alien_core::Storage::new("files".to_string()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .permission_profile(
+                "app",
+                alien_core::permissions::PermissionProfile::new().global(app_sets.to_vec()),
+            )
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .build()
+            .await
+            .expect("executor builds")
+    }
+
+    /// Setup reruns rebind management when its roles were bound under an earlier layout, and
+    /// when a release changed the roles the runtime binds, even if management's permission sets
+    /// are unchanged.
+    #[tokio::test]
+    async fn setup_run_rebinds_an_earlier_layout_and_changed_runtime_roles() {
+        let current_sets = ["storage/data-read"];
+        let executor = direct_setup_run(ready_management_controller("acme"), &current_sets).await;
+        let (management_revision, runtime_revision) = executor.with_context(|ctx| {
+            let context = ResourcePermissionsHelper::gcp_permission_context(ctx)
+                .expect("permission context")
+                .with_service_account_name("acme-management".to_string());
+            let runtime = gcp_runtime_roles(ctx.desired_stack, &context).expect("runtime roles");
+            (
+                super::super::management_permissions_revision(ctx).expect("revision"),
+                runtime_roles_revision(&runtime),
+            )
+        });
+        let rebind = |executor: &SingleControllerExecutor| {
+            executor.with_context(|ctx| {
+                executor
+                    .internal_state::<GcpRemoteStackManagementController>()
+                    .expect("controller")
+                    .management_roles_need_rebind(ctx)
+                    .expect("rebind check")
+            })
+        };
+        assert!(
+            rebind(&executor),
+            "a controller from an earlier layout is rebound"
+        );
+
+        let mut current = ready_management_controller("acme");
+        current.management_permissions_revision = management_revision.clone();
+        current.role_layout = GCP_MANAGEMENT_ROLE_LAYOUT;
+        current.runtime_roles_revision = Some(runtime_revision);
+        let executor = direct_setup_run(current.clone(), &current_sets).await;
+        assert!(!rebind(&executor), "nothing changed");
+
+        // The same controller after a release that adds a grant to the application.
+        let executor =
+            direct_setup_run(current, &["storage/data-read", "storage/data-write"]).await;
+        let unchanged_management = executor
+            .with_context(|ctx| super::super::management_permissions_revision(ctx))
+            .expect("revision");
+        assert_eq!(
+            unchanged_management, management_revision,
+            "management's own sets are unchanged"
+        );
+        assert!(
+            rebind(&executor),
+            "a changed runtime role is made and admitted on the next setup run"
+        );
+    }
+
+    /// A custom role an earlier run admitted stays admitted while an application identity still
+    /// holds it, so the runtime can remove that grant. Roles nobody else holds, that no run
+    /// admitted, or that are predefined (the runtime never removes those) are not added.
+    #[test]
+    fn stale_runtime_roles_stay_admitted_until_removed() {
+        let management = "serviceAccount:acme-management@p.iam.gserviceaccount.com";
+        let runtime = GcpRuntimeRoles {
+            custom_roles: Vec::new(),
+            project_roles: BTreeSet::from(["projects/p/roles/role_acme_new".to_string()]),
+        };
+        let previously_admitted = BTreeSet::from([
+            "projects/p/roles/role_acme_old".to_string(),
+            "projects/p/roles/role_acme_released".to_string(),
+            "roles/pubsub.subscriber".to_string(),
+        ]);
+        let binding = |role: &str, member: &str| Binding {
+            role: role.to_string(),
+            members: vec![member.to_string()],
+            condition: None,
+        };
+        let bindings = vec![
+            binding(
+                "projects/p/roles/role_acme_old",
+                "serviceAccount:acme-app@p.iam.gserviceaccount.com",
+            ),
+            binding("projects/p/roles/role_acme_released", management),
+            binding(
+                "roles/owner",
+                "serviceAccount:acme-app@p.iam.gserviceaccount.com",
+            ),
+            binding(
+                "roles/pubsub.subscriber",
+                "serviceAccount:acme-app@p.iam.gserviceaccount.com",
+            ),
+        ];
+
+        let admitted = GcpRemoteStackManagementController::admitted_project_roles(
+            &runtime,
+            &previously_admitted,
+            &bindings,
+            management,
+            "projects/p/roles/role_acme_",
+        );
+
+        assert_eq!(
+            admitted,
+            BTreeSet::from([
+                "projects/p/roles/role_acme_new".to_string(),
+                "projects/p/roles/role_acme_old".to_string(),
+            ])
+        );
+    }
+
+    /// With automatic setup, management holds every provision grant. Setup must leave it no way
+    /// to write a role, create every role the runtime binds, and let it grant only those roles on
+    /// the project.
+    #[tokio::test]
+    async fn automatic_setup_owns_runtime_roles_and_limits_project_grants() {
+        let created_roles = Arc::new(Mutex::new(Vec::<Role>::new()));
+        let written_policy = Arc::new(Mutex::new(None::<IamPolicy>));
+
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "role".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        let created = created_roles.clone();
+        iam.expect_create_role().returning(move |role_id, request| {
+            let mut role = request.role.clone();
+            role.name = Some(role_id);
+            created.lock().unwrap().push(role);
+            Ok(request.role)
+        });
+        let iam = Arc::new(iam);
+
+        let mut resource_manager = MockResourceManagerApi::new();
+        resource_manager
+            .expect_get_project_iam_policy()
+            .returning(|_, _| {
+                Ok(IamPolicy::builder()
+                    .version(3)
+                    .etag("initial-revision".to_string())
+                    .bindings(vec![Binding {
+                        role: format!("projects/{PROJECT}/roles/role_acme_released_grant"),
+                        members: vec![
+                            "serviceAccount:acme-app@test-project-123.iam.gserviceaccount.com"
+                                .to_string(),
+                        ],
+                        condition: None,
+                    }])
+                    .build())
+            });
+        let written = written_policy.clone();
+        resource_manager
+            .expect_set_project_iam_policy()
+            .times(1)
+            .returning(move |_, policy, _| {
+                *written.lock().unwrap() = Some(policy.clone());
+                Ok(policy)
+            });
+        let resource_manager = Arc::new(resource_manager);
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(resource_manager.clone()));
+
+        let mut controller = ready_management_controller("acme");
+        controller.state = GcpRemoteStackManagementState::BindingRole;
+        controller.role_bound = false;
+        // A custom role an earlier release admitted, which an application identity still holds.
+        let released = format!("projects/{PROJECT}/roles/role_acme_released_grant");
+        controller.admitted_project_roles = BTreeSet::from([released.clone()]);
+        let member = format!(
+            "serviceAccount:{}",
+            controller.service_account_email.as_ref().unwrap()
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .resource_prefix("acme")
+            .client_config(alien_core::ClientConfig::Gcp(Box::new({
+                let mut client = alien_core::GcpClientConfig::mock();
+                client.project_number = Some("123456789012".to_string());
+                client
+            })))
+            .stack_settings(alien_core::StackSettings {
+                setup_management: alien_core::SetupManagement::Automatic,
+                ..Default::default()
+            })
+            .with_stack_resource(
+                alien_core::Storage::new("files".to_string()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .permission_profile(
+                "app",
+                alien_core::permissions::PermissionProfile::new()
+                    .global(["storage/data-read", "storage/data-write"]),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let management_sets: Vec<String> = executor.with_context(|ctx| {
+            ctx.desired_stack.management().profile().expect("profile").0["*"]
+                .iter()
+                .map(|reference| reference.id().to_string())
+                .collect()
+        });
+        assert!(
+            management_sets
+                .iter()
+                .any(|id| id == "service-account/provision"),
+            "automatic management holds the service account provision grant"
+        );
+        let permission_context = executor
+            .with_context(|ctx| ResourcePermissionsHelper::gcp_permission_context(ctx))
+            .expect("permission context")
+            .with_service_account_name("acme-management".to_string());
+        let runtime = executor
+            .with_context(|ctx| gcp_runtime_roles(ctx.desired_stack, &permission_context))
+            .expect("runtime roles");
+        assert!(!runtime.project_roles.is_empty());
+
+        executor.step().await.expect("binding roles succeeds");
+        assert_eq!(
+            executor
+                .internal_state::<GcpRemoteStackManagementController>()
+                .unwrap()
+                .state,
+            GcpRemoteStackManagementState::GrantingFederation
+        );
+
+        let created_roles = created_roles.lock().unwrap().clone();
+        let policy = written_policy
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("policy written");
+        let write_role = gcp_project_iam_write_role(&permission_context).name;
+
+        // Every role management is bound to, except the dedicated write role, holds no role or
+        // project policy write.
+        let mut checked_custom_roles = 0;
+        for binding in policy
+            .bindings
+            .iter()
+            .filter(|b| b.members.contains(&member))
+        {
+            if binding.role == write_role {
+                continue;
+            }
+            if !binding.role.starts_with("projects/") {
+                assert!(
+                    ![
+                        "roles/owner",
+                        "roles/editor",
+                        "roles/iam.roleAdmin",
+                        "roles/resourcemanager.projectIamAdmin",
+                    ]
+                    .contains(&binding.role.as_str()),
+                    "management is bound to {}",
+                    binding.role
+                );
+                continue;
+            }
+            let role = created_roles
+                .iter()
+                .find(|role| {
+                    role.name
+                        .as_deref()
+                        .is_some_and(|id| binding.role.ends_with(&format!("/{id}")))
+                })
+                .unwrap_or_else(|| panic!("management's role {} was created", binding.role));
+            for permission in &role.included_permissions {
+                assert!(
+                    !GCP_ROLE_DEFINITION_WRITES.contains(&permission.as_str())
+                        && permission != "resourcemanager.projects.setIamPolicy",
+                    "management role {} holds {permission}",
+                    binding.role
+                );
+            }
+            checked_custom_roles += 1;
+        }
+        assert!(checked_custom_roles > 0, "management holds custom roles");
+
+        // The write role is bound only under conditions, which together admit exactly the
+        // runtime's project roles.
+        let write_bindings: Vec<&Binding> = policy
+            .bindings
+            .iter()
+            .filter(|binding| binding.role == write_role)
+            .collect();
+        assert!(!write_bindings.is_empty());
+        let mut admitted = std::collections::BTreeSet::new();
+        for binding in &write_bindings {
+            assert_eq!(binding.members, vec![member.clone()]);
+            let expression = &binding
+                .condition
+                .as_ref()
+                .expect("the project policy write is always conditioned")
+                .expression;
+            assert!(expression.starts_with(
+                "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(["
+            ));
+            let listed: Vec<String> = expression
+                .split('\'')
+                .filter(|part| part.starts_with("projects/") || part.starts_with("roles/"))
+                .map(str::to_string)
+                .collect();
+            assert!(listed.len() <= 10);
+            admitted.extend(listed);
+        }
+        let mut expected = runtime.project_roles.clone();
+        expected.insert(released.clone());
+        assert_eq!(
+            admitted, expected,
+            "the runtime's roles and the one still held"
+        );
+
+        // Setup created every role the runtime binds, so the runtime never writes one.
+        for role in &runtime.custom_roles {
+            assert!(
+                created_roles
+                    .iter()
+                    .any(|created| created.name.as_deref() == Some(role.role_id.as_str())),
+                "runtime role {} was not created by setup",
+                role.role_id
+            );
+        }
+
+        // What the run recorded lets the next setup run leave the roles alone.
+        let bound = executor
+            .internal_state::<GcpRemoteStackManagementController>()
+            .expect("controller")
+            .clone();
+        assert_eq!(bound.role_layout, GCP_MANAGEMENT_ROLE_LAYOUT);
+        assert_eq!(
+            bound.runtime_roles_revision,
+            Some(runtime_roles_revision(&runtime))
+        );
+        assert_eq!(bound.admitted_project_roles, expected);
+        let next = direct_setup_run(bound, &["storage/data-read", "storage/data-write"]).await;
+        assert!(
+            !next.with_context(|ctx| {
+                next.internal_state::<GcpRemoteStackManagementController>()
+                    .expect("controller")
+                    .management_roles_need_rebind(ctx)
+                    .expect("rebind check")
+            }),
+            "a setup run right after binding changes nothing"
+        );
     }
 
     fn test_permission_context() -> PermissionContext {
