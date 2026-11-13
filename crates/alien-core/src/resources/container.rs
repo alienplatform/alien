@@ -281,25 +281,84 @@ pub enum ContainerSecurityProfile {
 /// Container process identity and filesystem security.
 ///
 /// Absent means `restricted` with the image's own non-root user.
+///
+/// On the wire every field a previous Operator requires is always written
+/// (`runAsUser`/`runAsGroup` as `0` and `readOnlyRootFilesystem` as the
+/// profile's default when unset), so state and bundles written by this version
+/// stay readable after an Operator rollback. Reading maps those values back:
+/// `0` means "the image's own user/group", and a read-only flag equal to the
+/// profile default means "unset".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    rename_all = "camelCase",
+    from = "ContainerSecurityWire",
+    into = "ContainerSecurityWire"
+)]
 pub struct ContainerSecurity {
     /// Runtime security profile. `unrestricted` is the explicit opt-out.
     pub profile: ContainerSecurityProfile,
     /// Numeric UID for the container process. Defaults to the image's user,
     /// which must not be root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_as_user: Option<i64>,
     /// Numeric GID for the container process. Defaults to the image's group.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_as_group: Option<i64>,
     /// Mount the root filesystem read-only. Defaults to true under `restricted`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only_root_filesystem: Option<bool>,
     /// Absolute paths backed by a writable emptyDir. `/tmp` is always writable.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writable_paths: Vec<String>,
+}
+
+/// Wire form of [`ContainerSecurity`]; see its documentation.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContainerSecurityWire {
+    profile: ContainerSecurityProfile,
+    #[serde(default)]
+    run_as_user: Option<i64>,
+    #[serde(default)]
+    run_as_group: Option<i64>,
+    #[serde(default)]
+    read_only_root_filesystem: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    writable_paths: Vec<String>,
+}
+
+impl ContainerSecurityProfile {
+    fn default_read_only_root_filesystem(self) -> bool {
+        self == ContainerSecurityProfile::Restricted
+    }
+}
+
+impl From<ContainerSecurity> for ContainerSecurityWire {
+    fn from(security: ContainerSecurity) -> Self {
+        Self {
+            profile: security.profile,
+            run_as_user: Some(security.run_as_user.unwrap_or(0)),
+            run_as_group: Some(security.run_as_group.unwrap_or(0)),
+            read_only_root_filesystem: Some(
+                security
+                    .read_only_root_filesystem
+                    .unwrap_or_else(|| security.profile.default_read_only_root_filesystem()),
+            ),
+            writable_paths: security.writable_paths,
+        }
+    }
+}
+
+impl From<ContainerSecurityWire> for ContainerSecurity {
+    fn from(wire: ContainerSecurityWire) -> Self {
+        let default_read_only = wire.profile.default_read_only_root_filesystem();
+        Self {
+            profile: wire.profile,
+            run_as_user: wire.run_as_user.filter(|id| *id != 0),
+            run_as_group: wire.run_as_group.filter(|id| *id != 0),
+            read_only_root_filesystem: wire
+                .read_only_root_filesystem
+                .filter(|value| *value != default_read_only),
+            writable_paths: wire.writable_paths,
+        }
+    }
 }
 
 impl ContainerSecurity {
@@ -1013,6 +1072,57 @@ impl ResourceDefinition for Container {
 
 #[cfg(test)]
 mod tests {
+    /// `ContainerSecurity` exactly as the previous release declares it. State and
+    /// air-gap bundles written by this version must parse with it, so an Operator
+    /// rollback keeps working.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    struct PreviousContainerSecurity {
+        profile: ContainerSecurityProfile,
+        run_as_user: i64,
+        run_as_group: i64,
+        read_only_root_filesystem: bool,
+    }
+
+    #[test]
+    fn written_security_parses_with_the_previous_release_struct() {
+        let defaults = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        };
+        let explicit = ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            run_as_user: Some(70),
+            run_as_group: Some(71),
+            read_only_root_filesystem: Some(true),
+            writable_paths: vec!["/data".to_string()],
+        };
+        let unrestricted_defaults = ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            ..defaults.clone()
+        };
+        for security in [defaults, explicit, unrestricted_defaults] {
+            let json = serde_json::to_value(&security).unwrap();
+            serde_json::from_value::<PreviousContainerSecurity>(json.clone())
+                .unwrap_or_else(|error| panic!("previous release cannot read {json}: {error}"));
+            // Reading our own output restores the value, so stacks do not diff.
+            let back: ContainerSecurity = serde_json::from_value(json).unwrap();
+            assert_eq!(back, security);
+        }
+    }
+
+    #[test]
+    fn security_reads_tolerate_omitted_fields() {
+        let security: ContainerSecurity =
+            serde_json::from_str(r#"{"profile":"restricted"}"#).unwrap();
+        assert_eq!(security.run_as_user, None);
+        assert_eq!(security.read_only_root_filesystem, None);
+    }
+
     use super::*;
     use crate::resources::ExposeProtocol;
 
