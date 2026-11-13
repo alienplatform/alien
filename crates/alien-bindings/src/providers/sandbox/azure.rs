@@ -31,10 +31,10 @@ use alien_core::{
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
-/// Label carrying a hash of the id a caller asked `get_or_create` for. Azure allocates its own
-/// ids and two identical creates make two sandboxes, so this is how a retry or a second process
-/// finds the one the first made.
-const REQUEST_KEY_LABEL: &str = "alienRequestKey";
+/// `SANDBOX_REQUEST_KEY_LABEL` carries a hash of the id a caller asked `get_or_create` for. Azure
+/// allocates its own ids and two identical creates make two sandboxes, so this is how a retry or
+/// a second process finds the one the first made.
+const REQUEST_KEY_LABEL: &str = alien_core::SANDBOX_REQUEST_KEY_LABEL;
 
 fn request_key(requested_id: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -84,6 +84,7 @@ pub trait SandboxCreateRoute: std::fmt::Debug + Send + Sync {
     async fn create(
         &self,
         environment: &BTreeMap<String, String>,
+        labels: &BTreeMap<String, String>,
     ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>;
 }
 
@@ -133,15 +134,27 @@ impl AzureSandbox {
     pub async fn verified_create(
         &self,
         environment: BTreeMap<String, String>,
+        requested_labels: BTreeMap<String, String>,
     ) -> Result<(String, serde_json::Value)> {
         checked_sandbox_env(CREATE, &environment)?;
+        for (key, value) in &requested_labels {
+            let valid = (key == SANDBOX_EXPIRY_LABEL && alien_core::is_valid_sandbox_expiry(value))
+                || (key == REQUEST_KEY_LABEL && alien_core::is_valid_request_key(value));
+            if !valid {
+                return Err(AlienError::new(ErrorData::InvalidInput {
+                    operation_context: CREATE.into(),
+                    details: format!("label '{key}' is not one a caller may set, or its value is malformed"),
+                    field_name: Some("labels".into()),
+                }));
+            }
+        }
         if self.egress_manager.is_some() {
             return Err(self.unsupported(
                 CREATE,
                 "a gateway egress policy has no signed form the verifier can check",
             ));
         }
-        let mut labels = BTreeMap::new();
+        let mut labels = requested_labels;
         if self.agent {
             labels.insert(
                 agent::TRANSPORT_LABEL.into(),
@@ -483,8 +496,14 @@ impl Sandbox for AzureSandbox {
         }
         let asked = self.native_policy();
         let (sandbox, identity) = if let Some(route) = &self.create_route {
+            // Only the labels a caller may set cross to the manager; it adds the rest itself.
+            let routed: BTreeMap<String, String> = labels
+                .iter()
+                .filter(|(key, _)| key.as_str() != agent::TRANSPORT_LABEL)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
             let sandbox = route
-                .create(&request.env)
+                .create(&request.env, &routed)
                 .await
                 .map_err(|error| Self::failed(CREATE, error))?;
             (sandbox, None)
@@ -2079,15 +2098,20 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct Route(std::sync::Mutex<Vec<BTreeMap<String, String>>>);
+    struct Route(
+        std::sync::Mutex<Vec<BTreeMap<String, String>>>,
+        std::sync::Mutex<Vec<BTreeMap<String, String>>>,
+    );
 
     #[async_trait]
     impl SandboxCreateRoute for Route {
         async fn create(
             &self,
             environment: &BTreeMap<String, String>,
+            labels: &BTreeMap<String, String>,
         ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
         {
+            self.1.lock().unwrap().push(labels.clone());
             self.0.lock().unwrap().push(environment.clone());
             Ok(running("routed", None))
         }
@@ -2120,7 +2144,7 @@ mod tests {
             "2048Mi".to_string(),
             None,
         );
-        let (base, body) = sandbox.verified_create(env.clone()).await.expect("body");
+        let (base, body) = sandbox.verified_create(env.clone(), BTreeMap::new()).await.expect("body");
         sandbox
             .create(CreateSandboxRequest {
                 env: env.clone(),
@@ -2135,7 +2159,7 @@ mod tests {
             alien_azure_clients::azure::sandbox_data_plane::create_body(&request)
         );
 
-        let route = std::sync::Arc::new(Route(Default::default()));
+        let route = std::sync::Arc::new(Route(Default::default(), Default::default()));
         // No create expectation: a create that reached the data plane would panic.
         let mut routed_client = MockSandboxDataPlaneApi::new();
         settles_running(&mut routed_client, None);
@@ -2159,6 +2183,79 @@ mod tests {
             .expect("routed create");
         assert_eq!(created.sandbox_id, "routed");
         assert_eq!(*route.0.lock().unwrap(), vec![env]);
+        // Without a requested id or deadline, nothing crosses; the transport label never does.
+        assert_eq!(*route.1.lock().unwrap(), vec![BTreeMap::new()]);
+    }
+
+    /// The labels that make create idempotent and bounded ride along on the signed path.
+    #[tokio::test]
+    async fn a_routed_create_carries_the_request_key_and_expiry_labels() {
+        let route = std::sync::Arc::new(Route(Default::default(), Default::default()));
+        let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut client, None);
+        let routed = AzureSandbox::new(
+            std::sync::Arc::new(client),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        )
+        .with_create_route(route.clone());
+        routed
+            .create(CreateSandboxRequest {
+                sandbox_id: Some("ask-1".into()),
+                timeout_ms: Some(60_000),
+                ..Default::default()
+            })
+            .await
+            .expect("routed create");
+        let sent = route.1.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].len(), 2);
+        assert_eq!(sent[0][REQUEST_KEY_LABEL], request_key("ask-1"));
+        assert!(alien_core::is_valid_request_key(&sent[0][REQUEST_KEY_LABEL]));
+        assert!(alien_core::is_valid_sandbox_expiry(
+            &sent[0][SANDBOX_EXPIRY_LABEL]
+        ));
+    }
+
+    /// The manager-side body builder refuses labels a caller may not set or that are malformed.
+    #[tokio::test]
+    async fn verified_create_refuses_foreign_and_malformed_labels() {
+        let sandbox = AzureSandbox::new(
+            std::sync::Arc::new(MockSandboxDataPlaneApi::new()),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        );
+        for (key, value) in [
+            ("identity", "gateway"),
+            (REQUEST_KEY_LABEL, "a b"),
+            (SANDBOX_EXPIRY_LABEL, "0"),
+            (agent::TRANSPORT_LABEL, agent::TRANSPORT_VERSION),
+        ] {
+            let labels = BTreeMap::from([(key.to_string(), value.to_string())]);
+            assert!(
+                sandbox.verified_create(BTreeMap::new(), labels).await.is_err(),
+                "{key}={value} was accepted"
+            );
+        }
+        let ok = BTreeMap::from([
+            (REQUEST_KEY_LABEL.to_string(), request_key("ask-1")),
+            (SANDBOX_EXPIRY_LABEL.to_string(), "1700000000000".to_string()),
+        ]);
+        let (_, body) = sandbox
+            .verified_create(BTreeMap::new(), ok.clone())
+            .await
+            .expect("well-formed labels");
+        assert_eq!(body["labels"], serde_json::json!(ok));
     }
 
     fn disk_image(id: &str, label: &str, state: &str) -> DiskImage {

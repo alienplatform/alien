@@ -259,6 +259,27 @@ impl SandboxEgress {
 /// Per-session deadline metadata read by the external lifecycle reaper.
 pub const SANDBOX_EXPIRY_LABEL: &str = "alienExpiresAtMs";
 
+/// Label that lets a retried or second-process `get_or_create` find the sandbox the first made.
+pub const SANDBOX_REQUEST_KEY_LABEL: &str = "alienRequestKey";
+
+/// Longest accepted request key.
+pub const SANDBOX_REQUEST_KEY_MAX_LEN: usize = 64;
+
+/// Whether `value` is a well-formed request key: 1..=64 characters of `[A-Za-z0-9_-]`. The
+/// binding, the manager route and the verifier all call this one function.
+pub fn is_valid_request_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= SANDBOX_REQUEST_KEY_MAX_LEN
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Whether `value` is a well-formed expiry: a positive integer of milliseconds.
+pub fn is_valid_sandbox_expiry(value: &str) -> bool {
+    value.parse::<u64>().is_ok_and(|ms| ms > 0)
+}
+
 /// Azure gateway identities cannot renew without an in-guest agent.
 pub const AZURE_GATEWAY_MAX_LIFETIME_SECONDS: u32 = 24 * 60 * 60;
 
@@ -3109,5 +3130,28 @@ mod tests {
             "the next write stores the current names"
         );
         assert!(rewritten.get("session").is_none());
+    }
+}
+
+#[cfg(test)]
+mod label_format_tests {
+    use super::*;
+
+    #[test]
+    fn request_keys_are_bounded_and_safe() {
+        for good in ["a", "A-z_9", &"x".repeat(64)] {
+            assert!(is_valid_request_key(good), "{good}");
+        }
+        for bad in ["", "a b", "a/b", "a.b", "é", &"x".repeat(65)] {
+            assert!(!is_valid_request_key(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn expiry_is_a_positive_integer() {
+        assert!(is_valid_sandbox_expiry("1700000000000"));
+        for bad in ["", "0", "-1", "1.5", "never", "+5 "] {
+            assert!(!is_valid_sandbox_expiry(bad), "{bad}");
+        }
     }
 }
