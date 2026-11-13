@@ -1307,14 +1307,20 @@ pub fn check_sandbox_template(
             spec.image_uri
         )));
     }
-    // The agent's own port, then every preview port the signed sandbox declares, once each: the
-    // controller sorts and dedups the same way, so an undeclared port is a port nobody signed.
-    let mut expected_ports = vec![i32::from(GCP_AGENT_PLATFORM.port)];
-    expected_ports.extend(sandbox.preview_ports.iter().map(|port| i32::from(*port)));
-    expected_ports.sort_unstable();
-    expected_ports.dedup();
-    let expected_ports: Vec<_> = expected_ports
-        .into_iter()
+    // The agent's own port first (`:execute` goes to the first declared port), then every preview
+    // port the signed sandbox declares, once each and in ascending order, as the controller sends
+    // them: an undeclared port is a port nobody signed.
+    let agent_port = i32::from(GCP_AGENT_PLATFORM.port);
+    let mut preview_ports: Vec<i32> = sandbox
+        .preview_ports
+        .iter()
+        .map(|port| i32::from(*port))
+        .filter(|port| *port != agent_port)
+        .collect();
+    preview_ports.sort_unstable();
+    preview_ports.dedup();
+    let expected_ports: Vec<_> = std::iter::once(agent_port)
+        .chain(preview_ports)
         .map(|port| (port, Some("TCP".to_string())))
         .collect();
     let ports: Vec<_> = environment
