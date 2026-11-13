@@ -67,6 +67,7 @@ impl ResourceImporter for GcpSandboxImporter {
         let controller = GcpAgentPlatformTemplateController {
             state: GcpAgentPlatformTemplateState::CreateStart,
             region: Some(data.region),
+            preview_service_account: data.preview_service_account,
             ..Default::default()
         };
         make_imported_state_with_status(controller, ctx, ResourceStatus::Provisioning)
@@ -174,6 +175,9 @@ mod tests {
             .import(
                 GcpSandboxImportData {
                     region: "us-central1".to_string(),
+                    preview_service_account: Some(
+                        "agents-preview@proj.iam.gserviceaccount.com".to_string(),
+                    ),
                 },
                 &ctx,
             )
@@ -191,6 +195,11 @@ mod tests {
             GcpAgentPlatformTemplateState::CreateStart
         ));
         assert_eq!(controller.template_id, None);
+        // The signing identity setup created rides into the controller that builds the binding.
+        assert_eq!(
+            controller.preview_service_account.as_deref(),
+            Some("agents-preview@proj.iam.gserviceaccount.com")
+        );
     }
 
     /// Both halves of a GCP sandbox must be registered, or registration of the generated package

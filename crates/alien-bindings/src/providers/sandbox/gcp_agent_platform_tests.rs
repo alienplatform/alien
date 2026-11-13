@@ -1883,6 +1883,23 @@ async fn preview_without_a_signer_is_refused_as_unsupported() {
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
 }
 
+/// A manager-resolved (remote) binding carries neither the declared ports nor the signing
+/// identity: its lease cannot sign the edge credential. The refusal must say that, instead of
+/// blaming a port the caller rightly named.
+#[tokio::test]
+async fn preview_on_a_binding_without_ports_or_signer_names_the_binding_not_the_port() {
+    let error = provider(MockAgentPlatformApi::new())
+        .preview("s1", 8080)
+        .await
+        .expect_err("a binding with no preview setup refuses");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("remote") && !rendered.contains("not one of"),
+        "{rendered}"
+    );
+}
+
 /// The grant is requested over `:execute`, bounded by the sandbox's own deadline, and the answer
 /// is returned as the one header contract: the edge credentials gate the agent port, the
 /// capability and port ride in `X-Alien-*`, and the caller's bearer has its own header because
@@ -2102,4 +2119,86 @@ async fn preview_never_reports_more_than_the_longest_grant() {
         preview.expires_in_seconds,
         alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS as u64
     );
+}
+
+/// A binding must mint a grant from what each resolution path really hands the workload. The
+/// Terraform output and the controller's binding are different JSON, so each is parsed here the
+/// way the loader parses it, not built from the struct.
+async fn mint_from_binding_json(binding: serde_json::Value) -> crate::traits::PreviewCapability {
+    let alien_core::bindings::SandboxBinding::GcpAgentPlatform(binding) =
+        serde_json::from_value(binding).expect("the binding parses as the Agent Platform type")
+    else {
+        panic!("expected a GCP Agent Platform binding");
+    };
+    let expire = far_future();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    client.expect_execute().returning(|_, _, _| {
+        Ok(serde_json::to_vec(&json!({
+            "capability": "cap-1",
+            "expiresAt": chrono::Utc::now().timestamp() + 900,
+        }))
+        .unwrap())
+    });
+    let mut iam = alien_gcp_clients::gcp::iam::MockIamApi::new();
+    iam.expect_sign_jwt()
+        .withf(|account, _| account == "prev@p.iam.gserviceaccount.com")
+        .returning(|_, _| {
+            Ok(alien_gcp_clients::gcp::iam::SignJwtResponse {
+                signed_jwt: "signed.jwt".to_string(),
+            })
+        });
+    provider(client)
+        .with_preview_from_binding(
+            binding.preview_ports.clone(),
+            binding.preview_service_account.clone(),
+            "sandbox",
+            Arc::new(iam),
+        )
+        .expect("the binding resolves")
+        .preview("s1", 8081)
+        .await
+        .expect("a binding built from setup outputs mints a grant")
+}
+
+#[tokio::test]
+async fn a_terraform_emitted_binding_mints_a_grant() {
+    // The shape setup's emitter writes: plain strings and a numeric list, plus a service tag.
+    let preview = mint_from_binding_json(json!({
+        "service": "sandbox-gcp-agent-platform",
+        "engine": "projects/p/locations/us-central1/reasoningEngines/e",
+        "template": "projects/p/locations/us-central1/reasoningEngines/e/sandboxEnvironmentTemplates/t",
+        "region": "us-central1",
+        "allowEgress": false,
+        "previewPorts": [8080, 8081],
+        "previewServiceAccount": "prev@p.iam.gserviceaccount.com",
+    }))
+    .await;
+    assert_eq!(preview.headers["Authorization"], "Bearer signed.jwt");
+}
+
+#[tokio::test]
+async fn a_controller_binding_mints_a_grant() {
+    use alien_core::bindings::{BindingValue, SandboxBinding};
+    let mut binding = SandboxBinding::gcp_agent_platform(
+        BindingValue::value("projects/p/locations/us-central1/reasoningEngines/e".to_string()),
+        BindingValue::value(
+            "projects/p/locations/us-central1/reasoningEngines/e/sandboxEnvironmentTemplates/t"
+                .to_string(),
+        ),
+        BindingValue::value("us-central1".to_string()),
+        None,
+        false,
+    );
+    if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+        value.preview_ports = vec![8080, 8081];
+        value.preview_service_account = Some(BindingValue::value(
+            "prev@p.iam.gserviceaccount.com".to_string(),
+        ));
+    }
+    let preview = mint_from_binding_json(serde_json::to_value(binding).unwrap()).await;
+    assert_eq!(preview.headers["Authorization"], "Bearer signed.jwt");
+    assert_eq!(preview.allowed_ports, vec![8081]);
 }

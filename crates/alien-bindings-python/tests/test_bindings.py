@@ -324,6 +324,9 @@ async def test_sandbox_preview_returns_what_the_local_route_grants(tmp_path: Pat
         assert "preview" in await binding.capabilities()
         preview = await binding.preview("s1", 8080)
         assert preview == SandboxPreview("http://127.0.0.1:49152", {}, (8080,), 0)
+        # The fields a header-limited WebSocket client needs are on the public type, not dropped.
+        assert preview.caller_authorization_header == "Authorization"
+        assert preview.subprotocols == ()
         assert requests == [("/v1/sessions/s1/preview?port=8080", "Bearer route-token")]
     finally:
         server.shutdown()

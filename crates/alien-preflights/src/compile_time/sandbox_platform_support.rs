@@ -73,6 +73,20 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // Preview signs an edge credential as an identity setup creates beside the engine.
+                // A Live sandbox's engine is made by the runtime after setup, so nothing creates
+                // that identity and a deployed `preview()` would fail at the first call.
+                if platform == Platform::Gcp
+                    && lifecycle == ResourceLifecycle::Live
+                    && !sandbox.preview_ports.is_empty()
+                {
+                    return Some(format!(
+                        "Sandbox '{}': preview on GCP needs a signing identity that setup creates \
+                         next to the engine, and a Live sandbox's engine is created after setup; \
+                         declare the sandbox Frozen or remove its preview ports",
+                        sandbox.id()
+                    ));
+                }
                 sandbox
                     .validate_for_platform(platform)
                     .err()
@@ -119,12 +133,16 @@ mod tests {
     use indexmap::IndexMap;
 
     fn stack_with(sandbox: Sandbox) -> Stack {
+        stack_with_lifecycle(sandbox, ResourceLifecycle::Frozen)
+    }
+
+    fn stack_with_lifecycle(sandbox: Sandbox, lifecycle: ResourceLifecycle) -> Stack {
         let mut resources = IndexMap::new();
         resources.insert(
             sandbox.id().to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(sandbox),
-                lifecycle: ResourceLifecycle::Frozen,
+                lifecycle,
                 dependencies: Vec::new(),
                 display_name: None,
                 description: None,
@@ -170,6 +188,45 @@ mod tests {
             disk: "20Gi".to_string(),
             max_processes: None,
         }
+    }
+
+    /// GCP preview is signed as an identity setup creates beside the engine. A Live sandbox has
+    /// none, so the plan refuses it instead of leaving the first `preview()` to fail.
+    #[tokio::test]
+    async fn a_live_gcp_sandbox_with_preview_ports_is_refused_and_a_frozen_one_passes() {
+        let with_ports = || {
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .preview_ports(vec![8080])
+                .build()
+        };
+        let live = SandboxPlatformSupportCheck
+            .check(
+                &stack_with_lifecycle(with_ports(), ResourceLifecycle::Live),
+                Platform::Gcp,
+            )
+            .await
+            .expect("check runs");
+        assert!(!live.success, "a Live GCP preview has no signer");
+        let rendered = live.errors.join(" ");
+        assert!(
+            rendered.contains("agent") && rendered.contains("Frozen"),
+            "{rendered}"
+        );
+
+        let frozen = SandboxPlatformSupportCheck
+            .check(&stack_with(with_ports()), Platform::Gcp)
+            .await
+            .expect("check runs");
+        assert!(frozen.success, "{:?}", frozen.errors);
     }
 
     /// A ceiling outside the platform's own sizing rule is refused at plan time: Azure sizes cpu

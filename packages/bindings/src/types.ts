@@ -473,6 +473,17 @@ export interface SandboxPreview {
   allowedPorts: number[]
   /** Seconds until the preview expires. `0` means it does not expire (the local backend). */
   expiresInSeconds: number
+  /**
+   * Header that carries your own bearer token so it reaches the workload unchanged. It is
+   * `Authorization` except where the platform's edge consumes that header; set it to your token
+   * under this name, and keep every header in `headers` as returned.
+   */
+  callerAuthorizationHeader: string
+  /**
+   * WebSocket subprotocols to offer, in this order and after your own, when your client cannot
+   * set headers on the upgrade (a browser). Empty where the headers alone are enough.
+   */
+  subprotocols: string[]
 }
 
 /** A sandbox from `getOrCreate`, and which of the two things happened. */

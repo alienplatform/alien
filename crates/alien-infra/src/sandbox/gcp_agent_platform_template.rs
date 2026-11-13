@@ -295,6 +295,10 @@ pub struct GcpAgentPlatformTemplateController {
     /// Preview ports the declaration names, carried into the binding.
     #[serde(default)]
     pub(crate) preview_ports: Vec<u16>,
+    /// Identity setup created to sign the preview edge credential; imported, never created here,
+    /// and carried into the binding so a deployed workload can sign.
+    #[serde(default)]
+    pub(crate) preview_service_account: Option<String>,
 }
 
 #[controller]
@@ -739,6 +743,10 @@ impl GcpAgentPlatformTemplateController {
             }
             value.default_policy = self.default_policy.clone();
             value.preview_ports = self.preview_ports.clone();
+            value.preview_service_account = self
+                .preview_service_account
+                .clone()
+                .map(BindingValue::value);
         }
 
         Ok(Some(
@@ -817,6 +825,7 @@ impl GcpAgentPlatformTemplateController {
             egress: None,
             allow_egress: None,
             preview_ports: Vec::new(),
+            preview_service_account: None,
             _internal_stay_count: None,
         }
     }
@@ -1185,6 +1194,35 @@ mod tests {
             }
             other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
         }
+    }
+
+    /// The binding a deployed workload reads must carry what preview needs: the declared ports
+    /// and the signing identity setup created. Without the identity a deployed sandbox's
+    /// `preview()` fails at runtime.
+    #[test]
+    fn the_binding_carries_the_preview_ports_and_the_signer_setup_created() {
+        use crate::core::ResourceController;
+        let mut controller = GcpAgentPlatformTemplateController::mock_ready("eng", "tpl1");
+        controller.preview_ports = vec![8080, 8081];
+        controller.preview_service_account =
+            Some("agents-preview@p.iam.gserviceaccount.com".into());
+        let params = controller
+            .get_binding_params()
+            .expect("binding serializes")
+            .expect("a ready template has a binding");
+        let alien_core::bindings::SandboxBinding::GcpAgentPlatform(b) =
+            serde_json::from_value(params).expect("parses")
+        else {
+            panic!("expected a GCP Agent Platform binding");
+        };
+        assert_eq!(b.preview_ports, vec![8080, 8081]);
+        assert_eq!(
+            b.preview_service_account
+                .expect("signer present")
+                .into_value("b", "previewServiceAccount")
+                .expect("literal"),
+            "agents-preview@p.iam.gserviceaccount.com"
+        );
     }
 
     #[test]
