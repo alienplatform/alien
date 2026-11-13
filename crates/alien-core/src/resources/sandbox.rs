@@ -104,6 +104,10 @@ const KUBERNETES_MAX_LIFETIME_SECONDS: u32 = i32::MAX as u32;
 
 /// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
 /// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
+/// Largest ephemeral storage Agent Platform accepts on a sandbox template (10 GiB). A larger
+/// request is refused when the template is created.
+const GCP_MAX_DISK_MIB: i64 = 10 * 1024;
+
 const AZURE_CPU_STEP_MILLICORES: i64 = 250;
 const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
 const AZURE_MEMORY_MIB_PER_CORE: i64 = 2 * 1024;
@@ -932,6 +936,10 @@ impl Sandbox {
             self.azure_sandbox_limits()?;
         }
 
+        if platform == Platform::Gcp {
+            self.gcp_sandbox_limits()?;
+        }
+
         if platform == Platform::Aws {
             // Refused here rather than at emit so a customer sees it while planning, and so both
             // package formats inherit the same answer.
@@ -970,6 +978,33 @@ impl Sandbox {
                 },
             })
         })
+    }
+
+    /// Refuses a disk ceiling above Agent Platform's ephemeral-storage cap, at plan time like
+    /// [`Self::azure_sandbox_limits`], so it is a declaration to fix rather than a failed template.
+    pub fn gcp_sandbox_limits(&self) -> Result<()> {
+        let Some(limits) = self.limits.as_ref() else {
+            return Ok(());
+        };
+        let disk_mib = quantity_mib(&limits.disk).ok_or_else(|| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "disk".to_string(),
+                value: limits.disk.clone(),
+                reason: "expected a size such as 8Gi".to_string(),
+            })
+        })?;
+        if disk_mib > GCP_MAX_DISK_MIB {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "disk".to_string(),
+                value: limits.disk.clone(),
+                reason: "GCP Agent Platform caps a sandbox's ephemeral storage at 10Gi; declare \
+                         10Gi or less"
+                    .to_string(),
+            }));
+        }
+        Ok(())
     }
 
     /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
@@ -1750,7 +1785,7 @@ mod tests {
             .limits(SandboxLimits {
                 cpu: "1".to_string(),
                 memory: "2Gi".to_string(),
-                disk: "20Gi".to_string(),
+                disk: "10Gi".to_string(),
                 max_processes: None,
             })
             .egress(egress)
@@ -2183,9 +2218,40 @@ mod tests {
         }
     }
 
+    /// Agent Platform caps a sandbox's ephemeral storage at 10 GiB and refuses a larger request
+    /// when the template is created, long after planning. The declaration is refused here, with
+    /// the cap named, so the author sees a size to change rather than a failed template.
+    #[test]
+    fn gcp_refuses_a_disk_above_its_cap_and_accepts_the_cap() {
+        let with_disk = |disk: &str| {
+            let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+            sandbox.limits.as_mut().expect("the fixture declares limits").disk = disk.to_string();
+            sandbox
+        };
+
+        let error = with_disk("20Gi")
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("20Gi is above the Agent Platform cap");
+        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+        let rendered = error.to_string();
+        assert!(rendered.contains("disk"), "names the field: {rendered}");
+        assert!(rendered.contains("10Gi"), "names the cap: {rendered}");
+
+        with_disk("10Gi")
+            .validate_for_platform(Platform::Gcp)
+            .expect("the cap itself is allowed");
+        with_disk("8Gi")
+            .validate_for_platform(Platform::Gcp)
+            .expect("the default disk is allowed");
+        with_disk("20Gi")
+            .validate_for_platform(Platform::Kubernetes)
+            .expect("the cap is Agent Platform's, not every backend's");
+    }
+
     #[test]
     fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
-        let sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+        sandbox.limits.as_mut().expect("the fixture declares limits").disk = "10Gi".to_string();
         sandbox
             .validate_for_platform(Platform::Gcp)
             .expect("Agent Platform enforces declared ceilings, by terminating on breach");
