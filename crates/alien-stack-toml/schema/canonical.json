@@ -1264,7 +1264,8 @@
         }
       },
       "required": [
-        "profile"
+        "profile",
+        "writablePaths"
       ],
       "type": "object"
     },
