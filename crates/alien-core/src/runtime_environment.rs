@@ -20,6 +20,9 @@ pub const ENV_ALIEN_SANDBOX_CLUSTER_DNS: &str = "ALIEN_SANDBOX_CLUSTER_DNS";
 /// NetworkPolicy must refuse it, which is how a pod proves its policy is in force.
 pub const ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS: &str = "ALIEN_SANDBOX_OPERATOR_ADDRESS";
 pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";
+/// Namespace the administrator made for sandbox pods (`sandbox.namespace`). Unset means the
+/// release namespace, where sandbox pods have always run. The chart never creates it.
+pub const ENV_ALIEN_SANDBOX_NAMESPACE: &str = "ALIEN_SANDBOX_NAMESPACE";
 /// Idle sandbox pods the Operator keeps ready (`sandbox.warmPoolSize`).
 pub const ENV_ALIEN_SANDBOX_WARM_POOL_SIZE: &str = "ALIEN_SANDBOX_WARM_POOL_SIZE";
 /// JSON object of node labels sandbox pods must match (`sandbox.nodeSelector`).

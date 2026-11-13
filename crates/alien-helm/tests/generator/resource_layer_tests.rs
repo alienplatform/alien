@@ -1416,7 +1416,7 @@ fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
     let chart = render(&sandbox_with_linked_app(), StackSettings::default());
     let rendered = super::test_utils::helm_template_for_kube_version(
         &chart.files,
-        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
+        Some("management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n"),
         "acme",
         None,
     );
@@ -1630,4 +1630,118 @@ fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
     bundled.assert_ok("probe image on a chart without a sandbox");
     assert!(bundled.stdout.contains("python:3.13-slim@sha256:aaaa"), "{}", bundled.stdout);
     assert_helm_valid(&chart, "container_egress_no_sandbox");
+}
+
+fn sandbox_namespace_documents(values: &str) -> Vec<serde_yaml::Value> {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered =
+        super::test_utils::helm_template_for_kube_version(&chart.files, Some(values), "acme", None);
+    rendered.assert_ok("sandbox namespace render");
+    rendered_documents(&rendered)
+}
+
+fn operator_env(documents: &[serde_yaml::Value], name: &str) -> Option<String> {
+    documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .and_then(|operator| {
+            operator["spec"]["template"]["spec"]["containers"][0]["env"].as_sequence()
+        })
+        .and_then(|env| env.iter().find(|variable| variable["name"] == name))
+        .and_then(|variable| variable["value"].as_str().map(str::to_string))
+}
+
+fn session_policy(documents: &[serde_yaml::Value]) -> &serde_yaml::Value {
+    documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "NetworkPolicy" && document["metadata"]["name"] == "alien-sbx-agent"
+        })
+        .expect("the session NetworkPolicy")
+}
+
+/// Unset, `sandbox.namespace` changes nothing: the policy stays in the release namespace, selects
+/// the operator and linkers by pod alone, and no sandbox-namespace Role or variable appears.
+#[test]
+fn an_unset_sandbox_namespace_keeps_every_sandbox_object_in_the_release_namespace() {
+    let documents = sandbox_namespace_documents(
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n",
+    );
+    assert_eq!(
+        operator_env(&documents, alien_core::ENV_ALIEN_SANDBOX_NAMESPACE),
+        None
+    );
+    let policy = session_policy(&documents);
+    assert_eq!(policy["metadata"]["namespace"], "default");
+    for peer in policy["spec"]["ingress"][0]["from"].as_sequence().unwrap() {
+        assert!(peer.get("namespaceSelector").is_none(), "{peer:?}");
+        assert!(peer.get("podSelector").is_some());
+    }
+    assert!(
+        !documents.iter().any(|document| document["kind"] == "Role"
+            && document["metadata"]["name"]
+                .as_str()
+                .is_some_and(|name| name.ends_with("-sandbox"))),
+        "no Role for a separate namespace"
+    );
+}
+
+/// Set, sandbox pods, their policy and the operator's rights to them live in the administrator's
+/// namespace; callers are still selected in the release namespace; the chart creates no
+/// Namespace and no ClusterRole for it.
+#[test]
+fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
+    let documents = sandbox_namespace_documents(
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n",
+    );
+    assert_eq!(
+        operator_env(&documents, alien_core::ENV_ALIEN_SANDBOX_NAMESPACE).as_deref(),
+        Some("acme-sandboxes")
+    );
+    let policy = session_policy(&documents);
+    assert_eq!(policy["metadata"]["namespace"], "acme-sandboxes");
+    let peers = policy["spec"]["ingress"][0]["from"].as_sequence().unwrap();
+    assert!(peers.len() >= 2);
+    for peer in peers {
+        assert_eq!(
+            peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"], "default",
+            "{peer:?}"
+        );
+        assert!(peer.get("podSelector").is_some());
+    }
+    let role = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "Role" && document["metadata"]["namespace"] == "acme-sandboxes"
+        })
+        .expect("a Role in the sandbox namespace");
+    for rule in role["rules"].as_sequence().unwrap() {
+        for resource in rule["resources"].as_sequence().unwrap() {
+            assert!(matches!(
+                resource.as_str(),
+                Some("pods" | "secrets" | "events")
+            ));
+        }
+    }
+    let binding = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "RoleBinding"
+                && document["metadata"]["namespace"] == "acme-sandboxes"
+        })
+        .expect("a RoleBinding in the sandbox namespace");
+    assert_eq!(binding["subjects"][0]["namespace"], "default");
+    assert!(!documents
+        .iter()
+        .any(|document| document["kind"] == "Namespace"));
+    assert!(!documents.iter().any(|document| {
+        document["kind"] == "ClusterRole"
+            && document["rules"].as_sequence().is_some_and(|rules| {
+                rules.iter().any(|rule| {
+                    rule["resources"]
+                        .as_sequence()
+                        .is_some_and(|resources| resources.iter().any(|x| x == "pods"))
+                })
+            })
+    }));
 }

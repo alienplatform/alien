@@ -4364,6 +4364,12 @@ sandbox:
   # `isolated-sandbox` (AWS Nitro Sandboxes), GKE uses `gvisor`. Set it on any other cluster
   # (AKS: `kata-vm-isolation`; on-premises: the gVisor or Kata class your administrator installed).
   runtimeClassName: ""
+  # Namespace for sandbox pods, their warm pool, NetworkPolicy and Secrets. Empty (the default)
+  # keeps them in the release namespace. The chart never creates this namespace: an administrator
+  # makes it, and a sandbox whose image starts as root needs it to admit Pod Security `baseline`:
+  #   kubectl create namespace <name> && kubectl label namespace <name> pod-security.kubernetes.io/enforce=baseline
+  # The release namespace can then stay `restricted`.
+  namespace: ""
   # Extra scheduling for sandbox pods, applied on top of what the RuntimeClass itself sets.
   nodeSelector: {}
   tolerations: []
@@ -4900,6 +4906,10 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "additionalProperties": false,
         "properties": {
             "runtimeClassName": { "type": "string" },
+            "namespace": {
+                "type": "string",
+                "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)?$"
+            },
             "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "tolerations": { "type": "array" },
             "warmPoolSize": { "type": "integer", "minimum": 0 },
@@ -7179,7 +7189,13 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: ALIEN_OPERATOR_POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n            - name: {}\n              value: {{{{ printf \"$(ALIEN_OPERATOR_POD_IP):%d\" (int .Values.runtime.api.port) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS
     );
-    let broker = format!("{broker}{placement}{dns}{operator_address}");
+    // Set only when the administrator chose a namespace, so an unset value renders exactly the
+    // Deployment it always has.
+    let sandbox_namespace = format!(
+        "{{{{- $sandboxNamespace := dig \"namespace\" \"\" (default dict .Values.sandbox) }}}}\n{{{{- if $sandboxNamespace }}}}\n            - name: {}\n              value: {{{{ $sandboxNamespace | quote }}}}\n{{{{- end }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_NAMESPACE
+    );
+    let broker = format!("{broker}{placement}{dns}{operator_address}{sandbox_namespace}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"

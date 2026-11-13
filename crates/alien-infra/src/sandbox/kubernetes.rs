@@ -31,6 +31,15 @@ use alien_macros::controller;
 /// sets the variable and this is no longer consulted. The Operator never picks a class otherwise.
 const LEGACY_RUNTIME_CLASS: &str = "gvisor";
 
+/// The namespace the administrator reserved for sandbox pods (`sandbox.namespace`), when set.
+/// Unset keeps every sandbox object in the release namespace, as before.
+pub fn configured_sandbox_namespace() -> Option<String> {
+    std::env::var(alien_core::ENV_ALIEN_SANDBOX_NAMESPACE)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// The class the chart chose, which the Operator only checks. `None` for a chart that predates it.
 fn chart_runtime_class() -> Option<String> {
     std::env::var(alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS)
@@ -129,7 +138,8 @@ impl KubernetesSandboxController {
         // Recorded as soon as it is known, because the binding and the outputs both read it
         // directly rather than through the fallback: leaving it unset publishes no binding at
         // all, and the sandbox comes up Running with nothing able to reach it.
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
         self.namespace = Some(namespace.clone());
         let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
         self.deployment_label_key = Some(deployment_label_key);
@@ -144,7 +154,7 @@ impl KubernetesSandboxController {
             super::kubernetes_egress::configure(
                 ctx,
                 config,
-                &namespace,
+                &release_namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
                 &mut self.egress_replica_secret_sourced,
@@ -203,12 +213,14 @@ impl KubernetesSandboxController {
         confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
         self.default_policy = config.default_policy.clone();
         self.broker_url = Some(broker_url(&config.id)?);
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        // Follows the chart's current `sandbox.namespace`, so the binding points where new pods go.
+        self.namespace = Some(sandbox_namespace(ctx.get_kubernetes_config()?)?);
         self.egress = Some(
             super::kubernetes_egress::configure(
                 ctx,
                 config,
-                &namespace,
+                &release_namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
                 &mut self.egress_replica_secret_sourced,
@@ -237,7 +249,7 @@ impl KubernetesSandboxController {
     async fn deleting(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let client = ctx
             .service_provider
@@ -432,7 +444,8 @@ impl KubernetesSandboxController {
     ) -> Result<()> {
         confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
 
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
         self.broker_url = Some(broker_url(&config.id)?);
         let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
         self.deployment_label_key = Some(deployment_label_key);
@@ -443,7 +456,7 @@ impl KubernetesSandboxController {
             super::kubernetes_egress::configure(
                 ctx,
                 config,
-                &namespace,
+                &release_namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
                 &mut self.egress_replica_secret_sourced,
@@ -668,7 +681,12 @@ async fn replenish_warm_pool(
 
     let mut created = 0;
     let Some(egress_environment) =
-        super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
+        super::kubernetes_egress::bootstrap_environment(
+            ctx,
+            sandbox,
+            &deployment_namespace(kubernetes_config)?,
+        )
+        .await?
     else {
         return Ok(WarmPool {
             idle: without_terminating(idle.items).len(),
@@ -817,7 +835,7 @@ async fn ensure_image_pull_secret(
 async fn reap_expired_sessions_of(ctx: &ResourceControllerContext<'_>, sandbox: &Sandbox) {
     let prepared = async {
         let kubernetes_config = ctx.get_kubernetes_config()?;
-        let namespace = deployment_namespace(kubernetes_config)?;
+        let namespace = sandbox_namespace(kubernetes_config)?;
         let client = ctx
             .service_provider
             .get_kubernetes_pod_client(kubernetes_config)
@@ -1148,6 +1166,17 @@ fn deployment_namespace(config: &alien_core::KubernetesClientConfig) -> Result<S
             resource_id: None,
         })
     })
+}
+
+/// The namespace a sandbox's own objects live in: its pods, their pool, the capability Secret and
+/// the image pull Secret. The administrator's `sandbox.namespace` when the chart sets one,
+/// otherwise the release namespace. The egress gateway and the broker's callers stay in the
+/// release namespace either way.
+fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<String> {
+    match configured_sandbox_namespace() {
+        Some(namespace) => Ok(namespace),
+        None => deployment_namespace(config),
+    }
 }
 
 /// Counts the Live pods belonging to one sandbox.
