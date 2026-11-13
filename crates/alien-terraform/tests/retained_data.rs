@@ -615,3 +615,98 @@ fn retaining_a_notifying_bucket_removes_only_setup_entries_before_detaching() {
         assert!(removed.contains("aws_s3_bucket.source"), "{removed}");
     }
 }
+
+/// The shared Memorystore connection policy is detached only along with an instance. With no
+/// instance it was created for nothing, so it must stay managed for the destroy plan to remove;
+/// detaching it would leave it behind, and a network takes only one.
+#[cfg(unix)]
+#[test]
+fn a_memorystore_policy_is_detached_only_with_an_instance() {
+    const POLICY: &str = "google_network_connectivity_service_connection_policy";
+    let resource = |kind: &str, name: &str, id: &str, count: bool| {
+        let mut instance = json!({"attributes": {"id": id}});
+        if count {
+            instance["index_key"] = 0.into();
+        }
+        json!({"mode":"managed","type":kind,"name":name,"instances":[instance]})
+    };
+    for (with_instance, expected) in [
+        (
+            true,
+            vec![
+                "google_memorystore_instance.cache",
+                "google_network_connectivity_service_connection_policy.redis_shared_psc_policy[0]",
+            ],
+        ),
+        (false, vec![]),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("retain-data.py"),
+            include_str!("../src/templates/retain-data.py"),
+        )
+        .unwrap();
+        let addresses = [
+            "google_memorystore_instance.cache",
+            "google_network_connectivity_service_connection_policy.redis_shared_psc_policy",
+        ];
+        fs::write(
+            root.path().join("retained-data.json"),
+            serde_json::to_vec(&addresses).unwrap(),
+        )
+        .unwrap();
+        let cli = root.path().join("terraform");
+        fs::write(
+            &cli,
+            "#!/bin/sh\nif [ \"$1 $2\" = 'state pull' ]; then cat state.json; exit 0; fi\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut resources = vec![resource(
+            POLICY,
+            "redis_shared_psc_policy",
+            "policy-id",
+            true,
+        )];
+        if with_instance {
+            resources.push(resource(
+                "google_memorystore_instance",
+                "cache",
+                "instance-id",
+                false,
+            ));
+        }
+        let state = with_inventory(
+            json!({"version":4,"lineage":"memorystore","serial":1,"resources":resources}),
+            &addresses,
+        );
+        fs::write(
+            root.path().join("state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        let output = Command::new("python3")
+            .current_dir(root.path())
+            .args(["retain-data.py", "--receipt-dir", "receipts"])
+            .env("TF_CLI", "terraform")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    root.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .output()
+            .unwrap();
+        let selected: Vec<Value> = serde_json::from_str(&success(output)).unwrap();
+        let mut found: Vec<&str> = selected
+            .iter()
+            .map(|item| item["address"].as_str().unwrap())
+            .collect();
+        found.sort();
+        let mut expected = expected;
+        expected.sort();
+        assert_eq!(found, expected, "with_instance = {with_instance}");
+    }
+}
