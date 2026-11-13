@@ -72,6 +72,12 @@ impl SqliteDeploymentStore {
         "update-failed",
         "delete-failed",
     ];
+    /// Failed statuses the heartbeat loop keeps observing without a retry. A setup run
+    /// observes nothing: an update that failed is claimed by it only through its own rules.
+    fn observed_failed(status: &str, mode: Option<DeploymentAcquireMode>) -> bool {
+        status == "refresh-failed"
+            || (status == "update-failed" && mode != Some(DeploymentAcquireMode::SetupRun))
+    }
     const SETUP_TEARDOWN_STATUSES: [&'static str; 3] =
         ["retention-required", "teardown-required", "teardown-failed"];
     const RUNTIME_DELETE_STATUSES: [&'static str; 3] =
@@ -399,7 +405,7 @@ impl SqliteDeploymentStore {
                         || *status == Self::RUNNING_STATUS
                         // The heartbeat loop requests Running alongside RefreshFailed.
                         // Work-only acquisition must still require an explicit retry.
-                        || (*status == "refresh-failed"
+                        || (Self::observed_failed(status, mode)
                             && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
@@ -440,6 +446,7 @@ impl SqliteDeploymentStore {
         status: &str,
         failed_claimable: bool,
         statuses: Option<&Vec<String>>,
+        mode: Option<DeploymentAcquireMode>,
     ) -> bool {
         let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && failed_claimable;
 
@@ -452,7 +459,7 @@ impl SqliteDeploymentStore {
                 && (Self::WORK_STATUSES.contains(&status)
                     || Self::SETUP_TEARDOWN_STATUSES.contains(&status)
                     || status == Self::RUNNING_STATUS
-                    || (status == "refresh-failed"
+                    || (Self::observed_failed(status, mode)
                         && statuses
                             .iter()
                             .any(|candidate| candidate == Self::RUNNING_STATUS)))
@@ -628,6 +635,51 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::SqliteDeploymentStore;
+    use crate::traits::DeploymentAcquireMode;
+
+    /// The heartbeat loop observes a failed update without a retry, like a failed refresh.
+    /// Work-only acquisition still needs an explicit retry for either.
+    #[test]
+    fn heartbeat_acquires_failed_updates_without_a_retry() {
+        let heartbeat = vec![
+            "running".to_string(),
+            "refresh-failed".to_string(),
+            "update-failed".to_string(),
+        ];
+        for status in ["refresh-failed", "update-failed"] {
+            assert!(SqliteDeploymentStore::acquire_status_matches(
+                status,
+                false,
+                Some(&heartbeat),
+                Some(DeploymentAcquireMode::Runtime)
+            ));
+            assert!(!SqliteDeploymentStore::acquire_status_matches(
+                status,
+                false,
+                Some(&vec![status.to_string()]),
+                Some(DeploymentAcquireMode::Runtime)
+            ));
+            assert!(!SqliteDeploymentStore::acquire_status_matches(
+                status,
+                false,
+                None,
+                Some(DeploymentAcquireMode::Runtime)
+            ));
+        }
+    }
+
+    /// A setup run that asks for running and update-failed claims a failed update only through
+    /// its own rules, never as observation.
+    #[test]
+    fn setup_run_does_not_observe_a_failed_update() {
+        let statuses = vec!["running".to_string(), "update-failed".to_string()];
+        assert!(!SqliteDeploymentStore::acquire_status_matches(
+            "update-failed",
+            false,
+            Some(&statuses),
+            Some(DeploymentAcquireMode::SetupRun)
+        ));
+    }
 
     #[test]
     fn stale_lock_condition_parses_rfc3339_timestamps() {
@@ -1913,6 +1965,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     &status,
                     failed_claimable,
                     explicit_status_filter,
+                    filter.acquire_mode,
                 ) {
                     DeploymentAcquireUnavailableReason::StatusMismatch
                 } else if filter.excluded_deployment_ids.contains(&deployment_id)
@@ -2579,6 +2632,7 @@ mod gcp_project_consumer_tests {
     };
 
     use super::SqliteDeploymentStore;
+    use crate::traits::DeploymentAcquireMode;
     use crate::{
         auth::Subject,
         stores::sqlite::SqliteDatabase,

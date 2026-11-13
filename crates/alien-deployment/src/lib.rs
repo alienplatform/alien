@@ -358,13 +358,15 @@ pub async fn step(
             .await?
         }
         DeploymentStatus::UpdateFailed => {
-            updating::handle_update_failed(
+            // Boxed: observing a failed update builds a stack executor, and keeping that
+            // future inline would grow every step's future past small worker stacks.
+            Box::pin(updating::handle_update_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::DeleteFailed => {

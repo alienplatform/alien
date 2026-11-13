@@ -286,6 +286,130 @@ async fn revoked_key_suspends_dependents_and_resumes_same_resources() {
     }
 }
 
+/// While an update is open or has failed, the running resources are only observed. A key that
+/// comes back must lift the suspension of its dependents on that path too, so one failing
+/// resource does not keep the others suspended.
+#[tokio::test]
+async fn observing_a_restored_key_resumes_its_dependents() {
+    let availability = Arc::new(AtomicU8::new(0));
+    let mut kms = MockKmsApi::new();
+    kms.expect_describe_key().returning(|_| {
+        Ok(DescribeKeyResponse {
+            key_metadata: KeyMetadata {
+                origin: Some("EXTERNAL_KEY_STORE".to_string()),
+                arn: KEY_ARN.to_string(),
+                key_id: "key-id".to_string(),
+                enabled: true,
+                key_state: "Enabled".to_string(),
+                key_usage: "ENCRYPT_DECRYPT".to_string(),
+                key_spec: "SYMMETRIC_DEFAULT".to_string(),
+                deletion_date: None,
+            },
+        })
+    });
+    let observed = availability.clone();
+    kms.expect_encrypt()
+        .returning(move |_| match observed.load(Ordering::SeqCst) {
+            0 => Ok(EncryptResponse {
+                ciphertext_blob: "probe".to_string(),
+                key_id: KEY_ARN.to_string(),
+            }),
+            _ => Err(probe_error("com.amazonaws.kms#KeyUnavailableException")),
+        });
+    let kms = Arc::new(kms);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_kms_client()
+        .returning(move |_| Ok(kms.clone()));
+    let mut registry = ResourceRegistry::with_built_ins();
+    registry
+        .register::<Storage>(Storage::RESOURCE_TYPE)
+        .with_controller::<TestStorageController>(Platform::Aws);
+    let key = Key::new("observed-key".to_string()).build();
+    let dependent = Storage::new("observed-key-dependent".to_string()).build();
+    let stack = Stack::new("observed-key".to_string())
+        .add(key.clone(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            dependent,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Key::RESOURCE_TYPE, &key.id)],
+        )
+        .build();
+    let deployment_config = DeploymentConfig::builder()
+        .stack_settings(alien_core::StackSettings::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(alien_core::ExternalBindings::default())
+        .allow_frozen_changes(false)
+        .build();
+    let config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let executor = StackExecutor::builder(&stack, config)
+        .deployment_config(&deployment_config)
+        .resource_registry(Arc::new(registry))
+        .service_provider(Arc::new(provider))
+        .build()
+        .unwrap();
+    let settings = alien_core::StackSettings::default();
+    let ctx = ImportContext {
+        resource_id: &key.id,
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: None,
+        resource: &stack.resources[&key.id],
+    };
+    let mut state = StackState::new(Platform::Aws);
+    state.resources.insert(
+        key.id.clone(),
+        AwsKeyImporter
+            .import(
+                AwsKeyImportData {
+                    key_arn: KEY_ARN.to_string(),
+                    availability_probe: true,
+                },
+                &ctx,
+            )
+            .unwrap(),
+    );
+    for _ in 0..8 {
+        state = executor.step(state).await.unwrap().next_state;
+    }
+    let key_available = |state: &StackState| {
+        state.resources[&key.id]
+            .outputs
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<KeyOutputs>()
+            .unwrap()
+            .available
+    };
+    let ready_checks = |state: &StackState| {
+        state.resources["observed-key-dependent"]
+            .get_internal_controller_typed::<TestStorageController>()
+            .unwrap()
+            .ready_checks
+    };
+
+    availability.store(1, Ordering::SeqCst);
+    state = executor.step(state).await.unwrap().next_state;
+    assert_eq!(key_available(&state), Some(false));
+
+    // The key is restored; only observation runs (an open or failed update).
+    availability.store(0, Ordering::SeqCst);
+    let suspended_checks = ready_checks(&state);
+    for _ in 0..3 {
+        state = executor.observe_running(state, &[]).await.unwrap().state;
+    }
+    assert_eq!(key_available(&state), Some(true));
+    assert!(
+        ready_checks(&state) > suspended_checks,
+        "the dependent must resume once the key is observed available"
+    );
+}
+
 /// A CLI setup that reaches a key fails it at create, after the setup-owned
 /// resources before it were created. Tearing that deployment down must delete
 /// those resources and drop the key, which never existed in the cloud.
