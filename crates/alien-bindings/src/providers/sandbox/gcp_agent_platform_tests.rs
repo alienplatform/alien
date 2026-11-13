@@ -1841,3 +1841,242 @@ async fn terminate_of_a_sandbox_this_deployment_cannot_reach_is_still_refused() 
         "the refusal must carry why the delete was refused, got: {error}"
     );
 }
+
+// ---- preview ----------------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct FixedSigner;
+
+#[async_trait]
+impl EdgeTokenSigner for FixedSigner {
+    async fn sign(&self) -> Result<String> {
+        Ok("edge.jwt".to_string())
+    }
+}
+
+fn preview_provider(client: MockAgentPlatformApi) -> GcpAgentPlatformSandbox {
+    provider(client)
+        .with_preview_signer(Arc::new(FixedSigner))
+        .with_preview_ports(vec![8080, 8081, 9, 8090])
+}
+
+fn running_with_route(id: &str, expire_time: &str) -> SandboxEnvironment {
+    let mut sandbox = sandbox_in_state(id, "STATE_RUNNING");
+    sandbox.expire_time = Some(expire_time.to_string());
+    sandbox.connection_info = Some(alien_gcp_clients::gcp::agent_platform::ConnectionInfo {
+        load_balancer_hostname: Some("edge.example.test".to_string()),
+        routing_token: Some("route-1".to_string()),
+    });
+    sandbox
+}
+
+fn far_future() -> String {
+    (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()
+}
+
+#[tokio::test]
+async fn preview_without_a_signer_is_refused_as_unsupported() {
+    let error = provider(MockAgentPlatformApi::new())
+        .preview("s1", 8080)
+        .await
+        .expect_err("no signing identity is configured");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+}
+
+/// The grant is requested over `:execute`, bounded by the sandbox's own deadline, and the answer
+/// is returned as the one header contract: the edge credentials gate the agent port, the
+/// capability and port ride in `X-Alien-*`, and the caller's bearer has its own header because
+/// the edge consumes `Authorization`.
+#[tokio::test]
+async fn preview_grants_over_execute_and_returns_the_header_contract() {
+    let expire = far_future();
+    let deadline = chrono::DateTime::parse_from_rfc3339(&expire)
+        .unwrap()
+        .timestamp();
+    let mut client = MockAgentPlatformApi::new();
+    let sandbox_expire = expire.clone();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &sandbox_expire)));
+    client
+        .expect_execute()
+        .withf(move |_, sandbox, input| {
+            let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+            sandbox == "s1"
+                && body["op"] == "previewGrant"
+                && body["sandbox"] == "s1"
+                && body["port"] == 8081
+                && body["declaredPorts"] == json!([8080, 8081, 9, 8090])
+                && body["deadline"] == deadline
+        })
+        .times(1)
+        .returning(|_, _, _| {
+            Ok(serde_json::to_vec(&json!({
+                "capability": "cap-1",
+                "expiresAt": chrono::Utc::now().timestamp() + 900,
+            }))
+            .unwrap())
+        });
+    let preview = preview_provider(client).preview("s1", 8081).await.unwrap();
+
+    assert_eq!(
+        preview.endpoint,
+        "https://edge.example.test/v1/preview/8081"
+    );
+    assert_eq!(preview.headers["Authorization"], "Bearer edge.jwt");
+    assert_eq!(preview.headers["X-Sandbox-Routing-Token"], "route-1");
+    assert_eq!(
+        preview.headers["X-Sandbox-Port"],
+        alien_core::sandbox_image::AGENT_PORT.to_string()
+    );
+    assert_eq!(preview.headers["x-alien-preview-capability"], "cap-1");
+    assert_eq!(preview.headers["x-alien-preview-port"], "8081");
+    assert_eq!(preview.allowed_ports, vec![8081]);
+    assert_eq!(
+        preview.caller_authorization_header,
+        "x-alien-caller-authorization"
+    );
+    assert_eq!(
+        preview.subprotocols,
+        vec![
+            "v1.stream",
+            "edge.jwt",
+            "route-1",
+            &alien_core::sandbox_image::AGENT_PORT.to_string()
+        ]
+    );
+    assert!(preview.expires_in_seconds <= 900);
+}
+
+/// A second call for the same sandbox and port reuses the granted capability; another port asks
+/// again. The edge credentials are fresh each time, so only the grant is cached.
+#[tokio::test]
+async fn preview_caches_the_grant_per_port() {
+    let expire = far_future();
+    let grants = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    let counted = grants.clone();
+    client.expect_execute().returning(move |_, _, _| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Ok(serde_json::to_vec(&json!({
+            "capability": "cap",
+            "expiresAt": chrono::Utc::now().timestamp() + 900,
+        }))
+        .unwrap())
+    });
+    let provider = preview_provider(client);
+    provider.preview("s1", 8080).await.unwrap();
+    provider.preview("s1", 8080).await.unwrap();
+    assert_eq!(grants.load(Ordering::SeqCst), 1);
+    provider.preview("s1", 8081).await.unwrap();
+    assert_eq!(grants.load(Ordering::SeqCst), 2);
+}
+
+/// A grant close to expiry is asked for again rather than handed out about to die.
+#[tokio::test]
+async fn preview_refreshes_a_grant_close_to_expiry() {
+    let expire = far_future();
+    let grants = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    let counted = grants.clone();
+    client.expect_execute().returning(move |_, _, _| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Ok(serde_json::to_vec(&json!({
+            "capability": "cap",
+            "expiresAt": chrono::Utc::now().timestamp() + 5,
+        }))
+        .unwrap())
+    });
+    let provider = preview_provider(client);
+    provider.preview("s1", 8080).await.unwrap();
+    provider.preview("s1", 8080).await.unwrap();
+    assert_eq!(grants.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn preview_of_a_sandbox_without_an_edge_host_is_refused() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(|_, id| {
+        let mut sandbox = running_with_route(id, &far_future());
+        sandbox
+            .connection_info
+            .as_mut()
+            .expect("connection info")
+            .load_balancer_hostname = None;
+        Ok(sandbox)
+    });
+    let error = preview_provider(client)
+        .preview("s1", 8080)
+        .await
+        .expect_err("no edge host");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}
+
+#[tokio::test]
+async fn preview_of_a_sandbox_without_a_route_is_refused() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    let error = preview_provider(client)
+        .preview("s1", 8080)
+        .await
+        .expect_err("no routing token");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}
+
+#[tokio::test]
+async fn an_agent_refusal_of_the_grant_is_surfaced_and_nothing_is_cached() {
+    let expire = far_future();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    client
+        .expect_execute()
+        .times(2)
+        .returning(|_, _, _| Err(execute_refused()));
+    let provider = preview_provider(client);
+    assert!(provider.preview("s1", 9).await.is_err());
+    assert!(provider.preview("s1", 9).await.is_err());
+}
+
+#[tokio::test]
+async fn iam_edge_signer_signs_claims_for_the_edge_audience_with_the_service_account() {
+    let mut iam = alien_gcp_clients::gcp::iam::MockIamApi::new();
+    iam.expect_sign_jwt()
+        .withf(|account, request| {
+            let claims: serde_json::Value = serde_json::from_str(&request.payload).unwrap();
+            account == "sa@p.iam.gserviceaccount.com"
+                && claims["iss"] == "sa@p.iam.gserviceaccount.com"
+                && claims["sub"] == "sa@p.iam.gserviceaccount.com"
+                && claims["aud"] == "https://aiplatform.googleapis.com/"
+                && claims["exp"].as_i64().unwrap() > claims["iat"].as_i64().unwrap()
+                && claims["nonce"].as_u64().is_some()
+        })
+        .times(1)
+        .returning(|_, _| {
+            Ok(alien_gcp_clients::gcp::iam::SignJwtResponse {
+                signed_jwt: "signed.jwt".to_string(),
+            })
+        });
+    let signer = IamEdgeTokenSigner::new(Arc::new(iam), "sa@p.iam.gserviceaccount.com");
+    assert_eq!(signer.sign().await.unwrap(), "signed.jwt");
+}
+
+/// A port the declaration did not name is refused before any call to the cloud or the agent.
+#[tokio::test]
+async fn preview_of_an_undeclared_port_is_refused_without_a_call() {
+    let error = preview_provider(MockAgentPlatformApi::new())
+        .preview("s1", 9999)
+        .await
+        .expect_err("9999 is not declared");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(error.to_string().contains("9999"), "{error}");
+}

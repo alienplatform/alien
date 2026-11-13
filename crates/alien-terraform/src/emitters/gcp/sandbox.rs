@@ -118,6 +118,18 @@ fn agent_platform_fields(
             Expression::Number(hcl::Number::from(seconds as i64)),
         ));
     }
+    if !sandbox.preview_ports.is_empty() {
+        fields.push((
+            "previewPorts",
+            Expression::Array(
+                sandbox
+                    .preview_ports
+                    .iter()
+                    .map(|port| Expression::Number(hcl::Number::from(i64::from(*port))))
+                    .collect(),
+            ),
+        ));
+    }
     Ok(fields)
 }
 
@@ -701,6 +713,7 @@ mod tests {
                     targets_kubernetes: false,
                     stack_settings: &settings,
                     names: &names,
+                    pins: &alien_core::SetupPins::default(),
                 };
                 let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
                 let binding = GcpAgentPlatformSandboxEmitter
@@ -883,6 +896,8 @@ mod tests {
                 region: alien_core::BindingValue::Value("us-central1".to_string()),
                 max_lifetime_seconds: Some(1800),
                 allow_egress: false,
+                preview_service_account: None,
+                preview_ports: Vec::new(),
             })
             .expect("the binding type serializes");
             assert_eq!(
