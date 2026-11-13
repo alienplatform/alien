@@ -14,6 +14,74 @@ use alien_core::{
 use alien_terraform::TerraformTarget;
 
 #[test]
+fn gcp_key_used_by_a_volume_is_usable_by_the_compute_service_agent() {
+    let container = alien_core::Container::new("db".to_string())
+        .code(alien_core::ContainerCode::Image {
+            image: "postgres:17".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "1".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "1Gi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .stateful(true)
+        .replicas(1)
+        .persistent_storage(alien_core::PersistentStorage {
+            encryption_key: Some(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key")),
+            size: "10Gi".to_string(),
+            mount_path: "/data".to_string(),
+            backups: alien_core::VolumeBackups::default(),
+        })
+        .permissions("execution".to_string())
+        .build();
+    let stack = Stack::new("enterprise-key".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(container, ResourceLifecycle::Live)
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(rendered.contains("resource \"google_kms_crypto_key_iam_member\" \"customer_key_compute_disks\""));
+    // `google_project_service_identity` returns a null email for Compute: `terraform validate`
+    // accepts that and only `apply` fails, so the member is built from the project number.
+    assert!(rendered.contains(
+        "member = \"serviceAccount:service-${data.google_project.customer_key_project.number}@compute-system.iam.gserviceaccount.com\""
+    ), "{rendered}");
+    // The grant waits for the agent to exist (first Compute use in a project creates it).
+    assert!(rendered.contains("depends_on = [ google_project_service_identity.customer_key_compute_agent ]"), "{rendered}");
+    assert_terraform_valid(&module, "gcp_key_with_volume");
+
+    // A key no volume uses gets no Compute grant.
+    let plain = Stack::new("enterprise-key".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let plain = render(&plain, TerraformTarget::Gcp, StackSettings::default())
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!plain.contains("compute.googleapis.com"));
+}
+
+#[test]
 fn gcp_key_package_is_valid_and_retained() {
     let mut stack = Stack::new("enterprise-key".to_string())
         .add_with_remote_access(
