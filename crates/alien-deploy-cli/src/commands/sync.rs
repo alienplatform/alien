@@ -4189,6 +4189,19 @@ async fn helm_upgrade(
     }
     let images = airgap::chart_images(chart, &serde_json::Value::Null, &values)
         .context(config_error("checking the site's chart images"))?;
+    for key in images
+        .keys()
+        .filter(|key| key.starts_with(airgap::TEMPLATE_IMAGE_PREFIX))
+    {
+        if !record.chart_images.contains_key(key) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: key.clone(),
+                message: format!(
+                    "The chart runs an image ({key}) that is not in the bundle. Remove this pending bundle from to-site/, then pass the same values file online and at the site and re-download the update."
+                ),
+            }));
+        }
+    }
     for key in images.keys().filter(|key| key.starts_with("postgres.")) {
         if !record.chart_images.contains_key(key) {
             let resource = key
@@ -4241,7 +4254,11 @@ async fn helm_upgrade(
             &format!("global.imageRegistry={}", registry.trim_end_matches('/')),
         ]);
     }
-    for (key, image) in &record.chart_images {
+    for (key, image) in record
+        .chart_images
+        .iter()
+        .filter(|(key, _)| !key.starts_with(airgap::TEMPLATE_IMAGE_PREFIX))
+    {
         cmd.args([
             "--set-string",
             &format!("{key}.repository={}", image.repository),

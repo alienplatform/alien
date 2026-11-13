@@ -719,9 +719,15 @@ fn merge_chart_values(values: &mut serde_yaml::Value, overrides: &serde_yaml::Va
 /// `repository` and `tag`.
 pub const CHART_IMAGE_VALUES: [&str; 2] = ["runtime.image", "runtime.cleanup.onUninstall.image"];
 
+/// Key prefix of images a chart's templates run but no `repository`/`tag`
+/// values name: the sandbox network probe and the metrics server. They are
+/// bundled so the site's mirror holds them; the chart finds them there through
+/// `global.imageRegistry`, so nothing is set for them at install.
+pub const TEMPLATE_IMAGE_PREFIX: &str = "template.";
+
 /// The images a packaged chart runs by default, by values key, as
 /// `repository:tag` references. The Operator (`runtime.image`) must be
-/// there.
+/// there. Images only the templates name are keyed `template.*`.
 pub fn chart_images(
     chart: &Path,
     target: &serde_json::Value,
@@ -732,6 +738,7 @@ pub fn chart_images(
         .context(file_failed(format!("opening {}", chart.display())))?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let mut values = None;
+    let mut sandbox_probe = None;
     for entry in archive
         .entries()
         .into_alien_error()
@@ -752,7 +759,14 @@ pub fn chart_images(
                 .into_alien_error()
                 .context(invalid("the chart's values.yaml is unreadable"))?;
             values = Some(text);
-            break;
+        } else if path.components().count() == 3
+            && path.ends_with("templates/sandbox-cni-probe.yaml")
+        {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut text)
+                .into_alien_error()
+                .context(invalid("the chart's sandbox probe is unreadable"))?;
+            sandbox_probe = Some(text);
         }
     }
     // Helm permits charts without defaults; installation values still apply.
@@ -831,6 +845,37 @@ pub fn chart_images(
                 images.insert(key.to_string(), repository);
             }
             _ => {}
+        }
+    }
+    // The chart's templates run these too; a pre-install hook needs the probe
+    // image before anything else starts.
+    if let Some(template) = sandbox_probe {
+        // The template pins it: `"repository" "<repo>" "digest" "sha256:..."`.
+        let mut words = template.split('"');
+        let mut image = None;
+        while let Some(word) = words.next() {
+            if word == "repository" {
+                let repository = words.nth(1);
+                let digest = words.find(|w| *w == "digest").and_then(|_| words.nth(1));
+                image = repository.zip(digest);
+                break;
+            }
+        }
+        let (repository, digest) = image.ok_or_else(|| {
+            AlienError::new(invalid("the chart's sandbox probe names no pinned image"))
+        })?;
+        images.insert(
+            format!("{TEMPLATE_IMAGE_PREFIX}sandboxCniProbe"),
+            format!("{repository}@{digest}"),
+        );
+    }
+    let metrics_server = &values["clusterBootstrap"]["metricsServer"];
+    if metrics_server["enabled"].as_bool() == Some(true) {
+        if let Some(image) = metrics_server["image"].as_str().filter(|i| !i.is_empty()) {
+            images.insert(
+                format!("{TEMPLATE_IMAGE_PREFIX}metricsServer"),
+                image.to_string(),
+            );
         }
     }
     if !images.contains_key(CHART_IMAGE_VALUES[0]) {
@@ -1617,6 +1662,69 @@ mod tests {
         assert_eq!(
             target["releaseInfo"]["stack"]["resources"]["worker"]["config"]["code"]["image"],
             "manager.example.com:5050/artifacts/default:w-1"
+        );
+    }
+
+    #[test]
+    fn chart_images_include_the_images_only_templates_name() {
+        let stack = alien_core::Stack::new("app".to_string())
+            .add(
+                alien_core::Sandbox::new("agent".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "ubuntu:24.04".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(alien_core::SandboxEgress::Internet)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: Some(3600),
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &HelmRegistry::built_in(),
+                stack_settings: Default::default(),
+                chart_name: "app".to_string(),
+            },
+        )
+        .unwrap();
+        let chart = apply_package_defaults(
+            chart,
+            &PackageDefaults {
+                version: Some("1.0.0"),
+                management_url: Some("https://manager.example.com"),
+                operator_image: Some(OperatorImageDefault {
+                    repository: "registry.example.com/alien-operator",
+                    tag: "1.2.3",
+                }),
+                log_collector: Some(LogCollectorDefault::PodApi),
+                registry_pull_secret: false,
+                setup: None,
+            },
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-1.0.0.tgz");
+        std::fs::write(&path, package_chart(&chart).unwrap()).unwrap();
+
+        let images = chart_images(&path, &serde_json::Value::Null, &[]).unwrap();
+        assert_eq!(
+            images["template.sandboxCniProbe"],
+            "docker.io/library/python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
+            "the pre-install probe runs from the mirror, so the bundle must carry it"
+        );
+        assert!(!images.contains_key("template.metricsServer"));
+
+        let metrics: serde_yaml::Value =
+            serde_yaml::from_str("clusterBootstrap: {metricsServer: {enabled: true}}").unwrap();
+        let images = chart_images(&path, &serde_json::Value::Null, &[metrics]).unwrap();
+        assert_eq!(
+            images["template.metricsServer"],
+            "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
         );
     }
 
