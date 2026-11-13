@@ -503,7 +503,10 @@ impl SandboxCapabilities {
             // `:execute` is one request with one answer, capped at about 30 seconds. Input
             // cannot reach a command after its call has answered, so there is no stream to drive.
             interactive_commands: false,
-            // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
+            // The edge admits only `:execute`, or a port declared in the template with a Google
+            // identity JWT. Preview is the agent's own port-scoped capability carried over that
+            // path; it stays false until setup also creates the private endpoint it is reached
+            // through.
             preview: false,
             // `:pause` / `:resume` keep the process and its memory: measured live over three
             // cycles on one sandbox, with the same boot id, pid and a counter that continued.
@@ -514,7 +517,9 @@ impl SandboxCapabilities {
             snapshot: false,
             // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
             domain_egress_rules: false,
-            // A declared `deny` blocks both routed egress and DNS.
+            // A declared `deny` blocks TCP to public addresses, the metadata server and the
+            // deployment VPC (measured live). The sandbox can still resolve DNS names through
+            // Google's resolver, a small data-out channel: the platform has no setting for it.
             egress_deny: true,
             // The declared ceilings are enforced, but by terminating the sandbox on breach rather
             // than by refusing the allocation — a caller reading `true` should expect the sandbox
