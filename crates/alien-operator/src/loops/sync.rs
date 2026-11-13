@@ -1546,6 +1546,43 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    /// Turning on protected mode removes the dynamic containers the install ran
+    /// before; unprotected installs and installs that never allowed them keep
+    /// today's behavior.
+    #[test]
+    fn protected_mode_removes_dynamic_containers_only_where_they_were_allowed() {
+        let config = |dynamic: bool, protected: bool, platform: Platform, namespace: bool| {
+            let mut config = OperatorConfig::builder()
+                .platform(platform)
+                .data_dir("/tmp/unused")
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build();
+            config.dynamic_containers = dynamic;
+            config.namespace = namespace.then(|| "apps".to_string());
+            if protected {
+                config.release_signing = Some(crate::protected::test_signing("shop"));
+            }
+            config
+        };
+        let k8s = Platform::Kubernetes;
+        let removes = |c: &OperatorConfig| super::dynamic_containers_removed_by_protection(c);
+        let granted = |c: &OperatorConfig| {
+            super::dynamic_containers_capability(c).state == OperatorCapabilityState::Granted
+        };
+
+        let protected = config(true, true, k8s, true);
+        assert!(removes(&protected));
+        assert!(!granted(&protected));
+
+        let unprotected = config(true, false, k8s, true);
+        assert!(!removes(&unprotected));
+        assert!(granted(&unprotected));
+
+        assert!(!removes(&config(false, true, k8s, true)));
+        assert!(!removes(&config(true, true, k8s, false)));
+        assert!(!removes(&config(true, true, Platform::Aws, true)));
+    }
+
     /// A chart upgrade to a new release with the same setup rewrites the release
     /// file in place; the next report names the new release.
     #[test]

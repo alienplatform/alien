@@ -3500,6 +3500,10 @@ fn machine_agent_component(arch: MachineArch) -> &'static str {
     }
 }
 
+/// The only validator arguments a protected join runs: the machine agent's
+/// `validate-config` command on the candidate file.
+const PROTECTED_VALIDATOR_ARGS: [&str; 2] = ["validate-config", "{candidate_path}"];
+
 /// Check the bundle's machine agent is the build the vendor's signed release
 /// names, before it is installed.
 fn verify_machine_agent(
@@ -3566,6 +3570,15 @@ fn verify_machine_agent(
             return Err(refused(format!(
                 "the bundle's config validator '{}' is {validator_digest}, not the signed machine agent {pinned}; a protected join runs no other program",
                 validator.executable
+            )));
+        }
+        // The signed agent runs as root with whatever arguments the bundle
+        // gives it, so only the one fixed vector its validate command uses
+        // is allowed.
+        if validator.args != PROTECTED_VALIDATOR_ARGS {
+            return Err(refused(format!(
+                "the bundle's config validator arguments {:?} are not the fixed {:?} a protected join runs",
+                validator.args, PROTECTED_VALIDATOR_ARGS
             )));
         }
     }
@@ -6494,7 +6507,7 @@ mod tests {
             std::fs::write(dir.path().join("same-build"), AGENT).unwrap();
             let validator = |executable: &str| MachineBundleConfigValidator {
                 executable: executable.to_string(),
-                args: vec!["{candidate_path}".to_string()],
+                args: vec!["validate-config".to_string(), "{candidate_path}".to_string()],
             };
             let verify = |manifest: &MachineBundleManifest| {
                 verify_machine_agent(
@@ -6515,6 +6528,18 @@ mod tests {
                 ..signed
             };
             verify(&manifest).expect("a validator that is the signed build is accepted");
+
+            // The signed agent as validator, but with arguments the bundle chose.
+            manifest.config.validator = Some(MachineBundleConfigValidator {
+                executable: "same-build".to_string(),
+                args: vec![
+                    "serve".to_string(),
+                    "--flag".to_string(),
+                    "{candidate_path}".to_string(),
+                ],
+            });
+            let error = verify(&manifest).unwrap_err();
+            assert!(error.to_string().contains("are not the fixed"), "{error}");
 
             manifest.config.validator = Some(validator("other"));
             let error = verify(&manifest).unwrap_err();
