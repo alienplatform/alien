@@ -1659,6 +1659,41 @@ impl StackExecutor {
                                     resource_id
                                 );
                             }
+                            ResourceStatus::Updating
+                                if current_resource_state
+                                    .get_internal_controller()?
+                                    .is_some_and(|controller| controller.is_interruptible()) =>
+                            {
+                                // The controller only waits on something outside Alien in this
+                                // state and opted in to being interrupted, so the newer config
+                                // takes over now instead of after the wait ends.
+                                if self.dependencies_allow_update(
+                                    current_resource_state,
+                                    desired_config,
+                                    state,
+                                )? {
+                                    current_resource_state
+                                        .config
+                                        .validate_update(&desired_config.resource)
+                                        .context(ErrorData::ResourceConfigInvalid {
+                                            message: "Resource cannot be updated".to_string(),
+                                            resource_id: Some(resource_id.clone()),
+                                        })?;
+                                    info!(
+                                        "Interrupting the update wait of '{}' with its new config",
+                                        resource_id
+                                    );
+                                    plan_result.updates.insert(
+                                        resource_id.clone(),
+                                        desired_config.resource.clone(),
+                                    );
+                                } else {
+                                    debug!(
+                                        "Deferring the interruption of '{}' - new dependencies not ready yet",
+                                        resource_id
+                                    );
+                                }
+                            }
                             _ => {
                                 // Updating, Deleting -- wait for stable before acting. An update
                                 // also finishes with the config it started with, so the change
@@ -2488,7 +2523,7 @@ impl StackExecutor {
                             Ok(()) => {
                                 let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
-                                    state.previous_config = Some(current_state.config.clone()); // Store old config
+                                    state.previous_config = previous_config_for_update(current_state);
                                     state.dependencies = desired_config.dependencies.clone(); // Update dependencies to match new config
                                     state.status = controller.get_status();
                                     state.outputs = controller.get_outputs();
@@ -3620,5 +3655,18 @@ impl StackExecutor {
         });
 
         desired_resources_are_synced && deleting_resources_are_synced
+    }
+}
+
+/// The config recorded as "before" when an update starts. An update that interrupts another
+/// keeps the config the resource was last stable on, not the one it was still applying.
+fn previous_config_for_update(current_state: &StackResourceState) -> Option<Resource> {
+    if current_state.status == ResourceStatus::Updating {
+        current_state
+            .previous_config
+            .clone()
+            .or_else(|| Some(current_state.config.clone()))
+    } else {
+        Some(current_state.config.clone())
     }
 }
