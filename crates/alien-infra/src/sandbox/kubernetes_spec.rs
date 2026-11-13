@@ -298,6 +298,43 @@ pub fn idle_pool_pod(
     )
 }
 
+/// Name of the agent's readiness path: 200 once the pod's NetworkPolicy is proven in force.
+const NETWORK_READY_PATH: &str = "/v1/network-ready";
+
+/// Makes the pod Ready only after its NetworkPolicy is proven in force.
+///
+/// On a fresh node the policy can load after the pod starts, and until it does the pod's egress
+/// is unrestricted. The agent tries to connect to `operator_address` (a pod address every sandbox
+/// policy refuses) and answers the readiness probe only once that connection is dropped. The
+/// broker claims only Ready pods. `None` (a chart that predates the address) leaves the pod
+/// as it was: ready when its container runs.
+pub(crate) fn require_enforced_policy(pod: &mut Pod, operator_address: Option<&str>) {
+    let Some(address) = operator_address.filter(|address| !address.is_empty()) else {
+        return;
+    };
+    let Some(spec) = pod.spec.as_mut() else {
+        return;
+    };
+    let container = &mut spec.containers[0];
+    container.env.get_or_insert_default().push(EnvVar {
+        name: "ALIEN_SANDBOX_POLICY_CANARY".to_string(),
+        value: Some(address.to_string()),
+        value_from: None,
+    });
+    container.readiness_probe = Some(k8s_openapi::api::core::v1::Probe {
+        http_get: Some(k8s_openapi::api::core::v1::HTTPGetAction {
+            path: Some(NETWORK_READY_PATH.to_string()),
+            port: k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(
+                alien_core::sandbox_image::AGENT_PORT as i32,
+            ),
+            ..Default::default()
+        }),
+        period_seconds: Some(2),
+        failure_threshold: Some(1),
+        ..Default::default()
+    });
+}
+
 pub(crate) fn idle_pool_pod_with_labels(
     sandbox: &Sandbox,
     namespace: &str,
@@ -385,6 +422,40 @@ mod tests {
                 idle_pause_seconds: None,
             })
             .build()
+    }
+
+    /// With the Operator's address the pod is Ready only once the agent proves its policy is in
+    /// force; without it (an older chart) the pod is unchanged.
+    #[test]
+    fn the_pod_is_ready_only_when_its_policy_is_proven_in_force() {
+        let build = || {
+            sandbox_pod(
+                &sandbox(SandboxEgress::Internet),
+                "s1",
+                "sbx",
+                "gvisor",
+                None,
+                None,
+            )
+        };
+        let mut gated = build();
+        require_enforced_policy(&mut gated, Some("10.1.2.3:8080"));
+        let container = &gated.spec.as_ref().unwrap().containers[0];
+        let probe = container.readiness_probe.as_ref().expect("a readiness probe");
+        assert_eq!(
+            probe.http_get.as_ref().unwrap().path.as_deref(),
+            Some("/v1/network-ready")
+        );
+        assert!(container.env.as_ref().unwrap().iter().any(|variable| {
+            variable.name == "ALIEN_SANDBOX_POLICY_CANARY"
+                && variable.value.as_deref() == Some("10.1.2.3:8080")
+        }));
+
+        for absent in [None, Some("")] {
+            let mut pod = build();
+            require_enforced_policy(&mut pod, absent);
+            assert_eq!(pod, build());
+        }
     }
 
     #[test]

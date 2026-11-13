@@ -327,6 +327,7 @@ impl GcpKeyController {
                 crypto_key_name: self.crypto_key_name.clone()?,
             },
             wrapping_key_id: self.primary_version.clone()?,
+            disk_encryption_set_id: None,
         }))
     }
 
