@@ -612,7 +612,7 @@ impl GatewayEgress {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
         probe::supervisor_udp(self.privileged).await?;
-        probe::command(self.command_identity).await?;
+        probe::command(self.command_identity, self.privileged).await?;
         self.path_verified.store(true, Ordering::Release);
         Ok(())
     }
