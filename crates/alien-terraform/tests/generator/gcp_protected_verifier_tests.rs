@@ -611,7 +611,11 @@ fn management_publishes_to_commands_topics_by_name_only_when_it_dispatches_comma
     };
     let dispatching = serde_json::json!({ "extend": { "*": ["worker/dispatch-command"] } });
 
-    let text = module_text(&render(&stack_with(dispatching.clone()), TerraformTarget::Gcp, settings(true)));
+    let text = module_text(&render(
+        &stack_with(dispatching.clone()),
+        TerraformTarget::Gcp,
+        settings(true),
+    ));
     let block = text
         .split("resource \"google_project_iam_member\"")
         .skip(1)
@@ -629,8 +633,22 @@ fn management_publishes_to_commands_topics_by_name_only_when_it_dispatches_comma
         "limited by name to this install's commands topics: {block}"
     );
 
-    let unsigned = module_text(&render(&stack_with(dispatching), TerraformTarget::Gcp, settings(false)));
-    assert!(!unsigned.contains("commands_topic_publisher"), "unsigned installs are unchanged");
-    let without = module_text(&render(&stack_with(serde_json::json!("auto")), TerraformTarget::Gcp, settings(true)));
-    assert!(!without.contains("commands_topic_publisher"), "no dispatch set, no grant");
+    let unsigned = module_text(&render(
+        &stack_with(dispatching),
+        TerraformTarget::Gcp,
+        settings(false),
+    ));
+    assert!(
+        !unsigned.contains("commands_topic_publisher"),
+        "unsigned installs are unchanged"
+    );
+    let without = module_text(&render(
+        &stack_with(serde_json::json!("auto")),
+        TerraformTarget::Gcp,
+        settings(true),
+    ));
+    assert!(
+        !without.contains("commands_topic_publisher"),
+        "no dispatch set, no grant"
+    );
 }

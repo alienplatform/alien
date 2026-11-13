@@ -21,8 +21,14 @@ fn stack() -> Stack {
             "execution",
             PermissionProfile::new().resource("assets", ["storage/data-write"]),
         )
-        .permission("reader", PermissionProfile::new().global(["storage/data-read"]))
-        .permission("unrelated", PermissionProfile::new().global(["queue/data-read"]))
+        .permission(
+            "reader",
+            PermissionProfile::new().global(["storage/data-read"]),
+        )
+        .permission(
+            "unrelated",
+            PermissionProfile::new().global(["queue/data-read"]),
+        )
         .add(
             Storage::new("assets".to_string()).build(),
             ResourceLifecycle::Frozen,

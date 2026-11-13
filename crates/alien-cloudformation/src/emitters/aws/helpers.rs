@@ -95,6 +95,49 @@ pub(crate) fn chunk_managed_policy_statements(
         .collect())
 }
 
+/// Sid of the statement that refuses the management role writes under `/signed/`. It was added
+/// after installs existed, so it is placed after packing (see [`append_statements`]) and the
+/// statements an install already has stay in the documents they are in.
+pub(crate) const SIGNING_SETTINGS_DENY_SID: &str = "OnlySetupChangesSigningSettings";
+
+/// Splits out the statements named `sid`: (the others, the named ones), in order.
+pub(crate) fn take_statements_with_sid(
+    statements: Vec<CfExpression>,
+    sid: &str,
+) -> (Vec<CfExpression>, Vec<CfExpression>) {
+    statements.into_iter().partition(|statement| {
+        !matches!(statement, CfExpression::Object(object)
+            if object.get("Sid") == Some(&CfExpression::from(sid)))
+    })
+}
+
+/// Adds `statements` after the packed `documents` without moving anything in them: onto the
+/// last document while it stays below the size limit, otherwise as a document of their own.
+pub(crate) fn append_statements(
+    mut documents: Vec<CfExpression>,
+    statements: Vec<CfExpression>,
+) -> Result<Vec<CfExpression>> {
+    if statements.is_empty() {
+        return Ok(documents);
+    }
+    let existing = match documents.last() {
+        Some(CfExpression::Object(document)) => match document.get("Statement") {
+            Some(CfExpression::List(existing)) => existing.clone(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let mut combined = existing;
+    combined.extend(statements.iter().cloned());
+    if !documents.is_empty() && managed_policy_document_size(&combined)? <= MAX_MANAGED_POLICY_BYTES
+    {
+        *documents.last_mut().expect("not empty") = managed_policy_document(combined);
+    } else {
+        documents.push(managed_policy_document(statements));
+    }
+    Ok(documents)
+}
+
 /// Merges statements that differ only in their actions: same effect, same resources and same
 /// conditions. A statement allows or denies each of its actions on each resource under its
 /// conditions independently, so one statement with the union of the actions means exactly what
@@ -861,6 +904,43 @@ mod tests {
             resolved_statements,
             *resolved["Statement"].as_array().unwrap()
         );
+    }
+
+    /// An added statement leaves the packed documents as they are: it joins the last one, or
+    /// gets a document of its own when that is full.
+    #[test]
+    fn an_appended_statement_never_moves_packed_statements() {
+        let deny = CfExpression::object([
+            ("Sid", CfExpression::from(SIGNING_SETTINGS_DENY_SID)),
+            ("Effect", CfExpression::from("Deny")),
+        ]);
+        let heavy: Vec<CfExpression> = (0..5)
+            .map(|index| prefix_heavy_statement(index, 17))
+            .collect();
+
+        let roomy = vec![
+            managed_policy_document(vec![heavy[0].clone()]),
+            managed_policy_document(vec![heavy[1].clone()]),
+        ];
+        let appended = append_statements(roomy.clone(), vec![deny.clone()]).unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[0], roomy[0]);
+        assert_eq!(
+            appended[1],
+            managed_policy_document(vec![heavy[1].clone(), deny.clone()])
+        );
+
+        let full = vec![managed_policy_document(heavy.clone())];
+        let appended = append_statements(full.clone(), vec![deny.clone()]).unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[0], full[0]);
+        assert_eq!(appended[1], managed_policy_document(vec![deny.clone()]));
+
+        let (others, denies) = take_statements_with_sid(
+            vec![deny.clone(), heavy[0].clone()],
+            SIGNING_SETTINGS_DENY_SID,
+        );
+        assert_eq!((others, denies), (vec![heavy[0].clone()], vec![deny]));
     }
 
     #[test]

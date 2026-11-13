@@ -618,6 +618,9 @@ pub fn emit_iam_role_policy_stub(
     ));
 }
 
+/// Sid of the statement that refuses the management role writes under `/signed/`.
+const SIGNING_SETTINGS_DENY_SID: &str = "OnlySetupChangesSigningSettings";
+
 pub fn emit_iam_managed_policy_chunks(
     fragment: &mut TfFragment,
     role_label: &str,
@@ -627,10 +630,28 @@ pub fn emit_iam_managed_policy_chunks(
 ) -> Result<()> {
     let mut statements = statements;
     ensure_unique_statement_sids(&mut statements);
-    let chunks = chunk_iam_statements(
-        statements,
-        alien_permissions::generators::MAX_MANAGED_POLICY_BYTES,
-    )?;
+    // The signing Deny was added after installs existed, so it goes after packing and the
+    // statements an install already has stay in the policies they are in.
+    let (appended, statements): (Vec<_>, Vec<_>) = statements
+        .into_iter()
+        .partition(|statement| statement.sid == SIGNING_SETTINGS_DENY_SID);
+    let max_policy_bytes = alien_permissions::generators::MAX_MANAGED_POLICY_BYTES;
+    let mut chunks = chunk_iam_statements(statements, max_policy_bytes)?;
+    if !appended.is_empty() {
+        let fits_last = match chunks.last() {
+            Some(last) => {
+                let mut combined = last.clone();
+                combined.extend(appended.iter().cloned());
+                policy_document_size(&combined)? <= max_policy_bytes
+            }
+            None => false,
+        };
+        if fits_last {
+            chunks.last_mut().expect("checked").extend(appended);
+        } else {
+            chunks.extend(chunk_iam_statements(appended, max_policy_bytes)?);
+        }
+    }
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let policy_label = format!("{base_label}_{idx}");
         let attachment_label = format!("{policy_label}_attachment");

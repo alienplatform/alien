@@ -7,8 +7,9 @@
 # unprotected stack renders byte-identical to the base except for the changes listed there.
 #
 # Intended today (base = the merge base with main): every AWS management role denies writes
-# under /signed/ (`OnlySetupChangesSigningSettings`); Terraform AWS repacks its management
-# statements among its policies to fit it.
+# under /signed/ (`OnlySetupChangesSigningSettings`). It is appended after packing, so every
+# statement an install has stays in the same managed policy; the Deny joins the last policy, or
+# gets a policy of its own when that one is full.
 #
 # Usage: scripts/setup-render-diff/run.sh [base-ref]
 #   SETUP_RENDER_DIFF_BASE_TARGET  cargo target dir for the base build (default: a temp dir)

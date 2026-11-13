@@ -114,7 +114,9 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
         // management publishing on every topic named `<prefix>-*-rq` once. A worker a later
         // release adds needs no setup update; preflight refuses a queue that ends in `-rq`.
         if ctx.stack_settings.signing.is_some() && management_dispatches_commands(ctx) {
-            fragment.resource_blocks.push(commands_topic_publisher(label, &member));
+            fragment
+                .resource_blocks
+                .push(commands_topic_publisher(label, &member));
         }
 
         super::federation::emit(&mut fragment, label, &RemoteStackManagement::RESOURCE_TYPE);
