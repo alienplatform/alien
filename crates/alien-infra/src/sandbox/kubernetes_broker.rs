@@ -579,8 +579,10 @@ pub(crate) async fn reattach_session_for_deployment(
             })
         })?;
     // A pod that is not Ready has not proven its NetworkPolicy is in force (see `cold_create`):
-    // a retry for a session whose pod is still starting must not receive it early.
-    if !pod_is_ready(&pod) {
+    // a retry for a session whose pod is still starting must not receive it early. Only the
+    // `Ready` condition counts here, not the Operator address: a session already handed out
+    // proved its policy before the claim, and an Operator restart (new address) must not strand it.
+    if !pod_condition_ready(&pod) {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!("session '{session_id}' is not ready yet"),
             resource_id: Some(sandbox_id.to_string()),
@@ -624,16 +626,19 @@ pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
     )
 }
 
-fn pod_is_ready_for(pod: &Pod, operator_address: Option<&str>) -> bool {
-    let ready = pod
-        .status
+fn pod_condition_ready(pod: &Pod) -> bool {
+    pod.status
         .as_ref()
         .and_then(|status| status.conditions.as_ref())
         .is_some_and(|conditions| {
             conditions
                 .iter()
                 .any(|condition| condition.type_ == "Ready" && condition.status == "True")
-        });
+        })
+}
+
+fn pod_is_ready_for(pod: &Pod, operator_address: Option<&str>) -> bool {
+    let ready = pod_condition_ready(pod);
     let canary = pod
         .spec
         .as_ref()
@@ -1606,6 +1611,10 @@ mod tests {
         });
         assert!(pod_is_ready_for(&pod, Some("10.0.0.5:8080")));
         assert!(!pod_is_ready_for(&pod, Some("10.0.0.9:8080")));
+        assert!(
+            pod_condition_ready(&pod),
+            "a session already handed out stays reachable after an Operator restart"
+        );
         assert!(
             pod_is_ready_for(&pod, None),
             "no Operator address: nothing to compare"
