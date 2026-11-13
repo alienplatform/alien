@@ -836,8 +836,11 @@
             "compute.instances.setTags",
             "compute.networks.updatePolicy",
             "compute.subnetworks.use",
-            // Public machine type metadata; the update preflight checks that a zone of the region offers each pool's machine.
+            // Public zone and machine type metadata; the update preflight checks that a zone of the region offers each pool's machine.
+            "compute.zones.list",
             "compute.machineTypes.get",
+            // Regional quota values and usage only; the update preflight reads the regional CPU and GPU quotas.
+            "compute.regions.get",
             // Applied quota limits only; the update preflight reads the per-VM-family vCPU limit.
             "cloudquotas.quotas.get"
           ]
