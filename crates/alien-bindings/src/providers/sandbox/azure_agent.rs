@@ -97,6 +97,11 @@ async fn not_found_response(
 }
 
 impl AzureSandbox {
+    #[cfg(test)]
+    async fn invalidate_connection_for_test(&self, sandbox_id: &str) {
+        *self.connection_slot(sandbox_id).await.lock().await = None;
+    }
+
     async fn invalidate_connection(&self, sandbox_id: &str, request: &reqwest::Request) {
         let slot = self.connection_slot(sandbox_id).await;
         let mut cached = slot.lock().await;
@@ -296,6 +301,9 @@ impl AzureSandbox {
 pub(super) struct CachedGrant {
     capability: String,
     expires_at: i64,
+    /// The boot credential of the agent that signed it. A grant is only good for that boot: a
+    /// resumed or replaced sandbox runs a new agent with a new key.
+    boot_token: String,
 }
 
 /// A cached grant is replaced this many seconds before it stops working, so a caller never holds
@@ -319,7 +327,17 @@ impl AzureSandbox {
                 ),
             }));
         }
-        if !self.session_uses_agent(OPERATION, sandbox_id).await? {
+        Self::checked_sandbox_id(OPERATION, sandbox_id)?;
+        let record = self
+            .read_sandbox(OPERATION, sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".into(),
+                    reason: format!("{OPERATION}: sandbox '{sandbox_id}' does not exist"),
+                })
+            })?;
+        if !uses_agent(&record)? {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: OPERATION.to_string(),
                 reason: "this sandbox runs without the Alien agent, which issues the preview \
@@ -328,24 +346,52 @@ impl AzureSandbox {
             }));
         }
         let now = chrono::Utc::now().timestamp();
+        // A capability never outlives the sandbox's own deadline: the agent is told it, and a
+        // sandbox already past it gets none.
+        let deadline = record
+            .labels
+            .get(alien_core::SANDBOX_EXPIRY_LABEL)
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|millis| millis.div_euclid(1000));
+        if deadline.is_some_and(|deadline| deadline <= now) {
+            return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                sandbox_id: sandbox_id.to_string(),
+                restriction: "lifetime".to_string(),
+                reason: "its lifetime has ended; create a new sandbox".to_string(),
+            }));
+        }
+        let current_boot = self
+            .connection_slot(sandbox_id)
+            .await
+            .lock()
+            .await
+            .as_ref()
+            .map(|connection| connection.token.clone());
         let cached = self
             .preview_grants
             .lock()
             .expect("grants lock")
             .get(&(sandbox_id.to_string(), port))
-            .filter(|grant| grant.expires_at - now > GRANT_RENEW_MARGIN_SECONDS)
+            .filter(|grant| {
+                grant.expires_at - now > GRANT_RENEW_MARGIN_SECONDS
+                    && current_boot.as_deref() == Some(grant.boot_token.as_str())
+            })
             .cloned();
         let grant = match cached {
             Some(grant) => grant,
             None => {
+                let mut body = serde_json::json!({
+                    "v": 1,
+                    "op": "previewGrant",
+                    "sandbox": sandbox_id,
+                    "port": port,
+                });
+                if let Some(deadline) = deadline {
+                    body["deadline"] = serde_json::json!(deadline);
+                }
                 let request = AgentTransport::request(self, sandbox_id, reqwest::Method::POST, "/")
                     .await?
-                    .json(&serde_json::json!({
-                        "v": 1,
-                        "op": "previewGrant",
-                        "sandbox": sandbox_id,
-                        "port": port,
-                    }));
+                    .json(&body);
                 let response = AgentTransport::send(self, sandbox_id, request, OPERATION).await?;
                 #[derive(serde::Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -359,9 +405,18 @@ impl AzureSandbox {
                         "the agent's preview grant was unreadable",
                     ),
                 )?;
+                let boot_token = self
+                    .connection_slot(sandbox_id)
+                    .await
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|connection| connection.token.clone())
+                    .unwrap_or_default();
                 let grant = CachedGrant {
                     capability: granted.capability,
                     expires_at: granted.expires_at,
+                    boot_token,
                 };
                 self.preview_grants
                     .lock()
@@ -2067,5 +2122,178 @@ mod tests {
         assert_eq!(polled.exit.map(|exit| exit.code), Some(0));
         assert_eq!(polled.frames.len(), 1);
         server.abort();
+    }
+
+    /// A fake agent: counts `previewGrant` requests and keeps their bodies; answers every grant
+    /// with a capability that names the boot it came from.
+    struct PreviewAgent {
+        url: String,
+        grants: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        boot_byte: Arc<AtomicUsize>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    async fn preview_agent() -> PreviewAgent {
+        let grants = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let seen = grants.clone();
+        let router = Router::new()
+            .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
+            .route(
+                "/v1/health",
+                axum::routing::get(|| async {
+                    Json(serde_json::json!({
+                        "protocolVersion": 1, "status": "ready", "imageCommand": { "status": "running" }
+                    }))
+                }),
+            )
+            .route(
+                "/",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    let seen = seen.clone();
+                    async move {
+                        seen.lock().unwrap().push(body);
+                        Json(serde_json::json!({
+                            "capability": "v1.cap",
+                            "expiresAt": chrono::Utc::now().timestamp() + 900,
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        PreviewAgent {
+            url,
+            grants,
+            boot_byte: Arc::new(AtomicUsize::new(1)),
+            server,
+        }
+    }
+
+    fn preview_provider(agent: &PreviewAgent, expiry_millis: Option<i64>) -> AzureSandbox {
+        let mut labels = BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]);
+        if let Some(expiry) = expiry_millis {
+            labels.insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), expiry.to_string());
+        }
+        let mut native = MockSandboxDataPlaneApi::new();
+        native.expect_get_sandbox().returning(move |_, id| {
+            Ok(AzureRecord {
+                id: id.into(),
+                labels: labels.clone(),
+                vnet_connection_name: None,
+                egress_policy: super::super::egress_policy(&SandboxEgress::None),
+                state: Some("Running".into()),
+            })
+        });
+        let url = agent.url.clone();
+        native
+            .expect_agent_port_url()
+            .returning(move |_, _, _| Ok(url.clone()));
+        let boot = agent.boot_byte.clone();
+        native.expect_read_file().returning(move |_, _, _| {
+            Ok(STANDARD
+                .encode([boot.load(Ordering::SeqCst) as u8; 32])
+                .into_bytes())
+        });
+        AzureSandbox::new(
+            Arc::new(native),
+            "group".into(),
+            "image".into(),
+            SandboxEgress::None,
+            None,
+            "1000m".into(),
+            "2048Mi".into(),
+            None,
+        )
+        .with_agent(true)
+        .with_preview_ports(vec![8080])
+    }
+
+    const PREVIEW_SANDBOX: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+
+    #[tokio::test]
+    async fn a_preview_grant_carries_the_sandbox_deadline_and_none_is_issued_past_it() {
+        let agent = preview_agent().await;
+        let expiry = (chrono::Utc::now().timestamp() + 120) * 1000;
+        let provider = preview_provider(&agent, Some(expiry));
+        let capability = provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert!(capability.expires_in_seconds > 0);
+        assert_eq!(agent.grants.lock().unwrap()[0]["deadline"], expiry / 1000);
+
+        let ended = preview_provider(&agent, Some((chrono::Utc::now().timestamp() - 1) * 1000));
+        let error = ended
+            .preview(PREVIEW_SANDBOX, 8080)
+            .await
+            .err()
+            .expect("a sandbox past its deadline gets no capability");
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
+        assert_eq!(
+            agent.grants.lock().unwrap().len(),
+            1,
+            "no agent call for the refusal"
+        );
+        agent.server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_new_boot_does_not_reuse_the_previous_boots_grant() {
+        let agent = preview_agent().await;
+        let provider = preview_provider(&agent, None);
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert_eq!(agent.grants.lock().unwrap().len(), 1, "same boot: cached");
+        assert!(agent.grants.lock().unwrap()[0].get("deadline").is_none());
+
+        // The sandbox came back as a different agent (new boot credential) behind the same URL.
+        agent.boot_byte.store(2, Ordering::SeqCst);
+        provider
+            .invalidate_connection_for_test(PREVIEW_SANDBOX)
+            .await;
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert_eq!(
+            agent.grants.lock().unwrap().len(),
+            2,
+            "new boot: asked again"
+        );
+        agent.server.abort();
+    }
+
+    #[tokio::test]
+    async fn resume_drops_the_cached_grant() {
+        let agent = preview_agent().await;
+        let provider = preview_provider(&agent, None);
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        provider.resume(PREVIEW_SANDBOX).await.unwrap();
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert_eq!(
+            agent.grants.lock().unwrap().len(),
+            2,
+            "after resume the agent is asked again"
+        );
+        agent.server.abort();
+    }
+
+    #[tokio::test]
+    async fn session_capabilities_advertise_preview_only_with_the_agent_and_declared_ports() {
+        let agent = preview_agent().await;
+        let with_ports = preview_provider(&agent, None);
+        assert!(
+            with_ports
+                .session_capabilities(PREVIEW_SANDBOX)
+                .await
+                .unwrap()
+                .preview
+        );
+        let without_ports = preview_provider(&agent, None).with_preview_ports(vec![]);
+        assert!(
+            !without_ports
+                .session_capabilities(PREVIEW_SANDBOX)
+                .await
+                .unwrap()
+                .preview
+        );
+        agent.server.abort();
     }
 }

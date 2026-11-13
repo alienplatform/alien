@@ -437,6 +437,7 @@ impl Sandbox for AzureSandbox {
         capabilities.jobs = agent;
         capabilities.interactive_commands = agent;
         capabilities.supervisor_isolation = agent;
+        capabilities.preview = agent && !self.preview_ports.is_empty();
         Ok(capabilities)
     }
 
@@ -908,6 +909,13 @@ impl Sandbox for AzureSandbox {
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
         const OPERATION: &str = "sandbox.resume";
+
+        // A woken sandbox may run a new agent with a new signing key; none of the capabilities
+        // granted before are known to hold.
+        self.preview_grants
+            .lock()
+            .expect("grants lock")
+            .retain(|(id, _), _| id != sandbox_id);
 
         let Some(found) = self.read_sandbox(OPERATION, sandbox_id).await? else {
             return Err(AlienError::new(ErrorData::SandboxCommandFailed {
