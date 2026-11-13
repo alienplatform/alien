@@ -753,6 +753,8 @@ async fn proxy_chat_completions(
 /// `POST /<name>/v1/embeddings`: OpenAI-compatible embeddings, forwarded as is
 /// with the model rewritten to the upstream deployment. Served where the catalog
 /// lists an embeddings model for the binding's cloud (Azure today).
+const AZURE_EMBEDDINGS_API_VERSION: &str = "2024-10-21";
+
 async fn proxy_embeddings(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
@@ -782,7 +784,14 @@ async fn proxy_embeddings(
         .upstream_base_override
         .clone()
         .unwrap_or_else(|| endpoint.to_string());
-    let url = format!("{}/openai/v1/embeddings", base.trim_end_matches('/'));
+    // The deployment path, not `/openai/v1/embeddings`: the v1 embeddings route answers
+    // 401 PermissionDenied for the Cognitive Services User role the workload holds,
+    // while the deployment route accepts it (verified against a real account).
+    let url = format!(
+        "{}/openai/deployments/{}/embeddings?api-version={AZURE_EMBEDDINGS_API_VERSION}",
+        base.trim_end_matches('/'),
+        embedding.upstream_id
+    );
     payload["model"] = Value::String(embedding.upstream_id.to_string());
     let upstream_body =
         serde_json::to_vec(&payload)
@@ -802,8 +811,7 @@ async fn proxy_embeddings(
     )
     .with_requested_model(&requested_model);
     let response = async {
-        let upstream =
-            sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
+        let upstream = sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
         forward_response(upstream).await
     }
     .await;
@@ -2259,7 +2267,8 @@ mod tests {
         let mock = server
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/openai/v1/embeddings")
+                    .path("/openai/deployments/text-embedding-3-large/embeddings")
+                    .query_param("api-version", "2024-10-21")
                     .matches(|req: &HttpMockRequest| {
                         let body: Value =
                             serde_json::from_slice(req.body.as_deref().unwrap_or_default())
@@ -2300,7 +2309,7 @@ mod tests {
         let server = MockServer::start_async().await;
         server
             .mock_async(|when, then| {
-                when.method(POST).path("/openai/v1/embeddings");
+                when.method(POST).path("/openai/deployments/text-embedding-3-large/embeddings");
                 then.status(200)
                     .header("content-type", "application/json")
                     .body(r#"{"object":"list","data":[{"embedding":[0.1],"index":0}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#);
