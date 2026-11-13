@@ -444,3 +444,39 @@ mod allocation_tests {
         panic!("121 IDs cannot occupy 120 slots without a collision");
     }
 }
+
+#[cfg(test)]
+mod proxy_rule_tests {
+    use super::*;
+
+    /// The gateway rule of a sandbox NSG allows the proxy port only, under the same resource
+    /// address and name as before, so an install that took the earlier pair of ports updates
+    /// the rule in place.
+    #[test]
+    fn the_gateway_rule_allows_the_proxy_port_only() {
+        let mut fragment = TfFragment::default();
+        rule(
+            &mut fragment,
+            "agents",
+            Rule {
+                name: "gateway",
+                priority: 100,
+                destination: expr::raw("azurerm_subnet.net_sandbox_gateway.address_prefixes[0]"),
+                allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
+            },
+        );
+        let rendered = hcl::to_string(
+            &hcl::Body::builder()
+                .add_blocks(fragment.resource_blocks.clone())
+                .build(),
+        )
+        .unwrap();
+        if let Ok(path) = std::env::var("ALIEN_DUMP_GATEWAY_RULE") {
+            std::fs::write(path, &rendered).unwrap();
+        }
+        assert!(rendered.contains("resource \"azurerm_network_security_rule\" \"agents_gateway\""));
+        assert!(rendered.contains("destination_port_ranges"), "{rendered}");
+        assert!(rendered.contains("\"3128\""), "{rendered}");
+        assert!(!rendered.contains("3129"));
+    }
+}
