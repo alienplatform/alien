@@ -680,13 +680,12 @@ async fn replenish_warm_pool(
     .await;
 
     let mut created = 0;
-    let Some(egress_environment) =
-        super::kubernetes_egress::bootstrap_environment(
-            ctx,
-            sandbox,
-            &deployment_namespace(kubernetes_config)?,
-        )
-        .await?
+    let Some(egress_environment) = super::kubernetes_egress::bootstrap_environment(
+        ctx,
+        sandbox,
+        &deployment_namespace(kubernetes_config)?,
+    )
+    .await?
     else {
         return Ok(WarmPool {
             idle: without_terminating(idle.items).len(),
@@ -764,6 +763,12 @@ async fn replenish_warm_pool(
         match client.create_pod(namespace, &pod).await {
             Ok(_) => created += 1,
             Err(error) => {
+                if let Some(message) = pod_security_rejection(&sandbox.id, namespace, &error) {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message,
+                        resource_id: Some(sandbox.id.clone()),
+                    }));
+                }
                 warn!(sandbox_id = %sandbox.id, %namespace, error = %error, "Failed to create a pool pod")
             }
         }
@@ -1179,6 +1184,30 @@ fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<Stri
     }
 }
 
+/// The message for a pod the API server refused under Pod Security, or `None` for any other
+/// refusal. A root-boot sandbox needs a namespace that admits `baseline`; without this the pool
+/// would stay empty and the only trace would be a warning per tick.
+fn pod_security_rejection(
+    sandbox_id: &str,
+    namespace: &str,
+    refusal: &(impl serde::Serialize + ?Sized),
+) -> Option<String> {
+    // The serialized error escapes the quotes around the level, so read it unescaped.
+    let text = serde_json::to_string(refusal).ok()?.replace("\\\"", "\"");
+    if !text.contains("violates PodSecurity") {
+        return None;
+    }
+    let level = ["restricted", "baseline", "privileged"]
+        .into_iter()
+        .find(|level| text.contains(&format!("violates PodSecurity \"{level}:")))
+        .unwrap_or("restricted");
+    Some(format!(
+        "sandbox {sandbox_id} needs a namespace that admits Pod Security baseline; namespace \
+         {namespace} enforces {level} and refused its pods. Set sandbox.namespace to a namespace \
+         labelled pod-security.kubernetes.io/enforce=baseline (see the Kubernetes sandbox docs)"
+    ))
+}
+
 /// Counts the Live pods belonging to one sandbox.
 async fn list_session_pods(
     ctx: &ResourceControllerContext<'_>,
@@ -1217,6 +1246,38 @@ fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
+        let refusal = AlienError::new(ErrorData::CloudPlatformError {
+            message: "pods \"agent-1\" is forbidden: violates PodSecurity \"restricted:latest\": \
+                      allowPrivilegeEscalation != false"
+                .to_string(),
+            resource_id: None,
+        });
+        let message = super::pod_security_rejection("agent", "sandboxes", &refusal)
+            .expect("a Pod Security refusal is recognised");
+        assert!(
+            message.contains("sandbox agent needs a namespace that admits Pod Security baseline")
+        );
+        assert!(
+            message.contains("sandboxes enforces restricted"),
+            "{message}"
+        );
+        assert!(message.contains("sandbox.namespace"));
+    }
+
+    #[test]
+    fn other_refusals_are_not_reported_as_pod_security() {
+        let refusal = AlienError::new(ErrorData::CloudPlatformError {
+            message: "pods is forbidden: exceeded quota".to_string(),
+            resource_id: None,
+        });
+        assert_eq!(
+            super::pod_security_rejection("agent", "sandboxes", &refusal),
+            None
+        );
+    }
+
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
 
