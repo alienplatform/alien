@@ -105,6 +105,8 @@ export type {
   AmbientAiBinding,
   ChatCompletionCreateParams,
   ExternalAiBinding,
+  ModelApiCapabilities,
+  ModelCapabilitySupport,
   ResponseCreateParams,
 } from "@alienplatform/ai-gateway"
 export {

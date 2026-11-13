@@ -23,6 +23,57 @@ pub enum ClientApi {
     AnthropicMessages,
 }
 
+/// Whether a model feature has been qualified through one public Gateway API.
+///
+/// `Unverified` is deliberately different from `Unsupported`: Alien does not infer support from
+/// a model family or from the provider-native protocol used behind the Gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelCapabilitySupport {
+    Supported,
+    Unsupported,
+    Unverified,
+}
+
+/// Qualified model behavior for one public Gateway API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelApiCapabilities {
+    pub api: ClientApi,
+    pub function_tools: ModelCapabilitySupport,
+    pub image_input: ModelCapabilitySupport,
+    pub reasoning_controls: ModelCapabilitySupport,
+    pub server_managed_continuation: ModelCapabilitySupport,
+    pub stateless_replay: ModelCapabilitySupport,
+    /// Date of the live qualification evidence, or `None` when every fact is unverified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualified_on: Option<String>,
+}
+
+impl ModelApiCapabilities {
+    fn unverified(api: ClientApi) -> Self {
+        Self {
+            api,
+            function_tools: ModelCapabilitySupport::Unverified,
+            image_input: ModelCapabilitySupport::Unverified,
+            reasoning_controls: ModelCapabilitySupport::Unverified,
+            server_managed_continuation: ModelCapabilitySupport::Unverified,
+            stateless_replay: ModelCapabilitySupport::Unverified,
+            qualified_on: None,
+        }
+    }
+}
+
+/// An explicit all-unverified matrix for provider models without live qualification evidence.
+pub fn unverified_model_capabilities() -> Vec<ModelApiCapabilities> {
+    ClientApi::ALL
+        .into_iter()
+        .map(ModelApiCapabilities::unverified)
+        .collect()
+}
+
 impl ClientApi {
     /// Public request protocols accepted for every text-generation model. The
     /// gateway translates to the model's provider-native protocol when needed.
@@ -141,6 +192,27 @@ impl DirectAnthropicModel {
 }
 
 impl CatalogModel {
+    /// Qualified behavior per public API. Every API is present so callers cannot mistake an
+    /// omitted record for lack of support.
+    pub fn capabilities(&self) -> Vec<ModelApiCapabilities> {
+        let mut capabilities = unverified_model_capabilities();
+
+        // Live AWS qualification on 2026-09-22. These facts apply only to this exact
+        // provider/model/API tuple; the Chat Completions and Messages adapters remain unverified.
+        if self.cloud == Platform::Aws && self.public_id == "gpt-oss-20b" {
+            let responses = capabilities
+                .iter_mut()
+                .find(|entry| entry.api == ClientApi::OpenAiResponses)
+                .expect("the public API matrix always contains Responses");
+            responses.function_tools = ModelCapabilitySupport::Supported;
+            responses.server_managed_continuation = ModelCapabilitySupport::Supported;
+            responses.stateless_replay = ModelCapabilitySupport::Unsupported;
+            responses.qualified_on = Some("2026-09-22".to_string());
+        }
+
+        capabilities
+    }
+
     /// The model's publisher, for grouping in a picker. Derived from the public id,
     /// so the same public id reports the same provider on every cloud.
     pub fn provider(&self) -> &'static str {
