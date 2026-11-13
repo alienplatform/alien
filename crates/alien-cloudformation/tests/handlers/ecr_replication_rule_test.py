@@ -152,6 +152,18 @@ class RuleTests(unittest.TestCase):
         self.assertIn("Another writer", response["Reason"])
         self.assertEqual(self.ecr.put_replication_configuration.call_count, rule.MAX_ATTEMPTS)
 
+    def test_stops_with_a_failed_response_when_the_lambda_is_about_to_time_out(self):
+        self.ecr.describe_registry.side_effect = lambda: self.config([FOREIGN[0]])
+        context = MagicMock()
+        # Plenty of time for the first read, write and read-back, then too little to go on.
+        context.get_remaining_time_in_millis.side_effect = [50_000, 50_000, 50_000, 3_000]
+        with patch.object(rule.urllib.request, "urlopen") as http:
+            rule.handler(self.event, context)
+            response = json.loads(http.call_args.args[0].data)
+        self.assertEqual(response["Status"], "FAILED")
+        self.assertIn("Ran out of time", response["Reason"])
+        self.assertLess(self.ecr.put_replication_configuration.call_count, rule.MAX_ATTEMPTS)
+
     def test_a_write_that_loses_our_rule_is_retried_on_delete_too(self):
         self.event["RequestType"] = "Delete"
         self.ecr.describe_registry.side_effect = [

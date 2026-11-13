@@ -22,6 +22,17 @@ MAX_RULES = 25
 MAX_DESTINATIONS = 10
 # Another writer can change the configuration between our read and our write.
 MAX_ATTEMPTS = 5
+# Time kept back to send the CloudFormation response; without it the stack waits an hour.
+RESPONSE_RESERVE_MS = 10_000
+
+
+def ensure_time_left(context):
+    """Stop before the Lambda is cut off, so a FAILED response can still be sent."""
+    if context is not None and context.get_remaining_time_in_millis() < RESPONSE_RESERVE_MS:
+        raise TimeoutError(
+            "Ran out of time updating the ECR replication configuration; "
+            "the rules were not confirmed. Retry the stack update."
+        )
 
 
 def is_ours(rule, prefix, registry_id):
@@ -90,6 +101,7 @@ def handler(event, context):
             retries={"mode": "standard", "total_max_attempts": 3},
         ))
         for attempt in range(MAX_ATTEMPTS):
+            ensure_time_left(context)
             existing = read_rules(ecr)
             rules = merged_rules(existing, prefixes, properties["RegistryId"], ours)
             if rules == existing:
@@ -100,9 +112,11 @@ def handler(event, context):
                     "per region; remove a rule that is not needed or leave the regions empty"
                     % (len(rules) - (1 if ours else 0), MAX_RULES)
                 )
+            ensure_time_left(context)
             ecr.put_replication_configuration(replicationConfiguration={"rules": rules})
             # Read back: the write replaces every rule, so a writer that raced us could
             # have lost its rule, or ours could have been replaced.
+            ensure_time_left(context)
             after = read_rules(ecr)
             kept = [rule for rule in rules if rule != ours]
             if all(rule in after for rule in kept) and (ours is None or ours in after) and (
@@ -117,6 +131,7 @@ def handler(event, context):
                     "Another writer kept changing the ECR replication configuration; "
                     "gave up after %d attempts without confirming the rules" % MAX_ATTEMPTS
                 )
+            ensure_time_left(context)
             time.sleep(random.uniform(0.2, 1.0) * (attempt + 1))
     except Exception as error:
         status, reason = "FAILED", str(error)[:1000]
