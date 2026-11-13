@@ -258,6 +258,10 @@ fn ecr_lifecycle_policy() -> CfExpression {
 /// lifecycle (an accepted limitation), and cross-account pull grants are
 /// written on each replica by the registry binding. Replication configuration
 /// is one per account and region: only a stack that declares regions writes it.
+// CloudFormation cannot read the account's existing replication rules, so the check happens
+// before this template is used: the runtime preflight `ReplicationRulesCheck` refuses foreign
+// rules, and a caller that generates the template outside the preflights must read the
+// registry's reported replication state first.
 fn replication_resources(
     ctx: &EmitContext<'_>,
     registry: &ArtifactRegistry,
