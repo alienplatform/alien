@@ -2798,6 +2798,47 @@ mod tests {
         assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![heartbeat]);
     }
 
+    /// Put the retired `tunnel` field on every container in a saved value.
+    fn add_retired_tunnel(value: &mut serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut added = 0;
+                if map.contains_key("cpu") && map.contains_key("code") {
+                    map.insert("tunnel".into(), serde_json::json!({"port": 8080}));
+                    added += 1;
+                }
+                added + map.values_mut().map(add_retired_tunnel).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(add_retired_tunnel).sum(),
+            _ => 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_saved_with_a_container_tunnel_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let mut saved = serde_json::to_value(heartbeat_state()).unwrap();
+        assert_eq!(add_retired_tunnel(&mut saved), 2, "{saved}");
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))",
+                (saved.to_string(),),
+            )
+            .await
+            .unwrap();
+        let loaded = db
+            .get_deployment_state()
+            .await
+            .expect("the old checkpoint is readable")
+            .expect("checkpoint present");
+        assert_eq!(loaded.stack_state.unwrap().resources.len(), 2);
+    }
+
     #[tokio::test]
     async fn passive_heartbeats_reject_replaced_releases_and_workloads() {
         let dir = tempfile::tempdir().unwrap();
