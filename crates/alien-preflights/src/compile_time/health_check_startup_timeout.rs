@@ -17,24 +17,20 @@ impl CompileTimeCheck for HealthCheckStartupTimeoutCheck {
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
         stack.resources().any(|(_, entry)| {
-            entry
+            entry.config.downcast_ref::<Daemon>().is_some_and(|daemon| {
+                daemon
+                    .health_check
+                    .as_ref()
+                    .is_some_and(|check| check.startup_timeout_seconds.is_some())
+            }) || entry
                 .config
-                .downcast_ref::<Daemon>()
-                .is_some_and(|daemon| {
-                    daemon
+                .downcast_ref::<Container>()
+                .is_some_and(|container| {
+                    container
                         .health_check
                         .as_ref()
                         .is_some_and(|check| check.startup_timeout_seconds.is_some())
                 })
-                || entry
-                    .config
-                    .downcast_ref::<Container>()
-                    .is_some_and(|container| {
-                        container
-                            .health_check
-                            .as_ref()
-                            .is_some_and(|check| check.startup_timeout_seconds.is_some())
-                    })
         })
     }
 
@@ -89,9 +85,7 @@ impl CompileTimeCheck for HealthCheckStartupTimeoutCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        ContainerCode, DaemonCode, HealthCheck, ResourceLifecycle, ResourceSpec,
-    };
+    use alien_core::{ContainerCode, DaemonCode, HealthCheck, ResourceLifecycle, ResourceSpec};
 
     fn health_check(startup_timeout_seconds: Option<u32>) -> HealthCheck {
         HealthCheck {
@@ -149,7 +143,10 @@ mod tests {
     #[tokio::test]
     async fn accepts_one_second_through_24_hours_and_unset() {
         for seconds in [None, Some(1), Some(600), Some(86_400)] {
-            assert!(errors(&daemon_stack(seconds)).await.is_empty(), "{seconds:?}");
+            assert!(
+                errors(&daemon_stack(seconds)).await.is_empty(),
+                "{seconds:?}"
+            );
         }
         assert!(errors(&container_stack(None)).await.is_empty());
     }
@@ -174,7 +171,12 @@ mod tests {
     async fn rejects_it_on_a_platform_that_does_not_enforce_it() {
         let errors = errors_on(&daemon_stack(Some(600)), Platform::Kubernetes).await;
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("only enforced on the Machines platform"), "{errors:?}");
-        assert!(errors_on(&daemon_stack(None), Platform::Kubernetes).await.is_empty());
+        assert!(
+            errors[0].contains("only enforced on the Machines platform"),
+            "{errors:?}"
+        );
+        assert!(errors_on(&daemon_stack(None), Platform::Kubernetes)
+            .await
+            .is_empty());
     }
 }
