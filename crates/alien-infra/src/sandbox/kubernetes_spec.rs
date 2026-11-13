@@ -298,6 +298,10 @@ fn container_env(
         }
         env
     });
+    // Every mode: the agent starts the workload only once the pod's egress restriction is in
+    // force (the cluster API and the metadata address are dropped).
+    env.get_or_insert_default()
+        .push(plain_env(alien_sandbox_gate_env(), "true".to_string()));
     if root_boot {
         // Set here rather than in the image: the layered image serves both modes, and a root-only
         // setting baked into it would stop a non-root pod from booting. The pod env wins over the
@@ -316,6 +320,12 @@ fn container_env(
         ));
     }
     env
+}
+
+/// Name of the variable that makes the agent prove egress is restricted before it starts the
+/// workload (see the agent's `startup_gate`).
+const fn alien_sandbox_gate_env() -> &'static str {
+    "ALIEN_SANDBOX_STARTUP_EGRESS_GATE"
 }
 
 /// The volume the init container fills with the agent binary and `/opt/alien`.
@@ -928,7 +938,13 @@ mod tests {
             assert_eq!(security.read_only_root_filesystem, Some(true));
             assert_eq!(security.run_as_non_root, Some(true));
             assert_eq!(security.capabilities.as_ref().unwrap().add, None);
-            for variable in container.env.as_ref().expect("env") {
+            let env = container.env.as_ref().expect("env");
+            assert!(
+                env.iter()
+                    .any(|variable| variable.name == "ALIEN_SANDBOX_STARTUP_EGRESS_GATE"),
+                "the egress gate applies to non-root pods too"
+            );
+            for variable in env {
                 assert_ne!(variable.name, "ALIEN_SANDBOX_IMAGE_COMMAND");
                 assert_ne!(variable.name, "ALIEN_SANDBOX_ISOLATION");
                 assert_ne!(variable.name, "ALIEN_SANDBOX_PROTECTED_MOUNTS");

@@ -512,11 +512,17 @@ print(json.dumps(out))
             serde_json::from_slice(&output.stdout).expect("client result");
         assert_eq!(seen["http"], 200, "port {port}: {seen}");
         assert_eq!(seen["port"], port, "port {port}: {seen}");
-        assert_eq!(seen["uid"], 1001, "the workload runs as the dropped uid: {seen}");
+        assert_eq!(
+            seen["uid"], 1001,
+            "the workload runs as the dropped uid: {seen}"
+        );
         assert_eq!(seen["bearerUnchanged"], true, "port {port}: {seen}");
         assert_eq!(seen["noBearer"], 401, "port {port}: {seen}");
         assert!(
-            seen["upgrade"].as_str().unwrap_or_default().contains(" 101 "),
+            seen["upgrade"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(" 101 "),
             "port {port}: {seen}"
         );
         assert_eq!(seen["wsEcho"], true, "port {port}: {seen}");
@@ -525,12 +531,23 @@ print(json.dumps(out))
     let output = kubectl(
         &context,
         &[
-            "exec", "-n", &baseline, &pod, "--", "python3", "-c", client_script, "8081",
+            "exec",
+            "-n",
+            &baseline,
+            &pod,
+            "--",
+            "python3",
+            "-c",
+            client_script,
+            "8081",
             &token(8080),
         ],
     );
     let seen: serde_json::Value = serde_json::from_slice(&output.stdout).expect("client result");
-    assert_ne!(seen["http"], 200, "a capability for 8080 must not open 8081: {seen}");
+    assert_ne!(
+        seen["http"], 200,
+        "a capability for 8080 must not open 8081: {seen}"
+    );
     let _ = kubectl(
         &context,
         &["delete", "pod", "-n", &baseline, &pod, "--wait=false"],

@@ -330,12 +330,18 @@ NetworkPolicy enforcement: the install is refused until the cluster enforces Net
 probe checks it with live traffic). On EKS Auto Mode, enforcement is off until you apply a
 ConfigMap `amazon-vpc-cni` in `kube-system` with `enable-network-policy-controller: "true"`; the
 NodeClass `networkPolicy` field only sets the default. The probe's failure message names this step.
+A policy can still load about one second after a pod's container starts, so the agent, before it
+starts the ENTRYPOINT (root or non-root image), connects to the cluster API and `169.254.169.254:80`
+and starts the workload only after three consecutive rounds in which both are dropped. If they stay
+reachable for 30 s it exits with an error naming NetworkPolicy enforcement. Optional hardening:
+a dedicated sandbox NodePool with NodeClass `networkPolicy: DefaultDeny`; it is not required.
 
 Preview serves ports 8080, 8081 and 8090 over HTTP and WebSocket. The capability travels in
 `X-Alien-Preview-Capability` (optionally with `X-Alien-Preview-Port`); the caller's own
 `Authorization` header reaches the workload unchanged.
 
-Limits: the layered agent is amd64 only, so a node selector for another architecture is refused
+Limits: the own node's kubelet port (10250) stays reachable from a pod because many CNIs never
+filter pod-to-own-node traffic; it requires authentication. The layered agent is amd64 only, so a node selector for another architecture is refused
 at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernetes are not
 supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
 it is terminated or reaches its deadline.

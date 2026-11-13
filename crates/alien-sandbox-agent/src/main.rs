@@ -90,6 +90,12 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
+    // Kubernetes: never start the workload before the pod's egress restriction is in force.
+    if let Err(message) = alien_sandbox_agent::startup_gate::enforce_from_env() {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+
     let aws_image_transport =
         image_command_enabled()? && alien_sandbox_agent::image_command::defer_to_run_hook()?;
     if aws_image_transport && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file") {
