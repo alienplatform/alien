@@ -10,7 +10,7 @@ mod guest_network;
 mod guest_network_tests;
 mod probe;
 mod recovery;
-pub use probe::command_path_is_closed;
+pub use probe::{command_path_check, command_path_is_closed};
 mod redirect;
 mod transport;
 
