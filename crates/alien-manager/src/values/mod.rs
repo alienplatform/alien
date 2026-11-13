@@ -192,14 +192,19 @@ impl ValueStore {
         // Writes to the source wait while this runs, so nothing is written
         // between the copy and the removal.
         let _guard = self.lock_scope(from).await;
-        let record = ValueSlot::moved(&transfer_key(from, to, claim_id));
-        if let Some(done) = self.backend.get(to, &record).await? {
-            // Already finished: report what the destination holds, change nothing.
-            let slots: Vec<String> = serde_json::from_str(&done.value)
-                .map_err(|_| ErrorData::internal("A move record is unreadable".to_string()))?;
+        let key = transfer_key(from, to, claim_id);
+        let record = ValueSlot::moved(&key);
+        if self.backend.get(to, &record).await?.is_some() {
+            // The copy finished. The completion record is written before any
+            // source slot is removed, so a retry only finishes the removal
+            // and reports what the destination holds for the recorded slots.
             let mut held = Vec::new();
-            for slot in slots {
-                if let Some(stored) = self.get(to, &ValueSlot::from_stored(&slot)?).await? {
+            for name in self.recorded_slots(to, &key).await? {
+                let slot = ValueSlot::from_stored(&name)?;
+                if remove_source {
+                    self.backend.delete(from, &slot).await?;
+                }
+                if let Some(stored) = self.get(to, &slot).await? {
                     held.push(stored.meta(to)?);
                 }
             }
@@ -218,25 +223,53 @@ impl ValueStore {
             })?;
             copied.push(held.meta(to)?);
         }
-        if remove_source {
-            for stored in &sources {
-                self.backend.delete(from, &stored.slot).await?;
-            }
+        // One small marker per slot, then the completion record: no single
+        // value grows with the number of slots.
+        for meta in &copied {
+            self.backend
+                .put(
+                    to,
+                    &StoredValue {
+                        slot: ValueSlot::moved(&slot_marker_key(&key, meta.slot.as_str())),
+                        kind: ValueKind::Plain,
+                        value: meta.slot.as_str().to_string(),
+                        updated_at: now_in_stored_precision(),
+                    },
+                )
+                .await?;
         }
-        let names: Vec<&str> = copied.iter().map(|m| m.slot.as_str()).collect();
         self.backend
             .put(
                 to,
                 &StoredValue {
                     slot: record,
                     kind: ValueKind::Plain,
-                    value: serde_json::to_string(&names)
-                        .map_err(|e| ErrorData::internal(e.to_string()))?,
+                    value: copied.len().to_string(),
                     updated_at: now_in_stored_precision(),
                 },
             )
             .await?;
+        if remove_source {
+            for stored in &sources {
+                self.backend.delete(from, &stored.slot).await?;
+            }
+        }
         Ok(copied)
+    }
+
+    /// The slot names a finished transfer recorded, one marker each.
+    async fn recorded_slots(&self, to: &ValueScope, key: &str) -> Result<Vec<String>> {
+        let prefix = ValueSlot::moved(key);
+        let mut names: Vec<String> = self
+            .backend
+            .list_prefix(to, prefix.as_str())
+            .await?
+            .into_iter()
+            .filter(|marker| marker.slot != prefix)
+            .map(|marker| marker.value)
+            .collect();
+        names.sort();
+        Ok(names)
     }
 
     /// Removes every value of the scope, including the records of served values.
@@ -345,6 +378,12 @@ fn transfer_key(from: &ValueScope, to: &ValueScope, claim_id: &str) -> String {
         hasher.update(part.as_bytes());
     }
     hex::encode(hasher.finalize())
+}
+
+/// Names the marker of one slot of a finished transfer.
+fn slot_marker_key(transfer: &str, slot: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{transfer}{}", hex::encode(Sha256::digest(slot.as_bytes())))
 }
 
 fn check_size(slot: &ValueSlot, value: &str) -> Result<()> {
@@ -551,6 +590,99 @@ mod tests {
         // Another claim id copies again.
         store.copy_scope(&link, &dep, "other").await.unwrap();
         assert_eq!(store.list(&dep).await.unwrap().len(), 2);
+    }
+
+    /// A backend that starts refusing deletes after `allowed` of them.
+    struct CrashingDeletes {
+        inner: super::backend::KvValueBackend,
+        allowed: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl super::backend::ValueBackend for CrashingDeletes {
+        async fn put(&self, s: &ValueScope, v: &StoredValue) -> Result<()> {
+            self.inner.put(s, v).await
+        }
+        async fn put_if_absent(&self, s: &ValueScope, v: &StoredValue) -> Result<bool> {
+            self.inner.put_if_absent(s, v).await
+        }
+        async fn get(&self, s: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {
+            self.inner.get(s, slot).await
+        }
+        async fn delete(&self, s: &ValueScope, slot: &ValueSlot) -> Result<()> {
+            use std::sync::atomic::Ordering;
+            if self
+                .allowed
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_err()
+            {
+                return Err(ErrorData::internal("crash".to_string()));
+            }
+            self.inner.delete(s, slot).await
+        }
+        async fn list(&self, s: &ValueScope) -> Result<Vec<StoredValue>> {
+            self.inner.list(s).await
+        }
+        async fn list_prefix(&self, s: &ValueScope, p: &str) -> Result<Vec<StoredValue>> {
+            self.inner.list_prefix(s, p).await
+        }
+    }
+
+    async fn crashing_store(allowed: usize) -> (tempfile::TempDir, Arc<CrashingDeletes>, ValueStore) {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let dir = tempfile::tempdir().unwrap();
+        let kv = LocalKv::single_process(dir.path().join("kv")).await.unwrap();
+        let backend = Arc::new(CrashingDeletes {
+            inner: sealed_backend(Arc::new(kv)).1,
+            allowed: std::sync::atomic::AtomicUsize::new(allowed),
+        });
+        let store = ValueStore::new(backend.clone());
+        (dir, backend, store)
+    }
+
+    #[tokio::test]
+    async fn a_move_that_crashed_while_removing_sources_is_finished_by_a_retry() {
+        use std::sync::atomic::Ordering;
+        let (_dir, backend, store) = crashing_store(1).await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        for name in ["env:A", "env:B", "env:C"] {
+            store
+                .put(&reg, &slot(name), ValueKind::Plain, name.into())
+                .await
+                .unwrap();
+        }
+        // Dies after removing one source slot.
+        assert!(store.move_scope(&reg, &dep, "claim").await.is_err());
+        assert_eq!(store.list(&reg).await.unwrap().len(), 2);
+
+        backend.allowed.store(100, Ordering::SeqCst);
+        let held = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        let mut names: Vec<_> = held.iter().map(|m| m.slot.as_str().to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["env:A", "env:B", "env:C"]);
+        assert!(store.list(&reg).await.unwrap().is_empty());
+        assert_eq!(store.list(&dep).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_move_of_many_slots_with_long_ids_keeps_every_record_small() {
+        let (_dir, store) = kv_store().await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        for i in 0..200 {
+            let name = format!("input:{i:03}{}", "x".repeat(110));
+            store
+                .put(&reg, &slot(&name), ValueKind::Plain, "v".into())
+                .await
+                .unwrap();
+        }
+        let first = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        assert_eq!(first.len(), 200);
+        let again = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        assert_eq!(again.len(), 200);
+        // Every record kept in the destination fits a key-value limit.
+        for record in store.backend.list_prefix(&dep, "moved:").await.unwrap() {
+            assert!(record.value.len() < 1024, "{}", record.value.len());
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
