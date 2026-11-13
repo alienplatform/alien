@@ -15,23 +15,49 @@ use alien_core::{
     ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
-#[test]
-fn aws_registry_replication_settings_allow_package_emission() {
+fn registry_stack(regions: &[&str]) -> Stack {
     let mut registry = ArtifactRegistry::new("images".to_string()).build();
-    registry.replication_regions = vec!["us-west-2".to_string()];
-    let stack = Stack::new("app".to_string())
+    registry.replication_regions = regions.iter().map(|r| r.to_string()).collect();
+    Stack::new("app".to_string())
         .add(registry, ResourceLifecycle::Frozen)
-        .build();
-    let rendered = super::helpers::try_render_built_ins(
-        &stack,
+        .build()
+}
+
+fn try_render_registry(stack: &Stack) -> Result<String, String> {
+    super::helpers::try_render_built_ins(
+        stack,
         StackSettings::default(),
         RegistrationMode::OutputsFallback,
         alien_cloudformation::CloudFormationTarget::Aws,
         "aws",
-        "unsupported registry replication",
+        "registry replication",
     )
-    .expect("legacy replication settings must still render");
-    assert!(!format!("{rendered:?}").contains("ReplicationConfiguration"));
+    .map(|rendered| format!("{rendered:?}"))
+    .map_err(|e| e.to_string())
+}
+
+#[test]
+fn aws_registry_without_regions_emits_no_replication() {
+    let rendered = try_render_registry(&registry_stack(&[])).unwrap();
+    assert!(!rendered.contains("ReplicationConfiguration"));
+    assert!(!rendered.contains("RepositoryCreationTemplate"));
+}
+
+#[test]
+fn aws_registry_declared_regions_emit_replication_and_a_creation_template() {
+    let rendered = try_render_registry(&registry_stack(&["us-east-2", "eu-west-1"])).unwrap();
+    assert!(rendered.contains("AWS::ECR::ReplicationConfiguration"), "{rendered}");
+    assert!(rendered.contains("AWS::ECR::RepositoryCreationTemplate"), "{rendered}");
+    assert!(rendered.contains("us-east-2") && rendered.contains("eu-west-1"));
+    assert!(rendered.contains("PREFIX_MATCH"));
+    // The template carries no repository policy: grants are written per region.
+    assert!(!rendered.contains("\"RepositoryPolicy\""));
+}
+
+#[test]
+fn aws_registry_rejects_a_region_that_is_not_a_region_name() {
+    let err = try_render_registry(&registry_stack(&["us-east-2\"; Fn::Sub"])).unwrap_err();
+    assert!(err.contains("not an AWS region name"), "{err}");
 }
 
 #[test]

@@ -15,7 +15,7 @@ pub struct AwsArtifactRegistryEmitter;
 impl CfEmitter for AwsArtifactRegistryEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         let registry = resource_config::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
-        registry.validate_aws_replication()?;
+        let replication = replication_resources(ctx, registry)?;
         let logical_id = required_logical_id(ctx)?;
         let repository_id = format!("{logical_id}Repository");
         let pull_role_id = format!("{logical_id}PullRole");
@@ -53,7 +53,9 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
         pull_role.depends_on.push(repository_id.clone());
         push_role.depends_on.push(repository_id);
 
-        Ok(vec![repository, pull_role, push_role])
+        let mut resources = vec![repository, pull_role, push_role];
+        resources.extend(replication);
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -247,4 +249,95 @@ fn ecr_lifecycle_policy() -> CfExpression {
             ),
         ])]),
     )])
+}
+
+/// ECR replication for the regions the registry's owner declares. Lambda only
+/// pulls from ECR in its own region, so the images must exist there. The rule
+/// covers this registry's repository prefix only. The creation template makes
+/// the replicated repositories match the source (immutable tags, scanning,
+/// retention); cross-account pull grants are written per region by the
+/// registry binding. Replication configuration is one per account and region:
+/// only a stack that declares regions writes it.
+fn replication_resources(
+    ctx: &EmitContext<'_>,
+    registry: &ArtifactRegistry,
+) -> Result<Vec<CfResource>> {
+    if registry.replication_regions.is_empty() {
+        return Ok(Vec::new());
+    }
+    for region in &registry.replication_regions {
+        let valid = !region.is_empty()
+            && region
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !valid {
+            return Err(alien_error::AlienError::new(
+                alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "Artifact registry '{}': '{region}' is not an AWS region name",
+                        registry.id()
+                    ),
+                },
+            ));
+        }
+    }
+    let logical_id = required_logical_id(ctx)?;
+    let mut configuration = CfResource::new(
+        format!("{logical_id}Replication"),
+        "AWS::ECR::ReplicationConfiguration".to_string(),
+    );
+    configuration.properties.insert(
+        "ReplicationConfiguration".to_string(),
+        CfExpression::object([(
+            "Rules",
+            CfExpression::list([CfExpression::object([
+                (
+                    "Destinations",
+                    CfExpression::list(registry.replication_regions.iter().map(|region| {
+                        CfExpression::object([
+                            ("Region", CfExpression::from(region.as_str())),
+                            ("RegistryId", CfExpression::ref_("AWS::AccountId")),
+                        ])
+                    })),
+                ),
+                (
+                    "RepositoryFilters",
+                    CfExpression::list([CfExpression::object([
+                        ("Filter", stack_name(registry.id())),
+                        ("FilterType", CfExpression::from("PREFIX_MATCH")),
+                    ])]),
+                ),
+            ])]),
+        )]),
+    );
+
+    let mut template = CfResource::new(
+        format!("{logical_id}ReplicaTemplate"),
+        "AWS::ECR::RepositoryCreationTemplate".to_string(),
+    );
+    template
+        .properties
+        .insert("Prefix".to_string(), stack_name(registry.id()));
+    template.properties.insert(
+        "AppliedFor".to_string(),
+        CfExpression::list([CfExpression::from("REPLICATION")]),
+    );
+    template.properties.insert(
+        "ImageTagMutability".to_string(),
+        CfExpression::from("IMMUTABLE"),
+    );
+    template.properties.insert(
+        "EncryptionConfiguration".to_string(),
+        CfExpression::object([("EncryptionType", CfExpression::from("AES256"))]),
+    );
+    template.properties.insert(
+        "LifecyclePolicy".to_string(),
+        CfExpression::to_json_string(ecr_lifecycle_policy()),
+    );
+    configuration
+        .depends_on
+        .push(format!("{logical_id}Repository"));
+    // The template must exist before replication creates the first replica.
+    configuration.depends_on.push(template.logical_id.clone());
+    Ok(vec![configuration, template])
 }
