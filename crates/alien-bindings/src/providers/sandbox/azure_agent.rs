@@ -617,7 +617,7 @@ mod tests {
             )
             .with_agent(false);
             if cached_boot {
-                *provider.connection_slot("session").await.lock().await = Some(Connection {
+                *provider.connection_slot("6f9619ff-8b86-d011-b42d-00c04fc964ff").await.lock().await = Some(Connection {
                     client: reqwest::Client::builder().no_proxy().build().unwrap(),
                     url: cached_url.parse().unwrap(),
                     token: STANDARD.encode([3u8; 32]),
@@ -627,11 +627,11 @@ mod tests {
             // Session metadata must also select it through a rollback binding.
             let ready = async {
                 if resume {
-                    provider.resume("session").await
+                    provider.resume("6f9619ff-8b86-d011-b42d-00c04fc964ff").await
                 } else {
                     provider
                         .get_or_create(CreateSandboxRequest {
-                            sandbox_id: Some("session".into()),
+                            sandbox_id: Some("6f9619ff-8b86-d011-b42d-00c04fc964ff".into()),
                             ..Default::default()
                         })
                         .await

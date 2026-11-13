@@ -586,6 +586,9 @@ impl Sandbox for AzureSandbox {
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Self::checked_sandbox_id("sandbox.get", sandbox_id)?;
+        if !can_name_a_sandbox(sandbox_id) {
+            return Ok(None);
+        }
         // A 404 is "gone", which is a valid answer. Anything else is a real failure and must not
         // be flattened into None, or a throttle would read as an expired sandbox.
         let Some(sandbox) = self.read_sandbox("sandbox.get", sandbox_id).await? else {
@@ -611,7 +614,7 @@ impl Sandbox for AzureSandbox {
         if let Some(policy) = request.egress.as_ref() {
             self.requested_policy(Some(policy))?;
         }
-        if let Some(id) = request.sandbox_id.as_deref() {
+        if let Some(id) = request.sandbox_id.as_deref().filter(|id| can_name_a_sandbox(id)) {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
             // it up, judge it there, and refuse it if it does not match.
@@ -1236,7 +1239,7 @@ impl AzureSandbox {
             .await
         {
             Ok(sandbox) => Ok(Some(sandbox)),
-            Err(error) if is_not_found(&error) || is_malformed_id(&error) => Ok(None),
+            Err(error) if is_not_found(&error) => Ok(None),
             Err(error) => Err(Self::failed(operation, error)),
         }
     }
@@ -1894,25 +1897,19 @@ fn is_refusal(error: &AlienError<ClientErrorData>) -> bool {
     )
 }
 
+/// The data plane names its sandboxes with GUIDs and answers a read of any other id with a 400.
+/// An id that is not a GUID is a caller's own key, so no sandbox has it: decided here, without a
+/// request, rather than from the wording of that 400. Any 400 the data plane does send stays an
+/// error.
+fn can_name_a_sandbox(id: &str) -> bool {
+    uuid::Uuid::parse_str(id).is_ok()
+}
+
 /// Whether an Azure data-plane failure means the sandbox is already gone.
 ///
 /// Reads the status the client carries rather than the rendered message: `AlienError`'s `Display`
 /// walks the whole source chain and the data plane puts the response body in it, so a path or a
 /// trace id containing "404" would otherwise turn a throttle into "gone".
-/// The data plane names its sandboxes with GUIDs and answers a read of any other id with a 400
-/// whose only validation error is the `id`. Such an id is a caller's own key, so no sandbox has it.
-fn is_malformed_id(error: &AlienError<ClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(ClientErrorData::InvalidInput { message, .. }) if message.contains("\"errors\":{\"id\":")
-    ) || matches!(
-        &error.error,
-        Some(ClientErrorData::HttpResponseError { http_status, http_response_text, .. })
-            if *http_status == 400
-                && http_response_text.as_deref().is_some_and(|t| t.contains("\"errors\":{\"id\":"))
-    )
-}
-
 fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
     // Both variants, because the client wraps: `create_azure_http_error_with_context` builds the
     // `HttpResponseError` carrying the status and then returns
@@ -1929,7 +1926,6 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use alien_azure_clients::azure::sandbox_data_plane::EgressHostRule;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
@@ -1977,7 +1973,7 @@ mod tests {
             Ok(sandbox)
         });
         let error = sandbox_with(client)
-            .get("s1")
+            .get("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect_err("network mismatch");
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
@@ -2003,11 +1999,11 @@ mod tests {
                     Ok(sandbox)
                 });
             let sandbox = sandbox_denying(client, declaration)
-                .get("existing-native")
+                .get("0abc981b-08a9-5ab4-90c8-c00a33e9ef97")
                 .await
                 .expect("released native policy remains usable")
                 .expect("sandbox exists");
-            assert_eq!(sandbox.sandbox_id, "existing-native");
+            assert_eq!(sandbox.sandbox_id, "0abc981b-08a9-5ab4-90c8-c00a33e9ef97");
             assert_eq!(sandbox.state, SandboxState::Running);
         }
     }
@@ -2022,7 +2018,7 @@ mod tests {
         let sandbox = sandbox_denying(client, SandboxEgress::Allow);
         let error = sandbox
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("existing".into()),
+                sandbox_id: Some("30d94857-032c-55f2-8955-b92c759bc22e".into()),
                 egress: Some(alien_core::EgressPolicy::Internet),
                 ..Default::default()
             })
@@ -2031,12 +2027,12 @@ mod tests {
         assert_eq!(error.code, "SANDBOX_EGRESS_REQUIRES_INTERNET");
         let found = sandbox
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("existing".into()),
+                sandbox_id: Some("30d94857-032c-55f2-8955-b92c759bc22e".into()),
                 ..Default::default()
             })
             .await
             .expect("ordinary legacy reconnect remains usable");
-        assert_eq!(found.sandbox.sandbox_id, "existing");
+        assert_eq!(found.sandbox.sandbox_id, "30d94857-032c-55f2-8955-b92c759bc22e");
     }
 
     /// The declared image has to reach the create call, not a default chosen here.
@@ -2058,7 +2054,7 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -2219,7 +2215,7 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -2273,7 +2269,7 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -2443,7 +2439,7 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -2482,7 +2478,7 @@ mod tests {
         });
 
         let error = sandbox_with(client)
-            .terminate("s1")
+            .terminate("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect_err("a sandbox still present after the poll is not contained");
         assert!(
@@ -2501,7 +2497,7 @@ mod tests {
             .returning(|_, _| Err(http_error(404, "SandboxNotFound")));
 
         sandbox_with(client)
-            .terminate("s1")
+            .terminate("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect("an absent sandbox is a confirmed termination");
     }
@@ -2509,14 +2505,6 @@ mod tests {
     /// The discriminating case. A throttle whose body mentions 404 — a trace id, an inner code, a
     /// path — must not read as "the sandbox is gone": that starts a second sandbox while the
     /// first keeps running, reporting a live sandbox as terminated.
-    #[test]
-    fn an_id_the_data_plane_cannot_parse_names_no_sandbox() {
-        let body = r#"{"title":"One or more validation errors occurred.","status":400,"errors":{"id":["The input was not valid."]}}"#;
-        assert!(is_malformed_id(&http_error(400, body)));
-        assert!(!is_malformed_id(&http_error(400, r#"{"errors":{"cpu":["bad"]}}"#)));
-        assert!(!is_malformed_id(&http_error(500, body)));
-    }
-
     #[test]
     fn only_the_status_decides_whether_a_sandbox_is_gone() {
         assert!(is_not_found(&http_error(404, "SandboxNotFound")));
@@ -2527,7 +2515,7 @@ mod tests {
         assert!(
             is_not_found(&AlienError::new(ClientErrorData::RemoteResourceNotFound {
                 resource_type: "Sandbox".to_string(),
-                resource_name: "s1".to_string(),
+                resource_name: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
             })),
             "a wrapped 404 is how the client reports an absent sandbox"
         );
@@ -2815,7 +2803,7 @@ mod tests {
         let sandbox = provider(client.clone()).with_agent(true);
 
         let frames: Vec<Result<CommandOutput>> = sandbox
-            .run_command("s1", command(30))
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(30))
             .await
             .expect("the call itself succeeds; the deadline is reported in the stream")
             .collect()
@@ -2856,7 +2844,7 @@ mod tests {
         let sandbox = provider(client.clone());
 
         let frames: Vec<Result<CommandOutput>> = sandbox
-            .run_command("s1", command(300))
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(300))
             .await
             .expect("runs")
             .collect()
@@ -2878,7 +2866,7 @@ mod tests {
         let sandbox = provider(client.clone());
 
         let error = sandbox
-            .run_command("s1", command(30))
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(30))
             .await
             .err()
             .expect("a command that outran its deadline has not succeeded");
@@ -2906,7 +2894,7 @@ mod tests {
         let sandbox = provider(client.clone());
 
         let error = sandbox
-            .run_command("s1", command(30))
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(30))
             .await
             .err()
             .expect("a command that outran its deadline has not succeeded");
@@ -3100,7 +3088,7 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .withf(|_, request| request.environment.get("TOKEN").map(String::as_str) == Some("t"))
-            .returning(|_, _| Ok(running("s1", None)));
+            .returning(|_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None)));
         client
             .expect_get_sandbox()
             .returning(|_, id| Ok(running(id, None)));
@@ -3133,7 +3121,7 @@ mod tests {
         request.command = String::new();
         request.env = BTreeMap::from([("SECRET".to_string(), "hunter2".to_string())]);
 
-        let error = match sandbox_with(client).run_command("s1", request).await {
+        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request).await {
             Ok(_) => panic!("a command with no program must not run"),
             Err(error) => error,
         };
@@ -3159,7 +3147,7 @@ mod tests {
         request.args = vec!["printenv".to_string()];
         request.env = BTreeMap::from([("TOKEN".to_string(), "t".to_string())]);
 
-        let error = match sandbox_with(client).run_command("s1", request).await {
+        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request).await {
             Ok(_) => panic!("a command env would swallow must not be sent"),
             Err(error) => error,
         };
@@ -3203,13 +3191,13 @@ mod tests {
             "/../escape",
         ] {
             let error = sandbox
-                .read_file("s1", path)
+                .read_file("80b3969a-1016-5a27-86d1-a7bce44ced9b", path)
                 .await
                 .expect_err(&format!("'{path}' must be refused"));
             assert_eq!(error.code, "INVALID_INPUT", "{path}: {error}");
 
             sandbox
-                .write_files("s1", BTreeMap::from([(path.to_string(), vec![1u8])]))
+                .write_files("80b3969a-1016-5a27-86d1-a7bce44ced9b", BTreeMap::from([(path.to_string(), vec![1u8])]))
                 .await
                 .expect_err(&format!("'{path}' must be refused on write too"));
         }
@@ -3227,7 +3215,7 @@ mod tests {
         let sandbox = sandbox_with(client);
         for path in ["app.py", "src/app.py", "/work/app.py"] {
             sandbox
-                .read_file("s1", path)
+                .read_file("80b3969a-1016-5a27-86d1-a7bce44ced9b", path)
                 .await
                 .unwrap_or_else(|error| panic!("'{path}' is a normal path: {error}"));
         }
@@ -3244,7 +3232,7 @@ mod tests {
                 .insert(agent::TRANSPORT_LABEL.into(), "unknown-version".into());
             Ok(record)
         });
-        let error = match sandbox_with(client).run_command("s1", command(5)).await {
+        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5)).await {
             Ok(_) => panic!("unknown transport must be refused"),
             Err(error) => error,
         };
@@ -3260,14 +3248,14 @@ mod tests {
         client
             .expect_read_file()
             .withf(|group, sandbox_id, path| {
-                group == "grp" && sandbox_id == "s1" && path == "src/app.py"
+                group == "grp" && sandbox_id == "80b3969a-1016-5a27-86d1-a7bce44ced9b" && path == "src/app.py"
             })
             .times(1)
             .returning(|_, _, _| Ok(b"print(1)\n".to_vec()));
 
         let contents = sandbox_with(client)
             .with_agent(true)
-            .read_file("s1", "src/app.py")
+            .read_file("80b3969a-1016-5a27-86d1-a7bce44ced9b", "src/app.py")
             .await
             .expect("the read should succeed");
 
@@ -3285,7 +3273,7 @@ mod tests {
 
         let error = sandbox_with(client)
             .write_files(
-                "s1",
+                "80b3969a-1016-5a27-86d1-a7bce44ced9b",
                 BTreeMap::from([
                     ("a.txt".to_string(), vec![1u8]),
                     ("b/../../escape".to_string(), vec![2u8]),
@@ -3313,13 +3301,13 @@ mod tests {
                 );
                 Err(AlienError::new(ClientErrorData::RemoteAccessDenied {
                     resource_type: "sandbox".to_string(),
-                    resource_name: "s1".to_string(),
+                    resource_name: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                 }))
             });
 
         let error = sandbox_with(client)
             .write_files(
-                "s1",
+                "80b3969a-1016-5a27-86d1-a7bce44ced9b",
                 BTreeMap::from([
                     ("a.txt".to_string(), vec![1u8]),
                     ("b.txt".to_string(), vec![2u8]),
@@ -3346,7 +3334,7 @@ mod tests {
             }))
         });
         let refused = sandbox_with(client)
-            .read_file("s1", "missing.txt")
+            .read_file("80b3969a-1016-5a27-86d1-a7bce44ced9b", "missing.txt")
             .await
             .expect_err("a missing file is an error");
         assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
@@ -3363,7 +3351,7 @@ mod tests {
             }))
         });
         let unreachable = sandbox_with(client)
-            .read_file("s1", "app.py")
+            .read_file("80b3969a-1016-5a27-86d1-a7bce44ced9b", "app.py")
             .await
             .expect_err("an unavailable data plane is an error");
         assert_eq!(unreachable.code, "SANDBOX_UNREACHABLE", "{unreachable}");
@@ -3382,7 +3370,7 @@ mod tests {
                     message: "the data plane is unavailable".to_string(),
                 }))
             });
-        let command = match sandbox_with(client).run_command("s1", command(5)).await {
+        let command = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5)).await {
             Ok(_) => panic!("an unavailable data plane is an error"),
             Err(error) => error,
         };
@@ -3416,14 +3404,14 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: Some(state.clone()),
                 })
             });
 
             let sandbox = sandbox_with(client)
-                .get("s1")
+                .get("80b3969a-1016-5a27-86d1-a7bce44ced9b")
                 .await
                 .unwrap_or_else(|error| panic!("{reported}: {error}"))
                 .unwrap_or_else(|| panic!("{reported}: the sandbox exists"));
@@ -3443,14 +3431,14 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: state.clone(),
                 })
             });
 
             let error = sandbox_with(client)
-                .get("s1")
+                .get("80b3969a-1016-5a27-86d1-a7bce44ced9b")
                 .await
                 .expect_err("an unreadable state must not become a sandbox");
 
@@ -3471,7 +3459,7 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
-                    id: "s1".to_string(),
+                    id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                     egress_policy: None,
                     state: Some("Creating".to_string()),
                 })
@@ -3483,7 +3471,7 @@ mod tests {
         client
             .expect_get_sandbox()
             .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
+            .returning(|_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None)));
 
         let sandbox = sandbox_with(client)
             .create(CreateSandboxRequest {
@@ -3511,10 +3499,10 @@ mod tests {
                     && request.environment.get("TOKEN").map(String::as_str) == Some("t")
             })
             .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
+            .returning(|_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None)));
         client
             .expect_get_sandbox()
-            .returning(|_, _| Ok(running("s1", None)));
+            .returning(|_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None)));
         client.expect_delete_sandbox().returning(|_, _| Ok(()));
         // The create then waits for an agent that this mock never starts; only the body matters.
         let _ = sandbox_with(client)
@@ -3570,6 +3558,39 @@ mod tests {
         let resolved = sandbox_with(client).get_or_create(asks_for("ask-1")).await.unwrap();
         assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
         assert!(!resolved.created, "found, not created");
+    }
+
+    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: `get`
+    /// answers none and `get_or_create` goes straight to the request-key lookup.
+    #[tokio::test]
+    async fn a_key_that_is_not_a_guid_is_never_read_as_a_sandbox_id() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        // Only the sandbox the lookup found is read; the caller's key never is.
+        client
+            .expect_get_sandbox()
+            .withf(|_, id| id != "ask-1")
+            .returning(|_, id| Ok(running(id, None)));
+        client
+            .expect_list_sandboxes()
+            .returning(|_| Ok(vec![listed("azure-7", "ask-1", 30)]));
+        client.expect_create_sandbox().never();
+        let sandbox = sandbox_with(client);
+        assert!(sandbox.get("ask-1").await.unwrap().is_none());
+        let resolved = sandbox.get_or_create(asks_for("ask-1")).await.unwrap();
+        assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
+        assert!(!resolved.created);
+    }
+
+    /// A GUID the data plane rejects with a 400 is a real failure, not "no such sandbox".
+    #[tokio::test]
+    async fn a_bad_request_for_a_guid_id_is_still_an_error() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .times(1)
+            .returning(|_, _| Err(http_error(400, r#"{"errors":{"id":["x"]}}"#)));
+        let id = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+        assert!(sandbox_with(client).get(id).await.is_err());
     }
 
     /// Two callers can both look before either creates; the oldest sandbox with the label wins and
@@ -3673,7 +3694,7 @@ mod tests {
                     "deny is written as a rule too, so it does not rest on how the proxy treats a \
                      policy with no rules"
                 );
-                Ok(running("s1", Some(policy)))
+                Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", Some(policy)))
             });
         settles_running(
             &mut client,
@@ -3709,7 +3730,7 @@ mod tests {
                         action: "Allow".to_string(),
                     }]
                 );
-                Ok(running("s1", Some(policy)))
+                Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", Some(policy)))
             });
         settles_running(
             &mut client,
@@ -3744,7 +3765,7 @@ mod tests {
                     request.egress.is_none(),
                     "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
                 );
-                Ok(running("s1", None))
+                Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None))
             });
         settles_running(&mut client, None);
         sandbox_denying(client, SandboxEgress::Allow)
@@ -3781,11 +3802,11 @@ mod tests {
             client
                 .expect_create_sandbox()
                 .times(1)
-                .returning(move |_, _| Ok(running("s1", effective.clone())));
+                .returning(move |_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", effective.clone())));
             settles_running(&mut client, came_up_with.clone());
             client
                 .expect_delete_sandbox()
-                .withf(|_, id| id == "s1")
+                .withf(|_, id| id == "80b3969a-1016-5a27-86d1-a7bce44ced9b")
                 .times(1)
                 .returning(|_, _| Ok(()));
 
@@ -3836,7 +3857,7 @@ mod tests {
         // reading the state reported a disappearing sandbox as an uncontained one.
         let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("going-away".to_string()),
+                sandbox_id: Some("66b8a4da-795c-53fb-8313-f703d31feefd".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -3858,12 +3879,12 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client
             .expect_stop_sandbox()
-            .withf(|group, id| group == "grp" && id == "s1")
+            .withf(|group, id| group == "grp" && id == "80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .times(1)
             .returning(|_, _| Ok(()));
         client.expect_resume_sandbox().never();
         sandbox_with(client)
-            .pause("s1")
+            .pause("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect("pause should be accepted");
 
@@ -3881,12 +3902,12 @@ mod tests {
         });
         client
             .expect_resume_sandbox()
-            .withf(|group, id| group == "grp" && id == "s1")
+            .withf(|group, id| group == "grp" && id == "80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .times(1)
             .returning(|_, _| Ok(()));
         client.expect_stop_sandbox().never();
         sandbox_with(client)
-            .resume("s1")
+            .resume("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect("resume should reach a running sandbox");
     }
@@ -3907,7 +3928,7 @@ mod tests {
             Ok(sandbox)
         });
         sandbox_with(client)
-            .pause("s1")
+            .pause("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect("a stop that landed is success even when its response was lost");
 
@@ -3921,7 +3942,7 @@ mod tests {
             .expect_get_sandbox()
             .returning(|_, id| Ok(running(id, None)));
         sandbox_with(client)
-            .pause("s1")
+            .pause("80b3969a-1016-5a27-86d1-a7bce44ced9b")
             .await
             .expect_err("a stop that did not land must surface the failure");
     }
@@ -3938,7 +3959,7 @@ mod tests {
             .expect_create_sandbox()
             .withf(|_, request| request.idle_pause_seconds == Some(900))
             .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
+            .returning(|_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None)));
         settles_running(&mut client, None);
 
         AzureSandbox::new(
@@ -3970,7 +3991,7 @@ mod tests {
         });
 
         let error = sandbox_denying(client, SandboxEgress::None)
-            .get("built-under-allow")
+            .get("e2f4b12f-5b85-5f6a-934d-f57158628cd3")
             .await
             .expect_err("a sandbox without the declared policy must not be handed back");
 
@@ -4057,7 +4078,7 @@ mod tests {
             client
                 .expect_create_sandbox()
                 .times(1)
-                .returning(move |_, _| Ok(running("s1", Some(effective.clone()))));
+                .returning(move |_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", Some(effective.clone()))));
             settles_running(&mut client, Some(came_up_with.clone()));
             client
                 .expect_delete_sandbox()
@@ -4076,7 +4097,7 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_create_sandbox().times(1).returning(|_, _| {
             Ok(running(
-                "s1",
+                "80b3969a-1016-5a27-86d1-a7bce44ced9b",
                 Some(EgressPolicy {
                     default_action: "deny".to_string(),
                     host_rules: vec![EgressHostRule {
@@ -4180,7 +4201,7 @@ mod tests {
         // The stale sandbox is running under no policy at all; the replacement carries the one
         // the declaration asks for.
         client.expect_get_sandbox().returning(move |_, id| {
-            if id == "built-under-allow" {
+            if id == "e2f4b12f-5b85-5f6a-934d-f57158628cd3" {
                 return Ok(running(id, None));
             }
             Ok(running(
@@ -4205,7 +4226,7 @@ mod tests {
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("built-under-allow".to_string()),
+                sandbox_id: Some("e2f4b12f-5b85-5f6a-934d-f57158628cd3".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -4260,7 +4281,7 @@ mod tests {
         client.expect_execute_shell_command().never();
 
         let error = match sandbox_denying(client, SandboxEgress::None)
-            .run_command("built-under-allow", command(5))
+            .run_command("e2f4b12f-5b85-5f6a-934d-f57158628cd3", command(5))
             .await
         {
             Ok(_) => panic!("a sandbox without the declared policy must not run code"),
@@ -4294,7 +4315,7 @@ mod tests {
         let stopped = declared.clone();
         client.expect_get_sandbox().returning(move |_, id| {
             // The replacement is compliant; only the sandbox that was asleep woke up wider.
-            if id != "was-suspended" {
+            if id != "9c48066d-066f-517b-814f-d3cae4a8553b" {
                 return Ok(running(id, Some(stopped.clone())));
             }
             reads += 1;
@@ -4330,7 +4351,7 @@ mod tests {
         client.expect_resume_sandbox().returning(|_, _| Ok(()));
         client
             .expect_stop_sandbox()
-            .withf(|_, id| id == "was-suspended")
+            .withf(|_, id| id == "9c48066d-066f-517b-814f-d3cae4a8553b")
             .times(1)
             .returning(|_, _| Ok(()));
         client.expect_delete_sandbox().never();
@@ -4341,7 +4362,7 @@ mod tests {
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("was-suspended".to_string()),
+                sandbox_id: Some("9c48066d-066f-517b-814f-d3cae4a8553b".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -4369,7 +4390,7 @@ mod tests {
         client
             .expect_create_sandbox()
             .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
+            .returning(|_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", None)));
         // The readiness read and the delete both fail, which is one failure in practice: a
         // missing data-plane role refuses every verb.
         client
@@ -4419,7 +4440,7 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         let error = sandbox_denying(client, SandboxEgress::None)
-            .resume("built-under-allow")
+            .resume("e2f4b12f-5b85-5f6a-934d-f57158628cd3")
             .await
             .expect_err("a sandbox without the declared policy must not be woken");
 
@@ -4492,7 +4513,7 @@ mod tests {
         });
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
-            .get("asleep")
+            .get("45b46c53-eb37-5fd0-9154-07b293107be7")
             .await
             .expect("a sleeping sandbox must still be readable")
             .expect("the sandbox exists");
@@ -4526,7 +4547,7 @@ mod tests {
         client.expect_delete_sandbox().never();
 
         let error = sandbox_denying(client, SandboxEgress::None)
-            .resume("built-under-allow")
+            .resume("e2f4b12f-5b85-5f6a-934d-f57158628cd3")
             .await
             .expect_err("a stored policy that already fails must not be woken");
 
@@ -4586,14 +4607,14 @@ mod tests {
             .returning(|_, _| Ok(()));
         client
             .expect_stop_sandbox()
-            .withf(|_, id| id == "woken-then-unreadable")
+            .withf(|_, id| id == "77d23b31-889a-52ef-97fa-faa4a97c787c")
             .times(1)
             .returning(|_, _| Ok(()));
         client.expect_delete_sandbox().never();
 
         let error = sandbox_with(client)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("woken-then-unreadable".to_string()),
+                sandbox_id: Some("77d23b31-889a-52ef-97fa-faa4a97c787c".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -4637,7 +4658,7 @@ mod tests {
         request.cwd = Some("/work".to_string());
 
         let frames: Vec<Result<CommandOutput>> = sandbox_with(client)
-            .run_command("s1", request)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request)
             .await
             .expect("the command runs")
             .collect()
@@ -4676,7 +4697,7 @@ mod tests {
         request.env = BTreeMap::from([("TOKEN".to_string(), "t".to_string())]);
 
         let frames: Vec<Result<CommandOutput>> = sandbox_with(client)
-            .run_command("s1", request)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request)
             .await
             .expect("a command declaring a variable must run")
             .collect()
@@ -4703,7 +4724,7 @@ mod tests {
         let mut request = command(5);
         request.env = BTreeMap::from([("X; curl evil".to_string(), "1".to_string())]);
 
-        let error = match sandbox_with(client).run_command("s1", request).await {
+        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request).await {
             Ok(_) => panic!("a name the shell would run must not reach the shell"),
             Err(error) => error,
         };
@@ -4903,7 +4924,7 @@ mod tests {
         client.expect_delete_sandbox().never();
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
-            .get("still-booting")
+            .get("ce0c8a2d-81f8-5c8f-b049-2655f21887ba")
             .await
             .expect("a booting sandbox is not a contained-ness failure")
             .expect("the sandbox exists");
@@ -4928,7 +4949,7 @@ mod tests {
 
         let error = sandbox_denying(client, SandboxEgress::None)
             .write_files(
-                "built-under-allow",
+                "e2f4b12f-5b85-5f6a-934d-f57158628cd3",
                 BTreeMap::from([("app.py".to_string(), vec![1u8])]),
             )
             .await
@@ -5000,14 +5021,14 @@ mod tests {
 
         let wrote = sandbox
             .write_files(
-                "asleep",
+                "45b46c53-eb37-5fd0-9154-07b293107be7",
                 BTreeMap::from([("app.py".to_string(), vec![1u8])]),
             )
             .await
             .expect_err("a suspended sandbox takes no content");
         assert_eq!(wrote.code, "SANDBOX_COMMAND_FAILED", "{wrote}");
 
-        let ran = match sandbox.run_command("asleep", command(5)).await {
+        let ran = match sandbox.run_command("45b46c53-eb37-5fd0-9154-07b293107be7", command(5)).await {
             Ok(_) => panic!("a suspended sandbox runs no code"),
             Err(error) => error,
         };
@@ -5062,7 +5083,7 @@ mod tests {
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("asleep-under-allow".to_string()),
+                sandbox_id: Some("9912a515-b500-5154-a41b-b7b6daee2ad4".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -5095,7 +5116,7 @@ mod tests {
         // its replacement.
         client
             .expect_delete_sandbox()
-            .withf(|_, id| id == "broken")
+            .withf(|_, id| id == "c4a7b48e-41bc-5d55-92c5-c2e41626dd26")
             .times(1)
             .returning(|_, _| Ok(()));
         client
@@ -5105,7 +5126,7 @@ mod tests {
 
         let sandbox = sandbox_with(client)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("broken".to_string()),
+                sandbox_id: Some("c4a7b48e-41bc-5d55-92c5-c2e41626dd26".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -5131,7 +5152,7 @@ mod tests {
         });
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
-            .get("broken")
+            .get("c4a7b48e-41bc-5d55-92c5-c2e41626dd26")
             .await
             .expect("a failed sandbox is a state, not an unreadable response")
             .expect("the sandbox exists");
@@ -5165,7 +5186,7 @@ mod tests {
 
         let sandbox = sandbox_with(client)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("dying".to_string()),
+                sandbox_id: Some("face0f9d-5cb0-5a76-84d1-ff6cedecf7d1".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -5217,7 +5238,7 @@ mod tests {
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("asleep-and-fine".to_string()),
+                sandbox_id: Some("5dbc9969-2839-5da4-b475-dab6c06b0880".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -5225,7 +5246,7 @@ mod tests {
             .await
             .expect("a compliant sleeping sandbox is woken and returned");
 
-        assert_eq!(sandbox.sandbox.sandbox_id, "asleep-and-fine");
+        assert_eq!(sandbox.sandbox.sandbox_id, "5dbc9969-2839-5da4-b475-dab6c06b0880");
         assert!(
             !sandbox.created,
             "waking a sleeping sandbox is not creating one"
@@ -5271,7 +5292,7 @@ mod tests {
 
         let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
-                sandbox_id: Some("asleep-without-a-record".to_string()),
+                sandbox_id: Some("62d855ac-ab1b-57b9-9ac5-aba8ddf73566".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
                 ..Default::default()
@@ -5279,7 +5300,7 @@ mod tests {
             .await
             .expect("an absent policy on a sleeping record is unknown, not a mismatch");
 
-        assert_eq!(sandbox.sandbox.sandbox_id, "asleep-without-a-record");
+        assert_eq!(sandbox.sandbox.sandbox_id, "62d855ac-ab1b-57b9-9ac5-aba8ddf73566");
         assert!(
             !sandbox.created,
             "waking a sleeping sandbox is not creating one"
@@ -5311,7 +5332,7 @@ mod tests {
             .returning(|_, _| Err(http_error(500, "SuspendFailed")));
 
         let error = sandbox_denying(client, SandboxEgress::None)
-            .resume("built-under-allow")
+            .resume("e2f4b12f-5b85-5f6a-934d-f57158628cd3")
             .await
             .expect_err("a sandbox that woke up uncontained must not be reported as resumed");
 
@@ -5332,7 +5353,7 @@ mod tests {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 labels: Default::default(),
                 vnet_connection_name: Some("default".to_string()),
-                id: "s1".to_string(),
+                id: "80b3969a-1016-5a27-86d1-a7bce44ced9b".to_string(),
                 egress_policy: None,
                 state: Some("Hibernated".to_string()),
             })
@@ -5340,7 +5361,7 @@ mod tests {
         client.expect_execute_shell_command().never();
         client.expect_resume_sandbox().never();
 
-        let error = match sandbox_with(client).run_command("s1", command(5)).await {
+        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5)).await {
             Ok(_) => panic!("an unreadable state must not take work"),
             Err(error) => error,
         };
