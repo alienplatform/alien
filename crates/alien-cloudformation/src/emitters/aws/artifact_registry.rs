@@ -303,7 +303,7 @@ fn replication_resources(
                     "too-many-regions-at-most-{MAX_REPLICATION_REGION_SLOTS}-are-supported"
                 ))
             } else {
-                replication_slot_region(input_id, slot)
+                replication_slot_region(input_id, replication_input_is_conditional(ctx.stack, input_id), slot)
             };
             if slot == 0 {
                 // The whole resource is conditional on slot 0, so a nested
@@ -369,6 +369,29 @@ fn replication_resources(
                                     ]),
                                 ),
                                 ("Resource", CfExpression::from("*")),
+                            ]),
+                            // The first replication configuration in an account creates the
+                            // ECR replication service-linked role. The grant is a permission
+                            // (not a template resource) because the role may already exist,
+                            // and creating it twice fails the stack. It is limited to that
+                            // one service.
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                ("Action", CfExpression::from("iam:CreateServiceLinkedRole")),
+                                (
+                                    "Resource",
+                                    CfExpression::sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/replication.ecr.amazonaws.com/AWSServiceRoleForECRReplication"),
+                                ),
+                                (
+                                    "Condition",
+                                    CfExpression::object([(
+                                        "StringEquals",
+                                        CfExpression::object([(
+                                            "iam:AWSServiceName",
+                                            CfExpression::from("replication.ecr.amazonaws.com"),
+                                        )]),
+                                    )]),
+                                ),
                             ]),
                             CfExpression::object([
                                 ("Effect", CfExpression::from("Allow")),
@@ -463,29 +486,65 @@ pub(crate) fn replication_slot_condition(input_id: &str, slot: usize) -> String 
     )
 }
 
+/// True when the input only applies while another input has a given value. Such an input is
+/// emitted as a plain String parameter (comma separated), not a CommaDelimitedList.
+pub(crate) fn replication_input_is_conditional(stack: &alien_core::Stack, input_id: &str) -> bool {
+    stack
+        .inputs
+        .iter()
+        .any(|input| input.id == input_id && input.when.is_some())
+}
+
 /// The slot's region from the input list. The list is padded with empty
 /// entries first, because `Fn::Select` past the end fails the whole operation
-/// and conditions are evaluated on every create and update.
-pub(crate) fn replication_slot_region(input_id: &str, slot: usize) -> CfExpression {
+/// and conditions are evaluated on every create and update. A conditional input is a String
+/// parameter and `Fn::Join` only accepts a list, so it is padded directly.
+pub(crate) fn replication_slot_region(
+    input_id: &str,
+    conditional: bool,
+    slot: usize,
+) -> CfExpression {
     let parameter = crate::generator::stack_input_parameter_name_for_id(input_id);
     let padding = (0..=MAX_REPLICATION_REGION_SLOTS + 1).map(|_| CfExpression::from(""));
+    let first = if conditional {
+        CfExpression::ref_(parameter)
+    } else {
+        CfExpression::join(",", CfExpression::ref_(parameter))
+    };
     let padded = CfExpression::object([(
         "Fn::Split",
         CfExpression::list([
             CfExpression::from(","),
-            CfExpression::join(
-                ",",
-                CfExpression::list(
-                    std::iter::once(CfExpression::join(",", CfExpression::ref_(parameter)))
-                        .chain(padding),
-                ),
-            ),
+            CfExpression::join(",", CfExpression::list(std::iter::once(first).chain(padding))),
         ]),
     )]);
     CfExpression::object([(
         "Fn::Select",
         CfExpression::list([CfExpression::Integer(slot as i64), padded]),
     )])
+}
+
+/// The slot's condition: it has a region and, for a conditional input, the input applies.
+pub(crate) fn replication_slot_condition_expression(
+    input_id: &str,
+    conditional: bool,
+    slot: usize,
+) -> CfExpression {
+    let has_region = CfExpression::not(CfExpression::equals(
+        replication_slot_region(input_id, conditional, slot),
+        CfExpression::from(""),
+    ));
+    if !conditional {
+        return has_region;
+    }
+    let applies = format!(
+        "{}Applies",
+        crate::generator::stack_input_parameter_name_for_id(input_id)
+    );
+    CfExpression::and([
+        CfExpression::object([("Condition", CfExpression::from(applies))]),
+        has_region,
+    ])
 }
 
 #[cfg(test)]

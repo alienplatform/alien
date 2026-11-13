@@ -650,3 +650,62 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
         assert!(error.message.contains(invalid_id));
     }
 }
+
+#[test]
+fn aws_registry_replication_role_may_create_only_the_ecr_replication_service_linked_role() {
+    let template = render_template_json(&registry_stack(&["us-east-2"]));
+    let role = template["Resources"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|r| {
+            r["Type"] == "AWS::IAM::Role"
+                && r.to_string().contains("ecr:PutReplicationConfiguration")
+        })
+        .expect("replication role");
+    let statements = role["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        .as_array()
+        .unwrap();
+    let slr = statements
+        .iter()
+        .find(|s| s["Action"] == "iam:CreateServiceLinkedRole")
+        .expect("service-linked role grant, needed by the first replication write in an account");
+    assert_eq!(
+        slr["Condition"]["StringEquals"]["iam:AWSServiceName"],
+        "replication.ecr.amazonaws.com"
+    );
+    assert!(slr["Resource"].to_string().contains("AWSServiceRoleForECRReplication"));
+}
+
+#[test]
+fn aws_registry_conditional_regions_input_is_split_from_a_string_and_honors_its_condition() {
+    let mut stack = input_registry_stack();
+    let mut gate = alien_core::StackInputDefinition::deployer_boolean(
+        "multiRegion",
+        "Multi-region",
+        "Replicate images to other regions",
+        Some(false),
+    );
+    gate.kind = alien_core::StackInputKind::Boolean;
+    let regions = stack.inputs.get_mut(0).unwrap();
+    regions.when = Some(alien_core::StackInputCondition {
+        input: "multiRegion".to_string(),
+        equals: true,
+    });
+    stack.inputs.insert(0, gate);
+    let template = render_template_json(&stack);
+    // A conditional list input is a String parameter; the slots must not Join it as a list.
+    assert_eq!(template["Parameters"]["InputDeploymentRegions"]["Type"], "String");
+    let slot0 = template["Conditions"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(name, _)| name.ends_with("ReplicaRegion0Set"))
+        .map(|(_, v)| v.to_string())
+        .expect("slot 0 condition");
+    assert!(slot0.contains("InputDeploymentRegionsApplies"), "{slot0}");
+    assert!(
+        !slot0.contains("\"Fn::Join\":[\",\",{\"Ref\":\"InputDeploymentRegions\"}]"),
+        "{slot0}"
+    );
+}

@@ -2710,7 +2710,8 @@ fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
 /// from a deployer input; the registry emitter references them by name.
 fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
     use crate::emitters::aws::artifact_registry::{
-        replication_slot_condition, replication_slot_region, MAX_REPLICATION_REGION_SLOTS,
+        replication_input_is_conditional, replication_slot_condition,
+        replication_slot_condition_expression, MAX_REPLICATION_REGION_SLOTS,
     };
     for (_, entry) in stack.resources() {
         let Some(registry) = entry.config.downcast_ref::<alien_core::ArtifactRegistry>() else {
@@ -2719,13 +2720,11 @@ fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
         let Some(input_id) = registry.replication_regions_input.as_deref() else {
             continue;
         };
+        let conditional = replication_input_is_conditional(stack, input_id);
         for slot in 0..=MAX_REPLICATION_REGION_SLOTS {
             template.conditions.insert(
                 replication_slot_condition(input_id, slot),
-                CfExpression::not(CfExpression::equals(
-                    replication_slot_region(input_id, slot),
-                    CfExpression::from(""),
-                )),
+                replication_slot_condition_expression(input_id, conditional, slot),
             );
         }
     }
