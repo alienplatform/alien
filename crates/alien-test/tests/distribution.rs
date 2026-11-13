@@ -101,6 +101,11 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                     .expect("the bundle lives in the deployment's own bucket");
             }
         }
+        TestApp::SandboxRemote => {
+            common::sandbox::check_remote_interactive_command(&ctx.deployment, ctx.platform)
+                .await
+                .expect("a remote sandbox session runs an interactive command");
+        }
         TestApp::AutomaticSetup => {
             let installed = ctx
                 .manager
@@ -1164,6 +1169,18 @@ distribution_test_context!(
 #[test_context(TerraformAzurePushByoAi)]
 #[tokio::test]
 async fn terraform_azure_push_byo_ai(ctx: &mut TerraformAzurePushByoAi) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzurePushSandboxRemote,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::SandboxRemote
+);
+
+#[test_context(TerraformAzurePushSandboxRemote)]
+#[tokio::test]
+async fn terraform_azure_push_sandbox_remote(ctx: &mut TerraformAzurePushSandboxRemote) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
