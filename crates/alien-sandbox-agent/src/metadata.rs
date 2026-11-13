@@ -21,6 +21,9 @@ const METADATA_ADDRESS: SocketAddr = SocketAddr::new(
 const TIMEOUT: Duration = Duration::from_millis(500);
 const AWS_CREDENTIALS: &str = "/latest/meta-data/iam/security-credentials/";
 const AWS_INSTANCE_ID: &str = "/latest/meta-data/instance-id";
+const GCP_TOKEN: &str = "/computeMetadata/v1/instance/service-accounts/default/token";
+const GCP_INSTANCE_ID: &str = "/computeMetadata/v1/instance/id";
+const AZURE_INSTANCE: &str = "/metadata/instance?api-version=2021-02-01";
 
 /// What a command could read, and how an operator closes it.
 #[derive(Debug, PartialEq, Eq)]
@@ -45,6 +48,11 @@ const GCP_FIX: &str = "use Workload Identity with no binding for the sandbox Ser
 const AZURE_FIX: &str = "remove node-assigned identities the sandbox must not use";
 
 /// Ok when no request obtained credentials or identity data.
+///
+/// Timing: nothing answering costs one connect timeout (about 0.5 s) and the check ends. A
+/// service that accepts and never replies costs up to 1 s per request for roughly nine requests,
+/// which is longer than the 5 s the command-path probe allows; that fails closed ("command path
+/// check timeout"), which is the intended outcome for a service that hangs.
 pub fn credentials_obtainable() -> Result<(), Leak> {
     check(METADATA_ADDRESS)
 }
@@ -86,15 +94,26 @@ fn check(address: SocketAddr) -> Result<(), Leak> {
             });
         }
     }
-    let gcp = "/computeMetadata/v1/instance/service-accounts/default/token";
+    for path in [GCP_TOKEN, GCP_INSTANCE_ID] {
+        if matches!(
+            request(address, "GET", path, &[("Metadata-Flavor", "Google")]),
+            Ok(Some(_))
+        ) {
+            return Err(Leak {
+                cloud: "GCP",
+                path,
+                fix: GCP_FIX,
+            });
+        }
+    }
     if matches!(
-        request(address, "GET", gcp, &[("Metadata-Flavor", "Google")]),
+        request(address, "GET", AZURE_INSTANCE, &[("Metadata", "true")]),
         Ok(Some(_))
     ) {
         return Err(Leak {
-            cloud: "GCP",
-            path: gcp,
-            fix: GCP_FIX,
+            cloud: "Azure",
+            path: "/metadata/instance",
+            fix: AZURE_FIX,
         });
     }
     let azure = "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/";
@@ -251,6 +270,32 @@ mod tests {
             "{\"access_token\":\"x\"}",
         )]);
         assert_eq!(check(address).unwrap_err().cloud, "GCP");
+    }
+
+    #[test]
+    fn a_gcp_instance_id_is_a_leak() {
+        let address = serve(vec![("GET", GCP_INSTANCE_ID, false, 200, "1234567890")]);
+        let leak = check(address).unwrap_err();
+        assert_eq!((leak.cloud, leak.path), ("GCP", GCP_INSTANCE_ID));
+    }
+
+    #[test]
+    fn an_azure_instance_document_is_a_leak() {
+        let address = serve(vec![(
+            "GET",
+            "/metadata/instance",
+            false,
+            200,
+            "{\"compute\":{}}",
+        )]);
+        let leak = check(address).unwrap_err();
+        assert_eq!((leak.cloud, leak.path), ("Azure", "/metadata/instance"));
+    }
+
+    #[test]
+    fn an_azure_instance_refusal_passes() {
+        let address = serve(vec![("GET", "/metadata/instance", false, 403, "no")]);
+        assert_eq!(check(address), Ok(()));
     }
 
     #[test]
