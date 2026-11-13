@@ -19,8 +19,7 @@ use super::{
     identity_exchange::{
         IdentityEnrollmentRequest, IdentityEnrollmentResponse, IdentityExchangeRequest,
         IdentityRotationRequest, IdentityRotationResponse, IssuedSetupCredential,
-        RuntimeIdentityProof,
-        RuntimeIdentityVerifier, VerifiedRuntimeIdentity,
+        RuntimeIdentityProof, RuntimeIdentityVerifier, VerifiedRuntimeIdentity,
     },
     runtime_capability::{RuntimeGrant, RuntimePurpose},
     Subject,
@@ -28,7 +27,9 @@ use super::{
 use crate::{
     error::ErrorData,
     stores::sqlite::{runtime_identity::DailyKeyState, SqliteRuntimeIdentityStore},
-    traits::{token_store::TokenType, CredentialResolver, DeploymentRecord, DeploymentStore, TokenStore},
+    traits::{
+        token_store::TokenType, CredentialResolver, DeploymentRecord, DeploymentStore, TokenStore,
+    },
 };
 
 const OPERATOR: &str = "operator";
@@ -117,6 +118,20 @@ impl StandaloneRuntimeIdentity {
 
     /// The deployment for its enrolled Operator. The Operator finishes a deletion and
     /// reports it, including after a restart, so only a deleted deployment is refused.
+    /// The deployment a rerun key is minted for. A key that rewrites or removes
+    /// the installation is not issued while it is being removed, as on the
+    /// hosted manager; the Operator's own sync keeps working then.
+    async fn setup_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
+        let record = self.load(id).await?;
+        if matches!(record.status.as_str(), "deleting" | "deleted" | "retained") {
+            return Err(AlienError::new(ErrorData::DeploymentRemoving {
+                deployment_id: record.id.clone(),
+            })
+            .into_generic());
+        }
+        Ok(record)
+    }
+
     async fn operator_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
         let record = self.load(id).await?;
         if record.status == "deleted" {
@@ -414,7 +429,7 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
             .await
             .map_err(|_| unavailable())?
             .ok_or_else(refused)?;
-        let record = self.operator_deployment(&state.deployment_id).await?;
+        let record = self.setup_deployment(&state.deployment_id).await?;
         let expires_at = now + SETUP_CREDENTIAL_LIFETIME;
         let (raw, key_prefix, key_hash) = crate::ids::generate_token(TokenType::Setup.prefix());
         tokens
@@ -912,7 +927,10 @@ mod tests {
             ("dep-unknown", "ax_day_v1_one"),
         ] {
             assert!(
-                verifier.issue_setup_credential(deployment, key).await.is_err(),
+                verifier
+                    .issue_setup_credential(deployment, key)
+                    .await
+                    .is_err(),
                 "{deployment} accepted a refused key"
             );
         }
@@ -920,29 +938,72 @@ mod tests {
 
     #[tokio::test]
     async fn a_setup_key_is_refused_once_it_expires() {
-        let (verifier, _directory) =
-            verifier(vec![record("dep-1", Platform::Kubernetes, None)], Arc::new(Utc::now), None)
-                .await;
+        let (verifier, _directory) = verifier(
+            vec![record("dep-1", Platform::Kubernetes, None)],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
         let tokens = verifier.tokens.clone().unwrap();
         tokens
-            .create_setup_token("dep-1", "ax_setup_exp", &sha256_hash("expired"), Utc::now() - Duration::seconds(1))
+            .create_setup_token(
+                "dep-1",
+                "ax_setup_exp",
+                &sha256_hash("expired"),
+                Utc::now() - Duration::seconds(1),
+            )
             .await
             .unwrap();
-        assert!(tokens.validate_token(&sha256_hash("expired")).await.unwrap().is_none());
+        assert!(tokens
+            .validate_token(&sha256_hash("expired"))
+            .await
+            .unwrap()
+            .is_none());
     }
 
     /// The verifier can only issue into a token store it was given.
     #[tokio::test]
     async fn no_token_store_means_no_setup_key() {
-        let (mut verifier, _directory) =
-            verifier(vec![record("dep-1", Platform::Kubernetes, None)], Arc::new(Utc::now), None)
-                .await;
+        let (mut verifier, _directory) = verifier(
+            vec![record("dep-1", Platform::Kubernetes, None)],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
         enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
         verifier.tokens = None;
         assert!(verifier
             .issue_setup_credential("dep-1", "ax_day_v1_one")
             .await
             .is_err());
+    }
+
+    /// A deployment being removed gets no rerun key, and the Operator is told why, while its
+    /// own sync keeps working (see the next test).
+    #[tokio::test]
+    async fn no_rerun_key_is_issued_while_a_deployment_is_being_removed() {
+        for (status, issued) in [
+            ("running", true),
+            ("delete-pending", true),
+            ("delete-failed", true),
+            ("deleting", false),
+            ("retained", false),
+        ] {
+            let mut deployment = record("dep-1", Platform::Kubernetes, None);
+            deployment.status = status.into();
+            let (verifier, _directory) = verifier(vec![deployment], Arc::new(Utc::now), None).await;
+            enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+            let outcome = verifier
+                .issue_setup_credential("dep-1", "ax_day_v1_one")
+                .await;
+            match (issued, outcome) {
+                (true, Ok(_)) => {}
+                (false, Err(error)) => {
+                    assert_eq!(error.code, "DEPLOYMENT_REMOVING", "{status}")
+                }
+                (_, other) => panic!("{status}: unexpected {:?}", other.map(|_| ())),
+            }
+        }
     }
 
     /// An enrolled Operator finishes a deletion, so it keeps its sync authority while the
@@ -1113,11 +1174,7 @@ mod tests {
                 state.resources.get_mut("api").unwrap().status = Running;
                 state.resources.get_mut("execution-sa").unwrap().status = Running;
                 state.resources.get_mut(id).unwrap().status = status;
-                assert_eq!(
-                    aws_member(&state, "role-1"),
-                    accepted,
-                    "{id} in {status:?}"
-                );
+                assert_eq!(aws_member(&state, "role-1"), accepted, "{id} in {status:?}");
                 // The recorded identity must still match exactly.
                 assert!(!aws_member(&state, "role-2"), "{id} in {status:?}");
             }

@@ -392,6 +392,11 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         cancel: cancel.clone(),
     });
 
+    // The command a cluster admin runs inside this container to get a
+    // short-lived key for rerunning the installation.
+    #[cfg(unix)]
+    tokio::spawn(setup_credential::serve(db.clone(), cancel.clone()));
+
     // Start OTLP server (for local functions to send telemetry).
     // Telemetry alone is best-effort; a queue owner must fail if its listener fails.
     let otlp_host = config.otlp_server_host;

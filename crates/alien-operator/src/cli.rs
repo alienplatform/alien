@@ -395,7 +395,10 @@ pub fn cli_main_with_all_loops(
 
     // `setup-credential` runs next to a live Operator (kubectl exec), so it
     // skips the instance lock and tracing and has its own flags.
-    if std::env::args_os().nth(1).is_some_and(|arg| arg == "setup-credential") {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "setup-credential")
+    {
         std::process::exit(crate::setup_credential::main(std::env::args_os().skip(2)));
     }
 

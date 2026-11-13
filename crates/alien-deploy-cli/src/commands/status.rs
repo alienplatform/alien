@@ -131,8 +131,11 @@ async fn status_command_with(
     let tracker = DeploymentTracker::new()?;
 
     let tracked = tracker.get(&args.name);
-    let explicit =
-        resolve_optional_token(args.token.clone(), args.token_file.as_ref(), embedded_config)?;
+    let explicit = resolve_optional_token(
+        args.token.clone(),
+        args.token_file.as_ref(),
+        embedded_config,
+    )?;
     let token = match tracked {
         Some(tracked) => {
             let cli_name = embedded_config

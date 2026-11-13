@@ -398,7 +398,7 @@ pub async fn issue_enrollment_code(
     post, path = "/v1/deployments/{id}/setup-credential", operation_id = "issueSetupCredential",
     tag = "identity",
     params(("id" = String, Path, description = "Deployment ID")),
-    responses((status = 200, body = IssuedSetupCredential), (status = 401), (status = 503))
+    responses((status = 200, body = IssuedSetupCredential), (status = 401), (status = 409), (status = 503))
 ))]
 pub async fn issue_setup_credential(
     headers: HeaderMap,
@@ -418,6 +418,10 @@ pub async fn issue_setup_credential(
         Ok(issued) => ([(http::header::CACHE_CONTROL, "no-store")], Json(issued)).into_response(),
         Err(error) if error.retryable => {
             AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
+        }
+        // Only the Operator's own key reaches this point, so saying why is no leak.
+        Err(error) if error.code == "DEPLOYMENT_REMOVING" => {
+            AlienError::new(ErrorData::DeploymentRemoving { deployment_id: id }).into_response()
         }
         Err(_) => ErrorData::unauthorized("Setup credential refused").into_response(),
     }
@@ -505,7 +509,10 @@ mod setup_credential_route_tests {
         if let Some(value) = authorization {
             request = request.header("authorization", value);
         }
-        let response = app.oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         let status = response.status().as_u16();
         let cache = response
             .headers()
@@ -531,7 +538,10 @@ mod setup_credential_route_tests {
         ] {
             let (status, body, _) = call(deployment, header).await;
             assert_eq!(status, 401, "{deployment} {header:?}");
-            assert!(!body.contains("secret"), "the verifier's message leaked: {body}");
+            assert!(
+                !body.contains("secret"),
+                "the verifier's message leaked: {body}"
+            );
             assert!(!body.contains("ax_day_v1"), "a key was echoed: {body}");
         }
     }

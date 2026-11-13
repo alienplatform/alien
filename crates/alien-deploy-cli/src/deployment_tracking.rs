@@ -255,7 +255,10 @@ mod tests {
                     "https://manager.test.com".to_string(),
                     "local".to_string(),
                     None,
-                    Some(TrackedLocalDeployment { data_dir: "/tmp/alien-agent-state".to_string(), service_managed: true, }),
+                    Some(TrackedLocalDeployment {
+                        data_dir: "/tmp/alien-agent-state".to_string(),
+                        service_managed: true,
+                    }),
                 )
                 .unwrap();
         }

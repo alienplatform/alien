@@ -293,20 +293,38 @@ mod tests {
 
     #[tokio::test]
     async fn a_saved_token_is_used_when_nothing_else_is_given() {
-        let resolved = resolve(None, &tracked(Some("saved")), &KubeAccess::default(), "cli", "deploy")
-            .await
-            .unwrap();
+        let resolved = resolve(
+            None,
+            &tracked(Some("saved")),
+            &KubeAccess::default(),
+            "cli",
+            "deploy",
+        )
+        .await
+        .unwrap();
         assert_eq!(resolved.token, "saved");
     }
 
     #[tokio::test]
     async fn no_token_at_all_names_the_setup_token_and_the_rerun_command() {
-        let error = resolve(None, &tracked(None), &KubeAccess::default(), "acme-deploy", "deploy")
-            .await
-            .unwrap_err();
+        let error = resolve(
+            None,
+            &tracked(None),
+            &KubeAccess::default(),
+            "acme-deploy",
+            "deploy",
+        )
+        .await
+        .unwrap_err();
         let text = error.to_string();
-        assert!(text.contains("Cannot update \"prod\" without a setup token"), "{text}");
-        assert!(text.contains("acme-deploy deploy --name 'prod' --token-file <path>"), "{text}");
+        assert!(
+            text.contains("Cannot update \"prod\" without a setup token"),
+            "{text}"
+        );
+        assert!(
+            text.contains("acme-deploy deploy --name 'prod' --token-file <path>"),
+            "{text}"
+        );
         assert!(text.contains("Your deployment keeps running."), "{text}");
         assert!(!text.to_lowercase().contains("alien"), "{text}");
     }
@@ -315,9 +333,12 @@ mod tests {
     fn kubectl_failures_become_one_line_reasons() {
         let reason = |stderr: &str| failure_reason(stderr, "rel", "ns");
         assert!(reason("error: unexpected argument 'setup-credential' found").contains("too old"));
-        assert!(reason("Error from server (Forbidden): pods is forbidden").contains("Kubernetes access"));
-        assert!(reason("Error from server (NotFound): deployments.apps \"rel\" not found")
-            .contains("no Operator named 'rel' is running in namespace 'ns'"));
+        assert!(reason("Error from server (Forbidden): pods is forbidden")
+            .contains("Kubernetes access"));
+        assert!(
+            reason("Error from server (NotFound): deployments.apps \"rel\" not found")
+                .contains("no Operator named 'rel' is running in namespace 'ns'")
+        );
         assert!(reason("setup-credential: not-enrolled").contains("not finished enrolling"));
         assert!(!reason("anything else").contains('\n'));
     }

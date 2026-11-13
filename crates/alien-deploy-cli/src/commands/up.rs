@@ -14,9 +14,9 @@ pub(crate) const DEPLOY_CLI_USER_AGENT: &str =
 use crate::deployment_tracking::{
     DeploymentTracker, TrackedDeployment, TrackedHelmRelease, TrackedLocalDeployment,
 };
-use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use crate::error::{ErrorData, Result};
 use crate::output;
+use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_cli_common::{
     network::{self, NetworkArgs, NetworkMode},
     SetupItem,
@@ -909,9 +909,10 @@ mod tests {
             "--manager-url",
             "http://127.0.0.1:1",
         ]);
-        let direct = resolve_deployment_info(&direct, Some(&branded), None, &InClusterUse::default())
-            .await
-            .expect("direct manager run");
+        let direct =
+            resolve_deployment_info(&direct, Some(&branded), None, &InClusterUse::default())
+                .await
+                .expect("direct manager run");
         assert_eq!(direct.platform, "local");
         lookups.assert_hits_async(0).await;
 
