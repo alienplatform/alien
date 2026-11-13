@@ -149,7 +149,7 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
 
 #[tokio::test]
 async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
-    for platform in [Platform::Gcp, Platform::Local] {
+    for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
         let mut declared = sandbox(None);
         declared.egress = SandboxEgress::Internet;
         let result = PreflightRunner::new()
@@ -178,16 +178,4 @@ async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() 
             "released Allow stays available on {platform}: {result:?}"
         );
     }
-}
-
-/// Azure hosts the gateway as a Container in the deployment's network, so planning accepts it.
-#[tokio::test]
-async fn azure_plans_an_internet_sandbox_for_its_gateway() {
-    let mut declared = sandbox(None);
-    declared.egress = SandboxEgress::Internet;
-    let result = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(declared), Platform::Azure)
-        .await
-        .expect("preflight runs");
-    assert!(result.success, "Azure hosts the gateway: {result:?}");
 }
