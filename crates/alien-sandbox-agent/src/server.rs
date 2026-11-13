@@ -116,6 +116,22 @@ impl AgentAuthorization {
     }
 }
 
+/// Variables the platform sets in the agent's own environment that name a credential endpoint.
+/// Azure's sandbox runtime sets the managed identity pair even when no identity is attached, and
+/// the endpoint answers 401; the guest must still never be handed the means to ask.
+const PLATFORM_CREDENTIAL_VARIABLES: [&str; 5] = [
+    "IDENTITY_ENDPOINT",
+    "IDENTITY_HEADER",
+    "IDENTITY_SERVER_THUMBPRINT",
+    "MSI_ENDPOINT",
+    "MSI_SECRET",
+];
+
+/// Whether a variable of the agent's own environment may reach the boot process and commands.
+fn is_inherited_native_variable(name: &str) -> bool {
+    !name.starts_with("ALIEN_SANDBOX_") && !PLATFORM_CREDENTIAL_VARIABLES.contains(&name)
+}
+
 impl AgentState {
     /// Azure's create-time environment includes user variables and gateway proxy settings.
     /// Preserve those defaults without letting agent configuration become a child contract.
@@ -123,7 +139,7 @@ impl AgentState {
         #[cfg(unix)]
         if matches!(self.authorization, AgentAuthorization::NativeFile(_)) {
             for (name, value) in std::env::vars() {
-                if !name.starts_with("ALIEN_SANDBOX_") {
+                if is_inherited_native_variable(&name) {
                     env.entry(name).or_insert(value);
                 }
             }
@@ -1429,4 +1445,30 @@ async fn run_egress_hook(
         .set_gateway(&bootstrap.gateway, &bootstrap.audience, &hook.microvm_id)
         .await?;
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod native_environment_tests {
+    use super::is_inherited_native_variable;
+
+    #[test]
+    fn platform_credential_variables_never_reach_the_guest() {
+        for name in [
+            "IDENTITY_ENDPOINT",
+            "IDENTITY_HEADER",
+            "IDENTITY_SERVER_THUMBPRINT",
+            "MSI_ENDPOINT",
+            "MSI_SECRET",
+            "ALIEN_SANDBOX_PORT",
+        ] {
+            assert!(!is_inherited_native_variable(name), "{name} must be stripped");
+        }
+    }
+
+    #[test]
+    fn user_and_proxy_variables_are_still_inherited() {
+        for name in ["HTTPS_PROXY", "APP_TOKEN", "IDENTITY", "MY_IDENTITY_ENDPOINT"] {
+            assert!(is_inherited_native_variable(name), "{name} must pass");
+        }
+    }
 }
