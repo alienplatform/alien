@@ -16,6 +16,7 @@ use alien_sandbox_conformance::{evaluate, Expectation, Observation, Probe, Verdi
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+mod contract;
 mod entrypoint;
 mod error;
 use error::{operation, ErrorData, Result};
@@ -130,8 +131,18 @@ async fn create(
     journal: &mut File,
     sessions: &mut Vec<Session>,
 ) -> Result<usize> {
+    create_with(sandbox, binding, journal, sessions, CreateSandboxRequest::default()).await
+}
+
+async fn create_with(
+    sandbox: &dyn Sandbox,
+    binding: &str,
+    journal: &mut File,
+    sessions: &mut Vec<Session>,
+    request: CreateSandboxRequest,
+) -> Result<usize> {
     let instance = sandbox
-        .create(CreateSandboxRequest::default())
+        .create(request)
         .await
         .context(operation(format!("create {binding}")))?;
     let index = sessions.len();
@@ -367,6 +378,15 @@ async fn execute() -> Result<bool> {
             println!();
             Ok(report.passed)
         }
+        [action, suite_path, journal_path] if action == "contract" => {
+            let file = File::open(suite_path).into_alien_error().context(operation("open contract suite"))?;
+            let suite = serde_json::from_reader(file).into_alien_error().context(operation("decode contract suite"))?;
+            let report = contract::run(&bindings, suite, Path::new(journal_path)).await?;
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &report).into_alien_error()
+                .context(operation("write contract report"))?;
+            println!();
+            Ok(report.passed)
+        }
         [action, suite_path, journal_path] if action == "run" => {
             let file = File::open(suite_path)
                 .into_alien_error()
@@ -438,7 +458,7 @@ async fn execute() -> Result<bool> {
             Ok(true)
         }
         _ => Err(invalid(
-            "usage: alien-sandbox-conformance run SUITE.json JOURNAL.jsonl | entrypoint SUITE.json JOURNAL.jsonl | interactive SUITE.json JOURNAL.jsonl | cleanup JOURNAL.jsonl",
+            "usage: alien-sandbox-conformance run SUITE.json JOURNAL.jsonl | entrypoint SUITE.json JOURNAL.jsonl | contract SUITE.json JOURNAL.jsonl | interactive SUITE.json JOURNAL.jsonl | cleanup JOURNAL.jsonl",
         )),
     }
 }
