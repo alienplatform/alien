@@ -227,7 +227,10 @@ mod tests {
         .await
         .unwrap_err();
         let text = err.to_string();
-        assert!(text.contains("us-east-2") && text.contains(DIGEST), "{text}");
+        assert!(
+            text.contains("us-east-2") && text.contains(DIGEST),
+            "{text}"
+        );
     }
 
     #[test]
@@ -235,7 +238,9 @@ mod tests {
         assert!(is_region_policy_denial(
             "user is not authorized ... with an explicit deny in a service control policy"
         ));
-        assert!(!is_region_policy_denial("accessdeniedexception: no identity-based policy"));
+        assert!(!is_region_policy_denial(
+            "accessdeniedexception: no identity-based policy"
+        ));
     }
 
     #[tokio::test]
@@ -268,7 +273,9 @@ mod tests {
     #[tokio::test]
     async fn a_different_digest_behind_the_same_tag_is_refused() {
         let mut source = MockEcrApi::new();
-        source.expect_batch_get_image().returning(|_| Ok(found(DIGEST)));
+        source
+            .expect_batch_get_image()
+            .returning(|_| Ok(found(DIGEST)));
         let mut target = MockEcrApi::new();
         target.expect_batch_get_image().returning(|_| {
             Ok(found(
@@ -290,7 +297,9 @@ mod tests {
     async fn the_exact_digest_in_the_target_region_passes() {
         let source = MockEcrApi::new();
         let mut target = MockEcrApi::new();
-        target.expect_batch_get_image().returning(|_| Ok(found(DIGEST)));
+        target
+            .expect_batch_get_image()
+            .returning(|_| Ok(found(DIGEST)));
         ensure_image_in_region(
             &format!("{SRC}@{DIGEST}"),
             "us-east-2",

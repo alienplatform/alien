@@ -460,6 +460,7 @@ impl PreflightRegistry {
             // TODO: Add runtime checks
             // registry.add_runtime_check(Box::new(runtime::CloudConnectivityCheck));
             registry.add_runtime_check(Box::new(runtime::CloudQuotasCheck));
+            registry.add_runtime_check(Box::new(runtime::aws_replication::ReplicationRulesCheck));
             // registry.add_runtime_check(Box::new(runtime::CloudApisEnabledCheck));
             // registry.add_runtime_check(Box::new(runtime::SufficientPermissionsCheck));
         }

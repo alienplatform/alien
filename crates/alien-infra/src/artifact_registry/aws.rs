@@ -9,11 +9,11 @@ use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, IamRoleWriter};
 use alien_core::{
-    standard_resource_tags, RegistryReplicationOwner, RegistryReplicationReport, ArtifactRegistry, ArtifactRegistryHeartbeatData,
+    standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
     AwsEcrRepositoryHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    Platform, ProviderLifecycleState, RegistryReplicationOwner, RegistryReplicationReport,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 
 use alien_aws_clients::aws::ecr::{DescribeRepositoriesRequest, Repository};
@@ -1066,60 +1066,7 @@ async fn owned_role_arn(
     }
 }
 
-/// Classify the registry's replication rules: none, exactly the rule this registry's setup
-/// writes (its repository prefix, destinations in the same account), or anything else.
-pub(crate) fn classify_replication(
-    rules: &[alien_aws_clients::aws::ecr::ReplicationRule],
-    repository_prefix: &str,
-    account_id: &str,
-) -> RegistryReplicationReport {
-    if rules.is_empty() {
-        return RegistryReplicationReport {
-            owner: RegistryReplicationOwner::None,
-            foreign_rules: vec![],
-        };
-    }
-    let foreign_rules = rules
-        .iter()
-        .filter(|rule| {
-            let ours = rule.repository_filters.len() == 1
-                && rule.repository_filters[0].filter_type == "PREFIX_MATCH"
-                && rule.repository_filters[0].filter == repository_prefix
-                && !rule.destinations.is_empty()
-                && rule
-                    .destinations
-                    .iter()
-                    .all(|destination| destination.registry_id == account_id);
-            !ours
-        })
-        .map(|rule| {
-            let regions = rule
-                .destinations
-                .iter()
-                .map(|d| format!("{} (account {})", d.region, d.registry_id))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let filters = if rule.repository_filters.is_empty() {
-                "all repositories".to_string()
-            } else {
-                rule.repository_filters
-                    .iter()
-                    .map(|f| format!("{} {}", f.filter_type, f.filter))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            format!("copies {filters} to {regions}")
-        })
-        .collect::<Vec<_>>();
-    RegistryReplicationReport {
-        owner: if foreign_rules.is_empty() {
-            RegistryReplicationOwner::Ours
-        } else {
-            RegistryReplicationOwner::Foreign
-        },
-        foreign_rules,
-    }
-}
+pub(crate) use alien_preflights::runtime::aws_replication::classify_replication;
 
 impl AwsArtifactRegistryController {
     /// Read the account's replication rules with this identity and record whose they are.
@@ -2173,8 +2120,14 @@ mod tests {
         }
     }
 
-    fn rule(prefix: Option<&str>, registry_id: &str, region: &str) -> alien_aws_clients::aws::ecr::ReplicationRule {
-        use alien_aws_clients::aws::ecr::{ReplicationDestination, ReplicationRule, RepositoryFilter};
+    fn rule(
+        prefix: Option<&str>,
+        registry_id: &str,
+        region: &str,
+    ) -> alien_aws_clients::aws::ecr::ReplicationRule {
+        use alien_aws_clients::aws::ecr::{
+            ReplicationDestination, ReplicationRule, RepositoryFilter,
+        };
         ReplicationRule {
             destinations: vec![ReplicationDestination {
                 region: region.to_string(),
@@ -2233,10 +2186,7 @@ mod tests {
     async fn ready_step_with_registry_rules(
         saved: AwsArtifactRegistryController,
         rules: Result<Vec<alien_aws_clients::aws::ecr::ReplicationRule>>,
-    ) -> (
-        Result<()>,
-        AwsArtifactRegistryController,
-    ) {
+    ) -> (Result<()>, AwsArtifactRegistryController) {
         use alien_aws_clients::aws::ecr::{
             DescribeRegistryResponse, DescribeRepositoriesResponse, MockEcrApi,
             ReplicationConfiguration,
@@ -2255,10 +2205,12 @@ mod tests {
                     registry_id: "123456789012".to_string(),
                     replication_configuration: ReplicationConfiguration { rules },
                 }),
-                Err(_) => Err(AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
-                    resource_type: "registry".to_string(),
-                    resource_name: "ecr".to_string(),
-                })),
+                Err(_) => Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "registry".to_string(),
+                        resource_name: "ecr".to_string(),
+                    },
+                )),
             }
         });
         let ecr = Arc::new(ecr);
@@ -2300,7 +2252,10 @@ mod tests {
         let acct = "123456789012";
         let (outcome, state) = ready_step_with_registry_rules(ready_registry(), Ok(vec![])).await;
         outcome.unwrap();
-        assert_eq!(state.replication.unwrap().owner, RegistryReplicationOwner::None);
+        assert_eq!(
+            state.replication.unwrap().owner,
+            RegistryReplicationOwner::None
+        );
 
         let (outcome, state) = ready_step_with_registry_rules(
             ready_registry(),
@@ -2308,12 +2263,17 @@ mod tests {
         )
         .await;
         outcome.unwrap();
-        assert_eq!(state.replication.unwrap().owner, RegistryReplicationOwner::Ours);
+        assert_eq!(
+            state.replication.unwrap().owner,
+            RegistryReplicationOwner::Ours
+        );
         assert_eq!(state.replication_seen_ours, Some(true));
 
-        let (outcome, state) =
-            ready_step_with_registry_rules(ready_registry(), Ok(vec![rule(None, acct, "eu-west-1")]))
-                .await;
+        let (outcome, state) = ready_step_with_registry_rules(
+            ready_registry(),
+            Ok(vec![rule(None, acct, "eu-west-1")]),
+        )
+        .await;
         outcome.unwrap();
         let report = state.replication.unwrap();
         assert_eq!(report.owner, RegistryReplicationOwner::Foreign);
@@ -2326,9 +2286,13 @@ mod tests {
         let mut after_ours = ready_registry();
         after_ours.replication_seen_ours = Some(true);
         let (outcome, _) =
-            ready_step_with_registry_rules(after_ours, Ok(vec![rule(None, acct, "eu-west-1")])).await;
+            ready_step_with_registry_rules(after_ours, Ok(vec![rule(None, acct, "eu-west-1")]))
+                .await;
         let message = format!("{:?}", outcome.unwrap_err());
-        assert!(message.contains("eu-west-1") && message.contains("changed"), "{message}");
+        assert!(
+            message.contains("eu-west-1") && message.contains("changed"),
+            "{message}"
+        );
 
         // An unreadable registry keeps the registry usable and the old report.
         let mut known = ready_registry();
@@ -2342,7 +2306,10 @@ mod tests {
         }));
         let (outcome, state) = ready_step_with_registry_rules(known, denied).await;
         outcome.unwrap();
-        assert_eq!(state.replication.unwrap().owner, RegistryReplicationOwner::None);
+        assert_eq!(
+            state.replication.unwrap().owner,
+            RegistryReplicationOwner::None
+        );
     }
 
     #[tokio::test]
