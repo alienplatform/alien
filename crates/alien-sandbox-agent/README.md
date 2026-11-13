@@ -390,14 +390,32 @@ Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as the i
 root, with Docker's default capabilities minus NET_RAW, only when the image sets no user or sets
 root; an image with a non-root USER starts as that user with no capabilities. Exec and jobs always
 stay non-root. Sandboxes use the project's
-default network placement and are reached through `:execute`.
+default network placement. Alien's own calls go through `:execute`, which Agent Platform sends to
+the FIRST port the template declares, so the template lists the agent's port (8971) first and the
+declared preview ports after it.
+
+Preview: `preview(id, port)` asks the agent over `:execute` for a capability signed for that one
+sandbox, port and boot (at most 15 minutes, never past the sandbox's deadline), signs the edge's JWT
+as a setup-created identity that holds only the execute verb on the engine, and returns the sandbox's
+own edge host with `/v1/preview/<port>`. The edge consumes `Authorization` for its JWT, so the
+caller puts its own bearer in `x-alien-caller-authorization` (the field `callerAuthorizationHeader`)
+and the agent hands it to the workload as `Authorization`. A WebSocket upgrade is refused by the edge
+unless its credentials are offered as subprotocols, so a client offers the app's own protocol first
+and then the contract's `subprotocols` list, in order, and still sends the `x-alien-*` headers.
+A client that can only set headers cannot open a WebSocket on this backend. The agent keeps the
+client side of an upgraded stream open for a quarter second after the workload closes, because the
+edge loses the last frame (the close reply) of a daemon that drops the connection at once.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
-- `internet` egress and preview ports (not built or proven on GCP yet; declare `none` and no
-  preview ports);
-- an idle pause policy (the platform has no idle policy and Alien does not watch for idleness on
-  GCP). `pause_resume` is off: a resume was seen returning a fresh container.
+- `internet` egress: there is no enforcement point outside the guest without PSC-I or VPC Service
+  Controls, so a `host:port` policy could not be enforced. Declare `none`. It can be lifted when
+  Google ships an egress allowlist for Agent Platform, or when a deployment accepts VPC Service
+  Controls;
+- a preview port equal to the agent's own (8971);
+- an idle pause policy. `pause_resume` is off: on the default network placement every
+  `:pause`/`:resume` cycle measured returned a fresh container (new boot id, process gone, uptime
+  reset), with the agent and with a bare workload alike, so a paused sandbox keeps nothing.
 
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.

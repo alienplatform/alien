@@ -2080,3 +2080,26 @@ async fn preview_of_an_undeclared_port_is_refused_without_a_call() {
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     assert!(error.to_string().contains("9999"), "{error}");
 }
+
+/// The agent's clock may run ahead of this host's, so a grant that reads as longer than the
+/// longest one the agent issues is still reported as that longest one.
+#[tokio::test]
+async fn preview_never_reports_more_than_the_longest_grant() {
+    let expire = far_future();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    client.expect_execute().returning(|_, _, _| {
+        Ok(serde_json::to_vec(&json!({
+            "capability": "cap",
+            "expiresAt": chrono::Utc::now().timestamp() + 940,
+        }))
+        .unwrap())
+    });
+    let preview = preview_provider(client).preview("s1", 8080).await.unwrap();
+    assert_eq!(
+        preview.expires_in_seconds,
+        alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS as u64
+    );
+}

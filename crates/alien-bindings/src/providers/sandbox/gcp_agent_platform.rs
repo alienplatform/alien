@@ -1124,7 +1124,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
             endpoint: format!("https://{host}/v1/preview/{port}"),
             headers,
             allowed_ports: vec![port],
-            expires_in_seconds: (grant.expires_at - now).max(0) as u64,
+            // The agent's clock decides when a grant ends; this host's may read a few seconds
+            // behind it, so the remaining time is capped at the longest a grant can live.
+            expires_in_seconds: (grant.expires_at - now)
+                .clamp(0, alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS)
+                as u64,
             // The edge consumes `Authorization` for its own credential, so the caller's bearer
             // travels in this header and the agent re-emits it towards the daemon.
             caller_authorization_header: alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER

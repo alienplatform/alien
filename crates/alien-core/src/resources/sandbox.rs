@@ -1196,11 +1196,16 @@ impl Sandbox {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
 
-        // `internet` needs a gateway-enforced policy that GCP Agent Platform does not have here
-        // yet; it would plan cleanly and then run without one. Refuse it until it is built.
+        // `internet` needs a gateway-enforced policy, and on default placement there is no
+        // enforcement point outside the guest: the sandbox's traffic leaves through Google's own
+        // path, where nothing of ours can allow some hosts and deny the rest. It would plan
+        // cleanly and then run without a policy. A private network placement (PSC-I) or VPC
+        // Service Controls would give one; each has to be accepted by the deployment first, and
+        // the project's first sandbox pins the placement for good. Until one of them is chosen,
+        // or Google ships an egress allowlist for Agent Platform, this stays refused.
         if platform == Platform::Gcp && matches!(self.egress, SandboxEgress::Internet) {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                capability: "egress internet: not built or proven on GCP Agent Platform yet; declare egress none".to_string(),
+                capability: "egress internet: there is no enforcement point outside the guest on GCP Agent Platform without PSC-I or VPC Service Controls, so a host:port policy could not be enforced; declare egress none".to_string(),
                 platform: platform.to_string(),
             }));
         }
@@ -1876,6 +1881,12 @@ mod tests {
             .validate_for_platform(Platform::Gcp)
             .unwrap_err();
         assert!(refused.to_string().contains("egress internet"), "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("no enforcement point outside the guest"),
+            "{refused}"
+        );
         sandbox_with(SandboxEgress::None, vec![])
             .validate_for_platform(Platform::Gcp)
             .unwrap();

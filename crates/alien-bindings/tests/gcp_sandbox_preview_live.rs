@@ -68,7 +68,10 @@ async fn get(
         if drop_capability && name.starts_with("x-alien-preview") {
             continue;
         }
-        if override_headers.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+        if override_headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
             continue;
         }
         request = request.header(name, value);
@@ -80,7 +83,10 @@ async fn get(
         request = request.header(&preview.caller_authorization_header, bearer);
     }
     let response = request.send().await.expect("the edge answers");
-    (response.status().as_u16(), response.text().await.unwrap_or_default())
+    (
+        response.status().as_u16(),
+        response.text().await.unwrap_or_default(),
+    )
 }
 
 #[tokio::test]
@@ -118,12 +124,14 @@ async fn live_preview_http_websocket_and_refusals() {
             assert_eq!(seen["port"], *port, "{body}");
             assert_eq!(seen["path"], "/hello?x=1", "{body}");
             assert_eq!(seen["auth"], bearer, "the caller's bearer must arrive unchanged: {body}");
+            eprintln!("PASS http port {port}: 200, daemon saw path {} and Authorization {}", seen["path"], seen["auth"]);
             previews.push(preview);
         }
 
         // A port the template does not declare is refused by the binding without a call.
         let error = provider.preview(&first.sandbox_id, undeclared).await.expect_err("undeclared");
         assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+        eprintln!("PASS undeclared port {undeclared}: refused by the binding without a call");
 
         // Wrong port: a capability for the first port, aimed at another declared port, and at the
         // port the daemon serves but nobody declared.
@@ -136,6 +144,7 @@ async fn live_preview_http_websocket_and_refusals() {
         )
         .await;
         assert!([401, 403].contains(&status), "header names another port: {status}");
+        eprintln!("PASS capability for port {} with the header naming port {}: {status}", ports[0], ports[1]);
         let mut aimed = previews[0].clone();
         aimed.endpoint = aimed.endpoint.replace(
             &format!("/v1/preview/{}", ports[0]),
@@ -143,6 +152,7 @@ async fn live_preview_http_websocket_and_refusals() {
         );
         let (status, _) = get(&aimed, "/x", Some("Bearer x"), false, &[]).await;
         assert!([401, 403].contains(&status), "path names another port: {status}");
+        eprintln!("PASS capability for port {} aimed at path port {}: {status}", ports[0], ports[1]);
         let mut aimed = previews[0].clone();
         aimed.endpoint = aimed.endpoint.replace(
             &format!("/v1/preview/{}", ports[0]),
@@ -157,9 +167,11 @@ async fn live_preview_http_websocket_and_refusals() {
         )
         .await;
         assert!([401, 403].contains(&status), "undeclared port: {status}");
+        eprintln!("PASS capability aimed at the undeclared port {undeclared} the daemon serves: {status}");
         // No capability at all.
         let (status, _) = get(&previews[0], "/x", Some("Bearer x"), true, &[]).await;
         assert!([401, 403].contains(&status), "no capability: {status}");
+        eprintln!("PASS no capability: {status}");
 
         // Another sandbox's capability: the second sandbox's endpoint and edge credentials with
         // the first sandbox's capability.
@@ -174,6 +186,7 @@ async fn live_preview_http_websocket_and_refusals() {
         )
         .await;
         assert!([401, 403].contains(&status), "another sandbox's capability: {status}");
+        eprintln!("PASS another sandbox's capability: {status}");
         // ... and the second sandbox's own capability still works.
         let (status, body) = get(&other, "/x", Some("Bearer y"), false, &[]).await;
         assert_eq!(status, 200, "{body}");
@@ -204,6 +217,7 @@ async fn live_preview_http_websocket_and_refusals() {
         )
         .await;
         assert_eq!(status, 200, "the short grant works while it lives");
+        eprintln!("PASS short-lived capability works while it lives");
         tokio::time::sleep(std::time::Duration::from_secs(6)).await;
         let (status, _) = get(
             &previews[0],
@@ -214,6 +228,7 @@ async fn live_preview_http_websocket_and_refusals() {
         )
         .await;
         assert!([401, 403].contains(&status), "expired capability: {status}");
+        eprintln!("PASS expired capability: {status}");
 
         // WebSocket: the preview contracts go to the driver, which speaks the protocol.
         let mut fresh = Vec::new();
