@@ -353,14 +353,12 @@ impl AzureSandbox {
                     capability: String,
                     expires_at: i64,
                 }
-                let granted: Granted = response
-                    .json()
-                    .await
-                    .into_alien_error()
-                    .context(agent_protocol::unanswered(
+                let granted: Granted = response.json().await.into_alien_error().context(
+                    agent_protocol::unanswered(
                         OPERATION,
                         "the agent's preview grant was unreadable",
-                    ))?;
+                    ),
+                )?;
                 let grant = CachedGrant {
                     capability: granted.capability,
                     expires_at: granted.expires_at,
@@ -391,6 +389,10 @@ impl AzureSandbox {
                 ),
             ]),
             allowed_ports: vec![port],
+            // The agent port is anonymous on Azure, so the caller's own bearer rides `Authorization`
+            // untouched and the capability has its own header.
+            caller_authorization_header: "Authorization".to_string(),
+            subprotocols: Vec::new(),
             expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
                 .unwrap_or(0),
         })
@@ -617,7 +619,11 @@ mod tests {
             )
             .with_agent(false);
             if cached_boot {
-                *provider.connection_slot("6f9619ff-8b86-d011-b42d-00c04fc964ff").await.lock().await = Some(Connection {
+                *provider
+                    .connection_slot("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+                    .await
+                    .lock()
+                    .await = Some(Connection {
                     client: reqwest::Client::builder().no_proxy().build().unwrap(),
                     url: cached_url.parse().unwrap(),
                     token: STANDARD.encode([3u8; 32]),
@@ -627,7 +633,9 @@ mod tests {
             // Session metadata must also select it through a rollback binding.
             let ready = async {
                 if resume {
-                    provider.resume("6f9619ff-8b86-d011-b42d-00c04fc964ff").await
+                    provider
+                        .resume("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+                        .await
                 } else {
                     provider
                         .get_or_create(CreateSandboxRequest {
@@ -817,7 +825,11 @@ mod tests {
         assert!(output.next().await.is_none());
         server.abort();
     }
-    fn interactive_provider(url: String, token: String, labels: BTreeMap<String, String>) -> AzureSandbox {
+    fn interactive_provider(
+        url: String,
+        token: String,
+        labels: BTreeMap<String, String>,
+    ) -> AzureSandbox {
         let mut native = MockSandboxDataPlaneApi::new();
         native.expect_execute_shell_command().never();
         native.expect_get_sandbox().returning(move |_, id| {
@@ -916,7 +928,11 @@ mod tests {
             .await
             .unwrap();
         command.input.write(b"hi").await.unwrap();
-        assert_eq!(seen_stdin.lock().unwrap().len(), 1, "input reached the agent");
+        assert_eq!(
+            seen_stdin.lock().unwrap().len(),
+            1,
+            "input reached the agent"
+        );
         assert!(
             matches!(command.output.next().await.unwrap().unwrap(), CommandOutput::Stdout { data, .. } if data == b"ok")
         );
@@ -991,7 +1007,11 @@ mod tests {
             command.output.next().await.unwrap().unwrap(),
             CommandOutput::Exit { code: 0, .. }
         ));
-        assert_eq!(started.load(Ordering::SeqCst), 1, "the command started once");
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            1,
+            "the command started once"
+        );
         server.abort();
     }
 
@@ -1855,27 +1875,35 @@ mod tests {
         let grants = Arc::new(AtomicUsize::new(0));
         let counted = grants.clone();
         let router = Router::new()
-            .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
+            .route(
+                "/v1/activate",
+                post(|| async { axum::http::StatusCode::NO_CONTENT }),
+            )
             .route(
                 "/",
-                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
-                    let (expected, counted) = (expected.clone(), counted.clone());
-                    async move {
-                        if headers["authorization"] != expected {
-                            return (axum::http::StatusCode::UNAUTHORIZED, Json(serde_json::json!({})));
+                post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let (expected, counted) = (expected.clone(), counted.clone());
+                        async move {
+                            if headers["authorization"] != expected {
+                                return (
+                                    axum::http::StatusCode::UNAUTHORIZED,
+                                    Json(serde_json::json!({})),
+                                );
+                            }
+                            assert_eq!(body["op"], "previewGrant");
+                            assert_eq!(body["sandbox"], "session");
+                            let n = counted.fetch_add(1, Ordering::SeqCst);
+                            (
+                                axum::http::StatusCode::OK,
+                                Json(serde_json::json!({
+                                    "capability": format!("cap-{n}"),
+                                    "expiresAt": chrono::Utc::now().timestamp() + 900,
+                                })),
+                            )
                         }
-                        assert_eq!(body["op"], "previewGrant");
-                        assert_eq!(body["sandbox"], "session");
-                        let n = counted.fetch_add(1, Ordering::SeqCst);
-                        (
-                            axum::http::StatusCode::OK,
-                            Json(serde_json::json!({
-                                "capability": format!("cap-{n}"),
-                                "expiresAt": chrono::Utc::now().timestamp() + 900,
-                            })),
-                        )
-                    }
-                }),
+                    },
+                ),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -1903,10 +1931,15 @@ mod tests {
         assert_eq!(first.headers["x-alien-preview-capability"], "cap-0");
         assert_eq!(first.headers["x-alien-preview-port"], "8080");
         assert!(
-            !first.headers.keys().any(|name| name.eq_ignore_ascii_case("authorization")),
+            !first
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("authorization")),
             "the caller's Authorization belongs to the daemon"
         );
         assert_eq!(first.allowed_ports, vec![8080]);
+        assert_eq!(first.caller_authorization_header, "Authorization");
+        assert!(first.subprotocols.is_empty());
         assert!(first.expires_in_seconds > 800 && first.expires_in_seconds <= 900);
 
         // Cached per (sandbox, port): a second call asks nothing, another port asks again.
@@ -1930,7 +1963,10 @@ mod tests {
         .with_agent(true)
         .with_preview_ports(vec![8080]);
         let error = provider.preview("session", 22).await.unwrap_err();
-        assert!(error.to_string().contains("declared preview ports"), "{error}");
+        assert!(
+            error.to_string().contains("declared preview ports"),
+            "{error}"
+        );
         assert_eq!(grants.load(Ordering::SeqCst), 0);
         server.abort();
     }
@@ -1962,33 +1998,40 @@ mod tests {
         let expected = format!("Bearer {token}");
         let (start_auth, poll_auth) = (expected.clone(), expected);
         let router = Router::new()
-            .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
+            .route(
+                "/v1/activate",
+                post(|| async { axum::http::StatusCode::NO_CONTENT }),
+            )
             .route(
                 "/v1/jobs/start",
-                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
-                    let auth = start_auth.clone();
-                    async move {
-                        assert_eq!(headers["authorization"], auth);
-                        assert_eq!(body["command"], serde_json::json!(["sleep", "1"]));
-                        Json(serde_json::json!({"jobId": "j-1"}))
-                    }
-                }),
+                post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let auth = start_auth.clone();
+                        async move {
+                            assert_eq!(headers["authorization"], auth);
+                            assert_eq!(body["command"], serde_json::json!(["sleep", "1"]));
+                            Json(serde_json::json!({"jobId": "j-1"}))
+                        }
+                    },
+                ),
             )
             .route(
                 "/v1/jobs/poll",
-                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
-                    let auth = poll_auth.clone();
-                    async move {
-                        assert_eq!(headers["authorization"], auth);
-                        assert_eq!(body["jobId"], "j-1");
-                        Json(serde_json::json!({
-                            "running": false,
-                            "frames": [{"t": "stdout", "seq": 0, "data": "b2s="}],
-                            "exitCode": 0,
-                            "truncated": false,
-                        }))
-                    }
-                }),
+                post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let auth = poll_auth.clone();
+                        async move {
+                            assert_eq!(headers["authorization"], auth);
+                            assert_eq!(body["jobId"], "j-1");
+                            Json(serde_json::json!({
+                                "running": false,
+                                "frames": [{"t": "stdout", "seq": 0, "data": "b2s="}],
+                                "exitCode": 0,
+                                "truncated": false,
+                            }))
+                        }
+                    },
+                ),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -1996,7 +2039,8 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
         let labels = BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]);
-        let first = interactive_provider(url.clone(), token.clone(), labels.clone()).with_agent(true);
+        let first =
+            interactive_provider(url.clone(), token.clone(), labels.clone()).with_agent(true);
         assert!(first.capabilities().jobs);
         assert!(first.session_capabilities("session").await.unwrap().jobs);
         let started = first
@@ -2015,7 +2059,10 @@ mod tests {
         drop(first);
 
         let second = interactive_provider(url, token, labels).with_agent(true);
-        let polled = second.poll_job("session", &started.job_id, None).await.unwrap();
+        let polled = second
+            .poll_job("session", &started.job_id, None)
+            .await
+            .unwrap();
         assert!(!polled.running);
         assert_eq!(polled.exit.map(|exit| exit.code), Some(0));
         assert_eq!(polled.frames.len(), 1);
