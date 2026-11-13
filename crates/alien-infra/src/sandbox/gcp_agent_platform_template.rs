@@ -988,9 +988,25 @@ mod tests {
                     .build(),
                 GcpAgentPlatformEngineController::mock_ready("eng"),
             )
+            // Setup's network, with the PSC-I attachment a sandbox that needs one reads.
+            .with_dependency(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::UseDefault)
+                    .build(),
+                network_with_attachment(),
+            )
             .build()
             .await
             .expect("executor builds")
+    }
+
+    fn network_with_attachment() -> crate::network::GcpNetworkController {
+        let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
+        network.sandbox_psc_attachment_self_link = Some(
+            "https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/networkAttachments/na"
+                .to_string(),
+        );
+        network
     }
 
     /// A controller must round-trip by tag: the executor persists and reloads state between
@@ -1325,6 +1341,12 @@ mod tests {
             .platform(Platform::Gcp)
             .service_provider(provider_with(Arc::new(m)))
             .with_test_dependencies()
+            .with_dependency(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::UseDefault)
+                    .build(),
+                network_with_attachment(),
+            )
             .build()
             .await
             .expect("executor builds");
