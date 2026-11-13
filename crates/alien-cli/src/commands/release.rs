@@ -4358,10 +4358,11 @@ mod tests {
         }
     }
 
-    /// Signing pins each pushed image to the digest the registry holds; an
-    /// unsigned release keeps the tag reference it has always had.
+    /// Every release names its pushed images by digest (main does since #1487);
+    /// signing additionally checks each digest against the archive it was
+    /// built from, and refuses to sign an image it can't vouch for.
     #[tokio::test]
-    async fn only_a_signed_release_pins_images_to_their_digest() {
+    async fn signed_and_unsigned_releases_pin_images_to_the_same_digest() {
         let (manager_url, _) = start_renaming_manager(|_| false).await;
         let output = tempfile::tempdir().unwrap();
         let output_dir = output.path().to_path_buf();
@@ -4410,10 +4411,10 @@ mod tests {
         .unwrap()
         .0;
         let host = manager_url.trim_start_matches("http://");
-        let tagged = image(&unsigned);
+        let unsigned_ref = image(&unsigned);
         assert!(
-            tagged.starts_with(&format!("{host}/acme-artifacts/prj_a:")) && !tagged.contains('@'),
-            "an unsigned release keeps its tag reference: {tagged}"
+            unsigned_ref.starts_with(&format!("{host}/acme-artifacts/prj_a@sha256:")),
+            "an unsigned release names its image by digest, as main does: {unsigned_ref}"
         );
 
         let signed = push_platform_stack(
@@ -4433,13 +4434,7 @@ mod tests {
             protocol: oci_client::client::ClientProtocol::Http,
             ..Default::default()
         });
-        let digest = client
-            .fetch_manifest_digest(
-                &oci_client::Reference::try_from(tagged.as_str()).unwrap(),
-                &oci_client::secrets::RegistryAuth::Anonymous,
-            )
-            .await
-            .unwrap();
+        let digest = unsigned_ref.rsplit_once('@').unwrap().1.to_string();
         // This manager names another repository on the second resolve; the
         // content, and so the digest, is the same.
         assert_eq!(pinned, format!("{host}/artifacts/prj_a@{digest}"));
