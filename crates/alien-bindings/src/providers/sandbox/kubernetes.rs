@@ -576,7 +576,7 @@ impl KubernetesSandbox {
                         "the claimed pod could not be released after its initial egress policy failed"
                     );
                 }
-                return Err(error);
+                return Err(self.explain_denied_signing_key(&claim.session_id, error));
             }
         }
 
@@ -604,6 +604,29 @@ impl KubernetesSandbox {
                 claim.session_id
             ),
         ))
+    }
+
+    /// Creating a session reads the deployment's signing key. A workload whose permission profile
+    /// only links the sandbox (execute) cannot read it; say what to grant instead of the bare
+    /// access-denied of the secret read.
+    fn explain_denied_signing_key(
+        &self,
+        session_id: &str,
+        error: AlienError<ErrorData>,
+    ) -> AlienError<ErrorData> {
+        fn denied(code: &str, source: Option<&AlienError>) -> bool {
+            code == "REMOTE_ACCESS_DENIED"
+                || source.is_some_and(|s| denied(&s.code, s.source.as_deref()))
+        }
+        if denied(&error.code, error.source.as_deref()) {
+            return self.failed(
+                "sandbox.create",
+                &format!(
+                    "creating a session for sandbox {session_id} needs sandbox/management in the permission profile of this workload; it was denied reading the deployment's signing key"
+                ),
+            );
+        }
+        error
     }
 
     fn failed(&self, operation: &str, reason: &str) -> AlienError<ErrorData> {
@@ -1052,6 +1075,114 @@ mod tests {
             "sbx-pool",
         )
         .expect("the binding is complete")
+    }
+
+    /// A vault whose signing-key read is denied, as a workload that only links the sandbox sees.
+    #[derive(Debug)]
+    struct DeniedVault;
+    impl crate::traits::Binding for DeniedVault {}
+    #[async_trait]
+    impl crate::traits::Vault for DeniedVault {
+        async fn get_secret(&self, _name: &str) -> Result<String> {
+            use alien_error::ContextError;
+            Err(
+                AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "Secret".to_string(),
+                    resource_name: "signing-key".to_string(),
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get secret 'signing-key'".to_string(),
+                    resource_id: None,
+                }),
+            )
+        }
+        async fn secret_presence(&self, _: &str) -> Result<crate::traits::SecretPresence> {
+            unimplemented!()
+        }
+        async fn set_secret(&self, _: &str, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_secret(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn list_secrets(&self) -> Result<Vec<String>> {
+            unimplemented!()
+        }
+    }
+
+    /// Creating a session reads the signing key. When that is denied, and releasing the claimed
+    /// pod fails too, the caller learns which permission is missing, not the release failure and
+    /// not a bare access-denied.
+    #[tokio::test]
+    async fn a_denied_signing_key_read_names_the_missing_permission() {
+        let expires = chrono::Utc::now().timestamp() + 900;
+        let broker = serve(
+            Router::new()
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    delete(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+                )
+                .route(
+                    "/v1/sandbox/sessions",
+                    post(move |Json(body): Json<serde_json::Value>| async move {
+                        Json(serde_json::json!({
+                            "agentSessionId": "uid-2", "sessionId": body["sessionId"],
+                            "endpoint": "http://10.0.0.2:8080", "capability": "c",
+                            "expiresAt": expires, "generation": 1, "created": true,
+                        }))
+                    }),
+                ),
+        )
+        .await;
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        std::fs::write(token.path(), "service-account-token").unwrap();
+        let gateway = alien_core::SandboxEgressGateway {
+            container: "gateway".to_string(),
+            audience: "prefix/sbx".to_string(),
+            signing_key: alien_core::bindings::SandboxEgressSigningKey {
+                vault: "secrets".to_string(),
+                key: "signing-key".to_string(),
+            },
+            kid: "key-1".to_string(),
+            admin_ca_pem: None,
+            replicas: None,
+        };
+        let manager = crate::sandbox_egress::SandboxEgressManager::new(
+            gateway.clone(),
+            Arc::new(DeniedVault),
+            "http://127.0.0.1:3128",
+            "http://127.0.0.1:3129",
+        )
+        .expect("a manager");
+        let sandbox = KubernetesSandbox::new_with_egress_manager(
+            "sbx",
+            &KubernetesSandboxBinding {
+                default_policy: None,
+                egress: Some(alien_core::bindings::SandboxEgressBinding::Gateway(gateway)),
+                namespace: BindingValue::Value("alien".to_string()),
+                runtime_class: BindingValue::Value("gvisor".to_string()),
+                selector: BindingValue::Value("alien/sandbox=sbx-pool".to_string()),
+                broker_url: BindingValue::Value(broker),
+                key_name: BindingValue::Value("sandbox-key".to_string()),
+                token_path: BindingValue::Value(token.path().display().to_string()),
+            },
+            "sbx-pool",
+            Some(Arc::new(manager)),
+        )
+        .expect("the binding is complete");
+
+        let error = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("s1".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("the signing key cannot be read");
+        let message = format!("{error}");
+        assert!(
+            message.contains("creating a session for sandbox s1 needs sandbox/management in the permission profile"),
+            "{message}"
+        );
     }
 
     /// A pod is never paused, so resuming a running sandbox succeeds without changing anything
