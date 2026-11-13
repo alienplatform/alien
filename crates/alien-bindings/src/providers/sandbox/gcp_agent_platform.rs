@@ -238,6 +238,29 @@ impl GcpAgentPlatformSandbox {
         self
     }
 
+    /// Configures preview from a binding: its declared ports and, when setup created one, the
+    /// signing identity. One place for every resolution path, so a binding that carries both can
+    /// mint a grant wherever it came from.
+    pub fn with_preview_from_binding(
+        mut self,
+        preview_ports: Vec<u16>,
+        preview_service_account: Option<alien_core::bindings::BindingValue<String>>,
+        binding_name: &str,
+        iam: Arc<dyn alien_gcp_clients::gcp::iam::IamApi>,
+    ) -> Result<Self> {
+        self.preview_ports = preview_ports;
+        if let Some(account) = preview_service_account {
+            let account = account
+                .into_value(binding_name, "previewServiceAccount")
+                .context(ErrorData::config_invalid(
+                binding_name,
+                "Failed to resolve previewServiceAccount from the Agent Platform sandbox binding",
+            ))?;
+            self.preview_signer = Some(Arc::new(IamEdgeTokenSigner::new(iam, account)));
+        }
+        Ok(self)
+    }
+
     /// The ports the declaration names for preview. The agent is told them with every grant.
     pub fn with_preview_ports(mut self, ports: Vec<u16>) -> Self {
         self.preview_ports = ports;
@@ -1020,6 +1043,16 @@ impl Sandbox for GcpAgentPlatformSandbox {
     async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability> {
         const PREVIEW: &str = "sandbox.preview";
         Self::checked_sandbox_id(PREVIEW, sandbox_id)?;
+        // Neither ports nor signer: a manager-resolved binding, whose lease cannot sign the edge
+        // credential. Say so rather than blame the port.
+        if self.preview_ports.is_empty() && self.preview_signer.is_none() {
+            return Err(self.unsupported(
+                PREVIEW,
+                "this binding carries no preview setup; a remote binding cannot preview on GCP \
+                 because its lease cannot sign the edge credential. Use the binding the \
+                 deployment itself provides",
+            ));
+        }
         // Port first, ownership second: an undeclared port is refused without spending a call.
         if !self.preview_ports.contains(&port) {
             return Err(self.unsupported(

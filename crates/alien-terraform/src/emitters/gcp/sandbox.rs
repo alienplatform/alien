@@ -153,7 +153,20 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         refuse_domain_egress(sandbox)?;
         // The engine id is not here: it is server-assigned, and the engine registers its own.
-        Ok(expr::object([("region", expr::raw("var.gcp_region"))]))
+        let mut fields = vec![("region", expr::raw("var.gcp_region"))];
+        // The template controller builds the binding a workload reads, so the signing identity
+        // setup created reaches it through the import data.
+        if has_preview_signer(ctx, sandbox) {
+            let label = required_label(ctx)?;
+            fields.push((
+                "previewServiceAccount",
+                expr::template(format!(
+                    "${{google_service_account.{}.email}}",
+                    preview_label(label)
+                )),
+            ));
+        }
+        Ok(expr::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -720,7 +733,10 @@ mod tests {
                     .emit_binding_ref(&ctx)
                     .expect("renders")
                     .expect("binding");
-                (fragment, binding)
+                let import_ref = GcpAgentPlatformSandboxEmitter
+                    .emit_import_ref(&ctx)
+                    .expect("renders");
+                (fragment, binding, import_ref)
             };
             let kinds = |fragment: &TfFragment| -> Vec<String> {
                 fragment
@@ -730,14 +746,15 @@ mod tests {
                     .collect()
             };
 
-            let (none, binding) = render(vec![], true);
+            let (none, binding, none_import) = render(vec![], true);
             assert!(
                 kinds(&none).is_empty(),
                 "no preview ports, no identity: {none:?}"
             );
             assert!(!object_keys(&binding).contains("previewServiceAccount"));
+            assert!(!object_keys(&none_import).contains("previewServiceAccount"));
 
-            let (fragment, binding) = render(vec![8080, 8081], true);
+            let (fragment, binding, import_ref) = render(vec![8080, 8081], true);
             let all = kinds(&fragment);
             let count = |kind: &str| all.iter().filter(|k| k.as_str() == kind).count();
             assert_eq!(count("google_service_account"), 1, "{all:?}");
@@ -787,9 +804,15 @@ mod tests {
                 "only signJwt: {permissions}"
             );
             assert!(object_keys(&binding).contains("previewServiceAccount"));
+            // The deployment's controller builds the binding a workload reads, from the import
+            // data: the identity must travel there too, or a deployed sandbox cannot sign.
+            assert!(
+                object_keys(&import_ref).contains("previewServiceAccount"),
+                "import data names the signer: {import_ref:?}"
+            );
 
             // Nothing holds the signing verb unless a profile gives the workload this sandbox.
-            let (ungranted, _) = render(vec![8080], false);
+            let (ungranted, _, _) = render(vec![8080], false);
             assert!(
                 !kinds(&ungranted).contains(&"google_service_account_iam_member".to_string()),
                 "{ungranted:?}"

@@ -239,6 +239,8 @@ export interface RawSandboxPreview {
   headers: Record<string, string>
   allowedPorts: number[]
   expiresInSeconds: number
+  callerAuthorizationHeader: string
+  subprotocols: string[]
 }
 
 export interface RawResolvedSandbox {
