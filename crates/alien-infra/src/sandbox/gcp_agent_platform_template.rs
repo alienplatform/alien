@@ -1611,6 +1611,35 @@ mod tests {
         );
     }
 
+    /// The verifier signs off on exactly the body the controller builds, disk ceiling and agent
+    /// port included, and refuses the same body with a different disk ceiling or an extra key.
+    #[test]
+    fn the_verifier_accepts_the_controllers_full_template_body() {
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let body = build_template_body(&sandbox, "pfx-agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        let disk = sandbox.resolved_limits().disk;
+        assert_eq!(
+            wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
+            serde_json::json!(disk)
+        );
+        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+
+        let mut other_disk = wire.clone();
+        other_disk["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"] =
+            serde_json::json!("1Gi");
+        check_sandbox_template(&sandbox, "pfx", "123", &other_disk)
+            .expect_err("a disk ceiling that is not the signed one");
+        let mut extra = wire.clone();
+        extra["customContainerEnvironment"]["resources"]["limits"]["gpu"] = serde_json::json!("1");
+        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an extra limit");
+        let mut other_port = wire;
+        other_port["customContainerEnvironment"]["ports"][0]["port"] = serde_json::json!(8080);
+        check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
+    }
+
     #[test]
     fn build_template_body_declares_preview_ports_and_disk() {
         let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);

@@ -1322,6 +1322,8 @@ pub fn check_sandbox_template(
     let expected_limits = std::collections::HashMap::from([
         ("cpu".to_string(), limits.cpu),
         ("memory".to_string(), limits.memory),
+        // The disk ceiling the controller sends, the signed sandbox's own quantity string.
+        ("ephemeral-storage".to_string(), limits.disk),
     ]);
     if resources.requests.is_some() || resources.limits != Some(expected_limits) {
         return Err(refused(
