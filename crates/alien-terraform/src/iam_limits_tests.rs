@@ -971,10 +971,10 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     let us_east_2 = "us-east-2".len();
     let stub = crate::aws_role_policies::STUB_POLICY.len();
     for (prefix, region, chunks) in [
-        (9, us_east_2, [4_722, 954]),
-        (39, us_east_2, [5_412, 1_014]),
-        (40, us_east_2, [5_435, 1_016]),
-        (PREFIX, REGION, [5_484, 1_037]),
+        (9, us_east_2, [4_671, 1_232]),
+        (39, us_east_2, [5_361, 1_352]),
+        (40, us_east_2, [5_384, 1_356]),
+        (PREFIX, REGION, [5_433, 1_391]),
     ] {
         let usage = rendered
             .usage(DeploymentLengths {
@@ -988,8 +988,8 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
             usage.roles["execution_sa"],
             // Two managed policies, each attached once more while an update replaces it.
             RoleUsage {
-                inline_policies: 19,
-                inline_chars: 19 * stub,
+                inline_policies: 23,
+                inline_chars: 23 * stub,
                 attachments: 4,
             },
             "{case}"

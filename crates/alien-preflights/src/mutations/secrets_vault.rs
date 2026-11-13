@@ -49,8 +49,8 @@ impl StackMutation for SecretsVaultMutation {
             || config.external_bindings.has(SECRETS_VAULT_ID);
         // Containers and daemons on AWS machines receive their secret values
         // through this vault rather than through the machine control plane.
-        let machine_workloads = stack_state.platform == Platform::Aws
-            && !machine_workload_profiles(stack).is_empty();
+        let machine_workloads =
+            stack_state.platform == Platform::Aws && !machine_workload_profiles(stack).is_empty();
         let worker_needs_vault = stack.resources.values().any(|entry| {
             entry.config.resource_type() == Worker::RESOURCE_TYPE
                 && (!SecretDelivery::resolve(stack_state.platform, ComputeKind::Worker)
@@ -796,7 +796,10 @@ fn machine_workload_profiles(stack: &Stack) -> BTreeSet<String> {
     }
     stack
         .resources
-        .values()
+        .iter()
+        // The sandbox gateway reads its own config entry with a dedicated profile.
+        .filter(|(id, _)| id.as_str() != alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+        .map(|(_, entry)| entry)
         .filter_map(|entry| {
             entry
                 .config
@@ -847,8 +850,7 @@ fn add_machine_workload_secret_read(stack: &mut Stack, vault_name: &str) -> Resu
         .into_alien_error()
         .context(ErrorData::StackMutationFailed {
             mutation_name: "SecretsVaultMutation".to_string(),
-            message: "Failed to build the machine workload secrets read permission set"
-                .to_string(),
+            message: "Failed to build the machine workload secrets read permission set".to_string(),
             resource_id: None,
         })?;
         let permissions = stack
@@ -1801,7 +1803,9 @@ mod tests {
             }
         };
         let mut stack = compute_cluster_stack();
-        stack.resources.insert("web".to_string(), container("web", "web"));
+        stack
+            .resources
+            .insert("web".to_string(), container("web", "web"));
         stack
             .resources
             .insert("jobs".to_string(), container("jobs", "jobs"));
@@ -1847,7 +1851,11 @@ mod tests {
         assert_eq!(web.len(), 1);
         assert!(web[0].contains("${resourceName}-hz.web.*"), "{}", web[0]);
         assert!(web[0].contains("ssm:GetParameter"));
-        assert!(!web[0].contains("hz.jobs."), "no other profile's values: {}", web[0]);
+        assert!(
+            !web[0].contains("hz.jobs."),
+            "no other profile's values: {}",
+            web[0]
+        );
         assert!(!web[0].contains("PutParameter") && !web[0].contains("DeleteParameter"));
         assert!(aws_resources("jobs")[0].contains("${resourceName}-hz.jobs.*"));
 
