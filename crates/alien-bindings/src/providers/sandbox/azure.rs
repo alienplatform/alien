@@ -809,6 +809,18 @@ impl Sandbox for AzureSandbox {
                 "this sandbox was created without the agent, and the platform's exec takes no stdin",
             ));
         }
+        // The start request must never be replayed: it may have launched the command. So the
+        // cached credential is proven first with the idempotent activation, which refreshes a
+        // route another process invalidated (a resumed boot has a new token) before binding.
+        let activation = super::agent_protocol::AgentTransport::request(
+            self,
+            sandbox_id,
+            reqwest::Method::POST,
+            "/v1/activate",
+        )
+        .await?;
+        super::agent_protocol::AgentTransport::send(self, sandbox_id, activation, "sandbox.activate")
+            .await?;
         let agent = self.bound_agent(sandbox_id).await?;
         super::interactive::run_interactive(agent, request).await
     }

@@ -820,6 +820,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_interactive_start_refreshes_a_credential_the_agent_no_longer_accepts() {
+        // Another process resumed the sandbox: the cached token belongs to the old boot.
+        let fresh = STANDARD.encode([7u8; 32]);
+        let stale = STANDARD.encode([3u8; 32]);
+        let accept = format!("Bearer {fresh}");
+        let (activate_auth, interactive_auth) = (accept.clone(), accept.clone());
+        let started = Arc::new(AtomicUsize::new(0));
+        let counted = started.clone();
+        let router = Router::new()
+            .route(
+                "/v1/activate",
+                post(move |headers: HeaderMap| {
+                    let auth = activate_auth.clone();
+                    async move {
+                        if headers["authorization"] == auth {
+                            axum::http::StatusCode::NO_CONTENT
+                        } else {
+                            axum::http::StatusCode::UNAUTHORIZED
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/interactive",
+                post(move |headers: HeaderMap| {
+                    let auth = interactive_auth.clone();
+                    let counted = counted.clone();
+                    async move {
+                        if headers["authorization"] != auth {
+                            return (axum::http::StatusCode::UNAUTHORIZED, String::new());
+                        }
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        (
+                            axum::http::StatusCode::OK,
+                            "{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n".to_string(),
+                        )
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let provider = interactive_provider(
+            url.clone(),
+            fresh,
+            BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+        )
+        .with_agent(true);
+        *provider.connection_slot("session").await.lock().await = Some(Connection {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            url: url.parse().unwrap(),
+            token: stale,
+        });
+        let mut command = provider
+            .run_interactive("session", interactive_request())
+            .await
+            .expect("a stale cached credential is refreshed before the command starts");
+        assert!(matches!(
+            command.output.next().await.unwrap().unwrap(),
+            CommandOutput::Exit { code: 0, .. }
+        ));
+        assert_eq!(started.load(Ordering::SeqCst), 1, "the command started once");
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn interactive_commands_are_refused_on_a_session_without_the_agent() {
         // No agent label: the platform's own exec takes no stdin, and no request may leave.
         let provider = interactive_provider(
