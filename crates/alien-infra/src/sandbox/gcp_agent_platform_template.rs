@@ -1671,7 +1671,7 @@ mod tests {
 
     fn template_image(image: &str, config: &DeploymentConfig) -> Result<String> {
         let sandbox = sandbox_with(SandboxEgress::None, image, None, None);
-        build_template_body(&sandbox, "agent-sbx", config, None).map(|body| {
+        build_template_body(&sandbox, "agent-sbx", config).map(|body| {
             body.custom_container_environment
                 .and_then(|environment| environment.custom_container_spec)
                 .expect("the body names an image")

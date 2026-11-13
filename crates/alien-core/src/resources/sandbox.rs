@@ -503,23 +503,19 @@ impl SandboxCapabilities {
             // `:execute` is one request with one answer, capped at about 30 seconds. Input
             // cannot reach a command after its call has answered, so there is no stream to drive.
             interactive_commands: false,
-            // The edge admits only `:execute`, or a port declared in the template with a Google
-            // identity JWT. Preview is the agent's own port-scoped capability carried over that
-            // path; it stays false until setup also creates the private endpoint it is reached
-            // through.
+            // The only ingress Alien uses is `:execute`. The edge consumes `Authorization` for its
+            // own credential, so a caller's bearer cannot reach a workload port through it.
             preview: false,
-            // `:pause` / `:resume` keep the process and its memory: measured live over three
-            // cycles on one sandbox, with the same boot id, pid and a counter that continued.
-            // The routing token changes on every resume, which the binding re-reads.
-            pause_resume: true,
+            // `:resume` can return a fresh container while reporting success, so a pause does not
+            // keep the sandbox's state.
+            pause_resume: false,
             // The create path never sends `sandbox_environment_snapshot`, so no sandbox state is
             // reachable through the trait; declared false until the client carries it.
             snapshot: false,
             // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
             domain_egress_rules: false,
-            // A declared `deny` blocks TCP to public addresses, the metadata server and the
-            // deployment VPC (measured live). The sandbox can still resolve DNS names through
-            // Google's resolver, a small data-out channel: the platform has no setting for it.
+            // A declared `deny` blocks TCP to public addresses, the metadata server and DNS
+            // (measured live on the default network placement).
             egress_deny: true,
             // The declared ceilings are enforced, but by terminating the sandbox on breach rather
             // than by refusing the allocation — a caller reading `true` should expect the sandbox
@@ -1196,12 +1192,11 @@ impl Sandbox {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
 
-        // GCP Agent Platform has no deployment-VPC egress gateway yet, so `internet` would plan
-        // cleanly and then give the sandbox no gateway-enforced policy. Refuse it here until the
-        // gateway is hosted.
+        // `internet` needs a gateway-enforced policy that GCP Agent Platform does not have here
+        // yet; it would plan cleanly and then run without one. Refuse it until it is built.
         if platform == Platform::Gcp && matches!(self.egress, SandboxEgress::Internet) {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                capability: "egress internet: the GCP Agent Platform backend has no egress gateway yet; declare egress none".to_string(),
+                capability: "egress internet: not built or proven on GCP Agent Platform yet; declare egress none".to_string(),
                 platform: platform.to_string(),
             }));
         }
@@ -1209,7 +1204,7 @@ impl Sandbox {
         if platform == Platform::Gcp && !self.preview_ports.is_empty() {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
                 capability:
-                    "preview: preview is not available on GCP yet; remove the preview ports"
+                    "preview: not built or proven on GCP Agent Platform yet; remove the preview ports"
                         .to_string(),
                 platform: platform.to_string(),
             }));
@@ -1220,15 +1215,15 @@ impl Sandbox {
         }
 
         if self.lifecycle.idle_pause_seconds.is_some() {
-            capabilities.require(SandboxCapability::PauseResume, platform)?;
-            // GCP pauses and resumes on request, but its platform has no idle policy and Alien
-            // does not watch for idleness there yet.
+            // GCP has no idle policy and Alien does not watch for idleness there, so the plan
+            // says that instead of the generic pause refusal.
             if platform == Platform::Gcp {
                 return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                    capability: "idle pause policy: the GCP Agent Platform backend pauses on request only; remove the idle policy".to_string(),
+                    capability: "idle pause policy: the GCP Agent Platform backend has no idle policy and cannot keep a sandbox's state across a pause; remove the idle policy".to_string(),
                     platform: platform.to_string(),
                 }));
             }
+            capabilities.require(SandboxCapability::PauseResume, platform)?;
         }
 
         if self.lifecycle.max_lifetime_seconds.is_some() {
@@ -1837,14 +1832,14 @@ mod tests {
         let refused = sandbox_with(SandboxEgress::Internet, vec![])
             .validate_for_platform(Platform::Gcp)
             .unwrap_err();
-        assert!(refused.to_string().contains("egress gateway"), "{refused}");
+        assert!(refused.to_string().contains("egress internet"), "{refused}");
         sandbox_with(SandboxEgress::None, vec![])
             .validate_for_platform(Platform::Gcp)
             .unwrap();
     }
 
-    /// GCP can pause a sandbox, but the platform has no idle policy and nothing in Alien watches
-    /// for idleness yet, so a declared idle policy would plan cleanly and never fire.
+    /// GCP has no idle policy and nothing in Alien watches for idleness yet, so a declared idle
+    /// policy would plan cleanly and never fire.
     #[test]
     fn gcp_refuses_an_idle_pause_policy_at_plan_time_and_still_takes_a_lifetime() {
         let with_policy = |lifecycle: SandboxLifecyclePolicy| {
@@ -1881,7 +1876,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("preview is not available on GCP yet"),
+                .contains("not built or proven on GCP Agent Platform yet"),
             "{error}"
         );
         sandbox_with(SandboxEgress::Deny, vec![])
@@ -2058,8 +2053,8 @@ mod tests {
             "the only ingress is :execute; no port-scoped capability"
         );
         assert!(
-            row.pause_resume,
-            "a pause keeps the process and memory (three live cycles, same boot id and pid)"
+            !row.pause_resume,
+            ":resume can return a fresh container, so a pause keeps no state"
         );
         assert!(
             !row.snapshot,
@@ -2071,7 +2066,7 @@ mod tests {
         );
         assert!(
             row.egress_deny,
-            "a declared deny blocks both egress and DNS"
+            "a declared deny blocks TCP, the metadata server and DNS on the default placement"
         );
         assert!(
             row.enforced_limits,

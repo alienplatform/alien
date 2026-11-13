@@ -283,14 +283,6 @@ pub struct GcpAgentPlatformSandboxBinding {
     /// reader that never sees the template tell `allow` from `deny`. Absent means `deny`.
     #[serde(default)]
     pub allow_egress: bool,
-    /// Private endpoint of the sandbox service attachment, inside the deployment network. Preview
-    /// is available only when this and `preview_service_account` are both present; with it on,
-    /// preview is reachable only from inside the deployment network.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_endpoint: Option<BindingValue<String>>,
-    /// Service account that signs the edge credential for preview requests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_service_account: Option<BindingValue<String>>,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -435,8 +427,6 @@ impl SandboxBinding {
             region: region.into(),
             max_lifetime_seconds,
             allow_egress,
-            preview_endpoint: None,
-            preview_service_account: None,
         })
     }
 

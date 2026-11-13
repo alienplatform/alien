@@ -143,113 +143,9 @@ pub struct GcpAgentPlatformSandbox {
     template: String,
     /// Sandbox lifetime in seconds, from the declaration; absent takes the service default.
     max_lifetime_seconds: Option<u32>,
-    /// Where a preview request is sent and how its edge credential is minted. Absent until the
-    /// deployment supplies the private endpoint, which is when preview becomes available.
-    preview_ingress: Option<PreviewIngress>,
-    /// Granted capabilities, per sandbox and port. Only the grant is cached: the routing token
-    /// and edge credential are short-lived and read fresh for every call.
-    grants: std::sync::Mutex<std::collections::HashMap<(String, u16), CachedGrant>>,
-}
-
-/// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by the
-/// deployment's service account. It gates the agent port only; it is never the preview boundary.
-#[async_trait]
-pub trait EdgeTokenSigner: Send + Sync + std::fmt::Debug {
-    async fn sign(&self) -> Result<String>;
-}
-
-/// Audience the sandbox edge requires on its ingress JWT.
-const EDGE_JWT_AUDIENCE: &str = "https://aiplatform.googleapis.com/";
-/// Lifetime of a minted edge JWT. Kept short: it is minted per call and never cached.
-const EDGE_JWT_LIFETIME_SECONDS: i64 = 300;
-
-/// Signs the edge JWT with the deployment service account's managed key through IAM Credentials,
-/// so no key file exists anywhere.
-#[derive(Debug)]
-pub struct IamEdgeTokenSigner {
-    iam: Arc<dyn alien_gcp_clients::gcp::iam::IamApi>,
-    service_account: String,
-}
-
-impl IamEdgeTokenSigner {
-    pub fn new(
-        iam: Arc<dyn alien_gcp_clients::gcp::iam::IamApi>,
-        service_account: impl Into<String>,
-    ) -> Self {
-        Self {
-            iam,
-            service_account: service_account.into(),
-        }
-    }
-
-    fn claims(&self, now: i64) -> String {
-        json!({
-            "iat": now,
-            "exp": now + EDGE_JWT_LIFETIME_SECONDS,
-            "iss": self.service_account,
-            "sub": self.service_account,
-            "nonce": uuid::Uuid::new_v4().as_u128() % 1_000_000_000 + 1,
-            "aud": EDGE_JWT_AUDIENCE,
-        })
-        .to_string()
-    }
-}
-
-#[async_trait]
-impl EdgeTokenSigner for IamEdgeTokenSigner {
-    async fn sign(&self) -> Result<String> {
-        let request = alien_gcp_clients::gcp::iam::SignJwtRequest {
-            payload: self.claims(chrono::Utc::now().timestamp()),
-        };
-        let response = self
-            .iam
-            .sign_jwt(self.service_account.clone(), request)
-            .await
-            .context(ErrorData::Other {
-                message: "Failed to sign the sandbox edge credential".to_string(),
-            })?;
-        Ok(response.signed_jwt)
-    }
-}
-
-#[derive(Debug)]
-struct PreviewIngress {
-    /// Private endpoint of the sandbox service attachment, inside the deployment network.
-    endpoint: String,
-    signer: Arc<dyn EdgeTokenSigner>,
-}
-
-#[derive(Debug, Clone)]
-struct CachedGrant {
-    capability: String,
-    expires_at: i64,
-}
-
-/// A cached grant with less than this left is asked for again.
-const GRANT_REFRESH_MARGIN_SECONDS: i64 = 30;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewGrantReply {
-    capability: String,
-    expires_at: i64,
 }
 
 impl GcpAgentPlatformSandbox {
-    /// Enables preview through the deployment's private endpoint. With PSC-E there is no public
-    /// host, so the endpoint is only reachable from inside the deployment network.
-    pub fn with_preview_ingress(
-        mut self,
-        endpoint: impl Into<String>,
-        signer: Arc<dyn EdgeTokenSigner>,
-    ) -> Self {
-        self.preview_ingress = Some(PreviewIngress {
-            endpoint: endpoint.into().trim_end_matches('/').to_string(),
-            signer,
-        });
-        self
-    }
-
     /// Supplies the declaration carried by the resolved binding.
     pub fn with_egress(mut self, egress: Option<alien_core::SandboxEgress>) -> Self {
         self.egress = egress;
@@ -285,8 +181,6 @@ impl GcpAgentPlatformSandbox {
             engine,
             template,
             max_lifetime_seconds,
-            preview_ingress: None,
-            grants: Default::default(),
         }
     }
 
@@ -302,6 +196,15 @@ impl GcpAgentPlatformSandbox {
             operation: capability.to_string(),
             reason: reason.to_string(),
         })
+    }
+
+    /// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
+    /// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
+    fn pause_resume_unsupported(&self) -> AlienError<ErrorData> {
+        self.unsupported(
+            alien_core::SandboxCapability::PauseResume.as_str(),
+            "Agent Platform sandboxes cannot be paused and resumed with their state kept",
+        )
     }
 
     /// A sandbox id that stays a single path segment.
@@ -1013,147 +916,21 @@ impl Sandbox for GcpAgentPlatformSandbox {
         Ok(())
     }
 
-    async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability> {
-        const PREVIEW: &str = "sandbox.preview";
-        Self::checked_sandbox_id(PREVIEW, sandbox_id)?;
-        let Some(ingress) = &self.preview_ingress else {
-            return Err(self.unsupported(
-                PREVIEW,
-                "this deployment has no private sandbox endpoint; preview needs PSC-E",
-            ));
-        };
-        let unreachable = |reason: &str| {
-            AlienError::new(ErrorData::SandboxUnreachable {
-                operation: PREVIEW.to_string(),
-                reason: reason.to_string(),
-            })
-        };
-
-        let sandbox = self
-            .read_sandbox(PREVIEW, sandbox_id)
-            .await?
-            .ok_or_else(|| unreachable("the sandbox does not exist"))?;
-        let routing_token = sandbox
-            .connection_info
-            .as_ref()
-            .and_then(|info| info.routing_token.clone())
-            .ok_or_else(|| unreachable("the sandbox has no routing token yet"))?;
-        let deadline = sandbox
-            .expire_time
-            .as_deref()
-            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-            .map(|time| time.timestamp());
-
-        let now = chrono::Utc::now().timestamp();
-        let key = (sandbox_id.to_string(), port);
-        let cached = self
-            .grants
-            .lock()
-            .expect("grant cache lock")
-            .get(&key)
-            .filter(|grant| grant.expires_at - now > GRANT_REFRESH_MARGIN_SECONDS)
-            .cloned();
-        let grant = match cached {
-            Some(grant) => grant,
-            None => {
-                let body = self
-                    .execute_op(
-                        sandbox_id,
-                        PREVIEW,
-                        json!({
-                            "v": AGENT_PROTOCOL_VERSION,
-                            "op": "previewGrant",
-                            "sandbox": sandbox_id,
-                            "port": port,
-                            "deadline": deadline,
-                        }),
-                    )
-                    .await?;
-                let reply: PreviewGrantReply = serde_json::from_slice(&body).map_err(|_| {
-                    AlienError::new(ErrorData::SandboxCommandFailed {
-                        failure: "agentRefused".to_string(),
-                        reason: "the agent's preview grant could not be read".to_string(),
-                    })
-                })?;
-                let grant = CachedGrant {
-                    capability: reply.capability,
-                    expires_at: reply.expires_at,
-                };
-                self.grants
-                    .lock()
-                    .expect("grant cache lock")
-                    .insert(key, grant.clone());
-                tracing::info!(sandbox = sandbox_id, port, "preview granted");
-                grant
-            }
-        };
-
-        let edge_jwt = ingress.signer.sign().await?;
-        let agent_port = alien_core::sandbox_image::AGENT_PORT.to_string();
-        let mut headers = BTreeMap::new();
-        headers.insert("Authorization".to_string(), format!("Bearer {edge_jwt}"));
-        headers.insert("X-Sandbox-Routing-Token".to_string(), routing_token.clone());
-        headers.insert("X-Sandbox-Port".to_string(), agent_port.clone());
-        headers.insert("X-Alien-Preview-Capability".to_string(), grant.capability);
-        headers.insert("X-Alien-Preview-Port".to_string(), port.to_string());
-
-        Ok(PreviewCapability {
-            endpoint: ingress.endpoint.clone(),
-            headers,
-            allowed_ports: vec![port],
-            expires_in_seconds: (grant.expires_at - now).max(0) as u64,
-            // The edge consumes `Authorization` for its own credential, so the caller's bearer
-            // travels in this header and the agent re-emits it towards the daemon.
-            caller_authorization_header: "X-Alien-Caller-Authorization".to_string(),
-            // The edge reads its credentials from the subprotocol list on a WebSocket upgrade,
-            // after the application's own protocols.
-            subprotocols: vec!["v1.stream".to_string(), edge_jwt, routing_token, agent_port],
-        })
+    async fn preview(&self, _sandbox_id: &str, _port: u16) -> Result<PreviewCapability> {
+        Err(self.unsupported(
+            "preview",
+            "Agent Platform mints no port-scoped ingress capability; the only ingress is :execute",
+        ))
     }
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
-        const PAUSE: &str = "sandbox.pause";
-        Self::checked_sandbox_id(PAUSE, sandbox_id)?;
-        let started = self.client.pause(&self.engine, sandbox_id).await.context(
-            ErrorData::SandboxCommandFailed {
-                failure: "pauseFailed".to_string(),
-                reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
-            },
-        )?;
-        self.await_operation(PAUSE, started).await?;
-        Ok(())
+        Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
+        Err(self.pause_resume_unsupported())
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
-        const RESUME: &str = "sandbox.resume";
-        Self::checked_sandbox_id(RESUME, sandbox_id)?;
-        let sandbox = self
-            .read_sandbox(RESUME, sandbox_id)
-            .await?
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: RESUME.to_string(),
-                    reason: format!("sandbox '{sandbox_id}' does not exist"),
-                })
-            })?;
-        // Safe on a running sandbox: nothing to resume, so the platform is not asked.
-        if sandbox.state.as_deref() != Some("STATE_PAUSED") {
-            return Ok(());
-        }
-        let started = self.client.resume(&self.engine, sandbox_id).await.context(
-            ErrorData::SandboxCommandFailed {
-                failure: "resumeFailed".to_string(),
-                reason: format!("{RESUME}: sandbox '{sandbox_id}' could not be resumed"),
-            },
-        )?;
-        self.await_operation(RESUME, started).await?;
-        // The routing token changed, and a replaced container would not know a cached grant.
-        // Grants are cheap to mint again, and preview reads the token fresh on every call.
-        self.grants
-            .lock()
-            .expect("grant cache lock")
-            .retain(|(id, _), _| id != sandbox_id);
-        Ok(())
+        Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
+        Err(self.pause_resume_unsupported())
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {

@@ -181,13 +181,6 @@ pub trait IamApi: Send + Sync + Debug {
         service_account_name: String,
         request: GenerateIdTokenRequest,
     ) -> Result<GenerateIdTokenResponse>;
-
-    /// Sign a JWT payload with a service account's system-managed key, so no key file is needed.
-    async fn sign_jwt(
-        &self,
-        service_account_name: String,
-        request: SignJwtRequest,
-    ) -> Result<SignJwtResponse>;
 }
 
 // --- IAM Client ---
@@ -547,24 +540,6 @@ impl IamApi for IamClient {
             )
             .await
     }
-    async fn sign_jwt(
-        &self,
-        service_account_name: String,
-        request: SignJwtRequest,
-    ) -> Result<SignJwtResponse> {
-        let encoded_name = urlencoding::encode(&service_account_name);
-        let path = format!("projects/-/serviceAccounts/{encoded_name}:signJwt");
-        self.credentials_base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(request),
-                &service_account_name,
-            )
-            .await
-    }
-
     async fn create_workload_identity_pool(
         &self,
         pool_id: String,
@@ -1002,30 +977,6 @@ pub struct GenerateAccessTokenResponse {
 
     /// The expiration time of the access token in RFC3339 format.
     pub expire_time: String,
-}
-
-/// Sign a JSON claims set as a JWT with the service account's managed key.
-/// https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signJwt
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-#[serde(rename_all = "camelCase")]
-pub struct SignJwtRequest {
-    /// The JWT payload, as a JSON object serialized to a string.
-    pub payload: String,
-}
-
-/// A signed JWT. Never log it.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SignJwtResponse {
-    pub signed_jwt: String,
-}
-
-impl Debug for SignJwtResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignJwtResponse")
-            .field("signed_jwt", &"<redacted>")
-            .finish()
-    }
 }
 
 /// Request a Google-issued identity assertion without adding email claims.

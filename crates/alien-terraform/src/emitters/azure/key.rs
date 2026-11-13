@@ -263,10 +263,7 @@ fn emit_disk_encryption_set(ctx: &EmitContext<'_>, label: &str, fragment: &mut T
             attr("auto_key_rotation_enabled", Expression::Bool(true)),
             nested(crate::block::block(
                 "identity",
-                [attr(
-                    "type",
-                    Expression::String("SystemAssigned".to_string()),
-                )],
+                [attr("type", Expression::String("SystemAssigned".to_string()))],
             )),
         ],
     ));

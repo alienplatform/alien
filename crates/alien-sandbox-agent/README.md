@@ -386,23 +386,21 @@ private user namespace does not grant control over provider devices.
 # GCP Agent Platform sandboxes
 
 Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as root with Docker's
-default capabilities minus NET_RAW; exec and jobs stay non-root.
+default capabilities minus NET_RAW; exec and jobs stay non-root. Sandboxes use the project's
+default network placement and are reached through `:execute`.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
-- `internet` egress (no egress gateway is hosted on GCP yet; declare `none`);
+- `internet` egress and preview ports (not built or proven on GCP yet; declare `none` and no
+  preview ports);
 - an idle pause policy (the platform has no idle policy and Alien does not watch for idleness on
-  GCP; pause and resume on request are supported).
+  GCP). `pause_resume` is off: a resume was seen returning a fresh container.
 
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
 Alien stops the create at the FAILED state and names this as the likely cause.
 
-Egress `none` is created with a private network attachment so the sandbox has no default internet
-path. On GCP, `none` blocks TCP egress to public addresses and the metadata server, but the
-sandbox can still resolve DNS names through Google's resolver, a small data-out channel. It also
-could not reach a listener in the deployment VPC while a control host could.
-
-`:pause` and `:resume` keep the process and memory (the same boot id and pid over three cycles).
-Resume on a running sandbox is a no-op. The platform has no client token on create, so a retried
-create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the same id.
+Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the metadata server and DNS
+resolution, measured on the default network placement. The platform has no client token on create,
+so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
+same id.

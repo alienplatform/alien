@@ -252,26 +252,19 @@ fn azure_key_used_by_a_volume_gets_a_disk_encryption_set_and_exports_its_id() {
         .collect::<Vec<_>>()
         .join(" ");
 
-    assert!(
-        rendered.contains("auto_key_rotation_enabled = true"),
-        "versionless key id needs auto rotation"
-    );
+    assert!(rendered.contains("auto_key_rotation_enabled = true"), "versionless key id needs auto rotation");
     assert!(
         rendered.contains("resource \"azurerm_disk_encryption_set\" \"customer_key_disks\""),
         "{rendered}"
     );
-    assert!(
-        rendered.contains("key_vault_key_id = azurerm_key_vault_key.customer_key.versionless_id")
-    );
-    assert!(
-        rendered.contains("role_definition_name = \"Key Vault Crypto Service Encryption User\"")
-    );
+    assert!(rendered
+        .contains("key_vault_key_id = azurerm_key_vault_key.customer_key.versionless_id"));
+    assert!(rendered.contains("role_definition_name = \"Key Vault Crypto Service Encryption User\""));
     assert!(rendered.contains(
         "principal_id = azurerm_disk_encryption_set.customer_key_disks.identity[0].principal_id"
     ));
     // The runtime reads the set's id from the key's import data; it never creates one.
-    assert!(rendered
-        .contains("diskEncryptionSetId = azurerm_disk_encryption_set.customer_key_disks.id"));
+    assert!(rendered.contains("diskEncryptionSetId = azurerm_disk_encryption_set.customer_key_disks.id"));
     assert_terraform_valid(&module, "azure_key_with_disk_encryption_set");
 
     // A key no volume uses stays as it was.

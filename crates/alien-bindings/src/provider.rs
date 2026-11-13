@@ -2143,48 +2143,15 @@ impl BindingsProviderApi for BindingsProvider {
                 let mut config = gcp_config.clone();
                 config.region = region;
 
-                let preview_endpoint = gcp_binding
-                    .preview_endpoint
-                    .map(|value| value.into_value(binding_name, "previewEndpoint"))
-                    .transpose()
-                    .context(ErrorData::config_invalid(
-                        binding_name,
-                        "Failed to resolve previewEndpoint from the Agent Platform sandbox binding",
-                    ))?;
-                let preview_service_account = gcp_binding
-                    .preview_service_account
-                    .map(|value| value.into_value(binding_name, "previewServiceAccount"))
-                    .transpose()
-                    .context(ErrorData::config_invalid(
-                        binding_name,
-                        "Failed to resolve previewServiceAccount from the Agent Platform sandbox binding",
-                    ))?;
-
-                let iam_client = alien_gcp_clients::iam::IamClient::new(
-                    reqwest::Client::new(),
-                    gcp_config.clone(),
-                );
                 let client = AgentPlatformClient::new(reqwest::Client::new(), config);
-                let mut provider = GcpAgentPlatformSandbox::new(
-                    Arc::new(client),
-                    engine,
-                    template,
-                    gcp_binding.max_lifetime_seconds,
-                );
-                if let (Some(endpoint), Some(account)) = (preview_endpoint, preview_service_account)
-                {
-                    provider = provider.with_preview_ingress(
-                        endpoint,
-                        Arc::new(
-                            crate::providers::sandbox::gcp_agent_platform::IamEdgeTokenSigner::new(
-                                Arc::new(iam_client),
-                                account,
-                            ),
-                        ),
-                    );
-                }
                 let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
-                    provider.with_egress(
+                    GcpAgentPlatformSandbox::new(
+                        Arc::new(client),
+                        engine,
+                        template,
+                        gcp_binding.max_lifetime_seconds,
+                    )
+                    .with_egress(
                         gcp_binding
                             .egress
                             .as_ref()

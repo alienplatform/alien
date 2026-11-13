@@ -365,12 +365,7 @@ fn emit_image_management(
                 &applier_label,
                 Vec::<hcl::structure::Structure>::new(),
             ));
-            expr::traversal([
-                "data",
-                "azurerm_client_config",
-                applier_label.as_str(),
-                "object_id",
-            ])
+            expr::traversal(["data", "azurerm_client_config", applier_label.as_str(), "object_id"])
         }
     };
     let permission_set = alien_permissions::get_permission_set(IMAGES).ok_or_else(|| {

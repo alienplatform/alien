@@ -2523,8 +2523,7 @@ impl StackExecutor {
                             Ok(()) => {
                                 let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
-                                    state.previous_config =
-                                        previous_config_for_update(current_state);
+                                    state.previous_config = previous_config_for_update(current_state);
                                     state.dependencies = desired_config.dependencies.clone(); // Update dependencies to match new config
                                     state.status = controller.get_status();
                                     state.outputs = controller.get_outputs();

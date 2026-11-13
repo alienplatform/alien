@@ -49,10 +49,10 @@ pub use kubernetes::*;
 
 #[cfg(feature = "kubernetes")]
 mod kubernetes_broker;
-#[cfg(all(test, feature = "kubernetes"))]
-mod kubernetes_broker_kind_tests;
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes_broker_token;
+#[cfg(all(test, feature = "kubernetes"))]
+mod kubernetes_broker_kind_tests;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes_broker::*;
 

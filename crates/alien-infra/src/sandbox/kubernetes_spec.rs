@@ -441,10 +441,7 @@ mod tests {
         let mut gated = build();
         require_enforced_policy(&mut gated, Some("10.1.2.3:8080"));
         let container = &gated.spec.as_ref().unwrap().containers[0];
-        let probe = container
-            .readiness_probe
-            .as_ref()
-            .expect("a readiness probe");
+        let probe = container.readiness_probe.as_ref().expect("a readiness probe");
         assert_eq!(
             probe.http_get.as_ref().unwrap().path.as_deref(),
             Some("/v1/network-ready")
