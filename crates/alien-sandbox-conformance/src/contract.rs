@@ -72,6 +72,11 @@ pub struct EgressSuite {
     port: u16,
     /// Digest of the listener's known response body.
     body_sha256: String,
+    /// Reach the listener through the sandbox's proxy environment. Backends whose limit sits
+    /// outside the guest (Kubernetes: NetworkPolicy plus the gateway) drop a direct connect, so
+    /// the paired checks must use the gateway path there.
+    #[serde(default)]
+    use_proxy: bool,
 }
 
 #[derive(Serialize)]
@@ -195,12 +200,6 @@ macro_rules! check {
 
 async fn run_checks(suite: &Suite, sandbox: Arc<dyn Sandbox>, id: &str, checks: &mut Vec<Check>) {
     let token = suite.token.clone().unwrap_or_else(|| DEFAULT_TOKEN.into());
-    check!(
-        checks,
-        "censusJob",
-        census_job(&*sandbox, id, suite.boot_uid)
-    );
-    check!(checks, "bootOnce", boot_once(&*sandbox, id, suite.boot_uid));
     for port in &suite.ports {
         check!(
             checks,
@@ -208,6 +207,14 @@ async fn run_checks(suite: &Suite, sandbox: Arc<dyn Sandbox>, id: &str, checks: 
             http_port(&*sandbox, id, *port, &token)
         );
     }
+    // After the first HTTP answers: the ENTRYPOINT starts asynchronously after create, so a
+    // census taken earlier would find no server yet.
+    check!(
+        checks,
+        "censusJob",
+        census_job(&*sandbox, id, suite.boot_uid)
+    );
+    check!(checks, "bootOnce", boot_once(&*sandbox, id, suite.boot_uid));
     for port in &suite.ports {
         check!(
             checks,
@@ -627,7 +634,7 @@ async fn observe(
         id,
         &Probe::Http {
             url: format!("http://{}:{}/", egress.host, egress.port),
-            use_proxy: false,
+            use_proxy: egress.use_proxy,
             server_name: None,
             host_header: None,
         },
