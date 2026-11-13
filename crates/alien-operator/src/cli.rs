@@ -534,6 +534,11 @@ async fn run_operator_cli(
     let effective_sync_url = args
         .sync_url
         .or_else(|| packaged_config.as_ref().and_then(|c| c.manager_url.clone()));
+    if let Some(url) = effective_sync_url.as_deref() {
+        if let Some(warning) = plain_http_url_warning(url) {
+            warn!("{warning}");
+        }
+    }
     let effective_sync_token =
         cli_sync_token.or_else(|| packaged_config.as_ref().and_then(|c| c.token.clone()));
     let configured_deployment_id = args.deployment_id.or_else(|| {
@@ -941,6 +946,18 @@ async fn run_operator_cli(
     .await?;
 
     Ok(())
+}
+
+/// The Operator sends its deployment token to the manager URL. An `http` URL still works,
+/// so the Operator only warns about it.
+fn plain_http_url_warning(url: &str) -> Option<String> {
+    let (scheme, _) = url.split_once("://")?;
+    (!scheme.eq_ignore_ascii_case("https")).then(|| {
+        format!(
+            "The manager URL {url} is not https, so the deployment token is sent in clear text. \
+             Set the manager URL to its https:// address."
+        )
+    })
 }
 
 // This only excludes setup/admin credentials before initialize can create an identity.
@@ -2339,5 +2356,22 @@ mod initialize_tests {
             body["helmRelease"],
             serde_json::json!({"name": "shop-operator", "namespace": "customer-shop"})
         );
+    }
+}
+
+#[cfg(test)]
+mod plain_http_warning_tests {
+    use super::plain_http_url_warning;
+
+    #[test]
+    fn only_a_non_https_manager_url_is_warned_about() {
+        let warning = plain_http_url_warning("http://manager.example.test:8080").unwrap();
+        assert!(
+            warning.contains("http://manager.example.test:8080"),
+            "{warning}"
+        );
+        assert!(warning.contains("https://"), "{warning}");
+        assert!(plain_http_url_warning("https://manager.example.test").is_none());
+        assert!(plain_http_url_warning("HTTPS://manager.example.test").is_none());
     }
 }
