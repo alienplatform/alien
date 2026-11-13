@@ -63,6 +63,17 @@ impl SandboxPlacement {
             )
             .filter(|map| !map.is_empty()),
         };
+        if let Some(arch) = node_selector.as_ref().and_then(|selector| {
+            ["kubernetes.io/arch", "beta.kubernetes.io/arch"]
+                .into_iter()
+                .filter_map(|key| selector.get(key))
+                .find(|value| value.as_str() != "amd64")
+        }) {
+            return Err(format!(
+                "sandbox node selector asks for {arch} nodes, but the sandbox agent is built for \
+                 amd64 only; remove the architecture from sandbox.nodeSelector or select amd64 nodes"
+            ));
+        }
         let tolerations = match present(tolerations) {
             None => None,
             Some(json) => Some(
@@ -632,6 +643,24 @@ mod tests {
         ] {
             let placement = SandboxPlacement::from_values(selector, tolerations).unwrap();
             assert_eq!(placement, SandboxPlacement::default());
+        }
+    }
+
+    /// The layered agent is amd64 only, so a selector for any other architecture could only end
+    /// in a pod that cannot start; it is refused with the reason instead.
+    #[test]
+    fn a_non_amd64_node_selector_is_refused_with_the_reason() {
+        for key in ["kubernetes.io/arch", "beta.kubernetes.io/arch"] {
+            for arch in ["arm64", "arm"] {
+                let error =
+                    SandboxPlacement::from_values(Some(&format!(r#"{{"{key}":"{arch}"}}"#)), None)
+                        .unwrap_err();
+                assert!(error.contains("amd64 only"), "{error}");
+            }
+            assert!(
+                SandboxPlacement::from_values(Some(&format!(r#"{{"{key}":"amd64"}}"#)), None)
+                    .is_ok()
+            );
         }
     }
 

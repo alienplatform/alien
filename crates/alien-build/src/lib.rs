@@ -2250,12 +2250,11 @@ impl SandboxAgentLayering {
         contract: alien_core::sandbox_image::GCP_AGENT_PLATFORM,
         image_command_env: true,
     };
-    /// The pod runs as the image's own non-root user, which the layered image ends with.
-    /// Supervised startup of the base command (`ALIEN_SANDBOX_IMAGE_COMMAND`) means a root
-    /// agent that starts the command under the image identity and later drops sessions to
-    /// the exec identity (uid-split). A pod is not allowed to run as root and the pod is
-    /// the isolation boundary, so the setting keeps one meaning by not being set here: the
-    /// agent refuses it without root, and the base image's own command is not started.
+    /// The image ends as the base's own user. Supervised startup of the base command
+    /// (`ALIEN_SANDBOX_IMAGE_COMMAND`) is deliberately not baked in: the pod sets it, together
+    /// with the root user and the bounded capability set, only for a declaration whose image
+    /// user is root, so the one image serves both modes. Amd64 only: the Operator refuses an
+    /// arm64 node selector for a sandbox.
     const KUBERNETES: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::KUBERNETES_SANDBOX,
