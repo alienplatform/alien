@@ -390,6 +390,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::StorageCorsCheck));
         registry.add_compile_time_check(Box::new(compile_time::StorageNotificationsCheck));
         registry.add_compile_time_check(Box::new(compile_time::VolumeBackupsCheck));
+        registry.add_compile_time_check(Box::new(compile_time::HealthCheckStartupTimeoutCheck));
         registry.add_compile_time_check(Box::new(
             compile_time::kubernetes_compute::KubernetesComputeCheck,
         ));
@@ -408,6 +409,9 @@ impl PreflightRegistry {
 
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::SandboxEgressGatewayCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::AzureSandboxGroupFromSetupCheck,
         ));
 
         // Add deployment prerequisite checks. These validate the concrete

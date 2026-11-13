@@ -52,8 +52,8 @@ struct DiscoveryState {
     manager_access_token: String,
 }
 
-struct DiscoveryServer {
-    url: String,
+pub struct DiscoveryServer {
+    pub url: String,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -75,7 +75,7 @@ impl Drop for DiscoveryServer {
 }
 
 impl DiscoveryServer {
-    async fn start(deployment: &TestDeployment, platform: Platform) -> anyhow::Result<Self> {
+    pub async fn start(deployment: &TestDeployment, platform: Platform) -> anyhow::Result<Self> {
         let mut authorization = HeaderValue::from_str(&format!("Bearer {}", deployment.token))
             .context("build discovery authorization header")?;
         authorization.set_sensitive(true);

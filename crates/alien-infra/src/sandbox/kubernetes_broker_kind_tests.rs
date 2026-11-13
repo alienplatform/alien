@@ -1144,10 +1144,10 @@ spec:
     pod.metadata.name = Some("gate-agent".into());
     pod.metadata.generate_name = None;
     pod.metadata.namespace = Some(namespace.clone());
-    pod.metadata
-        .labels
-        .get_or_insert_default()
-        .insert("gate".into(), "agent".into());
+    // This pod only exercises the readiness gate. Carrying the template's pool, sandbox and
+    // deployment labels would put it in the idle pool the other tests in this namespace claim
+    // from and count, so it keeps only the label the NetworkPolicy selects.
+    pod.metadata.labels = Some([("gate".to_string(), "agent".to_string())].into());
     pod.metadata.annotations = None;
     apply(&serde_json::to_string(&pod).unwrap());
     kubectl_ns(&[

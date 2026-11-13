@@ -65,10 +65,10 @@ use std::{
     alien-deploy deploy --token ax_dg_abc123... --platform aws
 
     # Deploy using a token file so the token is not exposed in argv
-    alien-deploy deploy --token-file /run/alien/token --platform local
+    alien-deploy deploy --token-file /run/secrets/deploy-token --platform local
 
     # Deploy a local pull-model workload behind customer-managed ingress
-    alien-deploy deploy --token-file /run/alien/token --platform local --public-endpoint gateway.api=https://gateway.example.com
+    alien-deploy deploy --token-file /run/secrets/deploy-token --platform local --public-endpoint gateway.api=https://gateway.example.com
 
     # Deploy with an isolated VPC
     alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
@@ -177,7 +177,7 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
     pub kube_context: Option<String>,
 
-    /// alien-operator image for Kubernetes Helm installs.
+    /// operator image for Kubernetes Helm installs.
     #[arg(long, env = "ALIEN_OPERATOR_IMAGE")]
     pub operator_image: Option<String>,
 
@@ -217,7 +217,7 @@ pub struct UpArgs {
     /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
     ///
     /// Intended for pull-model deployments where DNS, TLS, and ingress are
-    /// owned outside Alien. Repeat this flag for multiple endpoints.
+    /// owned outside the deployment tooling. Repeat this flag for multiple endpoints.
     #[arg(long = "public-endpoint")]
     pub public_endpoints: Vec<String>,
 

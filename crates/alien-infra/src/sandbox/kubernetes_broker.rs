@@ -166,6 +166,11 @@ async fn claim_session_with_scope(
         let Some(name) = pod.metadata.name.clone() else {
             continue;
         };
+        // A deleted pod keeps its idle label until its grace period ends. It would take the
+        // claim, and the session would die with it (and could not be reattached meanwhile).
+        if pod.metadata.deletion_timestamp.is_some() {
+            continue;
+        }
         // A pod that is not Ready has not proven its NetworkPolicy is in force yet (see
         // `require_enforced_policy`): on a fresh node its egress may still be unrestricted.
         // It stays in the pool until it is, and this create takes another pod or goes cold.
@@ -3231,6 +3236,37 @@ mod tests {
         )
         .await
         .expect_err("the only idle pod is not Ready, and there is no template to go cold");
+        assert!(format!("{error:?}").contains("health tick"));
+    }
+
+    /// A deleted pod keeps its idle label until its grace period ends, and a Ready, addressed pod
+    /// looks claimable. Claiming it hands the caller a session on a pod that is about to vanish
+    /// (and a reattach, which skips terminating pods, then cannot find it). It is not claimed.
+    #[tokio::test]
+    async fn an_idle_pod_that_is_being_deleted_is_not_claimed() {
+        let mut dying = idle_pod("pool-0", "10.1.2.3");
+        dying.metadata.deletion_timestamp = Some(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()),
+        );
+        let mut pods = pods_returning(vec![dying]);
+        pods.expect_update_pod().never();
+        let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
+
+        let error = claim_session(
+            &(Arc::new(pods) as Arc<dyn PodApi>),
+            &(Arc::new(secrets) as Arc<dyn SecretsApi>),
+            "sbx",
+            "ns",
+            "s1",
+            "k",
+            1_000,
+        )
+        .await
+        .expect_err("the only idle pod is being deleted, and there is no template to go cold");
         assert!(format!("{error:?}").contains("health tick"));
     }
 

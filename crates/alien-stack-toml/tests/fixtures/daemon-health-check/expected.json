@@ -80,6 +80,7 @@
           "method": "POST",
           "path": "/status",
           "port": 8081,
+          "startupTimeoutSeconds": 1800,
           "timeoutSeconds": 5
         },
         "links": [],
