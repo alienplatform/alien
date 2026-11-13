@@ -16,6 +16,7 @@
 //! close. A WebSocket upgrade speaks HTTP/1.1 and is then copied byte for byte until the
 //! capability expires.
 
+use std::future::Future;
 use std::time::Duration;
 
 use alien_core::sandbox_image::AGENT_PORT;
@@ -27,6 +28,75 @@ use tokio::net::TcpStream;
 
 /// Comma separated ports the sandbox declared for preview.
 pub const ENV_PREVIEW_PORTS: &str = "ALIEN_SANDBOX_PREVIEW_PORTS";
+
+/// How long the client side of an upgraded stream is kept open after the daemon closes its side.
+/// A daemon answers a WebSocket close frame and drops the connection in the same breath, and the
+/// cloud edge in front of the agent was measured losing that last frame when the close followed it
+/// by less than about 50 ms; the frame is the client's only sign that the close was clean.
+const CLOSE_GRACE: Duration = Duration::from_millis(250);
+
+/// Delays the end of a stream by a grace period once the inner stream reports EOF, so the bytes
+/// written just before it are forwarded before the close is.
+struct LingeringEof<S> {
+    inner: S,
+    grace: Duration,
+    timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<S> LingeringEof<S> {
+    fn new(inner: S, grace: Duration) -> Self {
+        Self {
+            inner,
+            grace,
+            timer: None,
+        }
+    }
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for LingeringEof<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::task::Poll;
+        if let Some(timer) = self.timer.as_mut() {
+            return timer.as_mut().poll(cx).map(|()| Ok(()));
+        }
+        let before = buf.filled().len();
+        match std::pin::Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) if buf.filled().len() == before => {
+                let mut timer = Box::pin(tokio::time::sleep(self.grace));
+                let polled = timer.as_mut().poll(cx);
+                self.timer = Some(timer);
+                polled.map(|()| Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for LingeringEof<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
 
 /// A request body held in memory so the upstream can be sent a length.
 const MAX_REQUEST_BODY: usize = 32 * 1024 * 1024;
@@ -287,6 +357,7 @@ pub async fn forward(
                 return;
             }
             let remaining = u64::try_from(close_at - chrono::Utc::now().timestamp()).unwrap_or(0);
+            let mut upstream = LingeringEof::new(upstream, CLOSE_GRACE);
             // The stream is closed when the capability expires, whichever side is still talking.
             let _ = tokio::time::timeout(
                 Duration::from_secs(remaining),

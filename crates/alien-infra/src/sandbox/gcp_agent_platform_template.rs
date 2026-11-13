@@ -180,10 +180,19 @@ fn build_template_body(
     };
 
     // Ingress only reaches a port the template declares: the agent's own, then every preview port.
-    let mut declared_ports = vec![i32::from(GCP_AGENT_PLATFORM.port)];
-    declared_ports.extend(sandbox.preview_ports.iter().map(|port| i32::from(*port)));
-    declared_ports.sort_unstable();
-    declared_ports.dedup();
+    // The agent's port is first because `:execute` goes to the FIRST declared port (measured: with
+    // the ports sorted, a preview port below the agent's received the control traffic).
+    let agent_port = i32::from(GCP_AGENT_PLATFORM.port);
+    let mut preview_ports: Vec<i32> = sandbox
+        .preview_ports
+        .iter()
+        .map(|port| i32::from(*port))
+        .filter(|port| *port != agent_port)
+        .collect();
+    preview_ports.sort_unstable();
+    preview_ports.dedup();
+    let mut declared_ports = vec![agent_port];
+    declared_ports.extend(preview_ports);
 
     Ok(SandboxEnvironmentTemplate {
         name: None,
@@ -1667,6 +1676,15 @@ mod tests {
             .push(serde_json::json!({"port": 9999, "protocol": "TCP"}));
         check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an unsigned port");
 
+        // `:execute` goes to the first declared port, so the agent's port must be the first.
+        let mut sorted = wire.clone();
+        sorted["customContainerEnvironment"]["ports"]
+            .as_array_mut()
+            .expect("ports")
+            .sort_by_key(|port| port["port"].as_i64());
+        check_sandbox_template(&sandbox, "pfx", "123", &sorted)
+            .expect_err("the agent's port is not first");
+
         let mut missing = wire;
         missing["customContainerEnvironment"]["ports"]
             .as_array_mut()
@@ -1695,8 +1713,8 @@ mod tests {
             .collect();
         assert_eq!(
             ports,
-            vec![8080, 8081, 8090, 8971],
-            "agent port once, then each preview port"
+            vec![8971, 8080, 8081, 8090],
+            "agent port first (`:execute` goes to the first declared port), then each preview port"
         );
         assert_eq!(
             wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
