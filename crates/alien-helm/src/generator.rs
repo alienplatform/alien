@@ -7622,14 +7622,20 @@ spec:
           port: 53
     # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
     # ports the bindings use (a database, a cache) and the manager's own port.
-    {{- $ports := .Values.runtime.networkPolicy.egress.ports | default list }}
-    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" (include "deployment.managementUrl" .))).host) }}
-    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}{{- end }}
+    {{- $ports := list }}
+    {{- range (.Values.runtime.networkPolicy.egress.ports | default list) }}{{- $ports = append $ports (int .) }}{{- end }}
+    {{- $managerUrl := urlParse (default "" (include "deployment.managementUrl" .)) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" $managerUrl.host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}
+    {{- else if eq $managerUrl.scheme "http" }}{{- $ports = append $ports 80 }}
+    {{- else if eq $managerUrl.scheme "https" }}{{- $ports = append $ports 443 }}{{- end }}
+    {{- if $ports }}
     - ports:
         {{- range $ports | uniq }}
         - protocol: TCP
           port: {{ . }}
         {{- end }}
+    {{- end }}
     {{- if eq (default "" .Values.basePlatform) "gcp" }}
     # GKE: the Operator's cloud credentials come from the metadata server
     # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
@@ -11303,6 +11309,52 @@ infrastructureExistingSecret: customer-bindings
             Some("management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: strict\n"),
         );
         assert!(!bad.is_ok());
+    }
+
+    #[test]
+    fn a_restricted_policy_infers_the_manager_port_and_never_emits_an_empty_port_rule() {
+        let files = sample_chart_files();
+        let egress_ports = |url: &str, extra: &str| -> Vec<Vec<u64>> {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: {url}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n{extra}"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted policy");
+            let policy = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            policy["spec"]["egress"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|rule| {
+                    assert!(
+                        !rule.as_mapping().unwrap().is_empty(),
+                        "an empty rule allows everything"
+                    );
+                    rule["ports"]
+                        .as_sequence()
+                        .map(|p| p.iter().map(|x| x["port"].as_u64().unwrap()).collect())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        // An http URL without a port needs port 80.
+        let http = egress_ports("http://manager.example.test", "");
+        assert!(http.iter().flatten().any(|p| *p == 80), "{http:?}");
+        // Clearing the port list with an https URL still reaches the manager on 443.
+        let https = egress_ports(
+            "https://manager.example.test",
+            "    egress:\n      ports: []\n",
+        );
+        assert!(https.iter().flatten().any(|p| *p == 443), "{https:?}");
+        // An explicit port is used as written, and no rule has an empty ports list.
+        let explicit = egress_ports(
+            "https://manager.example.test:9443",
+            "    egress:\n      ports: []\n",
+        );
+        assert_eq!(explicit.last().unwrap(), &vec![9443]);
     }
 
     #[test]

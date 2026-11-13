@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 41
 expression: buf
 ---
 === Chart.yaml ===
@@ -3133,14 +3134,20 @@ spec:
           port: 53
     # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
     # ports the bindings use (a database, a cache) and the manager's own port.
-    {{- $ports := .Values.runtime.networkPolicy.egress.ports | default list }}
-    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" (include "deployment.managementUrl" .))).host) }}
-    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}{{- end }}
+    {{- $ports := list }}
+    {{- range (.Values.runtime.networkPolicy.egress.ports | default list) }}{{- $ports = append $ports (int .) }}{{- end }}
+    {{- $managerUrl := urlParse (default "" (include "deployment.managementUrl" .)) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" $managerUrl.host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}
+    {{- else if eq $managerUrl.scheme "http" }}{{- $ports = append $ports 80 }}
+    {{- else if eq $managerUrl.scheme "https" }}{{- $ports = append $ports 443 }}{{- end }}
+    {{- if $ports }}
     - ports:
         {{- range $ports | uniq }}
         - protocol: TCP
           port: {{ . }}
         {{- end }}
+    {{- end }}
     {{- if eq (default "" .Values.basePlatform) "gcp" }}
     # GKE: the Operator's cloud credentials come from the metadata server
     # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
