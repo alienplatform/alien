@@ -715,7 +715,7 @@ async fn replenish_warm_pool(
         .annotations
         .get_or_insert_default()
         .insert(ANNOTATION_TEMPLATE_HASH.to_string(), template_hash.clone());
-    let (stale, fresh) = split_idle_pods(without_terminating(idle.items), &template_hash);
+    let (stale, fresh) = split_idle_pods(idle.items, &template_hash);
     let excess = excess_idle_pods(fresh.clone(), target);
     let waiting = fresh.len() - excess.len();
     retire_stale_idle_pods(&client, namespace, &sandbox.id, stale).await;
@@ -929,6 +929,7 @@ pub(crate) fn without_terminating(
 }
 
 /// Splits idle pods into those built from a template other than `current` and those built from it.
+/// Pods that are being deleted are in neither.
 pub(crate) fn split_idle_pods(
     idle: Vec<k8s_openapi::api::core::v1::Pod>,
     current: &str,
@@ -938,7 +939,7 @@ pub(crate) fn split_idle_pods(
 ) {
     let mut stale = Vec::new();
     let mut fresh = Vec::new();
-    for pod in idle {
+    for pod in without_terminating(idle) {
         let built_from = pod
             .metadata
             .annotations
@@ -1198,7 +1199,10 @@ mod tests {
         assert_eq!(available.len(), 1);
         assert_eq!(available[0].metadata.name.as_deref(), Some("live"));
         assert_eq!(pool_deficit(2, available.len()), 1);
-        assert_eq!(pool_deficit(2, without_terminating(vec![dying]).len()), 2);
+        assert_eq!(pool_deficit(2, without_terminating(vec![dying.clone()]).len()), 2);
+        // Neither retired as stale nor counted as fresh.
+        let (stale, fresh) = split_idle_pods(vec![dying], "h");
+        assert!(stale.is_empty() && fresh.is_empty());
     }
 
     fn idle_with_hash(name: &str, hash: Option<&str>) -> Pod {
