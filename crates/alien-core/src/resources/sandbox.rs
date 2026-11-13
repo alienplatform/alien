@@ -503,9 +503,12 @@ impl SandboxCapabilities {
             // `:execute` is one request with one answer, capped at about 30 seconds. Input
             // cannot reach a command after its call has answered, so there is no stream to drive.
             interactive_commands: false,
-            // The only ingress Alien uses is `:execute`. The edge consumes `Authorization` for its
-            // own credential, so a caller's bearer cannot reach a workload port through it.
-            preview: false,
+            // The agent's declared port serves a per-port capability the agent verifies before it
+            // forwards to the workload's port, HTTP and WebSocket. The edge consumes
+            // `Authorization` for its own JWT, so the caller's bearer travels in its own header
+            // and the agent hands it to the workload as `Authorization`. Measured live on three
+            // ports; a WebSocket client must offer the edge's credentials as subprotocols.
+            preview: true,
             // `:resume` can return a fresh container while reporting success, so a pause does not
             // keep the sandbox's state.
             pause_resume: false,
@@ -1202,12 +1205,20 @@ impl Sandbox {
             }));
         }
 
-        if platform == Platform::Gcp && !self.preview_ports.is_empty() {
-            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                capability:
-                    "preview: not built or proven on GCP Agent Platform yet; remove the preview ports"
-                        .to_string(),
-                platform: platform.to_string(),
+        // The agent serves on its own port, which the template declares first and the agent
+        // never forwards to, so a preview port naming it could only ever be refused.
+        if platform == Platform::Gcp
+            && self
+                .preview_ports
+                .contains(&crate::sandbox_image::GCP_AGENT_PLATFORM.port)
+        {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "previewPorts".to_string(),
+                value: crate::sandbox_image::GCP_AGENT_PLATFORM.port.to_string(),
+                reason: "that port is the Alien agent's own on GCP Agent Platform; choose \
+                         another port for the workload"
+                    .to_string(),
             }));
         }
 
@@ -1900,20 +1911,18 @@ mod tests {
     }
 
     #[test]
-    fn gcp_refuses_preview_ports_at_plan_time() {
-        let error = sandbox_with(SandboxEgress::Deny, vec![8080])
+    fn gcp_accepts_preview_ports_but_not_the_agents_own() {
+        sandbox_with(SandboxEgress::Deny, vec![8080, 8081, 8090])
             .validate_for_platform(Platform::Gcp)
-            .expect_err("preview is refused on GCP");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(
-            error
-                .to_string()
-                .contains("not built or proven on GCP Agent Platform yet"),
-            "{error}"
-        );
+            .expect("preview ports are served on GCP");
         sandbox_with(SandboxEgress::Deny, vec![])
             .validate_for_platform(Platform::Gcp)
             .expect("a sandbox without preview ports is unaffected");
+        let error = sandbox_with(SandboxEgress::Deny, vec![8080, 8971])
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("the agent's own port is not a workload port");
+        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "{error}");
+        assert!(error.to_string().contains("8971"), "{error}");
     }
 
     #[test]
@@ -1977,7 +1986,7 @@ mod tests {
             gcp.reconnect,
             "generation from the container boot id makes a sandbox reachable across processes"
         );
-        assert!(!gcp.preview);
+        assert!(gcp.preview);
         assert!(gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
@@ -2081,8 +2090,8 @@ mod tests {
              processes"
         );
         assert!(
-            !row.preview,
-            "the only ingress is :execute; no port-scoped capability"
+            row.preview,
+            "the agent's declared port serves a per-port capability, measured on three ports"
         );
         assert!(
             !row.pause_resume,
@@ -2131,13 +2140,13 @@ mod tests {
     fn unsupported_capability_names_platform_and_capability() {
         let capabilities = SandboxCapabilities::for_platform(Platform::Gcp).expect("supported");
         let error = capabilities
-            .require(SandboxCapability::Preview, Platform::Gcp)
-            .expect_err("GCP has no preview");
+            .require(SandboxCapability::Snapshot, Platform::Gcp)
+            .expect_err("GCP has no snapshot");
 
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
         let rendered = error.to_string();
         assert!(
-            rendered.contains("preview"),
+            rendered.contains("snapshot"),
             "names the capability: {rendered}"
         );
         assert!(rendered.contains("gcp"), "names the platform: {rendered}");
@@ -2293,12 +2302,14 @@ mod tests {
             .validate_for_platform(Platform::Kubernetes)
             .expect("Kubernetes serves preview to in-cluster callers through the agent");
 
-        for platform in [Platform::Azure, Platform::Gcp] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("these backends have no port-scoped credential");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        }
+        sandbox
+            .validate_for_platform(Platform::Gcp)
+            .expect("GCP serves preview through the agent's declared port");
+
+        let error = sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect_err("Azure has no port-scoped credential");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
     }
 
     /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and
