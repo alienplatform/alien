@@ -389,3 +389,150 @@ async fn kubernetes_root_boot_kind_root_image_code_cannot_replace_the_agent_or_i
         "root image code changed the agent or its metadata: {stdout} {stderr}"
     );
 }
+
+/// The three preview ports of a root-supervisor workload, over HTTP and WebSocket, through the
+/// agent's preview route with a signed capability. The workload checks its own bearer token, so
+/// the caller's `Authorization` must reach it unchanged, and a 1 MiB WebSocket message must
+/// round-trip. The capability for one port is refused on another.
+#[tokio::test]
+#[ignore = "needs a Kind cluster; see the module docs"]
+async fn kubernetes_root_boot_kind_preview_serves_three_ports_over_http_and_websocket() {
+    let context = env("ALIEN_ROOT_BOOT_KIND_CONTEXT");
+    let baseline = env("ALIEN_ROOT_BOOT_KIND_BASELINE_NAMESPACE");
+    let pods = client(&context).await;
+    let pair = ed25519_compact::KeyPair::generate();
+    let public_key = BASE64.encode(pair.pk.as_ref());
+
+    let mut sandbox = declared("rootpreview", 0);
+    sandbox.preview_ports = vec![8080, 8081, 8090];
+    let (pod, uid) = start(&pods, &context, &baseline, &sandbox, &public_key)
+        .await
+        .expect("a root-boot pod is admitted where Pod Security is baseline");
+
+    let token = |port: u16| {
+        alien_core::sandbox_capability_token::mint(
+            &SandboxCapabilityClaims {
+                session_id: uid.clone(),
+                operation: SandboxOperationClass::Preview,
+                generation: 1,
+                expires_at: chrono::Utc::now().timestamp() + 300,
+                key_id: "kind".to_string(),
+                port: Some(port),
+            },
+            &pair.sk,
+        )
+        .expect("token")
+    };
+    // The caller: HTTP `/whoami`, a 1 MiB WebSocket echo, then HTTP without the daemon's bearer.
+    let client_script = r#"
+import base64, hashlib, json, os, socket, struct, sys, time, urllib.request, urllib.error
+port, capability = int(sys.argv[1]), sys.argv[2]
+bearer = "Bearer conformance-bearer-token"
+base = "127.0.0.1"
+headers = {"X-Alien-Preview-Capability": capability, "X-Alien-Preview-Port": str(port),
+           "Authorization": bearer}
+def get(extra=None):
+    h = dict(headers); h.update(extra or {})
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(
+            "http://%s:8971/v1/preview/%d/whoami" % (base, port), headers=h), timeout=20)
+        return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+status, body = get()
+out = {"http": status}
+if status == 200:
+    seen = json.loads(body)
+    out["port"] = seen["port"]
+    out["uid"] = seen["uid"]
+    out["bearerUnchanged"] = seen["authorizationSha256"] == hashlib.sha256(bearer.encode()).hexdigest()
+out["noBearer"] = get({"Authorization": "Bearer wrong"})[0]
+# WebSocket: 1 MiB each way.
+s = socket.create_connection((base, 8971), timeout=30)
+key = base64.b64encode(os.urandom(16)).decode()
+lines = ["GET /v1/preview/%d/ws HTTP/1.1" % port, "Host: x", "Upgrade: websocket",
+         "Connection: Upgrade", "Sec-WebSocket-Key: " + key, "Sec-WebSocket-Version: 13"]
+lines += ["%s: %s" % kv for kv in headers.items()]
+s.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+buf = b""
+while b"\r\n\r\n" not in buf:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    buf += chunk
+out["upgrade"] = buf.split(b"\r\n", 1)[0].decode()
+if b" 101 " in buf.split(b"\r\n", 1)[0]:
+    rest = buf.split(b"\r\n\r\n", 1)[1]
+    payload = os.urandom(1 << 20)
+    mask = os.urandom(4)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    s.sendall(bytes([0x82, 0x80 | 127]) + struct.pack(">Q", len(payload)) + mask + masked)
+    def need(n):
+        global rest
+        while len(rest) < n:
+            chunk = s.recv(1 << 16)
+            if not chunk:
+                raise EOFError
+            rest += chunk
+        data, rest = rest[:n], rest[n:]
+        return data
+    first, second = need(2)
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack(">H", need(2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", need(8))[0]
+    echoed = need(length)
+    out["wsEcho"] = echoed == payload
+print(json.dumps(out))
+"#;
+    for port in [8080u16, 8081, 8090] {
+        let capability = token(port);
+        let output = kubectl(
+            &context,
+            &[
+                "exec",
+                "-n",
+                &baseline,
+                &pod,
+                "--",
+                "python3",
+                "-c",
+                client_script,
+                &port.to_string(),
+                &capability,
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "client for {port}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let seen: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("client result");
+        assert_eq!(seen["http"], 200, "port {port}: {seen}");
+        assert_eq!(seen["port"], port, "port {port}: {seen}");
+        assert_eq!(seen["uid"], 1001, "the workload runs as the dropped uid: {seen}");
+        assert_eq!(seen["bearerUnchanged"], true, "port {port}: {seen}");
+        assert_eq!(seen["noBearer"], 401, "port {port}: {seen}");
+        assert!(
+            seen["upgrade"].as_str().unwrap_or_default().contains(" 101 "),
+            "port {port}: {seen}"
+        );
+        assert_eq!(seen["wsEcho"], true, "port {port}: {seen}");
+    }
+    // A capability for one port does not open another.
+    let output = kubectl(
+        &context,
+        &[
+            "exec", "-n", &baseline, &pod, "--", "python3", "-c", client_script, "8081",
+            &token(8080),
+        ],
+    );
+    let seen: serde_json::Value = serde_json::from_slice(&output.stdout).expect("client result");
+    assert_ne!(seen["http"], 200, "a capability for 8080 must not open 8081: {seen}");
+    let _ = kubectl(
+        &context,
+        &["delete", "pod", "-n", &baseline, &pod, "--wait=false"],
+    );
+}
