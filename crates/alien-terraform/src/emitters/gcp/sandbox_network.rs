@@ -277,6 +277,7 @@ mod tests {
                 targets_kubernetes: false,
                 stack_settings: &settings,
                 names: &names,
+                pins: &alien_core::SetupPins::default(),
             };
             (
                 GcpNetworkEmitter.emit(&ctx).unwrap(),
