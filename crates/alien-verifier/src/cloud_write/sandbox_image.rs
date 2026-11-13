@@ -10,7 +10,7 @@
 
 use alien_aws_clients::{
     lambda_microvms::{CreateMicrovmImageRequest, UpdateMicrovmImageRequest},
-    sandbox_bundle::{render, sandbox_prefix, RenderedBundle},
+    sandbox_bundle::{render, RenderedBundle},
     sandbox_image_build::{aws_partition, image_build_inputs, sandbox_image_arn},
 };
 use alien_core::{
@@ -72,33 +72,13 @@ pub fn check_bundle(facts: &Signed<'_>, image: &str) -> Result<RenderedBundle> {
     render(&bundle_bucket(facts.prefix), image, facts.id).map_err(refused)
 }
 
-/// The bundle URI a build request names, when it is a bundle of this sandbox in the install's
-/// bundle bucket: only the verifier writes there, and only what it rendered from the signed image.
-fn check_bundle_uri(facts: &Signed<'_>, request: &Value) -> Result<String> {
-    let uri = request
-        .pointer("/codeArtifact/uri")
-        .and_then(Value::as_str)
-        .ok_or_else(|| refused("the build request names no bundle"))?;
-    let expected_prefix = format!(
-        "s3://{}/{}",
-        bundle_bucket(facts.prefix),
-        sandbox_prefix(facts.id)
-    );
-    let digest = uri
-        .strip_prefix(&expected_prefix)
-        .and_then(|rest| rest.strip_suffix("/bundle.zip"));
-    match digest {
-        Some(digest)
-            if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-        {
-            Ok(uri.to_string())
-        }
-        _ => Err(refused(format!(
-            "the build reads {uri}, which is not a bundle of sandbox '{}' in this install's \
-             bundle bucket ({expected_prefix}<sha256>/bundle.zip)",
-            facts.id
-        ))),
-    }
+/// The URI of the bundle rendered from the image the release signed. The request's own URI is
+/// never taken: the render is deterministic, so a request naming any other bundle (an older,
+/// since revoked image's, say) differs from the derived one and is refused.
+fn signed_bundle_uri(facts: &Signed<'_>) -> Result<String> {
+    let signed = release_statement::sandbox_pinned_image(facts.id, facts.sandbox)
+        .map_err(|error| refused(error.message))?;
+    Ok(check_bundle(facts, signed)?.uri())
 }
 
 /// The free-form strings of a request, which only name the build.
@@ -166,7 +146,7 @@ pub fn check_create(
     account: &str,
     request: &Value,
 ) -> Result<CreateMicrovmImageRequest> {
-    let bundle = check_bundle_uri(facts, request)?;
+    let bundle = signed_bundle_uri(facts)?;
     let (description, token) = naming(request)?;
     let mut derived = inputs(facts, region, account, &bundle)?.create_request(
         image_name(facts),
@@ -196,7 +176,7 @@ pub fn check_update(
             facts.id
         )));
     }
-    let bundle = check_bundle_uri(facts, request)?;
+    let bundle = signed_bundle_uri(facts)?;
     let (description, token) = naming(request)?;
     let mut derived = inputs(facts, region, account, &bundle)?.update_request();
     derived.description = description;
@@ -322,7 +302,6 @@ mod tests {
     fn a_build_that_differs_from_the_derived_one_is_refused() {
         with_signed(|signed| {
             let (bundle, request) = bundle_and_create(signed);
-            let digest = "c".repeat(64);
             let edits: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
                 (
                     "a bundle in another bucket",
@@ -348,6 +327,15 @@ mod tests {
                         r["codeArtifact"]["uri"] = json!(
                             "s3://acme-abc-sandbox-bundles/sandbox-bundle/agents/../x/bundle.zip"
                         )
+                    }),
+                ),
+                (
+                    "a well-formed bundle of another digest (a revoked image's)",
+                    Box::new(|r| {
+                        r["codeArtifact"]["uri"] = json!(format!(
+                            "s3://acme-abc-sandbox-bundles/sandbox-bundle/agents/{}/bundle.zip",
+                            "c".repeat(64)
+                        ))
                     }),
                 ),
                 (
@@ -389,7 +377,7 @@ mod tests {
                     }),
                 ),
             ];
-            let _ = (&bundle, digest);
+            let _ = &bundle;
             for (name, edit) in edits {
                 let mut changed = request.clone();
                 edit(&mut changed);
