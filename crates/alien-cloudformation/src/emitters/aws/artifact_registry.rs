@@ -3,7 +3,8 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        required_logical_id, resource_config, stack_name, tags, PARAM_MANAGING_ROLE_ARN,
+        required_logical_id, resource_config, service_trust_policy, stack_name, tags,
+        PARAM_MANAGING_ROLE_ARN,
     },
     template::{CfExpression, CfResource},
 };
@@ -257,11 +258,10 @@ fn ecr_lifecycle_policy() -> CfExpression {
 /// template is written: replicas use the ECR defaults for tag immutability and
 /// lifecycle (an accepted limitation), and cross-account pull grants are
 /// written on each replica by the registry binding. Replication configuration
-/// is one per account and region: only a stack that declares regions writes it.
-// CloudFormation cannot read the account's existing replication rules, so the check happens
-// before this template is used: the runtime preflight `ReplicationRulesCheck` refuses foreign
-// rules, and a caller that generates the template outside the preflights must read the
-// registry's reported replication state first.
+/// is one per account and region: only a stack that declares regions writes it, and it keeps
+/// every rule that is not this registry's.
+// Existing rules are never read at generation time: the custom resource below reads and keeps
+// them when it writes, so a rule added after the template was generated is kept too.
 fn replication_resources(
     ctx: &EmitContext<'_>,
     registry: &ArtifactRegistry,
@@ -296,7 +296,7 @@ fn replication_resources(
             ));
         }
     }
-    let destinations = match from_input {
+    let regions = match from_input {
         Some(input_id) => CfExpression::list((0..=MAX_REPLICATION_REGION_SLOTS).map(|slot| {
             let region = if slot == MAX_REPLICATION_REGION_SLOTS {
                 CfExpression::from(format!(
@@ -305,61 +305,149 @@ fn replication_resources(
             } else {
                 replication_slot_region(input_id, slot)
             };
-            let destination = CfExpression::object([
-                ("Region", region),
-                ("RegistryId", CfExpression::ref_("AWS::AccountId")),
-            ]);
             if slot == 0 {
                 // The whole resource is conditional on slot 0, so a nested
                 // condition on it could never be false.
-                destination
+                region
             } else {
                 CfExpression::if_(
                     replication_slot_condition(input_id, slot),
-                    destination,
+                    region,
                     CfExpression::no_value(),
                 )
             }
         })),
-        None => CfExpression::list(registry.replication_regions.iter().map(|region| {
-            CfExpression::object([
-                ("Region", CfExpression::from(region.as_str())),
-                ("RegistryId", CfExpression::ref_("AWS::AccountId")),
-            ])
-        })),
+        None => CfExpression::list(
+            registry
+                .replication_regions
+                .iter()
+                .map(|region| CfExpression::from(region.as_str())),
+        ),
     };
     let logical_id = required_logical_id(ctx)?;
+    // ECR keeps one replication configuration per account and region, and writing it replaces
+    // every rule; deleting the native resource clears all of them. A native resource would
+    // therefore drop rules that other tools or other registries wrote, whatever was read when
+    // the template was generated. This custom resource reads the rules at the moment of the
+    // write, keeps all that are not this registry's unchanged, and on delete removes only this
+    // registry's rule (see ecr_replication_rule.py).
+    let log_id = format!("{logical_id}ReplicationLogs");
+    let role_id = format!("{logical_id}ReplicationRole");
+    let function_id = format!("{logical_id}ReplicationFunction");
+    let mut logs = CfResource::new(log_id.clone(), "AWS::Logs::LogGroup".to_string());
+    logs.properties.insert(
+        "LogGroupName".to_string(),
+        CfExpression::sub(format!("/aws/lambda/${{AWS::StackName}}-{}-replication", registry.id())),
+    );
+    logs.properties.insert(
+        "RetentionInDays".to_string(),
+        CfExpression::Integer(alien_core::AWS_LOG_RETENTION_DAYS.into()),
+    );
+    let mut role = CfResource::new(role_id.clone(), "AWS::IAM::Role".to_string());
+    role.properties.insert(
+        "AssumeRolePolicyDocument".to_string(),
+        service_trust_policy(["lambda.amazonaws.com"]),
+    );
+    role.properties.insert(
+        "Policies".to_string(),
+        CfExpression::list([CfExpression::object([
+            ("PolicyName", CfExpression::from("replication-rules")),
+            (
+                "PolicyDocument",
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list([
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                (
+                                    "Action",
+                                    CfExpression::list([
+                                        CfExpression::from("ecr:DescribeRegistry"),
+                                        CfExpression::from("ecr:PutReplicationConfiguration"),
+                                    ]),
+                                ),
+                                ("Resource", CfExpression::from("*")),
+                            ]),
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                (
+                                    "Action",
+                                    CfExpression::list([
+                                        CfExpression::from("logs:CreateLogStream"),
+                                        CfExpression::from("logs:PutLogEvents"),
+                                    ]),
+                                ),
+                                ("Resource", CfExpression::get_att(&log_id, "Arn")),
+                            ]),
+                        ]),
+                    ),
+                ]),
+            ),
+        ])]),
+    );
+    let mut function = CfResource::new(function_id.clone(), "AWS::Lambda::Function".to_string());
+    function.properties.insert(
+        "FunctionName".to_string(),
+        CfExpression::sub(format!("${{AWS::StackName}}-{}-replication", registry.id())),
+    );
+    function
+        .properties
+        .insert("Role".to_string(), CfExpression::get_att(&role_id, "Arn"));
+    function
+        .properties
+        .insert("Runtime".to_string(), CfExpression::from("python3.13"));
+    function
+        .properties
+        .insert("Handler".to_string(), CfExpression::from("index.handler"));
+    function
+        .properties
+        .insert("Timeout".to_string(), CfExpression::from(60u8));
+    function.properties.insert(
+        "Code".to_string(),
+        CfExpression::object([("ZipFile", CfExpression::from(REPLICATION_HANDLER))]),
+    );
+    function.properties.insert("Tags".to_string(), tags(ctx));
+    role.properties.insert("Tags".to_string(), tags(ctx));
+    logs.properties.insert("Tags".to_string(), tags(ctx));
+    function.depends_on.push(log_id.clone());
+
     let mut configuration = CfResource::new(
         format!("{logical_id}Replication"),
-        "AWS::ECR::ReplicationConfiguration".to_string(),
+        "Custom::EcrReplicationRule".to_string(),
     );
     configuration.properties.insert(
-        "ReplicationConfiguration".to_string(),
-        CfExpression::object([(
-            "Rules",
-            CfExpression::list([CfExpression::object([
-                ("Destinations", destinations),
-                (
-                    "RepositoryFilters",
-                    CfExpression::list([CfExpression::object([
-                        ("Filter", stack_name(registry.id())),
-                        ("FilterType", CfExpression::from("PREFIX_MATCH")),
-                    ])]),
-                ),
-            ])]),
-        )]),
+        "ServiceToken".to_string(),
+        CfExpression::get_att(&function_id, "Arn"),
     );
+    configuration
+        .properties
+        .insert("Prefix".to_string(), stack_name(registry.id()));
+    configuration.properties.insert(
+        "RegistryId".to_string(),
+        CfExpression::ref_("AWS::AccountId"),
+    );
+    configuration
+        .properties
+        .insert("Regions".to_string(), regions);
 
+    let mut resources = vec![logs, role, function, configuration];
     if let Some(input_id) = from_input {
         // No region answered: write nothing, so an install that leaves the
         // input empty keeps whatever replication its account already has.
-        configuration.condition = Some(replication_slot_condition(input_id, 0));
+        for resource in &mut resources {
+            resource.condition = Some(replication_slot_condition(input_id, 0));
+        }
     }
-    configuration
-        .depends_on
-        .push(format!("{logical_id}Repository"));
-    Ok(vec![configuration])
+    let repository = format!("{logical_id}Repository");
+    for resource in &mut resources {
+        resource.depends_on.push(repository.clone());
+    }
+    Ok(resources)
 }
+
+const REPLICATION_HANDLER: &str = include_str!("ecr_replication_rule.py");
 
 /// Region slots a deployer-provided list can fill. CloudFormation cannot loop
 /// over a parameter, so the template reserves this many destinations. An
@@ -398,4 +486,24 @@ pub(crate) fn replication_slot_region(input_id: &str, slot: usize) -> CfExpressi
         "Fn::Select",
         CfExpression::list([CfExpression::Integer(slot as i64), padded]),
     )])
+}
+
+#[cfg(test)]
+mod replication_handler_tests {
+    #[test]
+    fn handler_keeps_foreign_rules_through_create_update_and_delete() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let output = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(root.join("tests/handlers/ecr_replication_rule_test.py"))
+            .arg(root.join("src/emitters/aws/ecr_replication_rule.py"))
+            .output()
+            .expect("Python is required for the embedded replication handler test");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

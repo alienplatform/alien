@@ -46,8 +46,11 @@ fn aws_registry_without_regions_emits_no_replication() {
 #[test]
 fn aws_registry_declared_regions_emit_replication_and_no_creation_template() {
     let rendered = try_render_registry(&registry_stack(&["us-east-2", "eu-west-1"])).unwrap();
+    // The rules go through a merge-on-write custom resource, never the native account-wide
+    // resource, which replaces every rule and clears them all on delete.
+    assert!(rendered.contains("Custom::EcrReplicationRule"), "{rendered}");
     assert!(
-        rendered.contains("AWS::ECR::ReplicationConfiguration"),
+        !rendered.contains("AWS::ECR::ReplicationConfiguration"),
         "{rendered}"
     );
     assert!(
@@ -55,7 +58,8 @@ fn aws_registry_declared_regions_emit_replication_and_no_creation_template() {
         "{rendered}"
     );
     assert!(rendered.contains("us-east-2") && rendered.contains("eu-west-1"));
-    assert!(rendered.contains("PREFIX_MATCH"));
+    // The rule's prefix is the registry's own, so only that rule is ever replaced or removed.
+    assert!(rendered.contains("-images"), "{rendered}");
     // The template carries no repository policy: grants are written per region.
     assert!(!rendered.contains("\"RepositoryPolicy\""));
 }
@@ -107,7 +111,7 @@ fn aws_registry_regions_input_is_read_at_deploy_time_and_empty_writes_nothing() 
         .as_object()
         .unwrap()
         .values()
-        .find(|r| r["Type"] == "AWS::ECR::ReplicationConfiguration")
+        .find(|r| r["Type"] == "Custom::EcrReplicationRule")
         .expect("replication configuration");
     // Nothing is written until the deployer answers at least one region.
     let gate = configuration["Condition"].as_str().unwrap();

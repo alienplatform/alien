@@ -1,10 +1,12 @@
-//! Refuses to start a setup that writes ECR replication when the account already
-//! replicates repositories by some other rule. The setup replaces the account's
-//! one replication configuration, so a rule that is not this registry's would be
-//! lost. The read uses the identity the preflight runs with.
+//! Tells the operator, before a setup that writes ECR replication, which rules the account
+//! already has. ECR keeps one replication configuration per account and replacing it drops
+//! every rule, so the setup does not replace it: its custom resource reads the rules at the
+//! moment of the write, keeps every rule that is not this registry's unchanged, and removes
+//! only this registry's rule on delete. The read here uses the identity the preflight runs
+//! with and is informational: the write-time read is what guarantees nothing is dropped.
 
 use crate::error::Result;
-use crate::{CheckResult, CheckStatus, RuntimeCheck};
+use crate::{CheckResult, RuntimeCheck};
 use alien_aws_clients::{aws::ecr::ReplicationRule, AwsCredentialProvider, EcrApi, EcrClient};
 use alien_core::{
     ArtifactRegistry, ClientConfig, DeploymentConfig, Platform, RegistryReplicationOwner,
@@ -93,7 +95,7 @@ impl RuntimeCheck for ReplicationRulesCheck {
     }
 
     fn description(&self) -> &'static str {
-        "The account has no ECR replication rules other than this registry's"
+        "Lists the account's ECR replication rules that setup keeps unchanged"
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
@@ -102,7 +104,10 @@ impl RuntimeCheck for ReplicationRulesCheck {
                 entry
                     .config
                     .downcast_ref::<ArtifactRegistry>()
-                    .is_some_and(|registry| registry.replication_regions_input.is_some())
+                    .is_some_and(|registry| {
+                        registry.replication_regions_input.is_some()
+                            || !registry.replication_regions.is_empty()
+                    })
             })
     }
 
@@ -119,8 +124,10 @@ impl RuntimeCheck for ReplicationRulesCheck {
             .values()
             .filter_map(|entry| entry.config.downcast_ref::<ArtifactRegistry>())
             .filter_map(|registry| {
-                let input = registry.replication_regions_input.as_deref()?;
-                let regions = requested_regions(config, input);
+                let regions = match registry.replication_regions_input.as_deref() {
+                    Some(input) => requested_regions(config, input),
+                    None => registry.replication_regions.clone(),
+                };
                 (!regions.is_empty()).then_some((registry, regions))
             })
             .collect();
@@ -130,7 +137,6 @@ impl RuntimeCheck for ReplicationRulesCheck {
         let Some(aws) = client_config.aws_config() else {
             result
                 .add_warning("ECR replication rules could not be read: no AWS credentials".into());
-            result.status = Some(CheckStatus::Unknown);
             return Ok(result);
         };
         let ecr = match AwsCredentialProvider::from_config(aws.clone()).await {
@@ -145,7 +151,6 @@ impl RuntimeCheck for ReplicationRulesCheck {
                         result.add_warning(
                             "ECR replication rules could not be read: no HTTP client".into(),
                         );
-                        result.status = Some(CheckStatus::Unknown);
                         return Ok(result);
                     }
                 }
@@ -154,7 +159,6 @@ impl RuntimeCheck for ReplicationRulesCheck {
                 result.add_warning(
                     "ECR replication rules could not be read: credentials failed".into(),
                 );
-                result.status = Some(CheckStatus::Unknown);
                 return Ok(result);
             }
         };
@@ -166,9 +170,8 @@ impl RuntimeCheck for ReplicationRulesCheck {
     }
 }
 
-/// Read the account's rules and refuse unless there are none or they are exactly
-/// this registry's. A read that fails is reported as unknown, not as a pass: the
-/// registry controller reads the rules again and fails visibly if they are foreign.
+/// Read the account's rules and name every one that is not this registry's, with the note
+/// that setup keeps them. A failed read is a warning: it does not change what setup writes.
 pub async fn check_registry(
     ecr: &dyn EcrApi,
     repository_prefix: &str,
@@ -183,17 +186,16 @@ pub async fn check_registry(
                 account_id,
             );
             if report.owner == RegistryReplicationOwner::Foreign {
-                result.add_error(format!(
-                    "This AWS account already replicates ECR images by rules that are not this registry's ({}). Setting up replication would replace them. Remove or merge those rules, or leave the deployment regions empty.",
+                result.add_warning(format!(
+                    "This AWS account already has ECR replication rules that are not this registry's ({}). Setup keeps them unchanged and adds this registry's rule; deleting the setup removes only this registry's rule.",
                     report.foreign_rules.join("; ")
                 ));
             }
         }
         Err(error) => {
             result.add_warning(format!(
-                "ECR replication rules could not be read ({error}); setup cannot confirm it will not replace existing rules"
+                "ECR replication rules could not be read ({error}); setup reads them again when it writes and keeps rules that are not this registry's"
             ));
-            result.status = Some(CheckStatus::Unknown);
         }
     }
 }
@@ -255,18 +257,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_foreign_rule_is_refused_and_named() {
+    async fn a_foreign_rule_is_named_and_kept_not_refused() {
         for foreign in [
             rule(None, ACCOUNT, "eu-west-1"),
             rule(Some("other-"), ACCOUNT, "eu-west-1"),
             rule(Some("t-images"), "999999999999", "eu-west-1"),
         ] {
             let result = run(vec![foreign]).await;
-            assert!(!result.success);
+            assert!(result.success, "{:?}", result.errors);
             assert!(
-                result.errors[0].contains("eu-west-1"),
+                result.warnings[0].contains("eu-west-1") && result.warnings[0].contains("keeps"),
                 "{:?}",
-                result.errors
+                result.warnings
             );
         }
         let mixed = run(vec![
@@ -274,11 +276,12 @@ mod tests {
             rule(None, ACCOUNT, "eu-west-1"),
         ])
         .await;
-        assert!(!mixed.success);
+        assert!(mixed.success);
+        assert_eq!(mixed.warnings.len(), 1);
     }
 
     #[tokio::test]
-    async fn a_failed_read_is_unknown_not_a_pass() {
+    async fn a_failed_read_is_a_warning_and_does_not_change_the_write() {
         let mut ecr = MockEcrApi::new();
         ecr.expect_describe_registry().returning(|| {
             Err(alien_aws_clients::Error::new(
@@ -290,7 +293,7 @@ mod tests {
         });
         let mut result = CheckResult::success();
         check_registry(&ecr, "t-images", ACCOUNT, &mut result).await;
-        assert_eq!(result.status, Some(CheckStatus::Unknown));
+        assert!(result.success);
         assert!(!result.warnings.is_empty());
     }
 

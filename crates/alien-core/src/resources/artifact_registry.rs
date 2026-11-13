@@ -162,8 +162,9 @@ pub struct ArtifactRegistryOutputs {
 }
 
 /// Whose rules the registry's replication configuration holds. The configuration is one
-/// per account and region, and writing it replaces every rule, so the setup that writes ours
-/// must only run when none of the rules belong to someone else.
+/// per account and region, and writing it replaces every rule. The setup that writes ours
+/// reads the rules when it writes and keeps every rule that is not ours unchanged, so this
+/// report is informational: it tells the operator which other rules the account has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -172,7 +173,7 @@ pub enum RegistryReplicationOwner {
     None,
     /// Exactly the one rule this registry's setup writes.
     Ours,
-    /// At least one rule this registry did not write.
+    /// At least one rule this registry did not write; setup keeps it unchanged.
     Foreign,
 }
 

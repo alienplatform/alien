@@ -12,7 +12,7 @@ import { RegistryReplicationOwnerSchema } from "./registry-replication-owner-sch
 export const RegistryReplicationReportSchema = z.object({
     "foreignRules": z.optional(z.array(z.string()).describe("One short line per rule that is not ours: destination regions and repository filters.")),
 get "owner"(){
-                return RegistryReplicationOwnerSchema.describe("Whose rules the registry's replication configuration holds. The configuration is one\nper account and region, and writing it replaces every rule, so the setup that writes ours\nmust only run when none of the rules belong to someone else.")
+                return RegistryReplicationOwnerSchema.describe("Whose rules the registry's replication configuration holds. The configuration is one\nper account and region, and writing it replaces every rule. The setup that writes ours\nreads the rules when it writes and keeps every rule that is not ours unchanged, so this\nreport is informational: it tells the operator which other rules the account has.")
               }
     }).describe("The replication rules a registry reported, without anything beyond rule shapes.")
 

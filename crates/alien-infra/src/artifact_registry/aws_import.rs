@@ -33,7 +33,6 @@ impl ResourceImporter for AwsArtifactRegistryImporter {
             push_role_arn: Some(data.push_role_arn),
             repository_prefix: Some(data.repository_prefix),
             replication: None,
-            replication_seen_ours: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

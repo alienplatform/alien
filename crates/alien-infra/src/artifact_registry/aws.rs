@@ -117,10 +117,6 @@ pub struct AwsArtifactRegistryController {
     /// The replication ownership read from the registry on the last refresh.
     #[serde(default)]
     pub(crate) replication: Option<RegistryReplicationReport>,
-    /// Set once the registry has reported our own rule. Foreign rules after that mean someone
-    /// else wrote the account's configuration over ours, and the controller fails loudly.
-    #[serde(default)]
-    pub(crate) replication_seen_ours: Option<bool>,
 }
 
 #[controller]
@@ -1102,20 +1098,6 @@ impl AwsArtifactRegistryController {
             &prefix,
             &account_id,
         );
-        if report.owner == RegistryReplicationOwner::Foreign
-            && self.replication_seen_ours == Some(true)
-        {
-            return Err(AlienError::new(ErrorData::ResourceDrift {
-                resource_id: resource_id.to_string(),
-                message: format!(
-                    "The account's ECR replication rules changed after this registry's own rule was in place; {}. Image copies to other regions may no longer follow this registry's rule.",
-                    report.foreign_rules.join("; ")
-                ),
-            }));
-        }
-        if report.owner == RegistryReplicationOwner::Ours {
-            self.replication_seen_ours = Some(true);
-        }
         self.replication = Some(report);
         Ok(())
     }
@@ -1496,7 +1478,6 @@ impl AwsArtifactRegistryController {
             push_role_arn: Some(format!("arn:aws:iam::{}:role/test-push-role", account_id)),
             repository_prefix: Some("test-artifact-registry".to_string()),
             replication: None,
-            replication_seen_ours: None,
             _internal_stay_count: None,
         }
     }
@@ -2267,7 +2248,6 @@ mod tests {
             state.replication.unwrap().owner,
             RegistryReplicationOwner::Ours
         );
-        assert_eq!(state.replication_seen_ours, Some(true));
 
         let (outcome, state) = ready_step_with_registry_rules(
             ready_registry(),
@@ -2281,17 +2261,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn foreign_rules_after_ours_fail_loudly_and_a_failed_read_does_not() {
+    async fn foreign_rules_never_fail_the_registry_and_a_failed_read_does_not() {
         let acct = "123456789012";
-        let mut after_ours = ready_registry();
-        after_ours.replication_seen_ours = Some(true);
-        let (outcome, _) =
-            ready_step_with_registry_rules(after_ours, Ok(vec![rule(None, acct, "eu-west-1")]))
-                .await;
-        let message = format!("{:?}", outcome.unwrap_err());
-        assert!(
-            message.contains("eu-west-1") && message.contains("changed"),
-            "{message}"
+        // Foreign rules next to ours are normal: the setup keeps them unchanged.
+        let (outcome, state) = ready_step_with_registry_rules(
+            ready_registry(),
+            Ok(vec![
+                rule(Some("test-images"), acct, "us-east-2"),
+                rule(None, acct, "eu-west-1"),
+            ]),
+        )
+        .await;
+        outcome.unwrap();
+        assert_eq!(
+            state.replication.unwrap().owner,
+            RegistryReplicationOwner::Foreign
         );
 
         // An unreadable registry keeps the registry usable and the old report.
@@ -2399,7 +2383,6 @@ mod tests {
             push_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-push".to_string()),
             repository_prefix: Some("test-registry".to_string()),
             replication: None,
-            replication_seen_ours: None,
             _internal_stay_count: None,
         };
 
@@ -2696,7 +2679,6 @@ mod tests {
             push_role_arn: None,
             repository_prefix: Some("test-my-registry".to_string()),
             replication: None,
-            replication_seen_ours: None,
             _internal_stay_count: None,
         }
     }
