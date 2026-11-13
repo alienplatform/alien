@@ -18,7 +18,7 @@ use crate::{
 
 const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
 
-/// AWS and Kubernetes deployments run the gateway with the same compute and
+/// AWS, GCP and Kubernetes deployments run the gateway with the same compute and
 /// service-account machinery as application containers. AWS setup templates are prepared
 /// before any compute backend exists, so the gateway is installed regardless;
 /// `SandboxEgressGatewayCheck` refuses an AWS deployment that has no backend to run it.
@@ -31,7 +31,10 @@ impl StackMutation for SandboxGatewayMutation {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
-        matches!(state.platform, Platform::Aws | Platform::Kubernetes)
+        matches!(
+            state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Kubernetes
+        )
             && stack.resources().any(|(_, entry)| {
                 entry
                     .config
@@ -358,6 +361,18 @@ mod tests {
         assert!(
             matches!(error.error, Some(ErrorData::StackMutationFailed { resource_id: Some(id), .. }) if id == SANDBOX_EGRESS_GATEWAY_ID)
         );
+    }
+
+    #[tokio::test]
+    async fn gcp_internet_sandbox_gets_the_managed_gateway() {
+        let (stack, _, config) = fixture();
+        let state = StackState::new(Platform::Gcp);
+        assert!(SandboxGatewayMutation.should_run(&stack, &state, &config));
+        let prepared = SandboxGatewayMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        assert!(is_managed_gateway(&prepared, SANDBOX_EGRESS_GATEWAY_ID));
     }
 
     #[tokio::test]
