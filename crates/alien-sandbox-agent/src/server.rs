@@ -1056,7 +1056,9 @@ async fn preview(
             public_key,
             identity,
         } => (public_key, identity),
-        AgentAuthorization::Transport => return preview_by_header(&state, request, port, rest).await,
+        AgentAuthorization::Transport => {
+            return preview_by_header(&state, request, port, rest).await
+        }
         _ => {
             return Err(ApiError {
                 status: StatusCode::NOT_FOUND,
@@ -1114,12 +1116,11 @@ fn preview_by_header(
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_string)
         };
-        let capability = header(alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER).ok_or(
-            ApiError {
+        let capability =
+            header(alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER).ok_or(ApiError {
                 status: StatusCode::UNAUTHORIZED,
                 message: "a valid preview capability is required".to_string(),
-            },
-        )?;
+            })?;
         // The header names the port the capability is for; it must be the port in the path.
         let named: Option<u16> = header(alien_core::sandbox_image::PREVIEW_PORT_HEADER)
             .and_then(|value| value.parse().ok());

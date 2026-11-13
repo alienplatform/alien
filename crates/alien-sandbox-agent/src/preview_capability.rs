@@ -12,7 +12,6 @@ use std::sync::Mutex;
 use alien_core::sandbox_image::{AGENT_PORT, PREVIEW_CAPABILITY_MAX_SECONDS};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -140,8 +139,12 @@ impl PreviewAuthority {
         };
         let expires_at: i64 = expires.parse().map_err(|_| PreviewRefusal::Malformed)?;
         let tag = hex::decode(tag).map_err(|_| PreviewRefusal::Malformed)?;
-        let expected = self.mac(&sandbox, port, expires_at).finalize().into_bytes();
-        if !bool::from(expected.as_slice().ct_eq(&tag)) {
+        // `verify_slice` compares in constant time.
+        if self
+            .mac(&sandbox, port, expires_at)
+            .verify_slice(&tag)
+            .is_err()
+        {
             return Err(PreviewRefusal::Forged);
         }
         if expires_at <= now {
@@ -183,7 +186,9 @@ mod tests {
         let authority = PreviewAuthority::new("boot-1".into());
         assert_eq!(grant(&authority, 8080, Some(NOW + 60)).expires_at, NOW + 60);
         assert_eq!(
-            authority.grant("sandbox-a", 8080, &[8080], Some(NOW), NOW).unwrap_err(),
+            authority
+                .grant("sandbox-a", 8080, &[8080], Some(NOW), NOW)
+                .unwrap_err(),
             PreviewRefusal::Expired
         );
     }
@@ -203,12 +208,21 @@ mod tests {
         let authority = PreviewAuthority::new("boot-1".into());
         let granted = grant(&authority, 8080, None);
         let forged = format!("v1.{}.{}", NOW + 900, "00".repeat(32));
-        assert_eq!(authority.verify(&forged, 8080, NOW + 1), Err(PreviewRefusal::Forged));
+        assert_eq!(
+            authority.verify(&forged, 8080, NOW + 1),
+            Err(PreviewRefusal::Forged)
+        );
         // Extending the expiry invalidates the MAC.
         let tag = granted.capability.rsplit('.').next().unwrap();
         let extended = format!("v1.{}.{tag}", NOW + 99_999);
-        assert_eq!(authority.verify(&extended, 8080, NOW + 1), Err(PreviewRefusal::Forged));
-        assert_eq!(authority.verify("garbage", 8080, NOW), Err(PreviewRefusal::Malformed));
+        assert_eq!(
+            authority.verify(&extended, 8080, NOW + 1),
+            Err(PreviewRefusal::Forged)
+        );
+        assert_eq!(
+            authority.verify("garbage", 8080, NOW),
+            Err(PreviewRefusal::Malformed)
+        );
     }
 
     #[test]
@@ -247,7 +261,9 @@ mod tests {
         let authority = PreviewAuthority::new("boot-1".into());
         for port in [AGENT_PORT, 9999] {
             assert_eq!(
-                authority.grant("sandbox-a", port, &[AGENT_PORT, 8080], None, NOW).unwrap_err(),
+                authority
+                    .grant("sandbox-a", port, &[AGENT_PORT, 8080], None, NOW)
+                    .unwrap_err(),
                 PreviewRefusal::PortNotPreviewable
             );
         }

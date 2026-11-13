@@ -2129,3 +2129,107 @@ async fn transport_preview_upgrade_reaches_the_daemon_with_the_callers_authoriza
     assert!(seen.contains("authorization: bearer daemon-secret"));
     assert!(!seen.contains("x-alien-preview"));
 }
+
+/// A refused preview call, plain or upgrade, must not open a connection to the daemon: not one
+/// byte reaches it, and an upgrade is answered with a refusal, never a 101.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_refusals_never_connect_to_the_daemon() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    // A second boot serving the same sandbox name has its own key.
+    let (other_boot, _other_dir) = transport_agent().await;
+
+    let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut ports = Vec::new();
+    for _ in 0..2 {
+        let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+            .await
+            .expect("bind daemon stub");
+        ports.push(listener.local_addr().unwrap().port());
+        let accepted = accepted.clone();
+        tokio::spawn(async move {
+            loop {
+                if listener.accept().await.is_ok() {
+                    accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+    }
+    let (port, other_port) = (ports[0], ports[1]);
+    std::env::set_var(
+        "ALIEN_SANDBOX_PREVIEW_PORTS",
+        format!("{port},{other_port}"),
+    );
+
+    let capability_for = |base: String, port: u16, deadline: Option<i64>| async move {
+        let mut body = json!({"v": 1, "op": "previewGrant", "sandbox": "sandbox-a", "port": port});
+        if let Some(deadline) = deadline {
+            body["deadline"] = json!(deadline);
+        }
+        let granted: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        granted["capability"]
+            .as_str()
+            .expect("a capability")
+            .to_string()
+    };
+    let good = capability_for(base.clone(), port, None).await;
+    // Another boot, same sandbox name: valid MAC, wrong key.
+    let from_other_boot = capability_for(other_boot, port, None).await;
+    let short_lived =
+        capability_for(base.clone(), port, Some(chrono::Utc::now().timestamp() + 1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let forged = format!("v1.{}.{}", i64::MAX / 2, "00".repeat(32));
+
+    let cases: Vec<(&str, Option<String>, u16, u16)> = vec![
+        ("missing", None, port, port),
+        ("forged", Some(forged), port, port),
+        ("expired", Some(short_lived), port, port),
+        ("another boot", Some(from_other_boot), port, port),
+        ("wrong port", Some(good.clone()), other_port, other_port),
+        ("header names another port", Some(good), port, other_port),
+    ];
+    let address = base.trim_start_matches("http://").to_string();
+    for (what, capability, path_port, named) in cases {
+        for upgrade in [false, true] {
+            let mut request = format!(
+                "GET /v1/preview/{path_port}/socket HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer daemon-secret\r\nX-Alien-Preview-Port: {named}\r\nConnection: close\r\n"
+            );
+            if let Some(capability) = &capability {
+                request.push_str(&format!("X-Alien-Preview-Capability: {capability}\r\n"));
+            }
+            if upgrade {
+                request.push_str("Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n");
+            }
+            request.push_str("\r\n");
+            let mut client = tokio::net::TcpStream::connect(&address).await.unwrap();
+            client.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                client.read_to_end(&mut response),
+            )
+            .await;
+            let head = String::from_utf8_lossy(&response);
+            let status = head.split_whitespace().nth(1).unwrap_or("");
+            assert!(
+                matches!(status, "401" | "403"),
+                "{what} (upgrade={upgrade}): {head}"
+            );
+        }
+    }
+    assert_eq!(
+        accepted.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no refused call may open a connection to the daemon"
+    );
+}
