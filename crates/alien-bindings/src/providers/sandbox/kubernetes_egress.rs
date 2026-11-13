@@ -58,7 +58,10 @@ impl KubernetesSandbox {
             let status = response.status();
             // The agent's refusal names the failed step and cause (never a secret); logs of an
             // isolated pod may not be readable, so this is where the operator learns them.
-            let detail = response.text().await.unwrap_or_default();
+            // Read through the bounded reader: an oversized or stalled body gives no detail.
+            let detail = super::agent_protocol::error_body(response, "policy delivery")
+                .await
+                .unwrap_or_default();
             let detail: String = detail.chars().take(300).collect();
             let reason = if detail.trim().is_empty() {
                 format!("Kubernetes sandbox agent refused policy delivery: {status}")

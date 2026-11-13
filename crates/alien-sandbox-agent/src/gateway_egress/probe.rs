@@ -63,7 +63,7 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
     if !status.success() {
         return Err(AlienError::new(ErrorData::egress_unverified(
             "command-identity",
-            format!("the command-identity path check reached an address it must not ({status})"),
+            format!("the command-identity path check did not confirm the path is closed ({status})"),
         )));
     }
     Ok(())
