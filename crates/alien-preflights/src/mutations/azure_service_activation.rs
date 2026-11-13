@@ -190,10 +190,7 @@ impl AzureServiceActivationMutation {
                     );
                 }
                 "redis" => {
-                    services.insert(
-                        "enable-cache".to_string(),
-                        "Microsoft.Cache".to_string(),
-                    );
+                    services.insert("enable-cache".to_string(), "Microsoft.Cache".to_string());
                     // Private-only: a private endpoint and the `privatelink.redis.azure.net`
                     // zone are `Microsoft.Network`. Shares the `network` arm's key.
                     services.insert(

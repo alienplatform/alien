@@ -830,6 +830,16 @@ fn add_machine_workload_secret_read(stack: &mut Stack, vault_name: &str) -> Resu
         if !stack.permissions.profiles.contains_key(&profile) {
             continue;
         }
+        // Only profile names made of letters, digits, `-` and `_` get a grant.
+        // The prefix is `hz.<profile>.`, so a profile `web.admin` would sit
+        // inside the grant for `web`. The control plane refuses such names when
+        // it writes values, so nothing is lost.
+        if !profile
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            continue;
+        }
         let parameter = format!(
             "arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{}",
             vault_naming::parameter_store_parameter_name(
@@ -1811,11 +1821,18 @@ mod tests {
             .insert("jobs".to_string(), container("jobs", "jobs"));
         stack
             .resources
+            .insert("admin".to_string(), container("admin", "web.admin"));
+        stack
+            .resources
             .insert("management".to_string(), remote_stack_management_entry());
         stack
             .permissions
             .profiles
             .insert("web".to_string(), PermissionProfile::new());
+        stack
+            .permissions
+            .profiles
+            .insert("web.admin".to_string(), PermissionProfile::new());
         stack
             .permissions
             .profiles
@@ -1836,8 +1853,11 @@ mod tests {
         assert!(mutated.resources.contains_key("secrets"));
 
         let aws_resources = |profile: &str| -> Vec<String> {
-            mutated.permissions.profiles[profile].0["secrets"]
-                .iter()
+            mutated.permissions.profiles[profile]
+                .0
+                .get("secrets")
+                .into_iter()
+                .flatten()
                 .filter(|reference| reference.id() == MACHINE_WORKLOAD_SECRETS_READ_ID)
                 .flat_map(|reference| match reference {
                     PermissionSetReference::Inline(set) => {
@@ -1858,6 +1878,13 @@ mod tests {
         );
         assert!(!web[0].contains("PutParameter") && !web[0].contains("DeleteParameter"));
         assert!(aws_resources("jobs")[0].contains("${resourceName}-hz.jobs.*"));
+        // `web.admin` would fall inside the `web` prefix, so it gets no grant.
+        assert!(
+            !web[0].contains("hz.web.admin"),
+            "no grant for a dotted profile: {}",
+            web[0]
+        );
+        assert!(aws_resources("web.admin").is_empty());
 
         // Running it again changes nothing.
         let again = SecretsVaultMutation

@@ -516,14 +516,12 @@ mod tests {
                 );
             }
             for platform in [Platform::Aws, Platform::Gcp] {
-                assert!(
-                    StorageLifecycleRulesCheck
-                        .check(&stack, platform)
-                        .await
-                        .unwrap()
-                        .errors
-                        .is_empty()
-                );
+                assert!(StorageLifecycleRulesCheck
+                    .check(&stack, platform)
+                    .await
+                    .unwrap()
+                    .errors
+                    .is_empty());
             }
         }
     }
