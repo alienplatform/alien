@@ -1348,6 +1348,45 @@
         ]
       }
     },
+    "/v1/deployments/{id}/setup-credential": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Issue a short-lived key for rerunning an installation, to its own Operator.",
+        "description": "The caller proves itself with the Operator's live key as the bearer token.\nIt is not a session: the key is checked against this deployment only, so\nevery other caller gets the same refusal.",
+        "operationId": "issueSetupCredential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedSetupCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/v1/deployments/{id}/status-report": {
       "post": {
         "tags": [
@@ -11958,6 +11997,24 @@
             "type": "string"
           }
         }
+      },
+      "IssuedSetupCredential": {
+        "type": "object",
+        "description": "A key that updates one installation for a few minutes, and its deadline.\nNot `Debug`: it holds a key.",
+        "required": [
+          "token",
+          "expiresAt"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "KeyHeartbeatData": {
         "oneOf": [

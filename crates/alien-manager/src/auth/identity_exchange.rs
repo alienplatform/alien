@@ -456,3 +456,83 @@ async fn record_refused_token_code(state: &AppState, deployment_id: &str, stage:
         })
         .await;
 }
+
+#[cfg(test)]
+mod setup_credential_route_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// Accepts one key for one deployment and records what it was asked.
+    struct OneKey;
+
+    #[async_trait]
+    impl RuntimeIdentityVerifier for OneKey {
+        async fn verify(
+            &self,
+            _: &IdentityExchangeRequest,
+            _: &str,
+        ) -> Result<VerifiedRuntimeIdentity, AlienError> {
+            Err(ErrorData::unauthorized("unused").into_generic())
+        }
+
+        async fn issue_setup_credential(
+            &self,
+            deployment_id: &str,
+            operator_key: &str,
+        ) -> Result<IssuedSetupCredential, AlienError> {
+            if deployment_id == "dep-1" && operator_key == "ax_day_v1_live" {
+                Ok(IssuedSetupCredential {
+                    token: "ax_setup_minted".into(),
+                    expires_at: Utc::now() + chrono::Duration::minutes(15),
+                })
+            } else {
+                Err(ErrorData::unauthorized("a key with the secret in it").into_generic())
+            }
+        }
+    }
+
+    async fn call(deployment: &str, authorization: Option<&str>) -> (u16, String, Option<String>) {
+        let verifier: Arc<dyn RuntimeIdentityVerifier> = Arc::new(OneKey);
+        let app = Router::new()
+            .route(
+                "/v1/deployments/{id}/setup-credential",
+                post(issue_setup_credential),
+            )
+            .layer(Extension(verifier));
+        let mut request = Request::post(format!("/v1/deployments/{deployment}/setup-credential"));
+        if let Some(value) = authorization {
+            request = request.header("authorization", value);
+        }
+        let response = app.oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        let status = response.status().as_u16();
+        let cache = response
+            .headers()
+            .get("cache-control")
+            .map(|v| v.to_str().unwrap().to_string());
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&body).into_owned(), cache)
+    }
+
+    #[tokio::test]
+    async fn only_the_live_operator_key_gets_a_key_and_the_answer_is_not_cached() {
+        let (status, body, cache) = call("dep-1", Some("Bearer ax_day_v1_live")).await;
+        assert_eq!(status, 200);
+        assert!(body.contains("ax_setup_minted"));
+        assert_eq!(cache.as_deref(), Some("no-store"));
+
+        for (deployment, header) in [
+            ("dep-1", None),
+            ("dep-1", Some("Basic abc")),
+            ("dep-1", Some("Bearer ")),
+            ("dep-1", Some("Bearer ax_day_v1_other")),
+            ("dep-2", Some("Bearer ax_day_v1_live")),
+        ] {
+            let (status, body, _) = call(deployment, header).await;
+            assert_eq!(status, 401, "{deployment} {header:?}");
+            assert!(!body.contains("secret"), "the verifier's message leaked: {body}");
+            assert!(!body.contains("ax_day_v1"), "a key was echoed: {body}");
+        }
+    }
+}
