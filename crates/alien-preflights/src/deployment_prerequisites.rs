@@ -217,9 +217,9 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
         state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        // On AWS and GCP the gateway is a managed Container, which only the managed backend runs.
+        // On AWS the gateway is a managed Container, which only the managed backend runs.
         if alien_core::sandbox_egress::has_sandbox_gateway(stack)
-            && (!matches!(state.platform, Platform::Aws | Platform::Gcp)
+            && (state.platform != Platform::Aws
                 || matches!(config.compute_backend, Some(ComputeBackend::Horizon(_))))
         {
             return Ok(CheckResult::success());
