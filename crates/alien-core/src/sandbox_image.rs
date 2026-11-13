@@ -43,6 +43,17 @@ pub const ENV_CALLER_AUTHORIZATION_HEADER: &str = "ALIEN_SANDBOX_CALLER_AUTHORIZ
 /// Longest a preview capability lives, in seconds. A grant never outlives the session either.
 pub const PREVIEW_CAPABILITY_MAX_SECONDS: i64 = 15 * 60;
 
+/// Set by the Kubernetes backend only: the pod mounts the agent binary and `/opt/alien`
+/// read-only itself, so the agent verifies that instead of building a private mount namespace
+/// (a pod's default seccomp profile blocks `unshare`). The agent refuses to start if the mounts
+/// are not there, so setting it elsewhere cannot turn protection off.
+pub const ENV_PROTECTED_MOUNTS: &str = "ALIEN_SANDBOX_PROTECTED_MOUNTS";
+/// The agent's first argument that stages the protected files (the Kubernetes init container).
+pub const STAGE_PROTECTED_FILES_ARGUMENT: &str = "--stage-protected-files";
+/// Names inside the staging directory the pod mounts over the agent binary and `/opt/alien`.
+pub const STAGED_AGENT_NAME: &str = "agent";
+pub const STAGED_METADATA_NAME: &str = "opt";
+
 /// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
 pub const AGENT_MODE: u32 = 0o755;
 

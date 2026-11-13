@@ -217,24 +217,43 @@ pub(crate) fn sandbox_pod_with_labels(
                         }),
                         ..Default::default()
                     })
+                    .chain(root_boot.then(|| Volume {
+                        name: PROTECTED_VOLUME.to_string(),
+                        empty_dir: Some(EmptyDirVolumeSource {
+                            size_limit: Some(Quantity(PROTECTED_VOLUME_LIMIT.to_string())),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }))
                     .collect(),
             ),
+            init_containers: root_boot.then(|| vec![stage_protected_files(&image)]),
             containers: vec![Container {
                 name: "sandbox".to_string(),
-                image: Some(image),
+                image: Some(image.clone()),
                 env: container_env(sandbox, capability_public_key, root_boot),
-                volume_mounts: Some(vec![
-                    VolumeMount {
-                        name: SCRATCH_VOLUME.to_string(),
-                        mount_path: SCRATCH_PATH.to_string(),
-                        ..Default::default()
-                    },
-                    VolumeMount {
-                        name: SESSION_ROOT_VOLUME.to_string(),
-                        mount_path: SESSION_ROOT_PATH.to_string(),
-                        ..Default::default()
-                    },
-                ]),
+                volume_mounts: Some(
+                    [
+                        VolumeMount {
+                            name: SCRATCH_VOLUME.to_string(),
+                            mount_path: SCRATCH_PATH.to_string(),
+                            ..Default::default()
+                        },
+                        VolumeMount {
+                            name: SESSION_ROOT_VOLUME.to_string(),
+                            mount_path: SESSION_ROOT_PATH.to_string(),
+                            ..Default::default()
+                        },
+                    ]
+                    .into_iter()
+                    .chain(
+                        root_boot
+                            .then(protected_mounts)
+                            .into_iter()
+                            .flatten(),
+                    )
+                    .collect(),
+                ),
                 security_context: Some(container_security_context(root_boot)),
                 resources: Some(ResourceRequirements {
                     limits: Some(limits),
@@ -279,6 +298,10 @@ fn container_env(
         let env = env.get_or_insert_default();
         env.push(plain_env("ALIEN_SANDBOX_IMAGE_COMMAND", "true".to_string()));
         env.push(plain_env(
+            alien_core::sandbox_image::ENV_PROTECTED_MOUNTS,
+            "true".to_string(),
+        ));
+        env.push(plain_env(
             "ALIEN_SANDBOX_ISOLATION",
             alien_core::sandbox_image::Isolation::UidSplit
                 .env_value()
@@ -286,6 +309,76 @@ fn container_env(
         ));
     }
     env
+}
+
+/// The volume the init container fills with the agent binary and `/opt/alien`.
+const PROTECTED_VOLUME: &str = "alien-protected";
+/// Room for the agent binary and the image's `/opt/alien` metadata.
+const PROTECTED_VOLUME_LIMIT: &str = "256Mi";
+const PROTECTED_STAGING_PATH: &str = "/stage";
+const PROTECTED_METADATA_PATH: &str = "/opt/alien";
+
+/// A pod's default seccomp profile blocks `unshare`, so the agent cannot protect its own files
+/// with a private mount namespace here. The pod does it: this init container copies the agent
+/// (from the sandbox image itself, so it is the pinned build the container runs) and `/opt/alien`
+/// into a volume, and the sandbox container mounts that volume read-only over both paths.
+///
+/// It runs as uid 0 only because the image's `/opt/alien` files are root-owned and mode 0600; it
+/// holds no capability, cannot gain one, and has a read-only root filesystem.
+fn stage_protected_files(image: &str) -> Container {
+    Container {
+        name: "stage-protected-files".to_string(),
+        image: Some(image.to_string()),
+        command: Some(vec![
+            alien_core::sandbox_image::AGENT_PATH.to_string(),
+            alien_core::sandbox_image::STAGE_PROTECTED_FILES_ARGUMENT.to_string(),
+            PROTECTED_STAGING_PATH.to_string(),
+        ]),
+        volume_mounts: Some(vec![VolumeMount {
+            name: PROTECTED_VOLUME.to_string(),
+            mount_path: PROTECTED_STAGING_PATH.to_string(),
+            ..Default::default()
+        }]),
+        security_context: Some(SecurityContext {
+            allow_privilege_escalation: Some(false),
+            privileged: Some(false),
+            read_only_root_filesystem: Some(true),
+            run_as_non_root: Some(false),
+            run_as_user: Some(0),
+            capabilities: Some(Capabilities {
+                drop: Some(vec!["ALL".to_string()]),
+                add: None,
+            }),
+            ..Default::default()
+        }),
+        resources: Some(ResourceRequirements {
+            limits: Some(BTreeMap::from([
+                ("cpu".to_string(), Quantity("250m".to_string())),
+                ("memory".to_string(), Quantity("128Mi".to_string())),
+            ])),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+fn protected_mounts() -> Vec<VolumeMount> {
+    vec![
+        VolumeMount {
+            name: PROTECTED_VOLUME.to_string(),
+            mount_path: alien_core::sandbox_image::AGENT_PATH.to_string(),
+            sub_path: Some(alien_core::sandbox_image::STAGED_AGENT_NAME.to_string()),
+            read_only: Some(true),
+            ..Default::default()
+        },
+        VolumeMount {
+            name: PROTECTED_VOLUME.to_string(),
+            mount_path: PROTECTED_METADATA_PATH.to_string(),
+            sub_path: Some(alien_core::sandbox_image::STAGED_METADATA_NAME.to_string()),
+            read_only: Some(true),
+            ..Default::default()
+        },
+    ]
 }
 
 fn plain_env(name: &str, value: String) -> EnvVar {
@@ -767,6 +860,29 @@ mod tests {
             value("ALIEN_SANDBOX_ISOLATION").as_deref(),
             Some("uid-split")
         );
+        assert_eq!(
+            value("ALIEN_SANDBOX_PROTECTED_MOUNTS").as_deref(),
+            Some("true")
+        );
+        // The agent binary and /opt/alien come from a volume mounted read-only, filled by an
+        // init container that holds no capability.
+        let mounts = container.volume_mounts.as_ref().expect("mounts");
+        for path in ["/usr/local/bin/alien-sandbox-agent", "/opt/alien"] {
+            let mount = mounts
+                .iter()
+                .find(|mount| mount.mount_path == path)
+                .unwrap_or_else(|| panic!("{path} is mounted"));
+            assert_eq!(mount.read_only, Some(true), "{path}");
+            assert!(mount.sub_path.is_some(), "{path}");
+        }
+        let init = &spec.init_containers.expect("the staging init container")[0];
+        let init_security = init.security_context.as_ref().expect("init security");
+        assert_eq!(init_security.read_only_root_filesystem, Some(true));
+        assert_eq!(init_security.allow_privilege_escalation, Some(false));
+        let init_caps = init_security.capabilities.as_ref().expect("init caps");
+        assert_eq!(init_caps.drop, Some(vec!["ALL".to_string()]));
+        assert_eq!(init_caps.add, None);
+        assert_eq!(init.image, container.image);
     }
 
     /// Root mode is chosen by the declaration, never by the image: a non-root declaration's pod
@@ -786,7 +902,10 @@ mod tests {
             for variable in container.env.as_ref().expect("env") {
                 assert_ne!(variable.name, "ALIEN_SANDBOX_IMAGE_COMMAND");
                 assert_ne!(variable.name, "ALIEN_SANDBOX_ISOLATION");
+                assert_ne!(variable.name, "ALIEN_SANDBOX_PROTECTED_MOUNTS");
             }
+            assert!(spec.init_containers.is_none());
+            assert_eq!(container.volume_mounts.as_ref().unwrap().len(), 2);
         }
     }
 

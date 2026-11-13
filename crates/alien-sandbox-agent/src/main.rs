@@ -69,6 +69,25 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // The Kubernetes init container: fill the volume the pod mounts read-only over the agent.
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref()
+        == Some(alien_sandbox_agent::read_only_mounts::STAGE_ARGUMENT)
+    {
+        let Some(destination) = std::env::args_os().nth(2) else {
+            eprintln!("usage: alien-sandbox-agent --stage-protected-files <directory>");
+            std::process::exit(2);
+        };
+        if let Err(error) = alien_sandbox_agent::read_only_mounts::stage(
+            std::path::Path::new(&destination),
+            std::path::Path::new("/opt/alien"),
+        ) {
+            eprintln!("cannot stage the protected files: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     tracing_subscriber::fmt::init();
 
     let aws_image_transport =
@@ -109,10 +128,16 @@ fn main() -> Result<()> {
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
             if image_command_enabled()? {
-                alien_sandbox_agent::protected_files::protect(
-                    &state.agent_binary,
-                    std::path::Path::new("/opt/alien"),
-                )
+                // The flag only selects who provides the protection. Either way the agent
+                // refuses to continue unless it is in place.
+                let protect = if std::env::var_os(alien_core::sandbox_image::ENV_PROTECTED_MOUNTS)
+                    .is_some()
+                {
+                    alien_sandbox_agent::read_only_mounts::require
+                } else {
+                    alien_sandbox_agent::protected_files::protect
+                };
+                protect(&state.agent_binary, std::path::Path::new("/opt/alien"))
                 .into_alien_error()
                 .context(failed(
                     "protect agent bootstrap files",
