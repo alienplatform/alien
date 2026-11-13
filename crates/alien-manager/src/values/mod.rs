@@ -22,7 +22,7 @@ mod standalone;
 mod state;
 mod types;
 
-pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
+pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant, ValueMove};
 pub use backend::{KvValueBackend, ValueBackend};
 pub use cipher::{EnvelopeCipher, ValueCipher, DATA_KEY_CACHE_TTL};
 pub use container_env::load_container_env;
@@ -34,7 +34,7 @@ pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
 pub use state::HeldValues;
 pub use types::{
-    SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot, MAX_VALUE_BYTES,
+    ScopeKind, SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot, MAX_VALUE_BYTES,
 };
 
 use std::sync::Arc;
@@ -128,6 +128,39 @@ impl ValueStore {
             return Ok(None);
         }
         stored.meta(scope).map(Some)
+    }
+
+    /// Moves every value of `from` into `to`, then empties `from`. A slot
+    /// that `to` already holds is kept and the source's copy is dropped, so
+    /// repeating a move that stopped halfway finishes it without overwriting
+    /// anything written since. Returns the metadata of what `to` holds for
+    /// the moved slots.
+    pub async fn move_scope(&self, from: &ValueScope, to: &ValueScope) -> Result<Vec<ValueMeta>> {
+        if self.refuse_writes {
+            return Err(durability::ephemeral_state_error());
+        }
+        let mut moved = Vec::new();
+        for stored in self.list(from).await? {
+            let stored = StoredValue {
+                updated_at: now_in_stored_precision(),
+                ..stored
+            };
+            self.backend.put_if_absent(to, &stored).await?;
+            let held = self.get(to, &stored.slot).await?.ok_or_else(|| {
+                ErrorData::internal(format!("Slot '{}' vanished during a move", stored.slot))
+            })?;
+            moved.push(held.meta(to)?);
+            self.backend.delete(from, &stored.slot).await?;
+        }
+        Ok(moved)
+    }
+
+    /// Removes every value of the scope, including the records of served values.
+    pub async fn delete_scope(&self, scope: &ValueScope) -> Result<()> {
+        for stored in self.backend.list(scope).await? {
+            self.backend.delete(scope, &stored.slot).await?;
+        }
+        Ok(())
     }
 
     /// Removes the slot. Removing an empty slot is not an error.
@@ -306,6 +339,91 @@ mod tests {
             read.updated_at
                 .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
         );
+    }
+
+    #[test]
+    fn setup_link_and_registration_scopes_parse_and_do_not_name_a_deployment() {
+        let link = scope("link:lnk_1");
+        assert_eq!(link.kind(), ScopeKind::SetupLink);
+        assert_eq!(link.id(), "lnk_1");
+        assert_eq!(link.deployment_id(), None);
+        assert_eq!(scope("reg:reg_1").kind(), ScopeKind::Registration);
+        assert_eq!(scope("dep:dep_1").deployment_id(), Some("dep_1"));
+        for bad in ["link:", "reg:a:b", "other:x", "lnk_1", "link:a/b"] {
+            assert!(bad.parse::<ValueScope>().is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_move_carries_every_slot_to_the_deployment_and_empties_the_source() {
+        let (_dir, store) = kv_store().await;
+        let (link, dep) = (scope("link:lnk_1"), scope("dep:dep_1"));
+        store
+            .put(&link, &slot("input:key"), ValueKind::Secret, "\"s3\"".into())
+            .await
+            .unwrap();
+        store
+            .put(&link, &slot("env:A"), ValueKind::Plain, "a".into())
+            .await
+            .unwrap();
+        // Another link's values are not touched.
+        store
+            .put(&scope("link:lnk_2"), &slot("env:A"), ValueKind::Plain, "other".into())
+            .await
+            .unwrap();
+
+        let moved = store.move_scope(&link, &dep).await.unwrap();
+        let slots: Vec<_> = moved.iter().map(|m| m.slot.to_string()).collect();
+        assert_eq!(slots, ["env:A", "input:key"]);
+        assert!(store.list(&link).await.unwrap().is_empty());
+        let held = store.list(&dep).await.unwrap();
+        assert_eq!(held[1].value, "\"s3\"");
+        // The digest is keyed by the new scope, and the move reports it.
+        assert_eq!(moved[1].digest, held[1].digest(&dep).unwrap());
+        assert_eq!(store.list(&scope("link:lnk_2")).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn repeating_a_move_keeps_what_the_deployment_holds_since() {
+        let (_dir, store) = kv_store().await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        store
+            .put(&reg, &slot("env:A"), ValueKind::Plain, "from-registration".into())
+            .await
+            .unwrap();
+        store.move_scope(&reg, &dep).await.unwrap();
+        store
+            .put(&dep, &slot("env:A"), ValueKind::Plain, "edited".into())
+            .await
+            .unwrap();
+        // A retry after a lost response finds the source empty.
+        assert!(store.move_scope(&reg, &dep).await.unwrap().is_empty());
+        // A source slot that came back never overwrites the deployment's value.
+        store
+            .put(&reg, &slot("env:A"), ValueKind::Plain, "stale".into())
+            .await
+            .unwrap();
+        store.move_scope(&reg, &dep).await.unwrap();
+        assert_eq!(
+            store.get(&dep, &slot("env:A")).await.unwrap().unwrap().value,
+            "edited"
+        );
+        assert!(store.list(&reg).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_scope_removes_only_that_scope() {
+        let (_dir, store) = kv_store().await;
+        let (link, other) = (scope("link:lnk_1"), scope("link:lnk_10"));
+        for s in [&link, &other] {
+            store
+                .put(s, &slot("env:A"), ValueKind::Secret, "x".into())
+                .await
+                .unwrap();
+        }
+        store.delete_scope(&link).await.unwrap();
+        assert!(store.list(&link).await.unwrap().is_empty());
+        assert_eq!(store.list(&other).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
