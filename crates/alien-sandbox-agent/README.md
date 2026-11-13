@@ -340,10 +340,13 @@ next boot's executable is required independently of the current process.
 - **Jobs.** `start_job`, `poll_job` and `cancel_job` use the agent's job registry, which outlives
   the client that started a job, so another process can poll it. Catalog images, which run
   without the agent, refuse them.
-- **Lifetime.** Azure has no wall-clock ceiling of its own. The binding stamps
-  `alienExpiresAtMs` (the earliest of the request's `timeoutMs`, the declaration's ceiling and a
-  gateway identity's expiry) on each sandbox; every binding verb refuses a sandbox past it and
-  the controller's reaper deletes it. Sandboxes without the label are never reaped.
+- **Lifetime.** Azure has no wall-clock ceiling of its own. A sandbox gets a deadline only from
+  `timeoutMs` on its create request, the declaration's `maxLifetimeSeconds`, or a gateway
+  identity's expiry (the earliest applies); the binding stamps it as `alienExpiresAtMs`, every
+  binding verb refuses a sandbox past it, and the controller's reaper deletes it in groups where a
+  declared ceiling or a gateway applies. With none of these a sandbox lives until it is deleted,
+  as before. Preview capabilities end no later than the sandbox's deadline, and a resumed sandbox
+  gets new ones.
 - **Idempotent create.** Azure assigns ids and two identical creates make two sandboxes, so
   `get_or_create` labels a sandbox with a hash of the requested id and looks for it first; two
   racing creates converge on the oldest.
@@ -363,7 +366,7 @@ no-argument capabilities describe new sessions from the current binding.
 
 ## Azure egress `none` limits
 
-On Azure, `none` blocks TCP/UDP egress and HTTP(S) (Azure's proxy answers 403), but the sandbox can still resolve DNS names through Azure's resolver, which can carry small amounts of data out. The egress policy this client can set has host rules for HTTP(S) and a default action; it has no control for the platform resolver, so nothing here closes that channel. Measurements are in the PR's evidence.
+Under egress `none`, Azure sandboxes can still resolve DNS names through the platform resolver, but they can't open connections.
 
 ## Process lifecycle
 
