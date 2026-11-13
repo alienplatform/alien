@@ -15,6 +15,8 @@ use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info};
 
+const MACHINE_WORKLOAD_SECRETS_READ_ID: &str = "vault/machine-workload-secrets-read";
+
 /// Adds the shared vault for Worker environment secrets and Azure infrastructure secrets.
 /// Management keeps read/write access to the values it supplies here.
 pub struct SecretsVaultMutation;
@@ -45,6 +47,10 @@ impl StackMutation for SecretsVaultMutation {
 
         let explicitly_configured = stack.resources.contains_key(SECRETS_VAULT_ID)
             || config.external_bindings.has(SECRETS_VAULT_ID);
+        // Containers and daemons on AWS machines receive their secret values
+        // through this vault rather than through the machine control plane.
+        let machine_workloads = stack_state.platform == Platform::Aws
+            && !machine_workload_profiles(stack).is_empty();
         let worker_needs_vault = stack.resources.values().any(|entry| {
             entry.config.resource_type() == Worker::RESOURCE_TYPE
                 && (!SecretDelivery::resolve(stack_state.platform, ComputeKind::Worker)
@@ -53,6 +59,7 @@ impl StackMutation for SecretsVaultMutation {
         });
 
         explicitly_configured
+            || machine_workloads
             || alien_core::sandbox_egress::has_sandbox_gateway(stack)
             || worker_needs_vault
             || azure_setup_needs_vault(stack, stack_state, config)
@@ -153,6 +160,10 @@ impl StackMutation for SecretsVaultMutation {
                 !infrastructure_only && !write_only,
                 needs_certificates,
             )?;
+        }
+
+        if stack_state.platform == Platform::Aws {
+            add_machine_workload_secret_read(&mut stack, secrets_vault_id)?;
         }
 
         match stack_state.platform {
@@ -771,6 +782,87 @@ fn deployer_secrets_read_permission_set(keys: &BTreeSet<String>) -> Result<Permi
         message: "Failed to build the deployer secrets read permission set".to_string(),
         resource_id: None,
     })
+}
+
+/// Permission profiles of the containers and daemons that run on machines.
+/// Empty when the stack has no compute cluster.
+fn machine_workload_profiles(stack: &Stack) -> BTreeSet<String> {
+    if !stack
+        .resources
+        .values()
+        .any(|entry| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
+    {
+        return BTreeSet::new();
+    }
+    stack
+        .resources
+        .values()
+        .filter_map(|entry| {
+            entry
+                .config
+                .downcast_ref::<Container>()
+                .map(|container| container.permissions.clone())
+                .or_else(|| {
+                    entry
+                        .config
+                        .downcast_ref::<Daemon>()
+                        .and_then(|daemon| daemon.permissions.clone())
+                })
+        })
+        .collect()
+}
+
+/// The prefix, within the secrets vault, of the secret values the control plane
+/// hands one machine workload profile.
+pub fn machine_workload_secret_prefix(profile: &str) -> String {
+    format!("hz.{profile}.")
+}
+
+/// Let each machine workload profile read its own values from the secrets vault
+/// and nothing else in it. The grant names the profile, so a workload cannot
+/// read what was written for another profile, and the management identity (which
+/// only writes) cannot be used to read them back.
+fn add_machine_workload_secret_read(stack: &mut Stack, vault_name: &str) -> Result<()> {
+    for profile in machine_workload_profiles(stack) {
+        if !stack.permissions.profiles.contains_key(&profile) {
+            continue;
+        }
+        let parameter = format!(
+            "arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{}",
+            vault_naming::parameter_store_parameter_name(
+                "${resourceName}",
+                &format!("{}*", machine_workload_secret_prefix(&profile))
+            )
+        );
+        let set: PermissionSet = serde_json::from_value(serde_json::json!({
+            "id": MACHINE_WORKLOAD_SECRETS_READ_ID,
+            "description": "Reads the secret values handed to this workload profile's machines",
+            "platforms": {
+                "aws": [{
+                    "grant": { "actions": ["ssm:GetParameter"] },
+                    "binding": { "resource": { "resources": [parameter] } }
+                }]
+            }
+        }))
+        .into_alien_error()
+        .context(ErrorData::StackMutationFailed {
+            mutation_name: "SecretsVaultMutation".to_string(),
+            message: "Failed to build the machine workload secrets read permission set"
+                .to_string(),
+            resource_id: None,
+        })?;
+        let permissions = stack
+            .permissions
+            .profiles
+            .get_mut(&profile)
+            .expect("checked above")
+            .0
+            .entry(vault_name.to_string())
+            .or_default();
+        permissions.retain(|existing| existing.id() != MACHINE_WORKLOAD_SECRETS_READ_ID);
+        permissions.push(PermissionSetReference::Inline(set));
+    }
+    Ok(())
 }
 
 /// Add vault/data-read on `vault_name` to each of `profile_names`.
@@ -1679,6 +1771,99 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[tokio::test]
+    async fn machine_workloads_read_only_their_own_profiles_secret_values_on_aws() {
+        let container = |id: &str, profile: &str| {
+            let container = Container::new(id.to_string())
+                .code(ContainerCode::Image {
+                    image: "test:latest".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "1".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "1Gi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions(profile.to_string())
+                .build();
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            }
+        };
+        let mut stack = compute_cluster_stack();
+        stack.resources.insert("web".to_string(), container("web", "web"));
+        stack
+            .resources
+            .insert("jobs".to_string(), container("jobs", "jobs"));
+        stack
+            .resources
+            .insert("management".to_string(), remote_stack_management_entry());
+        stack
+            .permissions
+            .profiles
+            .insert("web".to_string(), PermissionProfile::new());
+        stack
+            .permissions
+            .profiles
+            .insert("jobs".to_string(), PermissionProfile::new());
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Aws);
+
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+        let mutated = SecretsVaultMutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert!(mutated.resources.contains_key("secrets"));
+
+        let aws_resources = |profile: &str| -> Vec<String> {
+            mutated.permissions.profiles[profile].0["secrets"]
+                .iter()
+                .filter(|reference| reference.id() == MACHINE_WORKLOAD_SECRETS_READ_ID)
+                .flat_map(|reference| match reference {
+                    PermissionSetReference::Inline(set) => {
+                        serde_json::to_string(set).into_iter().collect::<Vec<_>>()
+                    }
+                    PermissionSetReference::Name(_) => panic!("expected the inline grant"),
+                })
+                .collect()
+        };
+        let web = aws_resources("web");
+        assert_eq!(web.len(), 1);
+        assert!(web[0].contains("${resourceName}-hz.web.*"), "{}", web[0]);
+        assert!(web[0].contains("ssm:GetParameter"));
+        assert!(!web[0].contains("hz.jobs."), "no other profile's values: {}", web[0]);
+        assert!(!web[0].contains("PutParameter") && !web[0].contains("DeleteParameter"));
+        assert!(aws_resources("jobs")[0].contains("${resourceName}-hz.jobs.*"));
+
+        // Running it again changes nothing.
+        let again = SecretsVaultMutation
+            .mutate(mutated.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            again.permissions.profiles["web"].0["secrets"].len(),
+            mutated.permissions.profiles["web"].0["secrets"].len()
+        );
+
+        // Not on the other clouds, which keep their values in Horizon for now.
+        let gcp = StackState::new(Platform::Gcp);
+        assert!(!SecretsVaultMutation.should_run(&stack, &gcp, &config));
     }
 
     #[tokio::test]
