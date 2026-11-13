@@ -72,8 +72,16 @@ fn azure_availability(
 }
 
 /// The quota counter that limits a model's GlobalStandard deployments.
+///
+/// Azure names the counter after the model's family, which is not always the model name:
+/// `gpt-4.1` is `gpt4.1` and `model-router` is `ModelRouter`.
 fn usage_name(model_name: &str) -> String {
-    format!("OpenAI.GlobalStandard.{model_name}")
+    let counter = match model_name {
+        "gpt-4.1" => "gpt4.1",
+        "model-router" => "ModelRouter",
+        other => other,
+    };
+    format!("OpenAI.GlobalStandard.{counter}")
 }
 
 /// Capacity to request for one deployment, given the units still free in the
@@ -1157,7 +1165,7 @@ mod tests {
                 usages: models
                     .iter()
                     .map(|(model, limit, current)| {
-                        (format!("OpenAI.GlobalStandard.{model}"), *limit, *current)
+                        (usage_name(model), *limit, *current)
                     })
                     .collect(),
                 ..Self::default()
@@ -1308,11 +1316,30 @@ mod tests {
         assert_eq!(data.status.message, None);
     }
 
+    /// The counter names Azure lists in eastus2 (read from a live subscription).
+    #[test]
+    fn counter_names_match_what_azure_lists() {
+        let live = [
+            "OpenAI.GlobalStandard.gpt4.1",
+            "OpenAI.GlobalStandard.ModelRouter",
+            "OpenAI.GlobalStandard.gpt-5.5",
+            "OpenAI.GlobalStandard.gpt-5.6-sol",
+            "OpenAI.GlobalStandard.text-embedding-3-large",
+        ];
+        for (_, model, _, _) in alien_core::ai_catalog::azure_deployments() {
+            assert!(
+                live.iter().any(|l| l.eq_ignore_ascii_case(&usage_name(model))),
+                "no live counter for {model}: {}",
+                usage_name(model)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_deployment_is_capped_to_the_free_quota_and_reports_a_warning() {
         let mut fake = FakeAzure::uniform(1000.0, 0.0);
         for usage in &mut fake.usages {
-            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+            if usage.0 == "OpenAI.GlobalStandard.gpt4.1" {
                 *usage = (usage.0.clone(), 100.0, 90.0);
             }
         }
@@ -1337,7 +1364,7 @@ mod tests {
     async fn a_capacity_warning_survives_a_failed_availability_read() {
         let mut fake = FakeAzure::uniform(1000.0, 0.0);
         for usage in &mut fake.usages {
-            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+            if usage.0 == "OpenAI.GlobalStandard.gpt4.1" {
                 *usage = (usage.0.clone(), 100.0, 90.0);
             }
         }
@@ -1360,7 +1387,7 @@ mod tests {
     async fn no_free_quota_fails_before_creating_any_deployment() {
         let mut fake = FakeAzure::uniform(1000.0, 0.0);
         for usage in &mut fake.usages {
-            if usage.0 == "OpenAI.GlobalStandard.model-router" {
+            if usage.0 == "OpenAI.GlobalStandard.ModelRouter" {
                 *usage = (usage.0.clone(), 30.0, 30.0);
             }
         }
@@ -1383,7 +1410,7 @@ mod tests {
         // used. Re-running must not see that as "no quota left".
         let mut fake = FakeAzure::uniform(1000.0, 0.0);
         for usage in &mut fake.usages {
-            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+            if usage.0 == "OpenAI.GlobalStandard.gpt4.1" {
                 *usage = (usage.0.clone(), 50.0, 50.0);
             }
         }
@@ -1402,7 +1429,7 @@ mod tests {
         // show that is unreadable. The quota must not be used to refuse the deploy.
         let mut fake = FakeAzure::uniform(1000.0, 0.0);
         for usage in &mut fake.usages {
-            if usage.0 == "OpenAI.GlobalStandard.gpt-4.1" {
+            if usage.0 == "OpenAI.GlobalStandard.gpt4.1" {
                 *usage = (usage.0.clone(), 50.0, 50.0);
             }
         }
