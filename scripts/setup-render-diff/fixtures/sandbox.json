@@ -1,0 +1,44 @@
+{
+  "id": "sandbox",
+  "resources": {
+    "runner": {
+      "config": {
+        "id": "runner",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://acme-bundles-{region}/sandbox-bundle/v1/bundle.zip",
+          "type": "image"
+        },
+        "egress": "none",
+        "lifecycle": {
+          "idlePauseSeconds": 600,
+          "maxLifetimeSeconds": 7200
+        },
+        "limits": {
+          "cpu": "2",
+          "memory": "4Gi",
+          "disk": "8Gi"
+        }
+      },
+      "lifecycle": "live",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "assets": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "assets",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

@@ -87,6 +87,18 @@ async fn main() {
             StackSettings::default()
         };
         for format in FORMATS {
+            // A fixture that lists `supportedPlatforms` is rendered for those clouds only.
+            if let Some(platforms) = &stack.supported_platforms {
+                let platform = match format {
+                    "cloudformation" | "terraform-aws" => Platform::Aws,
+                    "terraform-gcp" => Platform::Gcp,
+                    "terraform-azure" => Platform::Azure,
+                    _ => Platform::Kubernetes,
+                };
+                if !platforms.contains(&platform) {
+                    continue;
+                }
+            }
             let rendered = render(&stack, &settings, format)
                 .await
                 .unwrap_or_else(|error| panic!("{name} {format}: {error}"));
