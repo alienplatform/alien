@@ -1,6 +1,5 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
-assertion_line: 41
 expression: buf
 ---
 === Chart.yaml ===
@@ -3668,6 +3667,18 @@ spec:
       ports:
         - protocol: TCP
           port: 988
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "aws" }}
+    # EKS Pod Identity: the Operator's cloud credentials come from the Pod Identity agent
+    # on the node (AWS_CONTAINER_CREDENTIALS_FULL_URI, 169.254.170.23:80, fd00:ec2::23 on IPv6).
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+        - ipBlock:
+            cidr: fd00:ec2::23/128
+      ports:
+        - protocol: TCP
+          port: 80
     {{- end }}
     {{- with .Values.runtime.networkPolicy.egress.extraRules }}
     {{- toYaml . | nindent 4 }}
