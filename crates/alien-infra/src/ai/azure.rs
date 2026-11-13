@@ -1168,7 +1168,7 @@ mod tests {
         fn uniform(limit: f64, current: f64) -> Self {
             let models: Vec<(&str, f64, f64)> = alien_core::ai_catalog::azure_deployments()
                 .into_iter()
-                .map(|(_, model, _)| (model, limit, current))
+                .map(|(_, model, _, _)| (model, limit, current))
                 .collect();
             Self::with_quota(&models)
         }
