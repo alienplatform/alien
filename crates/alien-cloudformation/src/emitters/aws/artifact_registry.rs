@@ -297,7 +297,7 @@ fn replication_resources(
         }
     }
     let conditional = match from_input {
-        Some(input_id) => replication_input_is_conditional(ctx.stack, ctx.platform, input_id)
+        Some(input_id) => replication_input_is_conditional(ctx.stack, deployment_platform(ctx), input_id)
             .ok_or_else(|| {
                 alien_error::AlienError::new(alien_core::ErrorData::GenericError {
                     message: format!(
@@ -496,6 +496,16 @@ pub(crate) fn replication_slot_condition(input_id: &str, slot: usize) -> String 
         "{}ReplicaRegion{slot}Set",
         crate::generator::stack_input_parameter_name_for_id(input_id)
     )
+}
+
+/// The platform the template's parameters are scoped to: on EKS the cloud is AWS but inputs
+/// apply to the Kubernetes deployment, so the lookup must use the same scope as the parameters.
+fn deployment_platform(ctx: &EmitContext<'_>) -> alien_core::Platform {
+    if ctx.targets_kubernetes {
+        alien_core::Platform::Kubernetes
+    } else {
+        ctx.platform
+    }
 }
 
 /// Whether the input is a conditional String parameter (`Some(true)`), a plain list parameter

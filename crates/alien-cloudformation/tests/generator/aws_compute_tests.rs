@@ -762,3 +762,68 @@ fn aws_registry_regions_input_that_is_not_a_parameter_fails_with_a_clear_error()
     .expect("a regions input that is dropped must not render a template that references it");
     assert!(format!("{error:?}").contains("not a deployer-provided input"), "{error:?}");
 }
+
+fn eks_registry_stack(platforms: Vec<alien_core::Platform>) -> Stack {
+    use alien_core::{
+        KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+        KubernetesHeartbeatMode, RemoteStackManagement,
+    };
+    let mut input = alien_core::StackInputDefinition::deployer_boolean(
+        "deploymentRegions",
+        "Deployment regions",
+        "Regions deployments run in",
+        Some(false),
+    );
+    input.kind = alien_core::StackInputKind::StringList;
+    input.default = Some(alien_core::StackInputDefaultValue::StringList(vec![]));
+    input.platforms = Some(platforms);
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions_input = Some("deploymentRegions".to_string());
+    Stack::new("kubernetes".to_string())
+        .inputs(vec![input])
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(registry, ResourceLifecycle::Frozen)
+        .build()
+}
+
+#[test]
+fn eks_registry_regions_input_scoped_to_kubernetes_renders_and_aws_scoped_one_is_refused() {
+    let render = |stack: &Stack| {
+        super::helpers::try_render_built_ins(
+            stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            alien_cloudformation::CloudFormationTarget::Eks,
+            "kubernetes",
+            "eks registry replication input",
+        )
+    };
+    // The parameter is scoped to the Kubernetes deployment; the lookup must find it there.
+    let template = render(&eks_registry_stack(vec![alien_core::Platform::Kubernetes]))
+        .expect("a Kubernetes-scoped regions input is valid on EKS");
+    let value = serde_json::to_value(&template).unwrap();
+    assert!(value["Resources"]
+        .as_object()
+        .unwrap()
+        .values()
+        .any(|r| r["Type"] == "Custom::EcrReplicationRule"));
+    // An input that is not a parameter of this template stays a clear generation error.
+    assert!(render(&eks_registry_stack(vec![alien_core::Platform::Aws])).is_err());
+}
+
+#[test]
+fn plain_aws_registry_regions_input_still_renders() {
+    render_template_json(&input_registry_stack());
+}
