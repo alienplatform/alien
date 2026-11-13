@@ -7459,10 +7459,12 @@ mod sandbox_build_tests {
                     (uid == 0 && !legacy_default) || platform == Platform::Azure;
                 if matches!(platform, Platform::Local | Platform::Kubernetes) {
                     let admitted = sandbox.validate_for_platform(platform);
-                    if uid == 0 && !user.is_empty() {
+                    if platform == Platform::Local && uid == 0 && !user.is_empty() {
                         assert_eq!(admitted.unwrap_err().code, "SANDBOX_CAPABILITY_UNSUPPORTED");
                     } else {
-                        admitted.expect("absent USER must retain the released non-root runtime");
+                        // Kubernetes admits a root image now (bounded boot capabilities, `none`
+                        // egress here); Local still refuses it above.
+                        admitted.expect("this image must be admitted on the platform");
                     }
                 }
                 assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
