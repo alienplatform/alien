@@ -2146,6 +2146,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),

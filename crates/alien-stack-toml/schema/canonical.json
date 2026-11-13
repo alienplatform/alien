@@ -911,6 +911,9 @@
             "null"
           ]
         },
+        "commandsCapabilityFile": {
+          "type": "boolean"
+        },
         "commandsEnabled": {
           "type": "boolean"
         },
@@ -1336,6 +1339,9 @@
             "array",
             "null"
           ]
+        },
+        "commandsCapabilityFile": {
+          "type": "boolean"
         },
         "commandsEnabled": {
           "type": "boolean"
@@ -3039,6 +3045,9 @@
               "$ref": "#/components/schemas/ReadinessProbe"
             }
           ]
+        },
+        "runtimeIdentityExchange": {
+          "type": "boolean"
         },
         "timeoutSeconds": {
           "type": "integer"

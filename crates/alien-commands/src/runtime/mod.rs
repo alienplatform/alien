@@ -22,7 +22,7 @@ pub const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
 
 /// Response upload plus final status submission must finish inside the
 /// operator's additional 60-second lease headroom.
-const COMMAND_RESPONSE_SUBMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const COMMAND_RESPONSE_SUBMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Per-command execution budget: `min(envelope.deadline, lease_expiry −
 /// [`LEASE_SAFETY_MARGIN`])`. The LEASE bound is clamped to now; an
@@ -493,6 +493,7 @@ impl LeaseClient {
         // LB) with reqwest's no-timeout default would freeze command intake
         // for the whole process, not just one request.
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
             .build()
             .ok()?;
@@ -581,6 +582,75 @@ impl LeaseClient {
         }
 
         Ok(lease_response.leases)
+    }
+
+    /// Refresh only the completion authority for an already dispatched command.
+    /// The receiver's current target-scoped bearer authorizes the request.
+    pub async fn refresh_response_context(
+        &self,
+        envelope: &mut Envelope,
+        lease_id: &str,
+        token: &str,
+    ) -> Result<()> {
+        let mut endpoint = self.endpoint.clone();
+        endpoint
+            .path_segments_mut()
+            .map_err(|_| {
+                AlienError::new(ErrorData::Other {
+                    message: "Invalid commands endpoint".into(),
+                })
+            })?
+            .pop()
+            .push(&envelope.command_id)
+            .push("response-context");
+        endpoint.query_pairs_mut().append_pair("leaseId", lease_id);
+        let mut response = self
+            .client
+            .get(endpoint.clone())
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| {
+                AlienError::new(ErrorData::HttpOperationFailed {
+                    message: "Cannot refresh command response context".into(),
+                    method: Some("GET".into()),
+                    url: Some(endpoint.to_string()),
+                })
+            })?;
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(AlienError::new(ErrorData::CommandReceiverUnauthorized {
+                operation: "response context refresh".into(),
+                url: endpoint.to_string(),
+            }));
+        }
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::CommandReceiverRequestRejected {
+                operation: "response context refresh".into(),
+                status: status.as_u16(),
+                url: endpoint.to_string(),
+            }));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| {
+            AlienError::new(ErrorData::Other {
+                message: "Cannot read command response context".into(),
+            })
+        })? {
+            if bytes.len() + chunk.len() > 64 * 1024 {
+                return Err(AlienError::new(ErrorData::Other {
+                    message: "Command response context exceeds limit".into(),
+                }));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        envelope.response_handling = serde_json::from_slice(&bytes).map_err(|_| {
+            AlienError::new(ErrorData::Other {
+                message: "Invalid command response context".into(),
+            })
+        })?;
+        resolve_envelope_urls(envelope, &self.endpoint);
+        Ok(())
     }
 
     /// Release a lease during graceful shutdown or duplicate suppression.

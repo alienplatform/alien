@@ -247,7 +247,9 @@ pub(crate) async fn build_sandbox_agent_image(
                 .protocol(protocol.clone())
                 .auth(base_auth.clone())
                 .blob_cache(cache.clone())
-                .user("0:0")
+                // A uid-split agent starts as root and drops before every spawn; a platform one
+                // starts as the exec user, because the runtime refuses root.
+                .user(&contract.user().unwrap_or_else(|| "0:0".to_string()))
                 .expose_port(&contract.exposed_port())
                 .entrypoint(vec![AGENT_PATH.to_string()])
                 .cmd(Vec::new());

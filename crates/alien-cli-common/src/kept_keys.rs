@@ -154,6 +154,7 @@ mod tests {
             available: Some(true),
             fingerprint,
             wrapping_key_id: "wrap".to_string(),
+            disk_encryption_set_id: None,
         }
     }
 

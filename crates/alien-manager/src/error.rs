@@ -308,6 +308,17 @@ pub enum ErrorData {
     )]
     Forbidden { reason: String },
 
+    /// A code made from a deployment token cannot be issued or redeemed once
+    /// the deployment's operator has a key.
+    #[error(
+        code = "ENROLLMENT_KEY_EXISTS",
+        message = "Deployment '{deployment_id}' already has an operator key; ask an administrator for an enrollment code",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    EnrollmentKeyExists { deployment_id: String },
+
     /// A value is larger than the store accepts.
     #[error(
         code = "VALUE_TOO_LARGE",

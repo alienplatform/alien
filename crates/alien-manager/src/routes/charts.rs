@@ -27,6 +27,8 @@
 //! never kept, so they are unknown: serving another chart under them is what
 //! made versions mutable.
 
+use std::sync::Arc;
+
 use alien_core::{DeploymentModel, Platform, StackSettings};
 use alien_helm::{
     apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
@@ -62,7 +64,7 @@ const CHART_MEDIA_TYPE: &str = "application/vnd.cncf.helm.chart.content.v1.tar+g
 const SETUP_FINGERPRINT_VERSION: u32 = 1;
 
 /// Chart settings for a manager that serves charts.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChartSettings {
     /// Operator image as configured, `repository:tag`.
     pub operator_image: String,
@@ -71,6 +73,19 @@ pub struct ChartSettings {
     /// to this upstream. Unset for an image without a registry (a local
     /// image), which charts reference as is.
     pub operator_upstream: Option<super::operator_image::UpstreamImage>,
+    /// Checks the enrollment code an operator pulls its own image with
+    /// before it enrolls. Set by the builder from the identity verifier.
+    pub enrollment_codes: Option<Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>>,
+}
+
+impl std::fmt::Debug for ChartSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartSettings")
+            .field("operator_image", &self.operator_image)
+            .field("operator_upstream", &self.operator_upstream)
+            .field("enrollment_codes", &self.enrollment_codes.is_some())
+            .finish()
+    }
 }
 
 impl ChartSettings {
@@ -94,6 +109,7 @@ impl ChartSettings {
         Self {
             operator_image,
             operator_upstream,
+            enrollment_codes: None,
         }
     }
 

@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -13,8 +14,9 @@ use bytes::Bytes;
 use http::{Request, Response};
 use http_body_util::combinators::UnsyncBoxBody;
 use hyper::{body::Incoming, client::conn::http2};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::{h2_settings, ErrorData, Result};
@@ -24,6 +26,28 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Request body sent into a tunnel.
 pub type TunnelBody = UnsyncBoxBody<Bytes, BoxError>;
+
+// Hyper runs its HTTP/2 transport in executor tasks. Cancel those tasks with
+// the serving future so an open response body cannot retain the connection.
+#[derive(Clone)]
+struct ConnectionExecutor(CancellationToken);
+
+impl<F> hyper::rt::Executor<F> for ConnectionExecutor
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, future: F) {
+        let cancelled = self.0.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => {},
+                _ = future => {},
+            }
+        });
+    }
+}
 
 struct Connection {
     id: u64,
@@ -56,7 +80,9 @@ impl TunnelRegistry {
     where
         IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
-        let (sender, connection) = http2::Builder::new(TokioExecutor::new())
+        let cancellation = CancellationToken::new();
+        let _cancel_on_drop = cancellation.clone().drop_guard();
+        let (sender, connection) = http2::Builder::new(ConnectionExecutor(cancellation))
             .timer(TokioTimer::new())
             .initial_stream_window_size(h2_settings::INITIAL_STREAM_WINDOW)
             .initial_connection_window_size(h2_settings::INITIAL_CONNECTION_WINDOW)

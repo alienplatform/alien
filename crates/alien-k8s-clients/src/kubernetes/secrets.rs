@@ -28,6 +28,9 @@ pub trait SecretsApi: Send + Sync + std::fmt::Debug {
     ) -> Result<List<Secret>>;
     async fn update_secret(&self, namespace: &str, name: &str, secret: &Secret) -> Result<Secret>;
     async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()>;
+    /// Deletes the Secret only while it is still the object with this uid, so a Secret that was
+    /// deleted and created again under the same name is left alone.
+    async fn delete_secret_if_uid(&self, namespace: &str, name: &str, uid: &str) -> Result<()>;
 }
 
 impl KubernetesClient {
@@ -157,6 +160,29 @@ impl KubernetesClient {
         sign_send_json(builder, &self.auth_config()).await
     }
 
+    /// Delete the observed secret without deleting a replacement with the same name.
+    pub async fn delete_secret_if_uid(&self, namespace: &str, name: &str, uid: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/namespaces/{}/secrets/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self
+            .client()
+            .request(Method::DELETE, &url)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::json!({
+                    "apiVersion": "v1",
+                    "kind": "DeleteOptions",
+                    "preconditions": { "uid": uid }
+                })
+                .to_string(),
+            );
+        sign_send_no_response(builder, &self.auth_config()).await
+    }
+
     /// Delete a secret in the specified namespace
     pub async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()> {
         let url = format!(
@@ -201,5 +227,9 @@ impl SecretsApi for KubernetesClient {
 
     async fn delete_secret(&self, namespace: &str, name: &str) -> Result<()> {
         self.delete_secret(namespace, name).await
+    }
+
+    async fn delete_secret_if_uid(&self, namespace: &str, name: &str, uid: &str) -> Result<()> {
+        self.delete_secret_if_uid(namespace, name, uid).await
     }
 }

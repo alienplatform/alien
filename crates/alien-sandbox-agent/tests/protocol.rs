@@ -127,6 +127,7 @@ fn claims() -> SandboxCapabilityClaims {
         generation: GENERATION,
         expires_at: chrono::Utc::now().timestamp() + 300,
         key_id: "k1".to_string(),
+        port: None,
     }
 }
 
@@ -1762,4 +1763,184 @@ async fn starting_an_interactive_command_without_a_capability_is_refused() {
         .expect("responds");
     assert_eq!(response.status(), 401);
     assert!(agent.state.interactive.is_empty());
+}
+
+/// The declared preview ports are the process environment, so the tests that set them run one at a
+/// time.
+static PREVIEW_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// A server standing in for the code a sandbox runs. Answers every request with `hello` and keeps
+/// the head of each request it saw.
+async fn upstream_server() -> (u16, Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind upstream");
+    let port = listener.local_addr().expect("address").port();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = Arc::clone(&seen);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let kept = Arc::clone(&kept);
+            tokio::spawn(async move {
+                let mut buffer = vec![0u8; 8192];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                kept.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buffer[..read]).to_string());
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\nX-From: upstream\r\n\r\nhello",
+                    )
+                    .await;
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// Preview reaches a declared port with a preview capability for exactly that port, and every
+/// other combination is refused before anything is forwarded.
+#[tokio::test]
+async fn preview_forwards_only_a_declared_port_to_a_capability_for_that_port() {
+    let _env = PREVIEW_ENV.lock().await;
+    let agent = Agent::start().await;
+    let (port, seen) = upstream_server().await;
+    let (undeclared, undeclared_seen) = upstream_server().await;
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", format!("{port},8971"));
+    let preview = |port: u16| {
+        let mut preview = claims();
+        preview.operation = SandboxOperationClass::Preview;
+        preview.port = Some(port);
+        agent.mint(preview)
+    };
+    let client = reqwest::Client::new();
+    let get = |path: String, token: String| {
+        let client = client.clone();
+        let base = agent.base_url.clone();
+        async move {
+            client
+                .get(format!("{base}{path}"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .expect("request")
+        }
+    };
+
+    let ok = get(format!("/v1/preview/{port}/a/b?x=1"), preview(port)).await;
+    assert_eq!(ok.status(), 200);
+    assert_eq!(ok.headers()["x-from"], "upstream");
+    assert_eq!(ok.text().await.unwrap(), "hello");
+    {
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].starts_with("GET /a/b?x=1 HTTP/1.0"), "{}", seen[0]);
+        assert!(
+            !seen[0].to_ascii_lowercase().contains("authorization"),
+            "the capability must not reach the code inside: {}",
+            seen[0]
+        );
+    }
+
+    // A capability for another port, for another class, for another pod, or already expired.
+    let mut wrong_pod = claims();
+    wrong_pod.operation = SandboxOperationClass::Preview;
+    wrong_pod.port = Some(port);
+    wrong_pod.session_id = "another-pod".to_string();
+    let mut expired = claims();
+    expired.operation = SandboxOperationClass::Preview;
+    expired.port = Some(port);
+    expired.expires_at = chrono::Utc::now().timestamp() - 1;
+    for (label, token) in [
+        ("a capability for another port", preview(port + 1)),
+        ("an execute capability", agent.capability()),
+        ("another pod's capability", agent.mint(wrong_pod)),
+        ("an expired capability", agent.mint(expired)),
+    ] {
+        let refused = get(format!("/v1/preview/{port}/"), token).await;
+        assert!(
+            [401, 403].contains(&refused.status().as_u16()),
+            "{label} must be refused, got {}",
+            refused.status()
+        );
+    }
+    // A port the sandbox did not declare, even with a capability minted for it.
+    let refused = get(format!("/v1/preview/{undeclared}/"), preview(undeclared)).await;
+    assert_eq!(refused.status(), 403);
+    assert!(undeclared_seen.lock().unwrap().is_empty());
+    // The agent's own port, even when declared and minted for.
+    let refused = get("/v1/preview/8971/".to_string(), preview(8971)).await;
+    assert_eq!(refused.status(), 403);
+    // No credential at all.
+    let anonymous = client
+        .get(format!("{}/v1/preview/{port}/", agent.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), 401);
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "only the one valid request was forwarded"
+    );
+}
+
+/// A WebSocket upgrade is allowed on a previewed port and is then a plain byte stream until the
+/// capability expires: what the client writes reaches the sandbox's server and its answer comes
+/// back.
+#[tokio::test]
+async fn preview_passes_an_upgrade_through_as_a_byte_stream() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _env = PREVIEW_ENV.lock().await;
+    let agent = Agent::start().await;
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind upstream");
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buffer = vec![0u8; 4096];
+        let _ = stream.read(&mut buffer).await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+            .await
+            .unwrap();
+        let read = stream.read(&mut buffer).await.unwrap();
+        let _ = stream.write_all(&buffer[..read]).await;
+    });
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", port.to_string());
+    let mut preview = claims();
+    preview.operation = SandboxOperationClass::Preview;
+    preview.port = Some(port);
+    let token = agent.mint(preview);
+    let address = agent.base_url.trim_start_matches("http://").to_string();
+    let mut client = tokio::net::TcpStream::connect(&address).await.unwrap();
+    client
+        .write_all(
+            format!(
+                "GET /v1/preview/{port}/socket HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut head = vec![0u8; 512];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut head))
+        .await
+        .expect("a response")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&head[..read]).starts_with("HTTP/1.1 101"));
+    client.write_all(b"ping").await.unwrap();
+    let mut echoed = [0u8; 4];
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.read_exact(&mut echoed),
+    )
+    .await
+    .expect("an echo")
+    .unwrap();
+    assert_eq!(&echoed, b"ping");
 }

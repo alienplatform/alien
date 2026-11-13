@@ -511,6 +511,7 @@ mod tests {
                 generation: 1,
                 expires_at: chrono::Utc::now().timestamp() + 300,
                 key_id: "k1".to_string(),
+                port: None,
             },
             &keys.sk,
         )

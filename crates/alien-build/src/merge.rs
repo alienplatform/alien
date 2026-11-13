@@ -113,6 +113,11 @@ fn merge_platform(
         let mut tarballs: BTreeMap<String, PathBuf> = BTreeMap::new();
         let mut source_locations = BTreeSet::new();
         let mut is_local = false;
+        // Starts true and is narrowed by every partial that built the resource: one target
+        // linked to an older receiver means the merged release must still send the token.
+        let mut reads_capability_file = true;
+        // The same rule for the Worker runtime's identity exchange.
+        let mut exchanges_identity = true;
 
         for partial in partials {
             let Some(image) = compute_image(&partial.stack, &resource_id) else {
@@ -132,6 +137,11 @@ fn merge_platform(
                 )
             }));
             is_local = true;
+            // Only a partial that built the resource knows its receiver; all must read the file.
+            reads_capability_file &= partial
+                .stack
+                .command_receiver_reads_capability_file(&resource_id);
+            exchanges_identity &= worker_exchanges_identity(&partial.stack, &resource_id);
             for tar in read_oci_tarballs(&artifact_dir)? {
                 let name = tar
                     .file_name()
@@ -183,6 +193,8 @@ fn merge_platform(
             &resource_id,
             absolute.to_string_lossy().into_owned(),
         );
+        set_commands_capability_file(&mut merged_stack, &resource_id, reads_capability_file);
+        set_worker_identity_exchange(&mut merged_stack, &resource_id, exchanges_identity);
         for (source_platform, basename) in source_locations {
             artifact_rewrites.insert(
                 (source_platform, resource_id.clone(), basename),
@@ -277,6 +289,9 @@ fn blank_images(stack: &Stack) -> Stack {
     let mut blanked = stack.clone();
     let ids: Vec<String> = blanked.resources().map(|(id, _)| id.clone()).collect();
     for id in ids {
+        // Only the partial that built a resource records its receiver.
+        set_commands_capability_file(&mut blanked, &id, false);
+        set_worker_identity_exchange(&mut blanked, &id, false);
         set_compute_image(&mut blanked, &id, String::new());
     }
     blanked
@@ -329,6 +344,39 @@ fn set_compute_image(stack: &mut Stack, resource_id: &str, image: String) {
             image,
             bundled_from: None,
         };
+    }
+}
+
+/// Set the build's record that a Container or Daemon's command receiver reads the capability
+/// file. No-op for other resources.
+fn set_commands_capability_file(stack: &mut Stack, resource_id: &str, reads: bool) {
+    let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == resource_id) else {
+        return;
+    };
+    if let Some(container) = entry.config.downcast_mut::<Container>() {
+        container.commands_capability_file = reads;
+    } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+        daemon.commands_capability_file = reads;
+    }
+}
+
+/// Whether the build recorded that a Worker's runtime exchanges its identity. False for
+/// everything else, so a non-Worker never changes the merged answer by itself.
+fn worker_exchanges_identity(stack: &Stack, resource_id: &str) -> bool {
+    stack
+        .resources()
+        .find(|(id, _)| *id == resource_id)
+        .and_then(|(_, entry)| entry.config.downcast_ref::<Worker>())
+        .is_some_and(|worker| worker.runtime_identity_exchange)
+}
+
+/// Set the build's record for a Worker's runtime. No-op for other resources.
+fn set_worker_identity_exchange(stack: &mut Stack, resource_id: &str, exchanges: bool) {
+    let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == resource_id) else {
+        return;
+    };
+    if let Some(worker) = entry.config.downcast_mut::<Worker>() {
+        worker.runtime_identity_exchange = exchanges;
     }
 }
 
@@ -672,6 +720,139 @@ mod tests {
         let merged_dir = PathBuf::from(&image);
         assert!(merged_dir.join("darwin-aarch64.oci.tar").exists());
         assert!(merged_dir.join("linux-x64.oci.tar").exists());
+    }
+
+    #[test]
+    fn merged_stack_keeps_the_receiver_marker_of_the_partials_that_built_it() {
+        // `agent` is built by both groups and marked in each; `web` is built by one group and
+        // marked there, and left as source (so unmarked) by the other. Neither difference may
+        // fail the compatibility check, and the merged stack keeps the marker.
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        let write_partial_with_markers = |partial: &str, tarball: &str, builds_web: bool| {
+            let platform_dir = root.path().join(partial).join("build").join("local");
+            let built_dir = |resource: &str| -> String {
+                let dir = platform_dir.join(format!("{resource}-{partial}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(tarball), tarball.as_bytes()).unwrap();
+                dir.canonicalize().unwrap().to_string_lossy().into_owned()
+            };
+            let mut agent = Daemon::new("agent".to_string())
+                .permissions("execution".to_string())
+                .code(DaemonCode::Image {
+                    image: built_dir("agent"),
+                })
+                .build();
+            agent.commands_capability_file = true;
+            let web = if builds_web {
+                let mut web = container("web", &built_dir("web"));
+                web.commands_capability_file = true;
+                web
+            } else {
+                container_source("web")
+            };
+            let stack = Stack::new("merge-test".to_string())
+                .add(agent, ResourceLifecycle::Live)
+                .add(web, ResourceLifecycle::Live)
+                .build();
+            std::fs::write(
+                platform_dir.join("stack.json"),
+                serde_json::to_string_pretty(&stack).unwrap(),
+            )
+            .unwrap();
+        };
+        write_partial_with_markers("arm", "linux-aarch64.oci.tar", true);
+        write_partial_with_markers("darwin", "darwin-aarch64.oci.tar", false);
+
+        merge_build_outputs(root.path(), out.path()).unwrap();
+        let merged: Stack = read_stack(&out.path().join("build/local/stack.json")).unwrap();
+        assert!(merged.command_receiver_reads_capability_file("agent"));
+        assert!(merged.command_receiver_reads_capability_file("web"));
+    }
+
+    #[test]
+    fn merged_stack_is_unmarked_when_any_built_partial_is_unmarked() {
+        // `agent` is built by both groups but only one links the newer receiver, so the merged
+        // release must stay unmarked. `web` is built and marked by one group and skipped (left
+        // as source) by the other: the skipped partial does not count, so it stays marked.
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        let write_partial_with_markers =
+            |partial: &str, tarball: &str, agent_marked: bool, builds_web: bool| {
+                let platform_dir = root.path().join(partial).join("build").join("local");
+                let built_dir = |resource: &str| -> String {
+                    let dir = platform_dir.join(format!("{resource}-{partial}"));
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join(tarball), tarball.as_bytes()).unwrap();
+                    dir.canonicalize().unwrap().to_string_lossy().into_owned()
+                };
+                let mut agent = Daemon::new("agent".to_string())
+                    .permissions("execution".to_string())
+                    .code(DaemonCode::Image {
+                        image: built_dir("agent"),
+                    })
+                    .build();
+                agent.commands_capability_file = agent_marked;
+                let web = if builds_web {
+                    let mut web = container("web", &built_dir("web"));
+                    web.commands_capability_file = true;
+                    web
+                } else {
+                    container_source("web")
+                };
+                let stack = Stack::new("merge-test".to_string())
+                    .add(agent, ResourceLifecycle::Live)
+                    .add(web, ResourceLifecycle::Live)
+                    .build();
+                std::fs::write(
+                    platform_dir.join("stack.json"),
+                    serde_json::to_string_pretty(&stack).unwrap(),
+                )
+                .unwrap();
+            };
+        write_partial_with_markers("arm", "linux-aarch64.oci.tar", true, true);
+        write_partial_with_markers("x64", "linux-x64.oci.tar", false, false);
+
+        merge_build_outputs(root.path(), out.path()).unwrap();
+        let merged: Stack = read_stack(&out.path().join("build/local/stack.json")).unwrap();
+        assert!(!merged.command_receiver_reads_capability_file("agent"));
+        assert!(merged.command_receiver_reads_capability_file("web"));
+    }
+
+    #[test]
+    fn merged_worker_records_identity_exchange_only_when_every_built_partial_does() {
+        let merge = |marks: [bool; 2]| {
+            let root = tempdir().unwrap();
+            let out = tempdir().unwrap();
+            for (partial, marked) in ["arm", "x64"].into_iter().zip(marks) {
+                let platform_dir = root.path().join(partial).join("build").join("aws");
+                let dir = platform_dir.join(format!("api-{partial}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("linux-aarch64.oci.tar"), b"image").unwrap();
+                let mut worker = alien_core::Worker::new("api".to_string())
+                    .permissions("execution".to_string())
+                    .code(alien_core::WorkerCode::Image {
+                        image: dir.canonicalize().unwrap().to_string_lossy().into_owned(),
+                    })
+                    .build();
+                worker.runtime_identity_exchange = marked;
+                let stack = Stack::new("merge-test".to_string())
+                    .add(worker, ResourceLifecycle::Live)
+                    .build();
+                std::fs::write(
+                    platform_dir.join("stack.json"),
+                    serde_json::to_string_pretty(&stack).unwrap(),
+                )
+                .unwrap();
+            }
+            merge_build_outputs(root.path(), out.path()).unwrap();
+            let merged: Stack = read_stack(&out.path().join("build/aws/stack.json")).unwrap();
+            worker_exchanges_identity(&merged, "api")
+        };
+        assert!(merge([true, true]));
+        assert!(!merge([true, false]));
+        assert!(!merge([false, true]));
+        assert!(!merge([false, false]));
     }
 
     #[test]

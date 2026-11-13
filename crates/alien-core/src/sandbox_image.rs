@@ -200,6 +200,19 @@ pub const AZURE_SANDBOX: SandboxImage = SandboxImage {
     isolation: Isolation::UidSplit,
 };
 
+/// A Kubernetes sandbox pod. The cluster's sandboxed runtime is the tenant boundary and refuses to
+/// start a root container here (`runAsNonRoot`), so the agent starts as the exec uid and
+/// supervises under it. Anything on the cluster network can reach the pod, so a caller presents a
+/// signed capability. The exec uid is a default: a non-root base `USER` replaces it.
+pub const KUBERNETES_SANDBOX: SandboxImage = SandboxImage {
+    exec_uid: 1000,
+    exec_gid: 1000,
+    session_root: "/sandbox",
+    port: AGENT_PORT,
+    authorization: Authorization::Capability,
+    isolation: Isolation::Platform,
+};
+
 /// The image every default sandbox builds on, by index digest so both architectures are pinned.
 ///
 /// Bumped by hand, then regenerated: Renovate skips the generated Dockerfiles and does not read

@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_query::{Expr, Query, SqliteQueryBuilder};
 use std::sync::Arc;
+use turso::transaction::TransactionBehavior;
 
 use super::database::{db_error, RowParser, SqliteDatabase};
 use super::migrations::Tokens;
@@ -27,6 +28,7 @@ impl SqliteTokenStore {
             "deployment-group" => TokenType::DeploymentGroup,
             "deployment" => TokenType::Deployment,
             "tunnel" => TokenType::Tunnel,
+            "commands-receiver" => TokenType::CommandsReceiver,
             other => return Err(db_error(&format!("Unknown token type: {}", other))),
         };
         Ok(TokenRecord {
@@ -44,6 +46,11 @@ impl SqliteTokenStore {
 #[async_trait]
 impl TokenStore for SqliteTokenStore {
     async fn create_token(&self, params: CreateTokenParams) -> Result<TokenRecord, AlienError> {
+        if params.token_type == TokenType::CommandsReceiver {
+            return Err(db_error(
+                "Commands keys are stored with create_commands_key, which checks the key generation",
+            ));
+        }
         let id = alien_core::new_id(alien_core::IdType::Token);
         let now = Utc::now();
 
@@ -114,16 +121,50 @@ impl TokenStore for SqliteTokenStore {
         }
     }
 
+    /// Deleting a deployment token also deletes that deployment's unused
+    /// enrollment codes made from a deployment token, in the same transaction.
+    /// A code made from a token must not outlive the revocation of the token.
     async fn delete_token(&self, id: &str) -> Result<(), AlienError> {
-        let sql = Query::delete()
-            .from_table(Tokens::Table)
-            .and_where(Expr::col(Tokens::Id).eq(id))
-            .to_string(SqliteQueryBuilder);
-
-        let rows_affected = self.db.execute_returning_rows_affected(&sql).await?;
-        if rows_affected == 0 {
+        let failed = || GenericError {
+            message: "Token deletion failed".to_string(),
+        };
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        let mut rows = tx
+            .query(
+                "SELECT type, deployment_id FROM tokens WHERE id = ?1",
+                [id.to_owned()],
+            )
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        let Some(row) = rows.next().await.into_alien_error().context(failed())? else {
             return Err(db_error(&format!("Token {} not found", id)));
+        };
+        let p = RowParser::new(&row);
+        let token_type = p.string(0, "type")?;
+        let deployment_id = p.optional_string(1, "deployment_id")?;
+        drop(rows);
+
+        tx.execute("DELETE FROM tokens WHERE id = ?1", [id.to_owned()])
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        if let (true, Some(deployment_id)) = (token_type == "deployment", deployment_id) {
+            tx.execute(
+                "DELETE FROM runtime_enrollment_codes \
+                 WHERE deployment_id = ?1 AND from_token = 1 AND initial_key_hash IS NULL",
+                [deployment_id],
+            )
+            .await
+            .into_alien_error()
+            .context(failed())?;
         }
+        tx.commit().await.into_alien_error().context(failed())?;
         Ok(())
     }
 
@@ -158,5 +199,104 @@ impl TokenStore for SqliteTokenStore {
             results.push(Self::parse_token(&row)?);
         }
         Ok(results)
+    }
+
+    async fn commands_key_generation(&self, deployment_id: &str) -> Result<u64, AlienError> {
+        let conn = self.db.conn().lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT generation FROM commands_key_generations WHERE deployment_id = ?1",
+                [deployment_id.to_owned()],
+            )
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to query the commands key generation".to_string(),
+            })?;
+        let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+            message: "Failed to read the commands key generation".to_string(),
+        })?
+        else {
+            return Ok(0);
+        };
+        Ok(RowParser::new(&row)
+            .i64(0, "generation")?
+            .try_into()
+            .unwrap_or_default())
+    }
+
+    async fn create_commands_key(
+        &self,
+        deployment_id: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        generation: u64,
+    ) -> Result<Option<TokenRecord>, AlienError> {
+        let id = alien_core::new_id(alien_core::IdType::Token);
+        let now = Utc::now();
+        let conn = self.db.conn().lock().await;
+        // One statement: the row is inserted only while the generation is still
+        // the one the key was derived at.
+        let inserted = conn
+            .execute(
+                "INSERT INTO tokens (id, type, key_prefix, key_hash, deployment_group_id, deployment_id, created_at) \
+                 SELECT ?1, 'commands-receiver', ?2, ?3, NULL, ?4, ?5 \
+                 WHERE COALESCE((SELECT generation FROM commands_key_generations WHERE deployment_id = ?4), 0) = ?6",
+                (
+                    id.clone(),
+                    key_prefix.to_owned(),
+                    key_hash.to_owned(),
+                    deployment_id.to_owned(),
+                    now.to_rfc3339(),
+                    i64::try_from(generation).unwrap_or(i64::MAX),
+                ),
+            )
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to store the commands key".to_string(),
+            })?;
+        if inserted == 0 {
+            return Ok(None);
+        }
+        Ok(Some(TokenRecord {
+            id,
+            token_type: TokenType::CommandsReceiver,
+            key_prefix: key_prefix.to_owned(),
+            key_hash: key_hash.to_owned(),
+            deployment_group_id: None,
+            deployment_id: Some(deployment_id.to_owned()),
+            created_at: now,
+        }))
+    }
+
+    async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError> {
+        let failed = || GenericError {
+            message: "Commands key revocation failed".to_string(),
+        };
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        tx.execute(
+            "DELETE FROM tokens WHERE type = 'commands-receiver' AND deployment_id = ?1",
+            [deployment_id.to_owned()],
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.execute(
+            "INSERT INTO commands_key_generations (deployment_id, generation) VALUES (?1, 1) \
+             ON CONFLICT(deployment_id) DO UPDATE SET \
+             generation = commands_key_generations.generation + 1",
+            [deployment_id.to_owned()],
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.commit().await.into_alien_error().context(failed())?;
+        Ok(())
     }
 }

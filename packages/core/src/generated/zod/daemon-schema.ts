@@ -18,6 +18,7 @@ get "code"(){
                 return DaemonCodeSchema
               },
 "command": z.array(z.string()).describe("Command to override the image default.").nullish(),
+"commandsCapabilityFile": z.optional(z.boolean().describe("Set by `alien build` when the daemon's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.")),
 "commandsEnabled": z.optional(z.boolean().default(false).describe("Whether an app-owned command receiver can lease pending commands for\nthis Daemon and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.").optional()

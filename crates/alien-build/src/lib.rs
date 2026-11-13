@@ -1,4 +1,5 @@
 pub(crate) mod command_output;
+mod commands_receiver;
 pub mod dependencies;
 mod dockerignore;
 pub mod error;
@@ -258,6 +259,18 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
     let stack_id = stack.id().to_string();
 
+    // Only this build may say a receiver reads the capability file: drop any
+    // value the stack definition carried, then set it for what is built below.
+    for (_, entry) in stack.resources_mut() {
+        if let Some(container) = entry.config.downcast_mut::<Container>() {
+            container.commands_capability_file = false;
+        } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+            daemon.commands_capability_file = false;
+        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
+            worker.runtime_identity_exchange = false;
+        }
+    }
+
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
     let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
@@ -514,6 +527,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         Ok(image_uri) => {
                             // Success - update the function
                             let mut updated_func = func;
+                            if let WorkerCode::Source { toolchain, .. } = &updated_func.code {
+                                updated_func.runtime_identity_exchange =
+                                    worker_runtime_exchanges_identity(toolchain, settings);
+                            }
                             updated_func.code = WorkerCode::Image { image: image_uri };
                             build_results.push((resource_id, updated_func));
                             completed_tasks += 1;
@@ -675,6 +692,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 Ok((resource_id, daemon, build_result)) => match build_result {
                     Ok(image_uri) => {
                         let mut updated_daemon = daemon;
+                        updated_daemon.commands_capability_file = updated_daemon.commands_enabled
+                            && match &updated_daemon.code {
+                                DaemonCode::Source { src, toolchain } => {
+                                    commands_receiver::receiver_reads_capability_file(
+                                        src, toolchain, &settings.get_targets(),
+                                    )
+                                    .await
+                                }
+                                DaemonCode::Image { .. } => false,
+                            };
                         updated_daemon.code = DaemonCode::Image { image: image_uri };
                         build_results.push((resource_id, updated_daemon));
                         completed_tasks += 1;
@@ -1072,8 +1099,20 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     match build_result {
                         Ok(image_uri) => {
                             // Success - update ALL containers in this group with the same image
+                            // One binary serves the group, so one answer does too.
+                            let reads_capability_file = match &containers_group[0].1.code {
+                                ContainerCode::Source { src, toolchain } => {
+                                    commands_receiver::receiver_reads_capability_file(
+                                        src, toolchain, &settings.get_targets(),
+                                    )
+                                    .await
+                                }
+                                ContainerCode::Image { .. } => false,
+                            };
                             for (resource_id, container) in containers_group {
                                 let mut updated_container = container;
+                                updated_container.commands_capability_file =
+                                    updated_container.commands_enabled && reads_capability_file;
                                 updated_container.code = ContainerCode::Image {
                                     image: image_uri.clone(),
                                 };
@@ -2126,6 +2165,7 @@ async fn push_target(
         Platform::Azure => SandboxAgentLayering::AZURE,
         Platform::Gcp => SandboxAgentLayering::GCP,
         Platform::Aws => SandboxAgentLayering::AWS,
+        Platform::Kubernetes => SandboxAgentLayering::KUBERNETES,
         _ => return Ok(image_uri),
     };
     let agent_uri = push_sandbox_agent_image(
@@ -2167,6 +2207,17 @@ impl SandboxAgentLayering {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::GCP_AGENT_PLATFORM,
         image_command_env: true,
+    };
+    /// The pod runs as the image's own non-root user, which the layered image ends with.
+    /// Supervised startup of the base command (`ALIEN_SANDBOX_IMAGE_COMMAND`) means a root
+    /// agent that starts the command under the image identity and later drops sessions to
+    /// the exec identity (uid-split). A pod is not allowed to run as root and the pod is
+    /// the isolation boundary, so the setting keeps one meaning by not being set here: the
+    /// agent refuses it without root, and the base image's own command is not started.
+    const KUBERNETES: Self = Self {
+        target: BinaryTarget::LinuxX64,
+        contract: alien_core::sandbox_image::KUBERNETES_SANDBOX,
+        image_command_env: false,
     };
     const AWS: Self = Self {
         target: BinaryTarget::LinuxArm64,
@@ -2675,6 +2726,11 @@ fn sandbox_base_settings(settings: &BuildSettings) -> BuildSettings {
             settings.platform.runtime_platform(),
         ));
     }
+    // Kubernetes layers the agent onto the amd64 image, the one the layering reads. Its default
+    // target is not amd64, so it is named: an arm64 base would not take the amd64 agent.
+    if settings.platform.runtime_platform() == Platform::Kubernetes {
+        sandbox_settings.targets = Some(vec![BinaryTarget::LinuxX64]);
+    }
     sandbox_settings
 }
 
@@ -2693,8 +2749,11 @@ fn layered_sandbox_agent(
 /// Cache identity of the layered agent and backend contract. Azure and GCP use the same
 /// binary with different authorization/port settings, so they must never share a pushed artifact.
 fn sandbox_agent_layered_on(platform: Platform) -> Option<String> {
-    matches!(platform, Platform::Gcp | Platform::Azure | Platform::Aws)
-        .then(|| format!("{platform}:{}", gcp_sandbox_image::sandbox_agent_image()))
+    matches!(
+        platform,
+        Platform::Gcp | Platform::Azure | Platform::Aws | Platform::Kubernetes
+    )
+    .then(|| format!("{platform}:{}", gcp_sandbox_image::sandbox_agent_image()))
 }
 
 /// The hash of a sandbox image built for `platform` from inputs that hash to `content_hash`. On
@@ -3790,6 +3849,24 @@ fn toolchain_name(toolchain: &ToolchainConfig) -> &'static str {
     }
 }
 
+/// Whether a Worker built from source runs on this build's own runtime base, which
+/// exchanges its cloud identity for telemetry credentials. A Dockerfile controls its
+/// own image and a base override is not known to carry the exchange, so both are
+/// left unmarked; deployers then keep giving those Workers `ALIEN_RUNTIME_SECRETS`.
+fn worker_runtime_exchanges_identity(
+    toolchain: &alien_core::ToolchainConfig,
+    settings: &BuildSettings,
+) -> bool {
+    match toolchain {
+        alien_core::ToolchainConfig::Docker { .. } => false,
+        alien_core::ToolchainConfig::TypeScript { .. } => {
+            std::env::var("ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE")
+                .map_or(true, |image| image.is_empty())
+        }
+        _ => settings.override_base_image.is_none(),
+    }
+}
+
 /// Apply a feature-versioned generic runtime base only to non-TypeScript
 /// Workers. TypeScript has its own language-base override, resolved by
 /// `typescript_worker_base_images`, so a mixed-language stack never places
@@ -4562,6 +4639,34 @@ mod tests {
                 Some(vec!["serve".to_string()])
             )
         );
+    }
+
+    #[test]
+    fn only_the_standard_runtime_base_is_recorded_as_exchanging_identity() {
+        let settings = |override_base_image: Option<&str>| BuildSettings {
+            override_base_image: override_base_image.map(str::to_string),
+            platform: PlatformBuildSettings::Gcp {},
+            output_directory: "out".to_string(),
+            targets: None,
+            cache_url: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let rust = alien_core::ToolchainConfig::Rust {
+            binary_name: "worker".to_string(),
+        };
+        let docker = alien_core::ToolchainConfig::Docker {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        assert!(worker_runtime_exchanges_identity(&rust, &settings(None)));
+        assert!(!worker_runtime_exchanges_identity(
+            &rust,
+            &settings(Some("example.com/base:v1"))
+        ));
+        assert!(!worker_runtime_exchanges_identity(&docker, &settings(None)));
     }
 
     #[test]
@@ -7867,6 +7972,94 @@ mod sandbox_push_tests {
                 .and_then(|image| image.as_str()),
             Some(elsewhere.as_str()),
             "the failed pull is the agent's: {error}"
+        );
+    }
+
+    /// A built Kubernetes sandbox is released with the agent layered on, and the image ends as the
+    /// base's own non-root user: the cluster's runtime refuses a root container, so the agent
+    /// cannot start as root and drop.
+    #[tokio::test]
+    async fn a_kubernetes_sandbox_is_released_with_the_agent_running_as_the_images_user() {
+        let (_registry, host) = dockdash::test_utils::setup_local_registry()
+            .await
+            .expect("local registry");
+        let options = dockdash::PushOptions {
+            auth: dockdash::RegistryAuth::Anonymous,
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        };
+        let image_with = |path: &'static str, user: Option<&'static str>| async move {
+            let layer = DockDashLayer::builder()
+                .and_then(|layer| layer.data(path, b"#!/bin/sh\n", Some(0o755)))
+                .expect("layer");
+            let mut builder = DockDashImage::builder()
+                .platform("linux", &dockdash::Arch::Amd64)
+                .layer(layer.build().await.expect("layer builds"));
+            if let Some(user) = user {
+                builder = builder.user(user);
+            }
+            builder.build().await.expect("image builds").0
+        };
+        let agent_image = format!("{host}/alien/agent:test");
+        image_with(alien_core::sandbox_image::AGENT_PATH, None)
+            .await
+            .push(&agent_image, &options)
+            .await
+            .expect("the stand-in agent pushes");
+        let base = image_with("/marker", Some("1001:1001")).await;
+        let built = tempfile::tempdir().expect("temp dir");
+        std::fs::copy(base.path(), built.path().join("linux-x64.oci.tar")).expect("tarball");
+        let stack = Stack::new("sandboxes".to_string())
+            .add(
+                sandbox("box", &built.path().to_string_lossy()),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let targets = collect_push_targets(&stack).expect("collects");
+        let image = push_target(
+            &targets[0],
+            &Platform::Kubernetes,
+            &format!("{host}/proj/sandbox"),
+            &options,
+            &agent_image,
+        )
+        .await
+        .expect("the sandbox pushes");
+        assert!(image.ends_with("-agent"), "{image}");
+
+        let reference = Reference::try_from(image.as_str()).expect("reference");
+        let (_, _, config) = OciClient::new(OciClientConfig {
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        })
+        .pull_manifest_and_config(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+        .await
+        .expect("the released image reads back");
+        let config: serde_json::Value = serde_json::from_str(&config).expect("config");
+        assert_eq!(config["config"]["User"], "1001:1001");
+        assert_eq!(
+            config["config"]["Entrypoint"],
+            serde_json::json!([alien_core::sandbox_image::AGENT_PATH])
+        );
+        let environment = config["config"]["Env"].as_array().expect("environment");
+        for expected in [
+            "ALIEN_SANDBOX_AUTHORIZATION=capability",
+            "ALIEN_SANDBOX_ISOLATION=platform",
+            "ALIEN_SANDBOX_EXEC_UID=1001",
+            "ALIEN_SANDBOX_ROOT=/sandbox",
+        ] {
+            assert!(
+                environment.contains(&serde_json::json!(expected)),
+                "{expected} missing from {environment:?}"
+            );
+        }
+        // The agent refuses this setting unless it runs as root with uid-split isolation, which
+        // a pod (non-root, platform isolation) never does: the pool pods would exit at start.
+        assert!(
+            !environment
+                .iter()
+                .any(|entry| entry.as_str().is_some_and(|e| e.starts_with("ALIEN_SANDBOX_IMAGE_COMMAND"))),
+            "{environment:?}"
         );
     }
 

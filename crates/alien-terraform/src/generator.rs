@@ -21,6 +21,7 @@ use crate::{
     naming::resource_labels,
     registry::TfRegistry,
     target::TerraformTarget,
+    verified_setup,
 };
 use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
@@ -544,10 +545,12 @@ pub(crate) fn render_terraform_module(
     );
     // The reasoning engine is a google-beta-only type. Keyed off the emitted block so a stack
     // without a Frozen sandbox declares nothing extra.
+    // Service agents (`google_project_service_identity`) are google-beta-only too: a data store
+    // with a customer key needs its agent to exist before the key can name it.
     let include_google_beta_provider = has_resource_type(
         &per_resource,
         crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
-    );
+    ) || has_resource_type(&per_resource, "google_project_service_identity");
     // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
     // of its own, and a missing declaration fails at init rather than at plan.
     let include_time_provider = gcp_iam_propagation_barrier.is_some()
@@ -744,8 +747,16 @@ pub(crate) fn render_terraform_module(
             options.registration.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
-        ))?,
+        )?)?,
     );
+    if let Some(registration) = options.registration.as_ref().filter(|registration| {
+        verified_setup::supported(target, stack_settings.setup_management, Some(registration))
+    }) {
+        files.insert(
+            "setup_record.tf".to_string(),
+            verified_setup::record_file(target, registration, setup_import_format_version)?,
+        );
+    }
     if options
         .helm_install
         .as_ref()
@@ -2206,20 +2217,28 @@ fn variables_body(
             .is_some()
             .then(|| deployment_name_default.to_string()),
     )));
-    // Only a module that registers itself reads the token. Without
-    // registration the input stays declared so callers that pass it keep working.
-    blocks.push(nested(variable_block(
-        "token",
-        if registration.is_none() {
-            "Not used: this module does not register the deployment."
-        } else if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
-            AUTOMATIC_TOKEN_DESCRIPTION
-        } else {
-            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
-        },
-        registration.is_none().then(|| expr::raw("null")),
-        true,
-    )));
+    if crate::verified_setup::supported(target, stack_settings.setup_management, registration) {
+        blocks.extend(
+            crate::verified_setup::variables(target)
+                .into_iter()
+                .map(nested),
+        );
+    } else {
+        // Only a module that registers itself reads the token. Without
+        // registration the input stays declared so callers that pass it keep working.
+        blocks.push(nested(variable_block(
+            "token",
+            if registration.is_none() {
+                "Not used: this module does not register the deployment."
+            } else if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+                AUTOMATIC_TOKEN_DESCRIPTION
+            } else {
+                "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+            },
+            registration.is_none().then(|| expr::raw("null")),
+            true,
+        )));
+    }
     blocks.push(nested(management_url_variable_block(
         registration.is_some(),
         setup_only,
@@ -4130,7 +4149,12 @@ fn registration_body(
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
     input_values: Expression,
-) -> Body {
+) -> Result<Body> {
+    let verified = verified_setup::supported(target, setup_management, registration);
+    let mut depends_on = depends_on.to_vec();
+    if verified {
+        depends_on.extend(verified_setup::reserve_dependencies(target));
+    }
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
             "depends_on",
@@ -4138,8 +4162,8 @@ fn registration_body(
         )
     });
     if let Some(registration) = registration {
-        let mut body = vec![
-            setup_management_precondition(setup_management),
+        // Attributes shared by the registration and the verified-setup observer.
+        let mut common = vec![
             attr("name", expr::raw("local.deployment_name")),
             attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
@@ -4174,25 +4198,48 @@ fn registration_body(
             attr("resources", expr::raw("local.deployment_resources")),
         ];
         if !expression_is_empty_object(&input_values) {
-            body.push(attr("input_values", input_values));
+            common.push(attr("input_values", input_values));
         }
         if let Some(release_id) = &registration.release_id {
-            body.push(attr("release_id", Expression::String(release_id.clone())));
+            common.push(attr("release_id", Expression::String(release_id.clone())));
         }
         if target.is_kubernetes() {
-            body.push(attr(
+            common.push(attr(
                 "base_platform",
                 expr::raw("local.deployment_base_platform"),
             ));
         }
+        let mut lifecycle = setup_management_precondition(setup_management);
+        let mut body = if verified {
+            if let Structure::Block(lifecycle) = &mut lifecycle {
+                for precondition in verified_setup::reserve_preconditions(target) {
+                    lifecycle.body.0.push(nested(precondition));
+                }
+            }
+            verified_setup::reserve_attributes(target)
+        } else {
+            // The install token goes to the provider, not to a resource
+            // argument that would be kept in Terraform state.
+            Vec::new()
+        };
+        body.insert(0, lifecycle);
+        body.extend(common.iter().cloned());
         if let Some(depends_on_attr) = depends_on_attr {
             body.push(depends_on_attr);
         }
-        return Body::from(vec![Structure::Block(resource_block(
+        let mut module = Body::from(vec![Structure::Block(resource_block(
             &registration.provider_resource_type(),
             "this",
             body,
         ))]);
+        if verified {
+            module.0.push(nested(verified_setup::observe_block(
+                target,
+                registration,
+                common,
+            )));
+        }
+        return Ok(module);
     }
 
     let mut body = vec![attr(
@@ -4252,11 +4299,11 @@ fn registration_body(
     }
 
     body.push(setup_management_precondition(setup_management));
-    Body::from(vec![Structure::Block(resource_block(
+    Ok(Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
         "deployment_registration",
         body,
-    ))])
+    ))]))
 }
 
 /// Compare the merged settings without changing the caller's requested mode.
@@ -5011,6 +5058,9 @@ fn readme_md(
             .then_some(deployment_name_default.as_str()),
         stack_settings.setup_management == alien_core::SetupManagement::Automatic,
     )];
+    if verified_setup::supported(target, stack_settings.setup_management, registration) {
+        input_sections.push(verified_setup::README_INPUTS.to_string());
+    }
     let registered = registration.is_some();
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
         && stack
@@ -5699,14 +5749,17 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         assert!(versions.contains("example_app ="));
         assert!(versions.contains("registry.example.com/acme/example-app"));
 
-        let registration_body = render_body(registration_body(
-            TerraformTarget::Aws,
-            1,
-            alien_core::SetupManagement::Manual,
-            Some(&registration),
-            &[],
-            Expression::Object(Default::default()),
-        ))
+        let registration_body = render_body(
+            registration_body(
+                TerraformTarget::Aws,
+                1,
+                alien_core::SetupManagement::Manual,
+                Some(&registration),
+                &[],
+                Expression::Object(Default::default()),
+            )
+            .expect("registration body"),
+        )
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));
         assert!(registration_body.contains(
@@ -5716,7 +5769,16 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
         // Resource arguments are kept in Terraform state; the install token is
         // given to the provider instead, whose configuration never is.
-        assert!(!registration_body.contains("var.token"));
+        // The module's precondition may read `var.token`; conditions are not
+        // kept in state. No resource argument carries it.
+        let parsed = hcl::parse(&registration_body).expect("registration parses");
+        assert!(
+            parsed.blocks().all(|block| block
+                .body()
+                .attributes()
+                .all(|attribute| attribute.key() != "token")),
+            "{registration_body}"
+        );
         let providers = hcl::parse(
             &render_body(providers_body(
                 TerraformTarget::Aws,
