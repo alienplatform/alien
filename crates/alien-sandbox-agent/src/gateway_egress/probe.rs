@@ -35,13 +35,15 @@ pub(super) async fn supervisor_udp(privileged: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
+pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: bool) -> Result<()> {
     let executable = std::env::current_exe()
         .into_alien_error()
         .context(failed("locate path check executable"))?;
     let mut command = tokio::process::Command::new(executable);
     command
         .arg("--egress-path-check")
+        .args(privileged.then_some("--privileged"))
+        .stdout(std::process::Stdio::piped())
         .env_clear()
         .kill_on_drop(true);
     // SAFETY: only the existing async-signal-safe identity drop runs between fork and exec.
@@ -51,6 +53,7 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
     let (mut child, _registration) = crate::children::spawn(&mut command)
         .into_alien_error()
         .context(failed("spawn command path check"))?;
+    let mut output = child.stdout.take();
     let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
         .into_alien_error()
@@ -58,17 +61,34 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
         .into_alien_error()
         .context(failed("run command path check"))?;
     if !status.success() {
+        // The child names what it found (for the metadata check: the cloud and path).
+        let mut cause = String::new();
+        if let Some(output) = output.as_mut() {
+            use tokio::io::AsyncReadExt;
+            let _ = output.take(1024).read_to_string(&mut cause).await;
+        }
+        if !cause.trim().is_empty() {
+            tracing::warn!(cause = %cause.trim(), "command-identity path check failed");
+        }
         return Err(AlienError::new(ErrorData::EgressPathUnexpected));
     }
     Ok(())
 }
 
 /// Internal child mode. It receives no token or credentials and has the command's exact identity.
-pub fn command_path_is_closed() -> bool {
-    for address in [
-        SocketAddr::from(([169, 254, 169, 254], 80)),
-        SocketAddr::from(([1, 1, 1, 1], 443)),
-    ] {
+///
+/// With `privileged` (a redirect exists) nothing may answer on the metadata address. Without it
+/// (Kubernetes) a NetworkPolicy may leave that address reachable, so the check is that no
+/// credentials or identity can be obtained from it. A leak is printed for the parent to report.
+pub fn command_path_is_closed(privileged: bool) -> bool {
+    let mut addresses = vec![SocketAddr::from(([1, 1, 1, 1], 443))];
+    if privileged {
+        addresses.insert(0, SocketAddr::from(([169, 254, 169, 254], 80)));
+    } else if let Err(leak) = crate::metadata::credentials_obtainable() {
+        println!("{leak}");
+        return false;
+    }
+    for address in addresses {
         if let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) {
             if stream.set_read_timeout(Some(PROBE_TIMEOUT)).is_err()
                 || stream.set_write_timeout(Some(PROBE_TIMEOUT)).is_err()

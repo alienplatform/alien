@@ -382,3 +382,25 @@ I/O and PTY allocation remain supported.
 GCP's sandbox kernel exposes no block devices and rejects block-node creation in
 live qualification; its provider device boundary remains required. The agent's
 private user namespace does not grant control over provider devices.
+
+## Kubernetes: metadata credentials
+
+On Kubernetes the agent runs without capabilities and installs no packet redirect, so a
+NetworkPolicy is what closes a command's network path. Some clusters (for example EKS Auto Mode)
+leave the node metadata address `169.254.169.254` reachable under a deny-all policy, so the
+agent does not require that address to be silent. As the identity that runs commands, it checks
+that no cloud credentials or instance identity can be obtained from it: the AWS IMDSv2 token and
+then `iam/security-credentials/` and `instance-id`, the same without a token (IMDSv1), the GCP
+default service account token and the Azure managed identity token. A 2xx reply with a body is
+refused, with the cloud and path named in the agent log; 401, 403, 404, a timeout, a refused
+connection, or a token with no data behind it are fine. The check on VM backends with the
+redirect is unchanged: nothing may answer.
+
+The cluster has to keep pod access to node credentials closed:
+
+- AWS: IMDSv2 required with hop limit 1 (the EKS Auto Mode default).
+- GKE: Workload Identity, with no binding for the sandbox ServiceAccount.
+- AKS: no node-assigned identity the sandbox must not use.
+
+`alien-sandbox-agent check-metadata` runs the same check and exits non-zero naming the leak; run
+it under the command uid to verify a cluster.
