@@ -1803,9 +1803,18 @@ mod tests {
             password: "pw".to_string(),
             tls: RedisTlsPolicy::Disabled,
         };
-        assert_eq!(params("::1").connection_url(), "redis://default:pw@[::1]:6379/0");
-        assert_eq!(params("[::1]").connection_url(), "redis://default:pw@[::1]:6379/0");
-        assert_eq!(params("10.0.0.5").connection_url(), "redis://default:pw@10.0.0.5:6379/0");
+        assert_eq!(
+            params("::1").connection_url(),
+            "redis://default:pw@[::1]:6379/0"
+        );
+        assert_eq!(
+            params("[::1]").connection_url(),
+            "redis://default:pw@[::1]:6379/0"
+        );
+        assert_eq!(
+            params("10.0.0.5").connection_url(),
+            "redis://default:pw@10.0.0.5:6379/0"
+        );
         assert_eq!(params("host.example").host, "host.example");
     }
 

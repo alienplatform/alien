@@ -622,7 +622,8 @@ impl KubernetesSandbox {
             return self.failed(
                 "sandbox.create",
                 &format!(
-                    "creating a session for sandbox {session_id} needs sandbox/management in the permission profile of this workload; it was denied reading the deployment's signing key"
+                    "creating a session for sandbox {session_id} needs sandbox/management in the permission profile of this workload; it was denied reading the deployment's signing key ({})",
+                    error
                 ),
             );
         }
@@ -1115,12 +1116,19 @@ mod tests {
     /// not a bare access-denied.
     #[tokio::test]
     async fn a_denied_signing_key_read_names_the_missing_permission() {
+        let released = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let expires = chrono::Utc::now().timestamp() + 900;
         let broker = serve(
             Router::new()
                 .route(
                     BROKER_RELEASE_ROUTE,
-                    delete(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+                    delete({
+                        let released = released.clone();
+                        move || async move {
+                            released.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                    }),
                 )
                 .route(
                     "/v1/sandbox/sessions",
@@ -1182,6 +1190,11 @@ mod tests {
         assert!(
             message.contains("creating a session for sandbox s1 needs sandbox/management in the permission profile"),
             "{message}"
+        );
+        assert_eq!(
+            released.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the claimed pod's release route is called once, and its failure does not hide the denial"
         );
     }
 
