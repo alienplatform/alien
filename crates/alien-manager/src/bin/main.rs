@@ -174,7 +174,6 @@ async fn build_standalone_server(
     // Build the server with standalone defaults
     let server = AlienManager::builder(config)
         .token_store(token_store)
-        .tunnels()
         .charts(alien_manager::routes::charts::ChartSettings::new(
             toml_config.operator.image.clone(),
             toml_config.operator.insecure_registry,

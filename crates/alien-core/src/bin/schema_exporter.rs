@@ -32,7 +32,6 @@ use utoipa::OpenApi;
     ContainerAutoscaling,
     ContainerPort,
     ContainerEgress,
-    ContainerTunnel,
     ExposeProtocol,
     PublicEndpoint,
     WorkerPublicEndpoint,

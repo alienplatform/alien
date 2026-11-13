@@ -1116,6 +1116,8 @@ async fn apply_render_mutations_with_management_config(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
@@ -2405,6 +2407,8 @@ async fn terraform_kubernetes_stack_for_target(
 
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,

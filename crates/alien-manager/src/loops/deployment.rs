@@ -1837,6 +1837,8 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                image_registry: None,
+                image_pull_secrets: Vec::new(),
                 gcp_federation_scope,
                 stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),

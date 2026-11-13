@@ -32,7 +32,7 @@ fn desired_deployment(
     namespace: &str,
     deployment_id: &str,
     target: &TargetDynamicContainer,
-    manager_pull_secret: bool,
+    pull_secrets: &[String],
     node_selector: Option<BTreeMap<String, String>>,
 ) -> Deployment {
     let name = backend_name(deployment_id, &target.name);
@@ -176,10 +176,11 @@ fn desired_deployment(
                     node_selector,
                     containers: vec![container],
                     automount_service_account_token: Some(false),
-                    image_pull_secrets: manager_pull_secret.then(|| {
-                        vec![LocalObjectReference {
-                            name: format!("{name}-registry"),
-                        }]
+                    image_pull_secrets: (!pull_secrets.is_empty()).then(|| {
+                        pull_secrets
+                            .iter()
+                            .map(|name| LocalObjectReference { name: name.clone() })
+                            .collect()
                     }),
                     security_context: Some(PodSecurityContext {
                         fs_group: Some(65532),
@@ -214,7 +215,7 @@ pub(super) async fn put_deployment(
     namespace: &str,
     deployment_id: &str,
     target: &TargetDynamicContainer,
-    manager_pull_secret: bool,
+    pull_secrets: &[String],
     node_selector: Option<BTreeMap<String, String>>,
 ) -> Result<Deployment> {
     let name = backend_name(deployment_id, &target.name);
@@ -230,7 +231,7 @@ pub(super) async fn put_deployment(
         namespace,
         deployment_id,
         target,
-        manager_pull_secret,
+        pull_secrets,
         node_selector,
     );
     if let Some(existing) = &current {

@@ -770,6 +770,9 @@ pub(super) async fn enrich_config(
         config.public_endpoints = operator_config.public_endpoints.clone();
     }
 
+    config.image_registry = operator_config.image_registry.clone();
+    config.image_pull_secrets = operator_config.image_pull_secrets.clone();
+
     // Chart-created databases are defaults; explicit bindings always win.
     if let Some(defaults) = &operator_config.chart_default_bindings {
         for (id, binding) in &defaults.0 {
@@ -1093,6 +1096,8 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),

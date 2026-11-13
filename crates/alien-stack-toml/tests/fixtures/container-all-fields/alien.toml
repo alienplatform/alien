@@ -19,9 +19,8 @@ ephemeral-storage = "20Gi"
 gpu = { type = "nvidia-l4", count = 1 }
 ports = [9090, 9091]
 public-endpoints.api = { port = 8080, host-label = "ledger", wildcard-subdomains = true }
-tunnel = 7000
 egress = "internet"
-security = { profile = "restricted", run-as-user = 10001, run-as-group = 10002, read-only-root-filesystem = true }
+security = { profile = "restricted", run-as-user = 10001, run-as-group = 10002, read-only-root-filesystem = true, writable-paths = ["/var/cache/ledger"] }
 persistent-storage = { size = "100Gi", mount-path = "/var/lib/ledger", encryption-key = "data-key", backups = { interval = "6h", retention = 14 } }
 autoscaling = { min = 2, desired = 3, max = 12, target-cpu-percent = 65, target-memory-percent = 75, target-http-in-flight-per-replica = 100, max-http-p95-latency = "250ms" }
 health-check = { port = 8080, path = "/ready", method = "HEAD", timeout = "2s", failure-threshold = 5 }

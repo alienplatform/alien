@@ -306,3 +306,102 @@ impl ReleaseStore for SqliteReleaseStore {
         Ok(charts)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use alien_core::{
+        Container, ContainerCode, Platform, ResourceLifecycle, ResourceSpec, Stack,
+    };
+
+    use super::*;
+    use crate::auth::Subject;
+
+    /// Add the retired `tunnel` field to every container in a saved stack,
+    /// the way a release stored before tunnels were removed carries it.
+    fn add_retired_tunnel(value: &mut serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut added = 0;
+                if map.contains_key("cpu") && map.contains_key("code") {
+                    map.insert("tunnel".into(), serde_json::json!({"port": 8080}));
+                    added += 1;
+                }
+                added + map.values_mut().map(add_retired_tunnel).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(add_retired_tunnel).sum(),
+            _ => 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_release_saved_with_a_container_tunnel_still_lists() {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let store = SqliteReleaseStore::new(db.clone());
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example/api:1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .cpu(ResourceSpec {
+                min: "0.5".into(),
+                desired: "0.5".into(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".into(),
+                desired: "256Mi".into(),
+            })
+            .build();
+        let stack = Stack::new("app".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let record = store
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "project".to_string(),
+                    stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .expect("create release");
+
+        // Rewrite the saved row into what an older manager wrote.
+        let conn = db.conn().lock().await;
+        let mut rows = conn
+            .query("SELECT stack FROM releases WHERE id = ?1", (record.id.as_str(),))
+            .await
+            .unwrap();
+        let saved: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        drop(rows);
+        let mut json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(add_retired_tunnel(&mut json), 1, "{saved}");
+        conn.execute(
+            "UPDATE releases SET stack = ?1 WHERE id = ?2",
+            (json.to_string(), record.id.as_str()),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let listed = store
+            .list_releases(&Subject::system())
+            .await
+            .expect("list_releases reads the old row");
+        assert_eq!(listed.len(), 1);
+        let fetched = store
+            .get_release(&Subject::system(), &record.id)
+            .await
+            .expect("get_release reads the old row");
+        assert!(fetched.is_some());
+    }
+}

@@ -21,10 +21,7 @@ fn release_and_token_subcommands_recognize_json_mode() {
             assert!(Cli::try_parse_from(&command).unwrap().wants_json_output());
         }
     }
-    for args in [
-        vec!["alien", "tokens", "ls"],
-        vec!["alien", "tokens", "create", "--tunnel"],
-    ] {
+    for args in [vec!["alien", "tokens", "ls"]] {
         assert!(!Cli::try_parse_from(&args).unwrap().wants_json_output());
         let mut args = args;
         args.push("--json");

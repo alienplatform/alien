@@ -54,8 +54,6 @@ pub enum RuntimePurpose {
     OperatorSync,
     /// Pull deployment images through the registry receiver.
     RegistryPull,
-    /// Connect the recorded operator tunnel.
-    OperatorTunnel,
     /// Receive the operator's fixed operations queue.
     OperatorOperations,
     /// Relay commands to one app worker, without dispatch or administrative rights.
@@ -67,7 +65,7 @@ pub enum RuntimePurpose {
 impl RuntimePurpose {
     fn lifetime(&self) -> Duration {
         match self {
-            Self::Telemetry | Self::OperatorSync | Self::OperatorTunnel => Duration::hours(1),
+            Self::Telemetry | Self::OperatorSync => Duration::hours(1),
             // Pods pull with this credential from a Kubernetes Secret that the
             // operator refreshes. It may last as long as the operator's daily
             // key, which caps it through the authority deadline, so new pods
@@ -243,9 +241,7 @@ impl RuntimeCredentials {
                 },
                 Role::DeploymentTelemetryWriter,
             ),
-            purpose @ (RuntimePurpose::OperatorSync
-            | RuntimePurpose::RegistryPull
-            | RuntimePurpose::OperatorTunnel) => (
+            purpose @ (RuntimePurpose::OperatorSync | RuntimePurpose::RegistryPull) => (
                 Scope::Deployment {
                     project_id: grant.project_id,
                     deployment_id: grant.deployment_id,
@@ -253,7 +249,6 @@ impl RuntimeCredentials {
                 match purpose {
                     RuntimePurpose::OperatorSync => Role::OperatorSync,
                     RuntimePurpose::RegistryPull => Role::RegistryPull,
-                    RuntimePurpose::OperatorTunnel => Role::OperatorTunnel,
                     _ => unreachable!(),
                 },
             ),
@@ -547,7 +542,6 @@ mod controller_tests {
             json!({"type":"receiveCommands", "target":{"resourceId":"other", "resourceType":"container"}}),
             json!({"type":"receiveCommands", "target":{"resourceId":"app", "resourceType":"worker"}}),
             json!({"type":"operatorSync"}),
-            json!({"type":"operatorTunnel"}),
             json!({"type":"operationRelay", "target":target}),
         ] {
             assert!(provider

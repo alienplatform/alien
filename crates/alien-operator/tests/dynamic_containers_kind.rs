@@ -101,6 +101,7 @@ async fn until_running(
             deployment_id,
             targets,
             None,
+            &[],
             &compute_stack(),
         )
         .await
@@ -201,6 +202,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[first.clone()],
         None,
+        &[],
         &invalid_stack,
     )
     .await
@@ -317,6 +319,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[first.clone(), second.clone()],
         None,
+        &[],
         &compute_stack(),
     )
     .await
@@ -452,6 +455,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[rotated.clone(), second.clone()],
         Some(("docker.io", "synthetic-test-token")),
+        &[],
         &compute_stack(),
     )
     .await
@@ -483,6 +487,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[rejected, second.clone()],
         Some(("docker.io", "synthetic-test-token")),
+        &[],
         &compute_stack(),
     )
     .await
@@ -558,6 +563,7 @@ async fn two_independent_containers_update_and_delete() {
             deployment_id,
             &[deleted.clone(), second.clone()],
             None,
+            &[],
             &invalid_stack,
         )
         .await
@@ -609,6 +615,7 @@ async fn two_independent_containers_update_and_delete() {
             deployment_id,
             &[],
             None,
+            &[],
             &compute_stack(),
         )
         .await
@@ -672,6 +679,7 @@ async fn withdrawn_image_approval_suspends_and_deletes_existing_workload() {
         deployment_id,
         &[desired.clone()],
         None,
+        &[],
         &stack,
     )
     .await
@@ -702,6 +710,7 @@ async fn withdrawn_image_approval_suspends_and_deletes_existing_workload() {
         deployment_id,
         &[desired.clone()],
         None,
+        &[],
         &stack,
     )
     .await
@@ -731,6 +740,7 @@ async fn withdrawn_image_approval_suspends_and_deletes_existing_workload() {
             deployment_id,
             &[desired.clone()],
             None,
+            &[],
             &stack,
         )
         .await

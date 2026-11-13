@@ -123,6 +123,15 @@ pub struct OperatorConfig {
     /// Explicit installation and manager bindings take precedence.
     pub chart_default_bindings: Option<ExternalBindings>,
 
+    /// Site registry (`host[/path]`) every workload image is pulled from, from the chart's
+    /// `global.imageRegistry`. Images keep their path, tag and digest.
+    pub image_registry: Option<String>,
+
+    /// Image pull Secret names from the chart's `runtime.imagePullSecrets`, for pods the
+    /// Operator creates at runtime (dynamic containers).
+    #[builder(default)]
+    pub image_pull_secrets: Vec<String>,
+
     /// Operations declared through `OPERATOR_OPERATIONS`, for an Operator
     /// installed without a release.
     pub operations: Option<alien_core::OperationsConfig>,
@@ -140,12 +149,6 @@ pub struct OperatorConfig {
     /// fingerprint this process started with, the chart was upgraded under a
     /// running old pod, and the report is skipped.
     pub setup_fingerprint_file: Option<PathBuf>,
-
-    /// Accept tunnel requests from the manager for the stack's declared
-    /// tunnel endpoints. The operator dials only when the manager advertises
-    /// a tunnel URL and the stack declares at least one endpoint.
-    #[builder(default = true)]
-    pub tunnel_enabled: bool,
 
     /// This Operator's own Deployment (in `namespace`). When set, the
     /// Operator updates its own image to the one the manager targets.
