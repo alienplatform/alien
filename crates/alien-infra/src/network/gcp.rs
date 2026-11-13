@@ -45,9 +45,6 @@ pub struct GcpNetworkController {
     pub(crate) region: Option<String>,
     pub cidr_block: Option<String>,
     pub is_byo_vpc: bool,
-    /// Network attachment for sandbox PSC-I, created by setup and only imported here.
-    #[serde(default)]
-    pub sandbox_psc_attachment_self_link: Option<String>,
 
     // Operation tracking
     pub(crate) pending_operation_name: Option<String>,
@@ -183,7 +180,6 @@ impl GcpNetworkController {
             region: Some(region),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vpc: false,
-            sandbox_psc_attachment_self_link: None,
             pending_operation_name: None,
             pending_operation_region: None,
             _internal_stay_count: None,

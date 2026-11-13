@@ -794,10 +794,6 @@ fn gcp_network_import_derives_subnetwork_name() {
         router_self_link: None,
         nat_name: None,
         is_byo_vpc: false,
-        sandbox_psc_attachment_self_link: Some(
-            "https://www.googleapis.com/compute/v1/projects/my-project/regions/us-central1/networkAttachments/alien-stack-sandbox-psc"
-                .to_string(),
-        ),
     };
     let state = run_through_registry(
         &Network::RESOURCE_TYPE,
@@ -811,12 +807,6 @@ fn gcp_network_import_derives_subnetwork_name() {
     assert_eq!(
         internal_state(&state)["subnetworkName"], "alien-stack-workload",
         "importer must derive subnetwork_name from the subnet self-link, else the worker gets no VPC egress"
-    );
-    assert!(
-        internal_state(&state)["sandboxPscAttachmentSelfLink"]
-            .as_str()
-            .is_some_and(|link| link.ends_with("/networkAttachments/alien-stack-sandbox-psc")),
-        "the importer must keep the setup-created attachment for the sandbox controller"
     );
 }
 

@@ -717,17 +717,6 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
-    /// Whether, on GCP, this sandbox must reach the deployment VPC through Private Service Connect.
-    ///
-    /// Google fixes a project's sandbox network placement when its first sandbox is created, so
-    /// setup, the controller and the plan-time dependency all key off this one answer.
-    pub fn needs_gcp_private_network(&self) -> bool {
-        // Measured: a template with `internetAccess: false` and no attachment is created FAILED
-        // with no reason, so the `none` mode needs the attachment too.
-        matches!(self.egress, SandboxEgress::None | SandboxEgress::Internet)
-            || !self.preview_ports.is_empty()
-    }
-
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
         match &self.egress {
             SandboxEgress::None => serde_json::json!({"mode":"deny"}),
@@ -1898,17 +1887,6 @@ mod tests {
         sandbox_with(SandboxEgress::Deny, vec![])
             .validate_for_platform(Platform::Gcp)
             .expect("a sandbox without preview ports is unaffected");
-    }
-
-    #[test]
-    fn every_mode_but_allow_needs_the_gcp_private_network() {
-        assert!(sandbox_with(SandboxEgress::Internet, vec![]).needs_gcp_private_network());
-        assert!(sandbox_with(SandboxEgress::Deny, vec![8080]).needs_gcp_private_network());
-        assert!(
-            sandbox_with(SandboxEgress::Deny, vec![]).needs_gcp_private_network(),
-            "a template that turns internet access off is refused without a network attachment"
-        );
-        assert!(!sandbox_with(SandboxEgress::Allow, vec![]).needs_gcp_private_network());
     }
 
     #[test]

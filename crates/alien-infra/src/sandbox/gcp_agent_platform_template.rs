@@ -26,7 +26,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
     ContainerPort, ContainerResources, CustomContainerEnvironment, CustomContainerSpec,
-    EgressControlConfig, IngressControlConfig, SandboxEnvironmentTemplate,
+    EgressControlConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_macros::controller;
@@ -163,7 +163,6 @@ fn build_template_body(
     sandbox: &Sandbox,
     display_name: &str,
     deployment_config: &DeploymentConfig,
-    network_attachment: Option<&str>,
 ) -> Result<SandboxEnvironmentTemplate> {
     let (image, limits, internet_access) = template_identity(sandbox)?;
     let image = pulled_image(&image, deployment_config, sandbox.id())?;
@@ -212,12 +211,6 @@ fn build_template_body(
         }),
         egress_control_config: Some(EgressControlConfig {
             internet_access: Some(internet_access),
-            network_attachment: network_attachment.map(str::to_string),
-            extra: Default::default(),
-        }),
-        // PSC-I and PSC-E are accepted only together.
-        ingress_control_config: network_attachment.map(|_| IngressControlConfig {
-            enable_private_service_connect: Some(true),
             extra: Default::default(),
         }),
         state: None,
@@ -325,13 +318,7 @@ impl GcpAgentPlatformTemplateController {
             .engine_id
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let attachment = sandbox_network_attachment(ctx, config)?;
-        let body = build_template_body(
-            config,
-            &display_name,
-            ctx.deployment_config,
-            attachment.as_deref(),
-        )?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -635,13 +622,7 @@ impl GcpAgentPlatformTemplateController {
         })?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let attachment = sandbox_network_attachment(ctx, config)?;
-        let body = build_template_body(
-            config,
-            &display_name,
-            ctx.deployment_config,
-            attachment.as_deref(),
-        )?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -824,46 +805,6 @@ impl GcpAgentPlatformTemplateController {
     }
 }
 
-/// The PSC-I network attachment a sandbox's template must carry, in the `projects/...` form the
-/// template API takes. Setup creates it, so a sandbox that needs one and finds none is refused
-/// with the reason: a template made without it would pin the project to the default network.
-fn sandbox_network_attachment(
-    ctx: &ResourceControllerContext<'_>,
-    sandbox: &Sandbox,
-) -> Result<Option<String>> {
-    if !sandbox.needs_gcp_private_network() {
-        return Ok(None);
-    }
-    let missing = |reason: &str| {
-        AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "{reason}. Sandboxes whose egress is not `allow`, and sandboxes with preview ports, need the network attachment that setup creates; re-run setup with the current module."
-            ),
-            resource_id: Some(sandbox.id.clone()),
-        })
-    };
-    let network_id = ctx
-        .desired_stack
-        .resources()
-        .find_map(|(id, entry)| {
-            entry
-                .config
-                .downcast_ref::<alien_core::Network>()
-                .map(|_| id.clone())
-        })
-        .ok_or_else(|| missing("the stack has no network"))?;
-    let network_ref = ResourceRef::new(alien_core::Network::RESOURCE_TYPE, network_id);
-    let link = ctx
-        .require_dependency::<crate::network::GcpNetworkController>(&network_ref)?
-        .sandbox_psc_attachment_self_link
-        .ok_or_else(|| missing("the network has no sandbox network attachment"))?;
-    // Self-links are `https://www.googleapis.com/compute/v1/projects/...`.
-    Ok(Some(match link.find("projects/") {
-        Some(start) => link[start..].to_string(),
-        None => link,
-    }))
-}
-
 fn missing_state(resource_id: &str, field: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ResourceConfigInvalid {
         message: format!("controller state is missing the {field}"),
@@ -939,8 +880,7 @@ mod tests {
             display_name: None,
             custom_container_environment: None,
             egress_control_config: None,
-            ingress_control_config: None,
-            state: Some(TEMPLATE_ACTIVE.to_string()),
+                state: Some(TEMPLATE_ACTIVE.to_string()),
             extra: Default::default(),
         }
     }
@@ -1003,25 +943,9 @@ mod tests {
                     .build(),
                 GcpAgentPlatformEngineController::mock_ready("eng"),
             )
-            // Setup's network, with the PSC-I attachment a sandbox that needs one reads.
-            .with_dependency(
-                alien_core::Network::new("default-network".to_string())
-                    .settings(alien_core::NetworkSettings::UseDefault)
-                    .build(),
-                network_with_attachment(),
-            )
             .build()
             .await
             .expect("executor builds")
-    }
-
-    fn network_with_attachment() -> crate::network::GcpNetworkController {
-        let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
-        network.sandbox_psc_attachment_self_link = Some(
-            "https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/networkAttachments/na"
-                .to_string(),
-        );
-        network
     }
 
     /// A controller must round-trip by tag: the executor persists and reloads state between
@@ -1356,12 +1280,6 @@ mod tests {
             .platform(Platform::Gcp)
             .service_provider(provider_with(Arc::new(m)))
             .with_test_dependencies()
-            .with_dependency(
-                alien_core::Network::new("default-network".to_string())
-                    .settings(alien_core::NetworkSettings::UseDefault)
-                    .build(),
-                network_with_attachment(),
-            )
             .build()
             .await
             .expect("executor builds");
@@ -1387,7 +1305,6 @@ mod tests {
                 Ok(SandboxEnvironmentTemplate {
                     egress_control_config: Some(EgressControlConfig {
                         internet_access: served.then_some(true),
-                        network_attachment: None,
                         extra: Default::default(),
                     }),
                     ..active_template(id)
@@ -1591,55 +1508,6 @@ mod tests {
 
     // ---- 5. Validation: the body carried, and the egress refusal. ------------------------------
 
-    fn network_with(attachment: Option<&str>) -> crate::network::GcpNetworkController {
-        let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
-        network.sandbox_psc_attachment_self_link = attachment.map(str::to_string);
-        network
-    }
-
-    async fn create_with_network(
-        egress: SandboxEgress,
-        attachment: Option<&str>,
-        expect_attachment: Option<&'static str>,
-    ) -> crate::error::Result<()> {
-        let mut m = MockAgentPlatformApi::new();
-        m.expect_create_template()
-            .withf(move |_, template| {
-                template
-                    .egress_control_config
-                    .as_ref()
-                    .and_then(|e| e.network_attachment.as_deref())
-                    == expect_attachment
-            })
-            .returning(|_, _| Ok(pending_op()));
-        m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
-        m.expect_get_template()
-            .returning(|_, id| Ok(active_template(id)));
-        m.expect_list_templates()
-            .returning(|_| Ok(vec![active_template("tpl1")]));
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(sandbox_with(egress, "ubuntu:24.04", None, None))
-            .controller(GcpAgentPlatformTemplateController::default())
-            .platform(Platform::Gcp)
-            .service_provider(provider_with(Arc::new(m)))
-            .with_test_dependencies()
-            .with_dependency(
-                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("agent-sbx"))
-                    .build(),
-                GcpAgentPlatformEngineController::mock_ready("eng"),
-            )
-            .with_dependency(
-                alien_core::Network::new("default-network".to_string())
-                    .settings(alien_core::NetworkSettings::UseDefault)
-                    .build(),
-                network_with(attachment),
-            )
-            .build()
-            .await
-            .expect("executor builds");
-        executor.run_until_terminal().await
-    }
-
     /// A container that exits leaves the template FAILED with no reason. The create must stop at
     /// once and say what usually causes it, not poll a template that will never become ACTIVE.
     #[tokio::test]
@@ -1666,36 +1534,6 @@ mod tests {
         );
         assert!(message.contains("exits"), "{message}");
         assert!(message.contains("foreground"), "{message}");
-    }
-
-    #[tokio::test]
-    async fn an_internet_sandbox_template_carries_the_setup_created_attachment() {
-        create_with_network(
-            SandboxEgress::Internet,
-            Some("https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/networkAttachments/na"),
-            Some("projects/p/regions/us-central1/networkAttachments/na"),
-        )
-        .await
-        .expect("create succeeds with the attachment");
-    }
-
-    #[tokio::test]
-    async fn an_internet_sandbox_without_the_attachment_is_refused_not_created_on_the_default_network(
-    ) {
-        let result = create_with_network(SandboxEgress::Internet, None, None).await;
-        let message = format!("{:?}", result.expect_err("create must not proceed"));
-        assert!(message.contains("re-run setup"), "{message}");
-    }
-
-    #[tokio::test]
-    async fn a_sandbox_that_needs_no_private_network_keeps_the_default_placement() {
-        create_with_network(
-            SandboxEgress::Allow,
-            Some("projects/p/regions/r/networkAttachments/na"),
-            None,
-        )
-        .await
-        .expect("create succeeds on the default placement");
     }
 
     #[tokio::test]
@@ -1763,7 +1601,7 @@ mod tests {
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
         let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
-        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
             .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
@@ -1774,15 +1612,13 @@ mod tests {
     }
 
     #[test]
-    fn build_template_body_declares_preview_ports_disk_and_private_network() {
+    fn build_template_body_declares_preview_ports_and_disk() {
         let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
         sandbox.preview_ports = vec![8081, 8090, 8080];
-        let attachment = "projects/p/regions/us-central1/networkAttachments/a2657-na";
         let body = build_template_body(
             &sandbox,
             "agent-sbx",
             &deployment_config(None, None),
-            Some(attachment),
         )
         .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
@@ -1801,17 +1637,12 @@ mod tests {
             wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
             "8Gi"
         );
-        assert_eq!(wire["egressControlConfig"]["networkAttachment"], attachment);
-        assert_eq!(
-            wire["ingressControlConfig"]["enablePrivateServiceConnect"], true,
-            "PSC-I and PSC-E are enabled together"
-        );
     }
 
     #[test]
-    fn build_template_body_without_a_network_attachment_leaves_placement_default() {
+    fn build_template_body_leaves_network_placement_default() {
         let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
-        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
             .expect("builds");
         let wire = serde_json::to_value(&body).expect("serializes");
         assert!(wire["egressControlConfig"]

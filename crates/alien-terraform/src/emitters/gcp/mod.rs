@@ -18,7 +18,6 @@ pub mod queue;
 pub mod remote_bindings;
 pub mod remote_stack_management;
 pub mod sandbox;
-pub mod sandbox_network;
 pub mod service_account;
 pub mod service_activation;
 pub mod storage;

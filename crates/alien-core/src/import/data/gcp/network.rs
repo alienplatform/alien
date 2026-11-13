@@ -23,8 +23,4 @@ pub struct GcpNetworkImportData {
     pub nat_name: Option<String>,
     /// True when the VPC is owned outside this stack.
     pub is_byo_vpc: bool,
-    /// Self-link of the network attachment sandboxes use for Private Service Connect egress.
-    /// Present only when the stack has a sandbox with `internet` egress or preview ports.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox_psc_attachment_self_link: Option<String>,
 }

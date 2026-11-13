@@ -2130,13 +2130,6 @@ expression: schemas
           "null"
         ]
       },
-      "sandboxPscAttachmentSelfLink": {
-        "description": "Self-link of the network attachment sandboxes use for Private Service Connect egress. Present only when the stack has a sandbox with `internet` egress or preview ports.",
-        "type": [
-          "string",
-          "null"
-        ]
-      },
       "subnetSelfLinks": {
         "description": "Subnetwork self-links across the configured regions.",
         "items": {

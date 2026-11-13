@@ -1917,7 +1917,6 @@ fn running_with_route(id: &str, expire_time: &str) -> SandboxEnvironment {
     sandbox.connection_info = Some(alien_gcp_clients::gcp::agent_platform::ConnectionInfo {
         load_balancer_hostname: None,
         routing_token: Some("route-1".to_string()),
-        service_attachment: None,
     });
     sandbox
 }
