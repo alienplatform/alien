@@ -33,6 +33,8 @@ pub struct RerunToken {
     pub token: String,
     /// Made by the Operator for this run: a 401 later means a newer rerun took over.
     pub in_cluster: bool,
+    /// When an in-cluster key stops working.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl fmt::Debug for RerunToken {
@@ -40,6 +42,7 @@ impl fmt::Debug for RerunToken {
         f.debug_struct("RerunToken")
             .field("token", &"<redacted>")
             .field("in_cluster", &self.in_cluster)
+            .field("expires_at", &self.expires_at)
             .finish()
     }
 }
@@ -81,16 +84,18 @@ pub async fn resolve(
         return Ok(RerunToken {
             token,
             in_cluster: false,
+            expires_at: None,
         });
     }
     let mut refusal = None;
     if tracked.platform == "kubernetes" {
         let (release, namespace) = helm_target(tracked, access);
         match fetch(&release, &namespace, access).await {
-            Ok(token) => {
+            Ok((token, expires_at)) => {
                 return Ok(RerunToken {
                     token,
                     in_cluster: true,
+                    expires_at: Some(expires_at),
                 })
             }
             Err(reason) => refusal = Some(reason),
@@ -100,7 +105,16 @@ pub async fn resolve(
         return Ok(RerunToken {
             token,
             in_cluster: false,
+            expires_at: None,
         });
+    }
+    if refusal.as_deref() == Some(REMOVING) {
+        return Err(AlienError::new(ErrorData::SetupTokenRequired {
+            message: format!(
+                "Cannot update \"{}\": it is being removed. Nothing was changed.",
+                tracked.name
+            ),
+        }));
     }
     Err(setup_token_required(
         &tracked.name,
@@ -117,7 +131,7 @@ async fn fetch(
     release: &str,
     namespace: &str,
     access: &KubeAccess,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<(String, DateTime<Utc>), String> {
     let mut command = Command::new("kubectl");
     if let Some(kubeconfig) = &access.kubeconfig {
         // The same variable kubectl reads, so a list of files works too.
@@ -155,8 +169,10 @@ async fn fetch(
     if printed.credential.is_empty() || printed.expires_at <= Utc::now() {
         return Err("the Operator returned an expired answer".to_string());
     }
-    Ok(printed.credential)
+    Ok((printed.credential, printed.expires_at))
 }
+
+const REMOVING: &str = "the deployment is being removed";
 
 /// One line saying why no key came back, from `kubectl exec`'s stderr.
 fn failure_reason(stderr: &str, release: &str, namespace: &str) -> String {
@@ -166,6 +182,8 @@ fn failure_reason(stderr: &str, release: &str, namespace: &str) -> String {
         "the Operator has not finished enrolling yet".into()
     } else if has("setup-credential: refused") {
         "the Operator's key was not accepted".into()
+    } else if has("setup-credential: removing") {
+        REMOVING.into()
     } else if has("setup-credential: unsupported") {
         "the manager cannot issue a key from the Operator".into()
     } else if has("setup-credential: unavailable") {
@@ -219,6 +237,15 @@ pub fn took_over(name: &str) -> AlienError<ErrorData> {
     })
 }
 
+/// The 15-minute key ran out before the run finished.
+pub fn key_expired(name: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::UpdateTookOver {
+        message: format!(
+            "The update key for \"{name}\" expired after 15 minutes; this run stopped. Your deployment keeps running. Run it again."
+        ),
+    })
+}
+
 /// Whether `error` or a cause is an HTTP 401.
 pub fn is_unauthorized(error: &AlienError<ErrorData>) -> bool {
     let mut refused = error.http_status_code == Some(401);
@@ -233,18 +260,21 @@ pub fn is_unauthorized(error: &AlienError<ErrorData>) -> bool {
 /// Records that a run uses an in-cluster key, and for which deployment, so a
 /// 401 later in the run can be explained.
 #[derive(Default)]
-pub struct InClusterUse(Mutex<Option<String>>);
+pub struct InClusterUse(Mutex<Option<(String, Option<DateTime<Utc>>)>>);
 
 impl InClusterUse {
-    pub fn mark(&self, name: &str) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(name.to_string());
+    pub fn mark(&self, name: &str, expires_at: Option<DateTime<Utc>>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((name.to_string(), expires_at));
     }
 
     /// Replace a 401 from a run that used an in-cluster key with the takeover message.
     pub fn explain(&self, error: AlienError<ErrorData>) -> AlienError<ErrorData> {
         let name = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
         match name {
-            Some(name) if is_unauthorized(&error) => took_over(&name),
+            Some((name, Some(expires_at))) if is_unauthorized(&error) && Utc::now() >= expires_at => {
+                key_expired(&name)
+            }
+            Some((name, _)) if is_unauthorized(&error) => took_over(&name),
             _ => error,
         }
     }
@@ -352,7 +382,7 @@ mod tests {
         unauthorized.http_status_code = Some(401);
         let untouched = usage.explain(unauthorized.clone());
         assert!(untouched.to_string().contains("refused"));
-        usage.mark("prod");
+        usage.mark("prod", None);
         let explained = usage.explain(unauthorized);
         assert_eq!(
             explained.message,
@@ -371,7 +401,7 @@ mod tests {
         retired.code = "DEPLOYMENT_KEY_RETIRED".into();
         for usage in [InClusterUse::default(), {
             let usage = InClusterUse::default();
-            usage.mark("prod");
+            usage.mark("prod", None);
             usage
         }] {
             let shown = usage.explain(retired.clone());
@@ -382,10 +412,32 @@ mod tests {
     }
 
     #[test]
+    fn a_401_after_the_key_expired_says_so_not_a_takeover() {
+        let usage = InClusterUse::default();
+        usage.mark("prod", Some(Utc::now() - chrono::Duration::seconds(1)));
+        let mut unauthorized = AlienError::new(ErrorData::GenericError {
+            message: "refused".into(),
+        });
+        unauthorized.http_status_code = Some(401);
+        let shown = usage.explain(unauthorized).message;
+        assert!(shown.contains("expired after 15 minutes"), "{shown}");
+        assert!(!shown.contains("took over"));
+    }
+
+    #[test]
+    fn a_removing_deployment_gets_its_own_reason() {
+        assert_eq!(
+            failure_reason("setup-credential: removing", "r", "n"),
+            REMOVING
+        );
+    }
+
+    #[test]
     fn debug_output_never_holds_the_key() {
         let token = RerunToken {
             token: "ax_setup_secret_value".into(),
             in_cluster: true,
+            expires_at: None,
         };
         assert!(!format!("{token:?}").contains("ax_setup_secret_value"));
     }

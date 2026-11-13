@@ -4350,7 +4350,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 }
 
 async fn up_command_with(
-    args: UpArgs,
+    mut args: UpArgs,
     embedded_config: Option<&DeployCliConfig>,
     in_cluster: &InClusterUse,
 ) -> Result<()> {
@@ -4377,6 +4377,16 @@ async fn up_command_with(
             message: e,
         })
     })?;
+    if platform == Platform::Kubernetes {
+        // A rerun without --namespace/--release keeps the install's own location.
+        if let Some(saved) = DeploymentTracker::new()?
+            .get(&name)
+            .and_then(|tracked| tracked.helm.clone())
+        {
+            args.helm_release.get_or_insert(saved.release);
+            args.namespace.get_or_insert(saved.namespace);
+        }
+    }
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     if args.setup_update {
@@ -5671,7 +5681,7 @@ async fn resolve_deployment_info(
             )
             .await?;
             if rerun.in_cluster {
-                in_cluster.mark(name);
+                in_cluster.mark(name, rerun.expires_at);
             }
             let token = rerun.token;
             let manager_url = args

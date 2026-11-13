@@ -155,7 +155,7 @@ async fn status_command_with(
             )
             .await?;
             if rerun.in_cluster {
-                in_cluster.mark(&args.name);
+                in_cluster.mark(&args.name, rerun.expires_at);
             }
             Some(rerun.token)
         }

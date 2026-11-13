@@ -141,7 +141,7 @@ async fn down_command_with(
             )
             .await?;
             if rerun.in_cluster {
-                in_cluster.mark(&tracked.name);
+                in_cluster.mark(&tracked.name, rerun.expires_at);
             }
             let token = rerun.token;
             let url = args
