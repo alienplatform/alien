@@ -1199,6 +1199,16 @@ impl Sandbox {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
 
+        // GCP Agent Platform has no deployment-VPC egress gateway yet, so `internet` would plan
+        // cleanly and then give the sandbox no gateway-enforced policy. Refuse it here until the
+        // gateway is hosted.
+        if platform == Platform::Gcp && matches!(self.egress, SandboxEgress::Internet) {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: "egress internet: the GCP Agent Platform backend has no egress gateway yet; declare egress none".to_string(),
+                platform: platform.to_string(),
+            }));
+        }
+
         if !self.preview_ports.is_empty() {
             capabilities.require(SandboxCapability::Preview, platform)?;
         }
@@ -1808,6 +1818,17 @@ mod tests {
 
     /// A URI with no token must come back whole, because every bundle configured today has none
     /// and emitting one differently would change every existing customer's template.
+    #[test]
+    fn gcp_refuses_internet_egress_at_plan_time_and_still_takes_none() {
+        let refused = sandbox_with(SandboxEgress::Internet, vec![])
+            .validate_for_platform(Platform::Gcp)
+            .unwrap_err();
+        assert!(refused.to_string().contains("egress gateway"), "{refused}");
+        sandbox_with(SandboxEgress::None, vec![])
+            .validate_for_platform(Platform::Gcp)
+            .unwrap();
+    }
+
     #[test]
     fn only_internet_egress_or_preview_ports_need_the_gcp_private_network() {
         assert!(sandbox_with(SandboxEgress::Internet, vec![]).needs_gcp_private_network());
