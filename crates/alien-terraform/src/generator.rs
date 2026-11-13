@@ -32,6 +32,7 @@ use alien_core::{
     TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::generators::signing_limits;
 use hcl::{
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
@@ -103,8 +104,13 @@ pub struct TerraformOptions<'a> {
     pub stack_settings: StackSettings,
     /// Optional self-registration settings. When present, the generated module
     /// requires the configured provider and creates its registration resource
-    /// after raw infrastructure is resolved.
+    /// after raw infrastructure is resolved. Protected modules take none: they
+    /// carry no provider of the service that hosts them.
     pub registration: Option<TerraformRegistration>,
+    /// The setup a module registered outside Terraform reports in its outputs
+    /// (`register --import terraform` reads them). Required on protected
+    /// modules; set this or `registration`, not both.
+    pub setup_identity: Option<TerraformSetupIdentity>,
     /// Optional Helm chart install settings. Only Kubernetes targets with
     /// self-registration can install the chart because the chart needs the
     /// manager deployment id and deployment token.
@@ -112,10 +118,14 @@ pub struct TerraformOptions<'a> {
     /// AWS regions supported by the environment that produced this
     /// module. Empty means no generated region validation.
     pub supported_aws_regions: Vec<String>,
+    /// What a protected module pins from the CLI build: the machine-image publisher and the
+    /// verifier image. Unprotected modules ignore it.
+    pub pins: alien_core::SetupPins,
 }
 
 /// Terraform provider dependency used by self-registering modules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerraformRegistration {
     /// Local Terraform provider name, used in `required_providers`.
     pub provider_name: String,
@@ -135,6 +145,23 @@ impl TerraformRegistration {
     fn provider_resource_type(&self) -> String {
         format!("{}_{}", self.provider_name, self.resource_type)
     }
+
+    fn setup_identity(&self) -> TerraformSetupIdentity {
+        TerraformSetupIdentity {
+            setup_target: self.setup_target.clone(),
+            setup_fingerprint: self.setup_fingerprint.clone(),
+            setup_fingerprint_version: self.setup_fingerprint_version,
+        }
+    }
+}
+
+/// Which setup a module is, as its import request names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerraformSetupIdentity {
+    /// `aws`, `gcp` or `azure`.
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +300,31 @@ fn generate_terraform_module_internal(
     Ok(module)
 }
 
+/// The setup the module reports in its outputs. A protected module never runs the provider of
+/// the service that hosts it (that code would run with the customer's credentials during
+/// `terraform apply`), so it reports through its outputs and must say which setup it is.
+fn module_setup_identity(options: &TerraformOptions<'_>) -> Result<Option<TerraformSetupIdentity>> {
+    let refuse = |reason: &str| {
+        Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render the Terraform module".to_string(),
+            reason: reason.to_string(),
+        }))
+    };
+    match (&options.registration, &options.setup_identity) {
+        (Some(_), Some(_)) => refuse(
+            "a module that registers through its provider reports that registration's setup; pass a setup identity only without registration",
+        ),
+        (Some(_), None) if options.stack_settings.signing.is_some() => refuse(
+            "a protected module registers through `register --import terraform`, not a provider of the service that hosts it",
+        ),
+        (None, None) if options.stack_settings.signing.is_some() => refuse(
+            "a protected module needs its setup target and fingerprint for `register --import terraform`",
+        ),
+        (Some(registration), None) => Ok(Some(registration.setup_identity())),
+        (None, identity) => Ok(identity.clone()),
+    }
+}
+
 /// Render the module without checking it against IAM quotas.
 pub(crate) fn render_terraform_module(
     stack: &Stack,
@@ -282,6 +334,14 @@ pub(crate) fn render_terraform_module(
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
+    // Advanced settings replace the deployment settings whole at apply time; a protected
+    // module fixes what it runs with in the module itself.
+    let profile = if options.stack_settings.signing.is_some() {
+        alien_core::SetupConfigurationProfile::Standard
+    } else {
+        profile
+    };
+    let setup_identity = module_setup_identity(&options)?;
     if target == TerraformTarget::Eks
         && matches!(
             options
@@ -401,6 +461,7 @@ pub(crate) fn render_terraform_module(
             targets_kubernetes: target.is_kubernetes(),
             stack_settings: &stack_settings,
             names: &labels,
+            pins: &options.pins,
         };
 
         if let Some(input_id) = resource.enabled_when.as_deref() {
@@ -503,11 +564,22 @@ pub(crate) fn render_terraform_module(
     }
     apply_resource_dependencies(stack, &mut per_resource);
     if platform == alien_core::Platform::Aws {
+        // The verifier's role keeps its one inline policy: setup's limits name it, and its
+        // grants are the verifier's alone.
+        let verifier = stack
+            .resources()
+            .find(|(_, entry)| {
+                entry.config.resource_type() == alien_core::SigningVerifier::RESOURCE_TYPE
+            })
+            .and_then(|(id, _)| per_resource.shift_remove_full(id.as_str()));
         crate::aws_role_policies::consolidate_role_policies(
             &mut per_resource,
             &shared_locals,
             &mut gated,
         )?;
+        if let Some((index, id, fragment)) = verifier {
+            per_resource.shift_insert(index, id, fragment);
+        }
     }
     // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
     // Making its subnets depend on those roles creates a Terraform cycle.
@@ -515,7 +587,7 @@ pub(crate) fn render_terraform_module(
         apply_aws_network_iam_dependency(stack, &mut per_resource);
     }
     if matches!(platform, alien_core::Platform::Azure) {
-        emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
+        emit_azure_setup_resource_role_definitions(&mut per_resource, stack, &stack_settings)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
     // Every fragment is emitted and every generator-injected block exists by
@@ -556,6 +628,44 @@ pub(crate) fn render_terraform_module(
     if let Some(barrier) = &gcp_iam_propagation_barrier {
         import_depends_on.push(barrier.clone());
     }
+    let management_label = stack
+        .resources()
+        .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+        .map(|(id, _)| resource_label_for_file(&labels, id).to_string());
+    let mut signing = signing_blocks(
+        &stack_settings,
+        target,
+        management_label.as_deref(),
+        &stack.application_vault_ids(),
+    )?;
+    // The signing parameters and the verifier need their APIs (Parameter Manager, Cloud Run)
+    // enabled first.
+    let service_activations: Vec<Expression> = per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter(|block| {
+            block.labels.first().map(|kind| kind.as_str()) == Some("google_project_service")
+        })
+        .filter_map(resource_address)
+        .collect();
+    if !service_activations.is_empty() {
+        let verifier = per_resource
+            .iter_mut()
+            .filter(|(id, _)| {
+                stack.resources.get(id.as_str()).is_some_and(|entry| {
+                    entry.config.resource_type() == alien_core::SigningVerifier::RESOURCE_TYPE
+                })
+            })
+            .flat_map(|(_, fragment)| fragment.resource_blocks.iter_mut());
+        for block in signing
+            .iter_mut()
+            .chain(verifier)
+            .filter(|block| resource_address(block).is_some())
+        {
+            upsert_depends_on(block, &service_activations);
+        }
+    }
+    import_depends_on.extend(signing.iter().filter_map(resource_address));
 
     let network_vars = network_extra_variables(stack, &labels);
     let include_kubernetes_provider = target.is_kubernetes()
@@ -585,10 +695,11 @@ pub(crate) fn render_terraform_module(
     // without a Frozen sandbox declares nothing extra.
     // Service agents (`google_project_service_identity`) are google-beta-only too: a data store
     // with a customer key needs its agent to exist before the key can name it.
-    let include_google_beta_provider = has_resource_type(
-        &per_resource,
-        crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
-    ) || has_resource_type(&per_resource, "google_project_service_identity");
+    let include_google_beta_provider =
+        has_resource_type(
+            &per_resource,
+            crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
+        ) || has_resource_type(&per_resource, "google_project_service_identity");
     // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
     // of its own, and a missing declaration fails at init rather than at plan.
     let include_time_provider = gcp_iam_propagation_barrier.is_some()
@@ -666,7 +777,7 @@ pub(crate) fn render_terraform_module(
             setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
-            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            network_mode_names_subnets(stack, target),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
             profile,
         )?)?,
@@ -770,6 +881,17 @@ pub(crate) fn render_terraform_module(
             files.insert(file_name, render_body(body)?);
         }
     }
+    if !signing.is_empty() {
+        files.insert(
+            "signing.tf".to_string(),
+            render_body(Body::from(
+                signing
+                    .into_iter()
+                    .map(Structure::Block)
+                    .collect::<Vec<_>>(),
+            ))?,
+        );
+    }
     if !gcp_iam_propagation_dependencies.is_empty() {
         files.insert(
             "iam_propagation.tf".to_string(),
@@ -783,6 +905,8 @@ pub(crate) fn render_terraform_module(
             setup_import_format_version,
             stack_settings.setup_management,
             options.registration.as_ref(),
+            setup_identity.as_ref(),
+            stack_settings.signing.is_some(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
         )?)?,
@@ -816,6 +940,8 @@ pub(crate) fn render_terraform_module(
             target,
             setup_import_format_version,
             options.registration.as_ref(),
+            setup_identity.as_ref(),
+            protected_outputs(target, &stack_settings, management_label.as_deref()),
             &stack_inputs,
             deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?
                 .into_iter()
@@ -935,7 +1061,12 @@ pub(crate) fn render_terraform_module(
     // `terraform fmt -check` expects. If terraform isn't installed we ship
     // the hcl-rs output as-is \u2014 it parses identically; only attribute
     // equals-sign alignment differs.
-    let _ = format_with_terraform(&mut module);
+    //
+    // A protected module skips it: a signed release records its digest, and
+    // its bytes must not depend on what is on the renderer's PATH.
+    if stack_settings.signing.is_none() {
+        let _ = format_with_terraform(&mut module);
+    }
 
     Ok(module)
 }
@@ -1117,12 +1248,17 @@ fn append_permission_entry(
 fn emit_azure_setup_resource_role_definitions(
     per_resource: &mut IndexMap<String, TfFragment>,
     stack: &Stack,
+    settings: &StackSettings,
 ) -> Result<()> {
     let Some((_resource_id, fragment)) = per_resource.iter_mut().next() else {
         return Ok(());
     };
 
-    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(stack, fragment)
+    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(
+        stack,
+        fragment,
+        settings.signing.is_some(),
+    )
 }
 
 fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
@@ -1835,6 +1971,267 @@ fn body_is_empty(body: &Body) -> bool {
     body.iter().next().is_none()
 }
 
+/// The blocks that hold a protected install's signing settings and ledger: setup alone
+/// writes the settings. Their names start with `/signed/` (AWS) or `signed-` (GCP), which no
+/// management grant on `<prefix>-*` reaches.
+///
+/// The fingerprint and channel are literals, so the module's digest pins them; the
+/// `signing_fingerprint` variable only shows the fingerprint and refuses any other value.
+///
+/// On Azure the resource group emitter writes the settings tag and the management emitter the
+/// ledger, the verifier identity and the deny settings; this adds the verifier's Container App.
+fn signing_blocks(
+    settings: &StackSettings,
+    target: TerraformTarget,
+    management_label: Option<&str>,
+    application_vaults: &[String],
+) -> Result<Vec<Block>> {
+    let Some(signing) = &settings.signing else {
+        return Ok(Vec::new());
+    };
+    let fingerprint_variable = signing_fingerprint_variable(&signing.fingerprint);
+    let prefix = "${local.resource_prefix}";
+    let mut signing_settings = signing.settings("stack")?;
+    signing_settings.prefix = prefix.to_string();
+    let settings_value = escaped_template(&signing_settings.to_json());
+    let ledger_json = alien_signing::Ledger::new(prefix).to_json();
+    // Standard SSM parameters and Parameter Manager versions hold far more than this; the
+    // ledger keeps heads only. A prefix is at most 128 characters.
+    for (name, json) in [
+        ("settings", signing_settings.to_json()),
+        ("ledger", ledger_json.clone()),
+    ] {
+        if json.replace(prefix, &"x".repeat(128)).len() > 4096 {
+            return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "Terraform".to_string(),
+                reason: format!("the signing {name} could pass 4096 bytes"),
+            }));
+        }
+    }
+    let ledger_value = escaped_template(&ledger_json);
+    match target {
+        TerraformTarget::Aws => Ok([
+            vec![fingerprint_variable],
+            aws_management_limits_blocks(management_label, application_vaults),
+            vec![
+                resource_block(
+                    "aws_ssm_parameter",
+                    "signing_fingerprint",
+                    [
+                        attr(
+                            "name",
+                            expr::template(alien_signing::settings::names::aws_settings(prefix)),
+                        ),
+                        attr("type", Expression::String("String".to_string())),
+                        attr("tier", Expression::String("Standard".to_string())),
+                        attr("value", settings_value),
+                    ],
+                ),
+                resource_block(
+                    "aws_ssm_parameter",
+                    "signing_state",
+                    [
+                        attr(
+                            "name",
+                            expr::template(alien_signing::settings::names::aws_ledger(prefix)),
+                        ),
+                        attr("type", Expression::String("String".to_string())),
+                        attr("tier", Expression::String("Standard".to_string())),
+                        attr("value", ledger_value),
+                        // Setup writes the empty ledger once; from then on only the verifier
+                        // writes it, and it only rises. Without this, the next apply (a setup
+                        // update) would write the empty ledger back and let an install accept
+                        // releases older than the ones it already ran.
+                        nested(block(
+                            "lifecycle",
+                            [attr(
+                                "ignore_changes",
+                                Expression::Array(vec![expr::raw("value")]),
+                            )],
+                        )),
+                    ],
+                ),
+            ],
+        ]
+        .concat()),
+        TerraformTarget::Gcp => {
+            let settings_label = "signing_fingerprint";
+            Ok(vec![
+                fingerprint_variable,
+                resource_block(
+                    "google_parameter_manager_parameter",
+                    settings_label,
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr(
+                            "parameter_id",
+                            expr::template(alien_signing::settings::names::gcp_settings(prefix)),
+                        ),
+                        attr("format", Expression::String("JSON".to_string())),
+                    ],
+                ),
+                resource_block(
+                    "google_parameter_manager_parameter_version",
+                    settings_label,
+                    [
+                        attr(
+                            "parameter",
+                            expr::traversal([
+                                "google_parameter_manager_parameter",
+                                settings_label,
+                                "id",
+                            ]),
+                        ),
+                        attr("parameter_version_id", Expression::String("v1".to_string())),
+                        attr("parameter_data", settings_value),
+                    ],
+                ),
+                // The ledger is a secret, not a parameter: the verifier adds a version per
+                // release, and deleting a secret takes its versions along, so teardown
+                // finishes; Parameter Manager refuses to delete a parameter with versions.
+                resource_block(
+                    "google_secret_manager_secret",
+                    "signing_state",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr(
+                            "secret_id",
+                            expr::template(alien_signing::settings::names::gcp_ledger(prefix)),
+                        ),
+                        nested(block(
+                            "replication",
+                            [nested(block("auto", Vec::<Structure>::new()))],
+                        )),
+                    ],
+                ),
+                resource_block(
+                    "google_secret_manager_secret_version",
+                    "signing_state",
+                    [
+                        attr(
+                            "secret",
+                            expr::traversal([
+                                "google_secret_manager_secret",
+                                "signing_state",
+                                "id",
+                            ]),
+                        ),
+                        attr("secret_data", ledger_value),
+                    ],
+                ),
+            ])
+        }
+        TerraformTarget::Azure => Ok(vec![fingerprint_variable]),
+        TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
+            Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("protect a {} install through Terraform", target.name()),
+                reason: "on Kubernetes the chart's signing values hold the settings".to_string(),
+            }))
+        }
+    }
+}
+
+/// The limits on a protected AWS install's management role, `<prefix>-management-limits`; the
+/// same as the CloudFormation template's.
+fn aws_management_limits_blocks(
+    management_label: Option<&str>,
+    application_vaults: &[String],
+) -> Vec<Block> {
+    let prefix = "${local.resource_prefix}";
+    let account = "${data.aws_caller_identity.current.account_id}";
+    let region = "${data.aws_region.current.region}";
+    let verifier = signing_limits::aws_verifier_name(prefix);
+    let mut blocks = Vec::new();
+    if let Some(management) = management_label {
+        blocks.push(resource_block(
+            "aws_iam_policy",
+            "management_limits",
+            [
+                attr(
+                    "name",
+                    expr::template(signing_limits::aws_management_limits_name(prefix)),
+                ),
+                attr(
+                    "description",
+                    expr::template(format!(
+                        "Limits that hold even if another policy grants more: only this module changes what the install trusts; only {verifier} changes what runs; machines boot only the publisher's images."
+                    )),
+                ),
+                attr(
+                    "policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(
+                        signing_limits::aws_management_limits(
+                            prefix,
+                            account,
+                            region,
+                            application_vaults,
+                        ),
+                    ),
+                ),
+            ],
+        ));
+        blocks.push(resource_block(
+            "aws_iam_role_policy_attachment",
+            "management_limits",
+            [
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", management, "name"]),
+                ),
+                attr(
+                    "policy_arn",
+                    expr::traversal(["aws_iam_policy", "management_limits", "arn"]),
+                ),
+            ],
+        ));
+    }
+    blocks
+}
+
+/// A quoted template whose value is `text` (JSON, a CEL condition), keeping its `${...}`
+/// interpolations.
+pub(crate) fn escaped_template(text: &str) -> Expression {
+    expr::template(text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Variable that shows a protected install's signing fingerprint and accepts only that value.
+pub const SIGNING_FINGERPRINT_VARIABLE: &str = "signing_fingerprint";
+
+fn signing_fingerprint_variable(fingerprint: &str) -> Block {
+    let literal = serde_json::Value::String(fingerprint.to_string()).to_string();
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(SIGNING_FINGERPRINT_VARIABLE.to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "Only software and settings signed with the vendor's keys run here. Check that this matches the fingerprint on the vendor's security page."
+                        .to_string(),
+                ),
+            ),
+            attr("default", Expression::String(fingerprint.to_string())),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(format!("var.{SIGNING_FINGERPRINT_VARIABLE} == {literal}")),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "This module runs only software signed with one fingerprint; it can't be changed."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )),
+        ]),
+    }
+}
+
 fn resource_label_for_file<'a>(
     labels: &'a IndexMap<String, String>,
     resource_id: &'a str,
@@ -2348,16 +2745,19 @@ fn variables_body(
             .is_some()
             .then(|| deployment_name_default.to_string()),
     )));
-    if crate::verified_setup::supported(target, stack_settings.setup_management, registration) {
-        blocks.extend(
-            crate::verified_setup::variables(target)
-                .into_iter()
-                .map(nested),
-        );
-    } else {
-        // Only a module that registers itself reads the token. Without
-        // registration the input stays declared so callers that pass it keep working.
-        blocks.push(nested(variable_block(
+    // A protected module registers through the deploy CLI after apply, which takes the token
+    // and the endpoint itself; the module never holds them.
+    if stack_settings.signing.is_none() {
+        if crate::verified_setup::supported(target, stack_settings.setup_management, registration) {
+            blocks.extend(
+                crate::verified_setup::variables(target)
+                    .into_iter()
+                    .map(nested),
+            );
+        } else {
+            // Only a module that registers itself reads the token. Without
+            // registration the input stays declared so callers that pass it keep working.
+            blocks.push(nested(variable_block(
             "token",
             if registration.is_none() {
                 "Not used: this module does not register the deployment."
@@ -2369,11 +2769,12 @@ fn variables_body(
             registration.is_none().then(|| expr::raw("null")),
             true,
         )));
+        }
+        blocks.push(nested(management_url_variable_block(
+            registration.is_some(),
+            setup_only,
+        )));
     }
-    blocks.push(nested(management_url_variable_block(
-        registration.is_some(),
-        setup_only,
-    )));
     if !setup_only {
         blocks.push(nested(string_enum_variable_block(
             "deployment_model",
@@ -2551,17 +2952,48 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
-        blocks.push(nested(bool_variable_block(
+        let mut manage_roles = bool_variable_block(
             "gcp_manage_custom_roles",
             "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack.",
             Some(true),
-        )));
-        blocks.push(nested(variable_block(
+        );
+        let mut role_prefix = variable_block(
             "gcp_custom_role_prefix",
             "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix.",
             Some(Expression::String(String::new())),
             false,
-        )));
+        );
+        // Roles managed outside the module could grant management what only the verifier
+        // may do, so a protected module creates its own.
+        if stack_settings.signing.is_some() {
+            manage_roles.body.0.push(nested(block(
+                "validation",
+                [
+                    attr("condition", expr::raw("var.gcp_manage_custom_roles")),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "A protected module creates its own custom roles.".to_string(),
+                        ),
+                    ),
+                ],
+            )));
+            role_prefix.body.0.push(nested(block(
+                "validation",
+                [
+                    attr("condition", expr::raw("var.gcp_custom_role_prefix == \"\"")),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "A protected module names its custom roles after its own prefix."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )));
+        }
+        blocks.push(nested(manage_roles));
+        blocks.push(nested(role_prefix));
         if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
             blocks.push(nested(variable_block(
                 "network_mode",
@@ -3008,6 +3440,9 @@ fn advanced_settings_default_json(
         object.remove("telemetry");
         object.remove("heartbeats");
         object.remove("endpointAccess");
+        // Setup writes the signing settings into the install and pins them in this module; a
+        // later change to the registered settings changes neither, so they are not offered as one.
+        object.remove("signing");
         if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
             && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
             || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)
@@ -3270,6 +3705,15 @@ fn string_enum_variable_block(
 ///
 /// A restricted sandbox routes session egress through a VPC connector that must name subnets, and
 /// the account default VPC's cannot be enumerated at setup.
+/// Whether `network_mode` withholds `use-default`, so setup always names subnets: a restricted
+/// sandbox's connector needs them, and on AWS so does a protected stack's verifier, which launches
+/// machines only into subnets setup fixes (setup can't name the account default VPC's). On GCP
+/// setup names the default network's subnet, so the default stays offered there.
+fn network_mode_names_subnets(stack: &Stack, target: TerraformTarget) -> bool {
+    alien_core::restricts_network_mode(stack, target.is_kubernetes())
+        || (target == TerraformTarget::Aws && alien_core::verifier_launches_machines(stack))
+}
+
 fn network_mode_description(needs_named_subnets: bool) -> &'static str {
     if needs_named_subnets {
         "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC."
@@ -4021,22 +4465,40 @@ fn locals_body(
             ),
         ));
     }
-    body.push(attr(
-        "deployment_settings",
-        if setup_only {
-            expr::object([
-                ("deploymentModel", Expression::String("push".to_string())),
-                (
-                    "updates",
-                    Expression::String("approval-required".to_string()),
-                ),
-                ("telemetry", Expression::String("off".to_string())),
-                ("heartbeats", Expression::String("on".to_string())),
-            ])
-        } else {
-            stack_settings_expression(target, stack_settings, profile)
-        },
-    ));
+    let deployment_settings = if setup_only {
+        expr::object([
+            ("deploymentModel", Expression::String("push".to_string())),
+            (
+                "updates",
+                Expression::String("approval-required".to_string()),
+            ),
+            ("telemetry", Expression::String("off".to_string())),
+            ("heartbeats", Expression::String("on".to_string())),
+        ])
+    } else {
+        stack_settings_expression(target, stack_settings, profile)
+    };
+    // A protected install registers as protected: the signing settings the module pins ride in
+    // the settings it reports, last, so nothing merged before them can change them.
+    let deployment_settings = match &stack_settings.signing {
+        Some(signing) => Expression::FuncCall(Box::new(
+            hcl::expr::FuncCall::builder(Identifier::sanitized("merge"))
+                .arg(deployment_settings)
+                .arg(expr::object([(
+                    "signing",
+                    expr::object([
+                        (
+                            "fingerprint",
+                            Expression::String(signing.fingerprint.clone()),
+                        ),
+                        ("channel", Expression::String(signing.channel.clone())),
+                    ]),
+                )]))
+                .build(),
+        )),
+        None => deployment_settings,
+    };
+    body.push(attr("deployment_settings", deployment_settings));
     body.push(attr(
         "deployment_resources",
         crate::emitters::enabled::registration_list(registration_resources),
@@ -4278,6 +4740,8 @@ fn registration_body(
     setup_import_format_version: u32,
     setup_management: alien_core::SetupManagement,
     registration: Option<&TerraformRegistration>,
+    setup_identity: Option<&TerraformSetupIdentity>,
+    protected: bool,
     depends_on: &[Expression],
     input_values: Expression,
 ) -> Result<Body> {
@@ -4383,8 +4847,8 @@ fn registration_body(
                 (
                     "setup_target",
                     Expression::String(
-                        registration
-                            .map(|r| r.setup_target.clone())
+                        setup_identity
+                            .map(|identity| identity.setup_target.clone())
                             .unwrap_or_default(),
                     ),
                 ),
@@ -4395,16 +4859,16 @@ fn registration_body(
                 (
                     "setup_fingerprint",
                     Expression::String(
-                        registration
-                            .map(|r| r.setup_fingerprint.clone())
+                        setup_identity
+                            .map(|identity| identity.setup_fingerprint.clone())
                             .unwrap_or_default(),
                     ),
                 ),
                 (
                     "setup_fingerprint_version",
                     Expression::Number(hcl::Number::from(i64::from(
-                        registration
-                            .map(|r| r.setup_fingerprint_version)
+                        setup_identity
+                            .map(|identity| identity.setup_fingerprint_version)
                             .unwrap_or_default(),
                     ))),
                 ),
@@ -4422,7 +4886,9 @@ fn registration_body(
                 target
                     .is_kubernetes()
                     .then(|| ("basePlatform", expr::raw("local.deployment_base_platform"))),
-            ),
+            )
+            // A protected module has no token or endpoint: the deploy CLI registers it.
+            .filter(|(key, _)| !(protected && matches!(*key, "token" | "management_url"))),
         ),
     )];
     if let Some(depends_on_attr) = depends_on_attr {
@@ -4904,6 +5370,8 @@ fn outputs_body(
     target: TerraformTarget,
     setup_import_format_version: u32,
     registration: Option<&TerraformRegistration>,
+    setup_identity: Option<&TerraformSetupIdentity>,
+    protected_outputs: Vec<(&'static str, Expression, &'static str)>,
     stack_inputs: &[StackInputDefinition],
     deployer_secret_outputs: Vec<(String, Expression, String)>,
 ) -> Body {
@@ -4931,8 +5399,8 @@ fn outputs_body(
         (
             "deployment_setup_target",
             Expression::String(
-                registration
-                    .map(|registration| registration.setup_target.clone())
+                setup_identity
+                    .map(|identity| identity.setup_target.clone())
                     .unwrap_or_default(),
             ),
             "Setup target.",
@@ -4945,8 +5413,8 @@ fn outputs_body(
         (
             "deployment_setup_fingerprint",
             Expression::String(
-                registration
-                    .map(|registration| registration.setup_fingerprint.clone())
+                setup_identity
+                    .map(|identity| identity.setup_fingerprint.clone())
                     .unwrap_or_default(),
             ),
             "Setup compatibility fingerprint.",
@@ -4954,8 +5422,8 @@ fn outputs_body(
         (
             "deployment_setup_fingerprint_version",
             Expression::Number(hcl::Number::from(i64::from(
-                registration
-                    .map(|registration| registration.setup_fingerprint_version)
+                setup_identity
+                    .map(|identity| identity.setup_fingerprint_version)
                     .unwrap_or_default(),
             ))),
             "Setup fingerprint algorithm version.",
@@ -4987,6 +5455,7 @@ fn outputs_body(
             "Deployer input values JSON for registration flows managed outside Terraform.",
         ));
     }
+    outputs.extend(protected_outputs);
     if let Some(registration) = registration {
         outputs.push((
             "deployment_id",
@@ -5052,6 +5521,36 @@ fn outputs_body(
         .collect();
 
     Body::from(blocks)
+}
+
+/// What only a protected module outputs: the rest of what `register --import terraform` sends
+/// (the deployment name; the registration resource took it from `var.name`) and, on Azure, the
+/// signing vault `verify` reads the ledger from.
+fn protected_outputs(
+    target: TerraformTarget,
+    settings: &StackSettings,
+    management_label: Option<&str>,
+) -> Vec<(&'static str, Expression, &'static str)> {
+    if settings.signing.is_none() {
+        return Vec::new();
+    }
+    let mut outputs = vec![(
+        "deployment_name",
+        expr::raw("local.deployment_name"),
+        "Deployment name for registration.",
+    )];
+    if let (TerraformTarget::Azure, Some(management)) = (target, management_label) {
+        outputs.push((
+            "deployment_signing_vault",
+            expr::traversal([
+                "azurerm_key_vault",
+                &format!("{management}_signing"),
+                "name",
+            ]),
+            "Key Vault holding the install's signing ledger.",
+        ));
+    }
+    outputs
 }
 
 fn resource_inventory(stack: &Stack, fragments: &IndexMap<String, TfFragment>) -> String {
@@ -5133,18 +5632,25 @@ fn readme_md(
     emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> String {
-    let required_env = if registration.is_some() {
+    let protected = stack_settings.signing.is_some();
+    let required_env = if protected {
+        format!("export TF_VAR_name=\"{}\"", stack.id())
+    } else if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
     } else {
         format!("export TF_VAR_name=\"{}\"", stack.id())
     };
-    let registration_note = registration
+    let registration_note = if protected {
+        "This module carries no registration provider. After `terraform apply`, register it from the directory you applied in with the deploy CLI:\n\n```bash\n<deploy-cli> register --import terraform --dir . --token \"...\"\n```\n\nIt reads `terraform output -json` and sends the outputs below.\n".to_string()
+    } else {
+        registration
         .map(|_| {
             "Terraform registers the deployment after the setup resources are ready. The registration step consumes `local.deployment_management_config`, `local.deployment_settings`, and `local.deployment_resources`; keep those values intact if your organization wraps this module.\n".to_string()
         })
         .unwrap_or_else(|| {
             "This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.\n".to_string()
-        });
+        })
+    };
 
     // An installer reads "apply succeeded" as "the package is installed". For a runtime-built
     // sandbox that is not true, and the gap is minutes long, so the note sits right under the
@@ -5183,16 +5689,23 @@ fn readme_md(
 
     let deployment_name_default = default_deployment_name(display_name, stack.id());
     let display_name = display_name.unwrap_or_else(|| stack.id());
-    let mut input_sections = vec![readme_required_inputs(
-        registration
-            .is_some()
-            .then_some(deployment_name_default.as_str()),
-        stack_settings.setup_management == alien_core::SetupManagement::Automatic,
-    )];
-    if verified_setup::supported(target, stack_settings.setup_management, registration) {
+    let mut input_sections = vec![if protected {
+        "Required:\n\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string()
+    } else {
+        readme_required_inputs(
+            registration
+                .is_some()
+                .then_some(deployment_name_default.as_str()),
+            stack_settings.setup_management == alien_core::SetupManagement::Automatic,
+        )
+    }];
+    if !protected
+        && verified_setup::supported(target, stack_settings.setup_management, registration)
+    {
         input_sections.push(verified_setup::README_INPUTS.to_string());
     }
-    let registered = registration.is_some();
+    // A protected module has no `management_url` to list.
+    let registered = registration.is_some() || protected;
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
         && stack
             .resources
@@ -5228,7 +5741,7 @@ fn readme_md(
             // Not on a Kubernetes target: the sandbox is skipped there, so no connector exists
             // to demand subnets and the restriction would explain itself with a resource the
             // module does not contain.
-            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            network_mode_names_subnets(stack, target),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
         ));
     }
@@ -5278,6 +5791,11 @@ fn readme_md(
     } else {
         ""
     };
+    let verify_note = if protected && target == TerraformTarget::Gcp {
+        "## Verifying\n\nTo check this module against the vendor's signed release, run the deploy CLI's `verify --terraform <module-dir> --platform gcp --prefix <resource_prefix> --project <project>`. It reads the install's signing state with your own credentials. The ledger secret `signed-<resource_prefix>-state` needs `roles/secretmanager.secretAccessor` on that one secret, which Viewer roles don't include. Grant it to the identity that verifies:\n\n```bash\ngcloud secrets add-iam-policy-binding signed-<resource_prefix>-state --project=<project> --member=<principal> --role=roles/secretmanager.secretAccessor\n```\n\n"
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -5290,7 +5808,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
 {registration_note}\n\
-## Outputs\n\n\
+{verify_note}## Outputs\n\n\
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
@@ -5303,6 +5821,7 @@ Use your organization's normal backend and approval workflow. A typical local re
         required_env = required_env,
         runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
+        verify_note = verify_note,
         kubernetes_operations = kubernetes_operations,
         azure_sandbox_note = azure_sandbox_note,
         azure_identity_note = azure_identity_note,
@@ -5627,6 +6146,8 @@ mod tests {
             &Stack::new("app".into()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 display_name: None,
                 stack_settings: StackSettings {
@@ -5716,6 +6237,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             &Stack::new("product-terraform-test".to_string()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -5783,6 +6306,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                     &stack,
                     TerraformTarget::Aws,
                     TerraformOptions {
+                        setup_identity: None,
+                        pins: alien_core::SetupPins::compiled_in(),
                         display_name: None,
                         registry: &registry,
                         stack_settings: StackSettings::default(),
@@ -5886,6 +6411,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                 1,
                 alien_core::SetupManagement::Manual,
                 Some(&registration),
+                Some(&registration.setup_identity()),
+                false,
                 &[],
                 Expression::Object(Default::default()),
             )
@@ -5943,6 +6470,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             TerraformTarget::Aws,
             1,
             Some(&registration),
+            Some(&registration.setup_identity()),
+            Vec::new(),
             &[],
             Vec::new(),
         ))

@@ -149,9 +149,6 @@
           },
           {
             "port": 8080
-          },
-          {
-            "port": 7000
           }
         ],
         "priority": "high",
@@ -180,13 +177,13 @@
           "profile": "restricted",
           "readOnlyRootFilesystem": true,
           "runAsGroup": 10002,
-          "runAsUser": 10001
+          "runAsUser": 10001,
+          "writablePaths": [
+            "/var/cache/ledger"
+          ]
         },
         "stateful": true,
-        "stopGracePeriodSeconds": 300,
-        "tunnel": {
-          "port": 7000
-        }
+        "stopGracePeriodSeconds": 300
       },
       "dependencies": [],
       "lifecycle": "live"

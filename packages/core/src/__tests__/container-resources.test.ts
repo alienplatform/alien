@@ -30,6 +30,7 @@ it("keeps internet egress opt-in and container ports reachable through links", (
       runAsUser: 65532,
       runAsGroup: 65532,
       readOnlyRootFilesystem: true,
+      writablePaths: [],
     })
     .egress("internet")
     .build()

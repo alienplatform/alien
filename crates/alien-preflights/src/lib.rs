@@ -494,6 +494,8 @@ impl PreflightRegistry {
         // determined by the dependency graph, not mutation order.
 
         // Phase 0: Platform normalization (adjust values before anything else)
+        registry.add_mutation(Box::new(mutations::ProtectedManagementRefusalMutation));
+        registry.add_mutation(Box::new(mutations::ProtectedRedisRefusalMutation));
         registry.add_mutation(Box::new(mutations::ContainerResourcesMutation));
         registry.add_mutation(Box::new(mutations::AzureMemoryAdjustmentMutation));
 
@@ -507,6 +509,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::SandboxGatewayMutation));
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
+        registry.add_mutation(Box::new(mutations::SigningVerifierMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
         registry.add_mutation(Box::new(mutations::DeployerSecretsVaultMutation));
         registry.add_mutation(Box::new(mutations::SandboxBundleStorageMutation));

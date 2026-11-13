@@ -8,6 +8,7 @@ mod lambda_image;
 #[cfg(test)]
 mod lambda_tests;
 pub mod merge;
+pub mod pinned_base_images;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
@@ -34,8 +35,8 @@ use error::{DockdashResultExt, ErrorData, Result};
 use fs2::FileExt;
 use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
 use oci_client::manifest::{
-    ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_MEDIA_TYPE,
-    OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
+    ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+    IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
 };
 use oci_client::Reference;
 use rand::distr::Alphanumeric;
@@ -94,6 +95,9 @@ struct DedupeKey {
     src: String,
     toolchain_type: ToolchainType,
     binary_name: String,
+    /// The `USER` the image is built with (see [`kubernetes_image_user`]). Containers that get
+    /// different users never share an image.
+    image_user: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -105,6 +109,19 @@ enum ToolchainType {
 }
 
 impl DedupeKey {
+    /// The key a container builds under: containers whose images get different users (restricted
+    /// default, explicit `runAsUser`, opt-out) never share an image.
+    fn for_container(
+        src: &str,
+        toolchain: &ToolchainConfig,
+        settings: &BuildSettings,
+        security: Option<&alien_core::ContainerSecurity>,
+    ) -> Self {
+        let mut key = Self::from_source_and_toolchain(src, toolchain);
+        key.image_user = kubernetes_image_user(settings, security);
+        key
+    }
+
     /// Extract dedupe key from source path and toolchain config
     fn from_source_and_toolchain(src: &str, toolchain: &ToolchainConfig) -> Self {
         match toolchain {
@@ -112,10 +129,12 @@ impl DedupeKey {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Rust,
                 binary_name: binary_name.clone(),
+                image_user: None,
             },
             ToolchainConfig::TypeScript { binary_name } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::TypeScript,
+                image_user: None,
                 binary_name: binary_name.clone().unwrap_or_else(|| "default".to_string()),
             },
             ToolchainConfig::Python {
@@ -125,6 +144,7 @@ impl DedupeKey {
             } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Python,
+                image_user: None,
                 binary_name: format!(
                     "{}\0{}\0{}",
                     python_version.as_deref().unwrap_or_default(),
@@ -135,6 +155,7 @@ impl DedupeKey {
             ToolchainConfig::Docker { dockerfile, .. } => Self {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::Docker,
+                image_user: None,
                 binary_name: dockerfile
                     .clone()
                     .unwrap_or_else(|| "Dockerfile".to_string()),
@@ -470,6 +491,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Worker,
                                 &[],
+                                kubernetes_image_user(&settings, func.security.as_ref()),
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for worker '{}' was cancelled", func_id);
@@ -641,6 +663,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Daemon,
                                 &[],
+                                kubernetes_image_user(&settings, daemon.security.as_ref()),
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for daemon '{}' was cancelled", daemon_id);
@@ -801,6 +824,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::SandboxBase,
                                 &[],
+                                None,
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for sandbox '{}' was cancelled", sandbox_id);
@@ -946,7 +970,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         // Group containers by dedupe key (src, toolchain_type, binary_name)
         let mut dedupe_groups: HashMap<DedupeKey, Vec<(String, Container)>> = HashMap::new();
         for (resource_id, container, src, toolchain) in containers_to_build {
-            let dedupe_key = DedupeKey::from_source_and_toolchain(&src, &toolchain);
+            let dedupe_key = DedupeKey::for_container(
+                &src,
+                &toolchain,
+                &container_settings,
+                container.security.as_ref(),
+            );
             dedupe_groups
                 .entry(dedupe_key.clone())
                 .or_default()
@@ -1038,6 +1067,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &output_dir,
                                 toolchain::WorkloadKind::Container,
                                 &related_resources,
+                                // The key groups only containers whose images get the same user.
+                                dedupe_key.image_user,
                             ) => result,
                             _ = cancel_token.cancelled() => {
                                 info!("Build for container '{}' was cancelled", container_id);
@@ -2159,6 +2190,13 @@ async fn push_target(
     )
     .await?;
     if target.resource_type != "sandbox" {
+        // Kubernetes runs workloads by digest: a tag can be repointed after the release is cut,
+        // and a site mirror keeps digests, not tags. The release records the digest it pushed.
+        if *platform == Platform::Kubernetes
+            && matches!(target.resource_type, "container" | "daemon")
+        {
+            return pin_to_digest(target.resource_name(), &image_uri, push_options).await;
+        }
         return Ok(image_uri);
     }
     let layered = match platform {
@@ -2246,7 +2284,12 @@ async fn pin_to_digest(
         .pull_manifest_raw(
             &reference,
             &push_options.auth,
-            &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+            &[
+                OCI_IMAGE_MEDIA_TYPE,
+                IMAGE_MANIFEST_MEDIA_TYPE,
+                OCI_IMAGE_INDEX_MEDIA_TYPE,
+                IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+            ],
         )
         .await
         .into_alien_error()
@@ -2441,6 +2484,7 @@ async fn build_resource(
     build_output_dir: &Path,
     workload: toolchain::WorkloadKind,
     related_resources: &[String],
+    image_user: Option<&'static str>,
 ) -> Result<String> {
     let resource_started = Instant::now();
     // Get target list from settings (uses platform defaults if not specified)
@@ -2465,9 +2509,11 @@ async fn build_resource(
     toolchain::create_toolchain(toolchain_config).validate_source(Path::new(src), resource_name)?;
 
     let cache_key_started = Instant::now();
-    let artifact_cache_key =
+    let artifact_cache_key = with_image_user(
         compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
-            .await?;
+            .await?,
+        image_user,
+    );
     let cache_key_secs = cache_key_started.elapsed().as_secs_f64();
 
     let platform_name = settings.platform.runtime_platform().as_str();
@@ -2560,6 +2606,7 @@ async fn build_resource(
                     &target,
                     &target_output_path,
                     workload,
+                    image_user,
                 )
                 .await?;
 
@@ -2611,6 +2658,7 @@ async fn build_resource(
     // A re-key that fails (a file removed since the build) leaves the artifact uncached too.
     match compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
         .await
+        .map(|key| with_image_user(key, image_user))
     {
         Ok(key_after_build) if key_after_build == artifact_cache_key => {
             write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key)
@@ -3492,6 +3540,39 @@ fn source_layer_compression(
     }
 }
 
+/// The unprivileged user and group source-built images run as on Kubernetes, where pods are
+/// restricted by default and the kubelet refuses an image that runs as root.
+pub const KUBERNETES_IMAGE_USER: &str = "65532:65532";
+
+/// The `USER` a source-built image gets: [`KUBERNETES_IMAGE_USER`] for a Kubernetes target whose
+/// workload runs restricted, nothing for any other target and for a workload that opted out of
+/// the restricted profile (it keeps the image's own user).
+fn kubernetes_image_user(
+    settings: &BuildSettings,
+    security: Option<&alien_core::ContainerSecurity>,
+) -> Option<&'static str> {
+    // A positive numeric `runAsUser` overrides the image's user at pod start, so the image
+    // needs no rewrite and a Dockerfile `USER name` is not a problem.
+    let explicit_uid = security
+        .and_then(|security| security.run_as_user)
+        .is_some_and(|uid| uid > 0);
+    (settings.platform.runtime_platform() == Platform::Kubernetes
+        && alien_core::ContainerSecurity::is_restricted(security)
+        && !explicit_uid)
+        .then_some(KUBERNETES_IMAGE_USER)
+}
+
+/// An artifact built with a `USER` is a different artifact from the same source without one.
+fn with_image_user(key: String, image_user: Option<&str>) -> String {
+    match image_user {
+        Some(user) => format!(
+            "{:x}",
+            Sha256::digest(format!("{key}\0image-user\0{user}").as_bytes())
+        ),
+        None => key,
+    }
+}
+
 /// Build a specific OS/architecture target to an OCI tarball file
 #[allow(clippy::too_many_arguments)]
 async fn build_target_to_file(
@@ -3503,6 +3584,7 @@ async fn build_target_to_file(
     target: &BinaryTarget,
     output_path: &Path,
     workload: toolchain::WorkloadKind,
+    image_user: Option<&'static str>,
 ) -> Result<String> {
     info!(
         "Starting toolchain build for resource: {} (target: {})",
@@ -3556,6 +3638,24 @@ async fn build_target_to_file(
             if materialize_complete_oci_tarball(tarball_path, output_path).await? {
                 info!("Copied complete OCI tarball to {}", output_path.display());
             }
+            // A Dockerfile that leaves the image running as root cannot start under the
+            // restricted pod profile; give it the unprivileged user unless it set its own.
+            if let Some(user) = image_user {
+                let archive = output_path.to_path_buf();
+                let rewritten = tokio::task::spawn_blocking(move || {
+                    toolchain::docker::set_archive_user_if_root(&archive, user)
+                })
+                .await
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: resource_name.to_string(),
+                    reason: "Setting the image user task failed".to_string(),
+                    build_output: None,
+                })??;
+                if rewritten {
+                    info!("Set the image user to {user} (the Dockerfile ran as root)");
+                }
+            }
         }
 
         toolchain::ImageBuildStrategy::FromBaseImage {
@@ -3567,12 +3667,18 @@ async fn build_target_to_file(
             // Container/Daemon images must remain on their plain bases even
             // when a mixed stack builds Workers from a feature-versioned
             // alien-base image.
-            let base_images_to_try = base_images_for_workload(
+            let mut base_images_to_try = base_images_for_workload(
                 base_images,
                 settings.override_base_image.as_deref(),
                 workload,
                 toolchain_config,
             );
+            base_images_to_try = base_images_to_try
+                .iter()
+                .map(|image| {
+                    pinned_base_images::resolve(image, settings.require_pinned_base_images)
+                })
+                .collect::<Result<_>>()?;
 
             if base_images_to_try.is_empty() {
                 return Err(AlienError::new(ErrorData::BuildConfigInvalid {
@@ -3634,6 +3740,9 @@ async fn build_target_to_file(
                         .platform(target.oci_os(), &target.to_dockdash_arch())
                         .pull_policy(PullPolicy::Always)
                         .layer(app_layer);
+                    if let Some(user) = image_user {
+                        image_builder = image_builder.user(user);
+                    }
 
                     // Built-in Worker and direct bases are public. Do not let
                     // unrelated DOCKER_USERNAME/PASSWORD values get sent to
@@ -3763,6 +3872,9 @@ async fn build_target_to_file(
             let mut image_builder = DockDashImage::builder()
                 .platform(target.oci_os(), &target.to_dockdash_arch())
                 .working_dir("/app"); // Set working directory so ./app resolves correctly
+            if let Some(user) = image_user {
+                image_builder = image_builder.user(user);
+            }
             image_builder = apply_image_command(image_builder, &toolchain_output);
 
             for layer in all_layers {
@@ -4652,6 +4764,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let rust = alien_core::ToolchainConfig::Rust {
             binary_name: "worker".to_string(),
@@ -4822,6 +4935,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let handler = Arc::new(RejectWarnings(std::sync::atomic::AtomicUsize::new(0)));
         let bus = alien_core::EventBus::with_handlers(vec![handler.clone()]);
@@ -4856,6 +4970,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -4897,6 +5012,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let built = build_stack(stack, &settings)
             .await
@@ -4927,6 +5043,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -5072,6 +5189,7 @@ mod tests {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             };
             let x86 = BuildSettings {
                 targets: Some(vec![BinaryTarget::LinuxX64]),
@@ -5555,6 +5673,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         // Pull alpine:latest (small, always available)
@@ -5659,6 +5778,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let mut reversed = settings.clone();
         reversed.targets.as_mut().unwrap().reverse();
@@ -5742,6 +5862,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         // Try to pull non-existent image
@@ -5784,6 +5905,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         // Pull alpine image
@@ -5821,6 +5943,91 @@ mod tests {
         assert!(tarball_path.exists(), "Tarball should exist");
     }
 
+    #[test]
+    fn containers_with_different_image_users_never_share_an_image() {
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let kubernetes = BuildSettings {
+            output_directory: String::new(),
+            platform: PlatformBuildSettings::Kubernetes {
+                base_platform: None,
+            },
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+            require_pinned_base_images: false,
+        };
+        let opted_out = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        let explicit = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            ..opted_out.clone()
+        };
+        let key = |security| DedupeKey::for_container("src", &toolchain, &kubernetes, security);
+        let restricted = key(None);
+        assert_eq!(restricted, key(None));
+        assert_ne!(restricted, key(Some(&opted_out)));
+        // An explicit runAsUser keeps the image's user, like an opt-out, and unlike the default.
+        assert_ne!(restricted, key(Some(&explicit)));
+        assert_eq!(key(Some(&opted_out)), key(Some(&explicit)));
+    }
+
+    #[test]
+    fn only_restricted_kubernetes_workloads_get_the_unprivileged_user() {
+        let settings = |platform| BuildSettings {
+            output_directory: String::new(),
+            platform,
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+            require_pinned_base_images: false,
+        };
+        let kubernetes = settings(PlatformBuildSettings::Kubernetes {
+            base_platform: None,
+        });
+        let opted_out = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        assert_eq!(
+            kubernetes_image_user(&kubernetes, None),
+            Some("65532:65532")
+        );
+        assert_eq!(kubernetes_image_user(&kubernetes, Some(&opted_out)), None);
+        let explicit = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            ..opted_out.clone()
+        };
+        assert_eq!(kubernetes_image_user(&kubernetes, Some(&explicit)), None);
+        for other in [
+            PlatformBuildSettings::Gcp {},
+            PlatformBuildSettings::Azure {},
+        ] {
+            assert_eq!(kubernetes_image_user(&settings(other), None), None);
+        }
+        // The same source built with and without the user is a different artifact.
+        let key = "abc".to_string();
+        assert_eq!(with_image_user(key.clone(), None), key);
+        assert_ne!(with_image_user(key.clone(), Some("65532:65532")), key);
+    }
+
     /// `alien release` reuses a pushed image by the artifact's directory name, and GCP pushes a
     /// sandbox with the agent layered on. Folding the agent into both the cache key and the name
     /// is what makes a new agent a new push, even when the rebuilt base is byte-identical.
@@ -5843,6 +6050,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -5931,6 +6139,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let mut previous = None;
         for index in 0..17 {
@@ -5990,6 +6199,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -6162,6 +6372,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -6226,6 +6437,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -6293,6 +6505,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let first_key = compute_source_artifact_cache_key(
@@ -6359,6 +6572,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let key = |dir: &Path| {
@@ -6444,6 +6658,7 @@ mod tests {
                     debug_mode: false,
                     rebuild: false,
                     pull_base_images: false,
+                    require_pinned_base_images: false,
                 };
                 compute_source_artifact_cache_key(
                     &dir,
@@ -6494,6 +6709,7 @@ mod tests {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             };
         let x64 = vec![BinaryTarget::LinuxX64];
         let arm64 = vec![BinaryTarget::LinuxArm64];
@@ -7106,6 +7322,7 @@ mod sandbox_build_tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         }
     }
 

@@ -577,6 +577,69 @@ resource "azurerm_cognitive_deployment" "fixture_model-router" {
   ]
 }
 
+resource "azurerm_cognitive_deployment" "fixture_gpt-5_5" {
+  count                = var.input_fixture_enabled ? 1 : 0
+  name                 = "gpt-5.5"
+  cognitive_account_id = azurerm_cognitive_account.fixture[0].id
+
+  model {
+    format  = "OpenAI"
+    name    = "gpt-5.5"
+    version = "2026-04-24"
+  }
+
+  sku {
+    name     = "GlobalStandard"
+    capacity = 50
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_cognitive_deployment" "fixture_gpt-5_6-sol" {
+  count                = var.input_fixture_enabled ? 1 : 0
+  name                 = "gpt-5.6-sol"
+  cognitive_account_id = azurerm_cognitive_account.fixture[0].id
+
+  model {
+    format  = "OpenAI"
+    name    = "gpt-5.6-sol"
+    version = "2026-07-09"
+  }
+
+  sku {
+    name     = "GlobalStandard"
+    capacity = 50
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_cognitive_deployment" "fixture_text-embedding-3-large" {
+  count                = var.input_fixture_enabled ? 1 : 0
+  name                 = "text-embedding-3-large"
+  cognitive_account_id = azurerm_cognitive_account.fixture[0].id
+
+  model {
+    format  = "OpenAI"
+    name    = "text-embedding-3-large"
+    version = "1"
+  }
+
+  sku {
+    name     = "GlobalStandard"
+    capacity = 50
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 resource "azurerm_role_assignment" "fixture_cognitive_services_user_execution_assignment_0" {
   count              = var.input_fixture_enabled ? 1 : 0
   name               = uuidv5("oid", "deployment:azure:ai-role-assign:${azurerm_cognitive_account.fixture[0].id}:cognitive_services_user:execution:0")
@@ -613,6 +676,9 @@ resource "terraform_data" "deployment_registration" {
     azurerm_cognitive_account.fixture,
     azurerm_cognitive_deployment.fixture_gpt-4_1,
     azurerm_cognitive_deployment.fixture_model-router,
+    azurerm_cognitive_deployment.fixture_gpt-5_5,
+    azurerm_cognitive_deployment.fixture_gpt-5_6-sol,
+    azurerm_cognitive_deployment.fixture_text-embedding-3-large,
     azurerm_role_assignment.fixture_cognitive_services_user_execution_assignment_0
   ]
 

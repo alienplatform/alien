@@ -19,6 +19,10 @@ use std::collections::HashMap;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
+/// The Container Apps API version this client speaks, and whose schema its request types follow.
+/// Whoever sends a body built from these types sends it at this version.
+pub const CONTAINER_APPS_API_VERSION: &str = "2025-07-01";
+
 /// Result of a container app create or update operation
 pub type ContainerAppOperationResult = OperationResult<ContainerApp>;
 
@@ -279,7 +283,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 container_app_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(container_app)
@@ -342,7 +346,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 container_app_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(container_app)
@@ -387,7 +391,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 container_app_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
@@ -446,7 +450,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 &self.token_cache.config().subscription_id,
                 resource_group_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
@@ -501,7 +505,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 container_app_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
@@ -545,7 +549,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(managed_environment)
@@ -607,7 +611,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(managed_environment)
@@ -651,7 +655,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
@@ -714,7 +718,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
@@ -752,7 +756,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 environment_name,
                 certificate_name,
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(certificate)
@@ -828,7 +832,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 environment_name,
                 certificate_name,
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
@@ -878,7 +882,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 job_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(job).into_alien_error().context(
@@ -915,7 +919,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 job_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
@@ -978,7 +982,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 job_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
@@ -1017,7 +1021,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 resource_group_name,
                 job_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::POST, url).content_length("");
@@ -1053,7 +1057,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}/executions/{}/stop", 
                      &self.token_cache.config().subscription_id, resource_group_name, job_name, job_execution_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::POST, url).content_length("");
@@ -1108,7 +1112,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 environment_name,
                 component_name
             ),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let body = serde_json::to_string(dapr_component)
@@ -1153,9 +1157,10 @@ impl ContainerAppsApi for AzureContainerAppsClient {
             environment_name,
             component_name
         );
-        let url = self
-            .base
-            .build_url(&path, Some(vec![("api-version", "2025-07-01".into())]));
+        let url = self.base.build_url(
+            &path,
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
+        );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
         let req = builder.build()?;
@@ -1185,7 +1190,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name, component_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
@@ -1242,7 +1247,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
@@ -1303,7 +1308,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}/listSecrets", 
                      &self.token_cache.config().subscription_id, resource_group_name, environment_name, component_name),
-            Some(vec![("api-version", "2025-07-01".into())]),
+            Some(vec![("api-version", CONTAINER_APPS_API_VERSION.into())]),
         );
 
         let builder = AzureRequestBuilder::new(Method::POST, url.clone()).content_length("");

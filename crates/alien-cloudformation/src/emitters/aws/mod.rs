@@ -25,6 +25,7 @@ pub mod service_account;
 pub mod storage;
 mod storage_notifications;
 pub mod vault;
+pub mod verifier;
 pub mod worker;
 
 pub use ai::AwsAiEmitter;
@@ -43,4 +44,5 @@ pub use sandbox::AwsSandboxEmitter;
 pub use service_account::AwsServiceAccountEmitter;
 pub use storage::AwsStorageEmitter;
 pub use vault::AwsVaultEmitter;
+pub use verifier::AwsVerifierEmitter;
 pub use worker::AwsWorkerEmitter;

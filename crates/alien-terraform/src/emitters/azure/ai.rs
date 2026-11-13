@@ -57,10 +57,10 @@ impl TfEmitter for AzureAiEmitter {
         ));
 
         // One deployment per curated model, mirroring AzureAiController's
-        // DeployingModels state. capacity = 1 matches the controller's
-        // DEFAULT_DEPLOYMENT_CAPACITY so the Frozen (Terraform) and Live
-        // (controller) paths provision the same throughput.
-        for (deployment, model, version) in alien_core::ai_catalog::azure_deployments() {
+        // DeployingModels state. capacity comes from the same catalog list
+        // the controller reads, so the Frozen (Terraform) and Live (controller)
+        // paths provision the same throughput.
+        for (deployment, model, version, capacity) in alien_core::ai_catalog::azure_deployments() {
             fragment.resource_blocks.push(resource_block(
                 "azurerm_cognitive_deployment",
                 // The Azure deployment name keeps dots (e.g. gpt-4.1); the Terraform
@@ -84,7 +84,7 @@ impl TfEmitter for AzureAiEmitter {
                         "sku",
                         [
                             attr("name", Expression::String("GlobalStandard".to_string())),
-                            attr("capacity", expr::raw("1")),
+                            attr("capacity", expr::raw(&capacity.to_string())),
                         ],
                     )),
                 ],

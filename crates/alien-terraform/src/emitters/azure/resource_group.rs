@@ -25,6 +25,30 @@ use hcl::expr::Expression;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureResourceGroupEmitter;
 
+/// The group's tags. A protected install's signing settings are the `signing-fingerprint`
+/// tag: the group sits under the protection's deny, so only setup changes it.
+fn group_tags(ctx: &EmitContext<'_>) -> Result<Expression> {
+    let tags = tags(ctx, "resource-group");
+    let Some(signing) = &ctx.stack_settings.signing else {
+        return Ok(tags);
+    };
+    let mut settings = signing.settings("stack")?;
+    settings.prefix = "${local.resource_prefix}".to_string();
+    let value = settings
+        .to_json()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    Ok(Expression::FuncCall(Box::new(
+        hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("merge"))
+            .arg(tags)
+            .arg(expr::object([(
+                alien_signing::settings::names::AZURE_SETTINGS_TAG,
+                expr::template(value),
+            )]))
+            .build(),
+    )))
+}
+
 impl TfEmitter for AzureResourceGroupEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let _ = downcast::<AzureResourceGroup>(ctx, AzureResourceGroup::RESOURCE_TYPE)?;
@@ -36,7 +60,7 @@ impl TfEmitter for AzureResourceGroupEmitter {
             [
                 attr("name", expr::raw("var.azure_resource_group_name")),
                 attr("location", expr::raw("var.azure_location")),
-                attr("tags", tags(ctx, "resource-group")),
+                attr("tags", group_tags(ctx)?),
             ],
         ));
         // Deleting the group cascades to retained children, including runtime-created data.

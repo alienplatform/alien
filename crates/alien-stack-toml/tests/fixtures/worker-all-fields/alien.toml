@@ -13,6 +13,7 @@ commands-enabled = true
 concurrency-limit = 25
 memory = "2Gi"
 timeout = "10m"
+security = { profile = "restricted" }
 readiness-probe = { method = "GET", path = "/ready" }
 public-endpoints = ["hooks"]
 triggers = [

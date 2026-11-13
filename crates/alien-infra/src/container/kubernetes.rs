@@ -79,10 +79,16 @@ async fn create_registry_pull_secret(
 fn image_needing_pull_secret<'a>(
     code: &'a ContainerCode,
     manager_url: Option<&str>,
+    mirrored: bool,
 ) -> Option<&'a str> {
     let ContainerCode::Image { image } = code else {
         return None;
     };
+    // A site mirror authenticates with the installation's own pull secrets. The manager's
+    // token must never be sent to it.
+    if mirrored {
+        return None;
+    }
     let manager_url = manager_url?;
     let manager_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
     let image_host = image.split('/').next().unwrap_or_default();
@@ -389,9 +395,11 @@ impl KubernetesContainerController {
             alien_core::commands_types::CommandTargetType::Container,
         )
         .await?;
-        let image_pull_secret_name = if let Some(image) =
-            image_needing_pull_secret(&config.code, ctx.deployment_config.manager_url.as_deref())
-        {
+        let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
+            &config.code,
+            ctx.deployment_config.manager_url.as_deref(),
+            ctx.deployment_config.image_registry.is_some(),
+        ) {
             let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
@@ -662,6 +670,7 @@ impl KubernetesContainerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
+        let mut template = None;
         // Check workload status (different API for Deployment vs StatefulSet)
         let (ready_replicas, replicas, healthy) = if self.is_stateful {
             match deployment_client
@@ -671,6 +680,7 @@ impl KubernetesContainerController {
                 Ok(statefulset) => {
                     self.replace_obsolete_unready_pod(&statefulset, config, namespace, ctx)
                         .await?;
+                    template = statefulset.spec.as_ref().map(|spec| spec.template.clone());
 
                     if let Some(status) = &statefulset.status {
                         (
@@ -719,6 +729,7 @@ impl KubernetesContainerController {
             {
                 Ok(deployment) => {
                     self.workload_failure = deployment_failure_progress(&deployment);
+                    template = deployment.spec.as_ref().map(|spec| spec.template.clone());
                     if let Some(status) = &deployment.status {
                         (
                             status.ready_replicas,
@@ -776,16 +787,32 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
-        if self.is_stateful {
-            self.workload_failure =
-                crate::kubernetes_priority_events::missing_priority_class_progress(
-                    ctx,
-                    config.priority,
-                    namespace,
-                    workload_name,
-                )
-                .await;
-        }
+        let restricted_hint = if let Some(template) = &template {
+            crate::core::fail_if_root_image_blocked(
+                ctx,
+                namespace,
+                &self.workload_labels(ctx, &config.id, self.build_labels(workload_name)),
+                template,
+                &config.id,
+            )
+            .await?
+        } else {
+            None
+        };
+        let priority_failure = if self.is_stateful {
+            crate::kubernetes_priority_events::missing_priority_class_progress(
+                ctx,
+                config.priority,
+                namespace,
+                workload_name,
+            )
+            .await
+        } else {
+            None
+        };
+        self.workload_failure = priority_failure
+            .or(restricted_hint)
+            .or(self.workload_failure.take());
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1381,9 +1408,11 @@ impl KubernetesContainerController {
             alien_core::commands_types::CommandTargetType::Container,
         )
         .await?;
-        let image_pull_secret_name = if let Some(image) =
-            image_needing_pull_secret(&config.code, ctx.deployment_config.manager_url.as_deref())
-        {
+        let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
+            &config.code,
+            ctx.deployment_config.manager_url.as_deref(),
+            ctx.deployment_config.image_registry.is_some(),
+        ) {
             let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
@@ -1526,12 +1555,14 @@ impl KubernetesContainerController {
             .await?;
 
         let desired_replicas = config.replicas.unwrap_or(1) as i32;
+        let mut template = None;
         let (ready_replicas, replicas, rollout_complete) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
+                    template = statefulset.spec.as_ref().map(|spec| spec.template.clone());
                     let ready = statefulset
                         .status
                         .as_ref()
@@ -1564,6 +1595,7 @@ impl KubernetesContainerController {
             {
                 Ok(deployment) => {
                     self.workload_failure = deployment_failure_progress(&deployment);
+                    template = deployment.spec.as_ref().map(|spec| spec.template.clone());
                     let ready = deployment
                         .status
                         .as_ref()
@@ -1607,16 +1639,34 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
-        if self.is_stateful {
-            self.workload_failure =
-                crate::kubernetes_priority_events::missing_priority_class_progress(
-                    ctx,
-                    config.priority,
-                    namespace,
-                    workload_name,
-                )
-                .await;
-        }
+        // A re-rendered workload can start refusing an image or filesystem the old one allowed:
+        // say so instead of waiting out the rollout.
+        let restricted_hint = if let Some(template) = &template {
+            crate::core::fail_if_root_image_blocked(
+                ctx,
+                namespace,
+                &self.workload_labels(ctx, &config.id, self.build_labels(workload_name)),
+                template,
+                &config.id,
+            )
+            .await?
+        } else {
+            None
+        };
+        let priority_failure = if self.is_stateful {
+            crate::kubernetes_priority_events::missing_priority_class_progress(
+                ctx,
+                config.priority,
+                namespace,
+                workload_name,
+            )
+            .await
+        } else {
+            None
+        };
+        self.workload_failure = priority_failure
+            .or(restricted_hint)
+            .or(self.workload_failure.take());
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -2668,7 +2718,7 @@ impl KubernetesContainerController {
         // compiled binary is the direct entrypoint. Reaching here with
         // unbuilt source means the build step was skipped.
         let image = match &config.code {
-            ContainerCode::Image { image } => image.clone(),
+            ContainerCode::Image { image } => ctx.deployment_config.workload_image(image),
             ContainerCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
@@ -2834,15 +2884,9 @@ impl KubernetesContainerController {
                 probe.initial_delay_seconds = Some(GATEWAY_READY_DELAY_SECONDS);
             }
         }
-        let security = config.security.as_ref();
-        if security.is_some_and(|settings| settings.run_as_user <= 0 || settings.run_as_group <= 0)
-        {
-            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Restricted container security needs positive user and group IDs"
-                    .to_string(),
-            }));
-        }
+        let security =
+            crate::core::pod_security(&config.id, config.security.as_ref(), &volume_mounts)?;
+        volume_mounts.extend(security.mounts);
 
         let container = K8sContainer {
             name: kubernetes_resource_name("", &config.id),
@@ -2863,15 +2907,7 @@ impl KubernetesContainerController {
             env: Some(env_vars),
             liveness_probe,
             readiness_probe,
-            security_context: security.map(|settings| SecurityContext {
-                allow_privilege_escalation: Some(false),
-                read_only_root_filesystem: Some(settings.read_only_root_filesystem),
-                capabilities: Some(Capabilities {
-                    drop: Some(vec!["ALL".to_string()]),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            security_context: security.container,
             volume_mounts: if volume_mounts.is_empty() {
                 None
             } else {
@@ -2925,6 +2961,8 @@ impl KubernetesContainerController {
             });
         }
 
+        volumes.extend(security.volumes);
+
         let pool = alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(
             |message| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2953,23 +2991,12 @@ impl KubernetesContainerController {
             service_account_name: Some(service_account_name.to_string()),
             // The gateway never calls the Kubernetes API; its configuration is projected.
             automount_service_account_token: gateway.then_some(false),
-            security_context: security.map(|settings| PodSecurityContext {
-                run_as_non_root: Some(true),
-                run_as_user: Some(settings.run_as_user),
-                run_as_group: Some(settings.run_as_group),
-                fs_group: Some(settings.run_as_group),
-                seccomp_profile: Some(SeccompProfile {
-                    type_: "RuntimeDefault".to_string(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            security_context: security.pod,
             containers: vec![container],
-            image_pull_secrets: image_pull_secret_name.map(|name| {
-                vec![LocalObjectReference {
-                    name: name.to_string(),
-                }]
-            }),
+            image_pull_secrets: crate::kubernetes_registry::workload_pull_secrets(
+                ctx.deployment_config,
+                image_pull_secret_name,
+            ),
             volumes: if volumes.is_empty() {
                 None
             } else {
@@ -3170,21 +3197,107 @@ mod tests {
         };
         let manager = Some("https://manager.example.test");
         assert_eq!(
-            image_needing_pull_secret(&image("manager.example.test/app:1"), manager),
+            image_needing_pull_secret(&image("manager.example.test/app:1"), manager, false),
             Some("manager.example.test/app:1")
         );
         assert_eq!(
-            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), manager),
+            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), manager, false),
             None
         );
         assert_eq!(
-            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), None),
+            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), None, false),
             None
         );
     }
 
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
+
+    /// Writes the container's Deployment, as the controller renders it, for the Kind test that
+    /// applies it to a namespace enforcing the `restricted` Pod Security profile.
+    /// `ALIEN_KIND_MANIFEST_DIR` receives `container.yaml`; `ALIEN_KIND_IMAGE` is the release's
+    /// image and `ALIEN_KIND_IMAGE_REGISTRY` the site registry it must be pulled from.
+    #[tokio::test]
+    #[ignore = "writes manifests for the Kind pod security test"]
+    async fn write_the_default_deployment_for_the_kind_test() {
+        let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
+        let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
+        // ALIEN_KIND_CONFIG names a container from an example stack; the default is the
+        // controller test fixture, which declares no `security`.
+        let mut config = match std::env::var("ALIEN_KIND_CONFIG") {
+            Ok(path) => serde_json::from_str(&std::fs::read_to_string(path).expect("config"))
+                .expect("container config"),
+            Err(_) => manifest_test_container(&[], false),
+        };
+        let name = std::env::var("ALIEN_KIND_NAME").unwrap_or_else(|_| "web".to_string());
+        let out = std::env::var("ALIEN_KIND_OUT").unwrap_or_else(|_| "container.yaml".to_string());
+        config.code = ContainerCode::Image { image };
+        config.replicas = Some(1);
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        if let Ok(registry) = std::env::var("ALIEN_KIND_IMAGE_REGISTRY") {
+            harness = harness.with_image_registry(&registry);
+        }
+        let controller = manifest_test_controller();
+        let mut value = if config.persistent_storage.is_some() {
+            let set = controller
+                .build_statefulset(
+                    &config,
+                    &name,
+                    "default",
+                    "default",
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("statefulset manifest");
+            let mut value = serde_json::to_value(&set).expect("serialize");
+            value["kind"] = "StatefulSet".into();
+            value
+        } else {
+            let deployment = controller
+                .build_deployment(
+                    &config,
+                    &name,
+                    "default",
+                    "default",
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("deployment manifest");
+            let mut value = serde_json::to_value(&deployment).expect("serialize");
+            value["kind"] = "Deployment".into();
+            value
+        };
+        value["apiVersion"] = "apps/v1".into();
+        // The Kind test chooses the namespace.
+        value["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("namespace");
+        std::fs::write(
+            std::path::Path::new(&dir).join(out),
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write manifest");
+    }
+
+    #[test]
+    fn a_site_mirror_never_receives_the_manager_pull_token() {
+        let code = ContainerCode::Image {
+            image: "manager.example.com/app@sha256:abc".to_string(),
+        };
+        assert!(
+            image_needing_pull_secret(&code, Some("https://manager.example.com"), false)
+                .is_some()
+        );
+        assert!(
+            image_needing_pull_secret(&code, Some("https://manager.example.com"), true)
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn adopted_workload_accepts_ready_created_replicas() {
@@ -3281,6 +3394,7 @@ mod tests {
     async fn create_retry_converges_existing_workload_to_corrective_release() {
         for stateful in [false, true] {
             let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             let config = manifest_test_container(&[("RELEASE", "corrected")], stateful);
             let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             let mut ctx = harness.ctx();
@@ -3410,6 +3524,7 @@ mod tests {
     async fn workload_progress_reports_current_replica_failure_and_clears_after_repair() {
         for updating in [false, true] {
             let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             let mut response = serde_json::json!({
                 "apiVersion": "apps/v1", "kind": "Deployment",
                 "metadata": {"name": "web", "generation": 2},
@@ -3470,6 +3585,7 @@ mod tests {
                 [(1, 1, true), (3, 3, true), (1, 3, false), (0, 1, false)]
             {
                 let server = httpmock::MockServer::start_async().await;
+                crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
                 let kind = if stateful {
                     "StatefulSet"
                 } else {
@@ -4221,7 +4337,11 @@ mod tests {
             .template
             .spec
             .unwrap();
-        assert!(pod.volumes.is_none());
+        assert!(pod
+            .volumes
+            .iter()
+            .flatten()
+            .all(|volume| volume.secret.is_none()));
         let error = controller
             .additional_environment_secrets(&earlier, &ctx)
             .await
@@ -4446,9 +4566,10 @@ mod tests {
         });
         config.security = Some(ContainerSecurity {
             profile: ContainerSecurityProfile::Restricted,
-            run_as_user: 65532,
-            run_as_group: 65532,
-            read_only_root_filesystem: true,
+            run_as_user: Some(65532),
+            run_as_group: Some(65532),
+            read_only_root_filesystem: Some(true),
+            writable_paths: Vec::new(),
         });
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let deployment = manifest_test_controller()

@@ -1,6 +1,6 @@
 //! Synthetic Docker cache validation driver. See scripts/docker-cache/README.md.
 use alien_build::toolchain::{
-    Toolchain, ToolchainContext, WorkloadKind, cache_utils::store_from_url, docker::DockerToolchain,
+    cache_utils::store_from_url, docker::DockerToolchain, Toolchain, ToolchainContext, WorkloadKind,
 };
 use alien_core::BinaryTarget;
 use std::{collections::HashMap, path::PathBuf};

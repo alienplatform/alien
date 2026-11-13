@@ -167,6 +167,8 @@ async fn deployment_with_queued_update(manager_has_signing_key: bool) -> Fixture
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -227,9 +229,9 @@ async fn deployment_with_queued_update(manager_has_signing_key: bool) -> Fixture
             RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: None,
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),

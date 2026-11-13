@@ -12,6 +12,7 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
+use alien_core::SandboxEgress;
 use alien_error::{Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::Method;
@@ -29,7 +30,7 @@ pub const API_VERSION: &str = "2026-02-01-preview";
 /// It is neither ARM's scope nor the endpoint's own host: the sandbox data plane sits on the
 /// dynamic-sessions audience while answering at `azuredevcompute.io`. A token minted for either
 /// host fails here as a 401 that reads like a missing role assignment.
-const ADC_SCOPE: &str = "https://dynamicsessions.io/.default";
+pub const ADC_SCOPE: &str = "https://dynamicsessions.io/.default";
 
 /// Service key an endpoint override is looked up under, which is how a test points the client at
 /// a server it controls instead of a region's real data plane.
@@ -41,6 +42,64 @@ const SERVICE_NAME: &str = "sandboxDataPlane";
 /// enforce (`alien-sandbox-agent/src/files.rs`) rather than a measured server limit: one bound
 /// callers can rely on everywhere, and a body that never grows past it here.
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
+
+/// The data plane's own words for the two actions and the one inspection mode that blocks
+/// non-HTTP traffic.
+pub const DENY: &str = "Deny";
+pub const ALLOW: &str = "Allow";
+pub const FULL_INSPECTION: &str = "Full";
+
+/// The host pattern that matches everything, so `deny` is a rule rather than only a default.
+pub const EVERY_HOST: &str = "*";
+
+/// The label a packaged-agent sandbox carries, and the transport version it names.
+pub const AGENT_TRANSPORT_LABEL: &str = "alienAgentTransport";
+pub const AGENT_TRANSPORT_VERSION: &str = "native-file-v1";
+
+/// The ADC service defaults, named so a reader can tell a deliberate default from a magic number.
+/// One core and 2 GiB: what a sandbox gets when its declaration names no ceilings.
+pub const DEFAULT_CPU: &str = "1000m";
+pub const DEFAULT_MEMORY: &str = "2048Mi";
+
+/// The policy a declared mode is created with.
+///
+/// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
+/// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
+/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
+/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
+/// `allow` promises.
+pub fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
+    let bounded = |host_rules| {
+        Some(EgressPolicy {
+            default_action: DENY.to_string(),
+            unmodelled: Default::default(),
+            rules: Vec::new(),
+            host_rules,
+            traffic_inspection: Some(FULL_INSPECTION.to_string()),
+        })
+    };
+
+    match egress {
+        SandboxEgress::Allow | SandboxEgress::Internet => None,
+        // Written as a rule as well as a default, because Microsoft documents `Partial`
+        // inspection as evaluating only traffic a rule matches and never states that `Full`
+        // differs. A policy holding no rule at all is the one shape where "deny" could mean
+        // nothing, and this is one rule to be out of it.
+        SandboxEgress::None => bounded(vec![EgressHostRule {
+            pattern: EVERY_HOST.to_string(),
+            action: DENY.to_string(),
+        }]),
+        SandboxEgress::AllowDomains { domains } => bounded(
+            domains
+                .iter()
+                .map(|domain| EgressHostRule {
+                    pattern: domain.clone(),
+                    action: ALLOW.to_string(),
+                })
+                .collect(),
+        ),
+    }
+}
 
 /// An egress policy as the data plane takes and reports it.
 ///
@@ -181,7 +240,7 @@ pub struct CreateSandbox {
 /// `sourcesRef` is required unless a preset sandbox type is named, and resources are nested rather
 /// than top level. A flat {disk, cpu, memory} is rejected with "'sourcesRef' is required when not
 /// using a preset sandbox type".
-fn create_body(request: &CreateSandbox) -> serde_json::Value {
+pub fn create_body(request: &CreateSandbox) -> serde_json::Value {
     let disk_image = match &request.disk_image_id {
         Some(id) => serde_json::json!({ "id": id }),
         None => serde_json::json!({ "name": request.disk_image, "isPublic": true }),
@@ -313,7 +372,7 @@ impl std::fmt::Debug for CreateDiskImage {
 }
 
 /// The disk image create body: `image.base`, the labels, and `registryCredentials` when set.
-fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
+pub fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
     let mut body = serde_json::json!({
         "image": { "base": request.base },
         "labels": request.labels,

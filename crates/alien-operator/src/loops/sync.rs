@@ -18,7 +18,7 @@ use alien_core::{
     DeploymentStatus, ObservedInventoryBatch, Platform,
 };
 use alien_deployment::run_observe_pass;
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use chrono::Utc;
 use reqwest::Client;
 use std::sync::Arc;
@@ -343,6 +343,8 @@ async fn sync_with_manager(
                 version: Some(version),
                 description: None,
                 stack: alien_core::Stack::new("observed".to_string()).build(),
+                signed: None,
+                signer_lists: Vec::new(),
             });
         }
     }
@@ -360,18 +362,24 @@ async fn sync_with_manager(
         ),
         None => None,
     };
-    let dynamic_reports =
-        if dynamic_containers_capability(&state.config).state == OperatorCapabilityState::Granted {
-            match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
-                Ok(reports) => reports,
-                Err(error) => {
-                    error!(error = %error, "Dynamic container reconciliation failed");
-                    None
-                }
+    let dynamic_reports = if dynamic_containers_capability(&state.config).state
+        == OperatorCapabilityState::Granted
+    {
+        match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
+            Ok(reports) => reports,
+            Err(error) => {
+                error!(error = %error, "Dynamic container reconciliation failed");
+                None
             }
-        } else {
-            None
-        };
+        }
+    } else {
+        if dynamic_containers_removed_by_protection(&state.config) {
+            if let Err(error) = super::dynamic_containers::remove_all(state, &deployment_id).await {
+                error!(error = %error, "Failed to remove dynamic containers in protected mode");
+            }
+        }
+        None
+    };
 
     // Propose a protocol-only upgrade through the manager first. The deployment
     // loop cannot persist or execute the upgrade locally until its acknowledgement.
@@ -392,7 +400,7 @@ async fn sync_with_manager(
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
         supports_execution_claims: true,
-        supports_tunnels: true,
+        supports_pod_security: true,
         execution_claim,
         current_state: Some(deployment_state),
         heartbeats,
@@ -485,6 +493,7 @@ async fn sync_with_manager(
                 message: "Failed to parse sync response".to_string(),
             })?;
 
+    let signed_config = sync_response.signed_config.clone();
     let identity = state
         .db
         .read_enrolled_daily_identity()
@@ -530,16 +539,6 @@ async fn sync_with_manager(
         }
     }
 
-    // The manager advertises its tunnel endpoint on every sync; an absent URL
-    // (older manager, or tunnels disabled) stops the tunnel loop from dialing.
-    if let Err(e) = state
-        .db
-        .set_tunnel_url(sync_response.tunnel_url.as_deref())
-        .await
-    {
-        error!(error = %e, "Failed to persist tunnel_url");
-    }
-
     if let Some(image) = sync_response.target_operator_image.as_deref() {
         if let Err(e) = crate::self_update::apply(state, image).await {
             warn!(error = %e, image, "Operator self-update failed; will retry on the next sync");
@@ -562,13 +561,31 @@ async fn sync_with_manager(
         }
     }
     if let Some(ref targets) = sync_response.target_dynamic_containers {
-        state.db.set_target_dynamic_containers(targets).await?;
+        if !state.config.is_protected() {
+            state.db.set_target_dynamic_containers(targets).await?;
+        }
     }
 
     let mut state_hydrated = false;
     if let Some(manager_state) = sync_response.current_state {
         let local_state = state.db.get_deployment_state().await?;
-        if local_state
+        if state.config.is_protected() {
+            // The manager's copy of the state can carry releases and prepared
+            // stacks; a protected Operator keeps its own and takes only the
+            // manager's control signals.
+            // A first sync seeds the resource prefix the chart named its
+            // workloads with, which is what registration gave the manager.
+            if local_state.is_none() {
+                seed_local_deployment_state(state).await?;
+            }
+            if let Some(mut local_state) = state.db.get_deployment_state().await? {
+                if apply_manager_control_signals(&mut local_state, &manager_state) {
+                    state.db.set_deployment_state(&local_state).await?;
+                    state_hydrated = true;
+                    info!("Applied deployment control signals from manager");
+                }
+            }
+        } else if local_state
             .as_ref()
             .is_none_or(is_uninitialized_deployment_state)
         {
@@ -587,6 +604,18 @@ async fn sync_with_manager(
             debug!("Manager returned deployment state, but local state is already initialized");
         }
     }
+
+    let durable_target = match durable_target {
+        Some(mut target) => {
+            // The newest signed config, which may be newer than the one the
+            // target was built with (a stored target is processed again).
+            if signed_config.is_some() {
+                target.signed_config = signed_config.clone();
+            }
+            protect_target(state, &target).await?
+        }
+        None => None,
+    };
 
     // Check if there's a new target
     let has_update = durable_target.is_some();
@@ -669,8 +698,201 @@ async fn sync_with_manager(
         }
     }
 
+    // A newer signed config with no new release: apply the installed
+    // release again with it.
+    let config_update = !has_update && reapply_with_signed_config(state, signed_config).await?;
+
     secret_refresh?;
-    Ok(has_update || state_hydrated)
+    Ok(has_update || state_hydrated || config_update)
+}
+
+/// Apply the installed release again when `signed` is a newer `config/v1`
+/// than the one this protected Operator applied. Developer values change
+/// without a release, so they can't wait for the next target.
+async fn reapply_with_signed_config(
+    state: &OperatorState,
+    signed: Option<alien_core::SignedStatement>,
+) -> crate::error::Result<bool> {
+    let (Some(_), Some(signed)) = (&state.config.release_signing, signed) else {
+        return Ok(false);
+    };
+    let Ok(opened) = signed.open() else {
+        warn!("Protected mode: the manager sent a config statement that doesn't open; ignoring it");
+        return Ok(false);
+    };
+    let applied = state
+        .db
+        .get_signing_trust()
+        .await?
+        .and_then(|stored| stored.config_sequence);
+    if applied.is_some_and(|applied| applied >= opened.sequence) {
+        debug!(
+            ?applied,
+            sequence = opened.sequence,
+            "Protected mode: the signed config is not newer than the applied one"
+        );
+        return Ok(false);
+    }
+    // A finished update clears the stored configuration; the manager's
+    // values then come from the last target it sent, kept with the claim.
+    // Either way they are rebuilt from the signed release and config.
+    let config = match state.db.get_deployment_config().await? {
+        Some(config) => Some(config),
+        None => state
+            .db
+            .get_sync_execution()
+            .await?
+            .and_then(|execution| execution.target)
+            .map(|target| target.config),
+    };
+    let (Some(deployment), Some(config)) = (state.db.get_deployment_state().await?, config) else {
+        debug!("Protected mode: no deployment applied yet to apply newer signed config to");
+        return Ok(false);
+    };
+    // Mid-update, the new config waits for the update to finish. A refused
+    // target leaves the installed release running, so it doesn't block one.
+    let refused_only = deployment.status == DeploymentStatus::UpdateFailed
+        && deployment
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "RELEASE_REFUSED");
+    if deployment.status != DeploymentStatus::Running && !refused_only {
+        debug!(status = ?deployment.status, "Protected mode: newer signed config waits for the deployment to settle");
+        return Ok(false);
+    }
+    let Some(release_info) = deployment.current_release else {
+        debug!("Protected mode: newer signed config waits for a running release");
+        return Ok(false);
+    };
+    let target = alien_core::sync::TargetDeployment {
+        release_info,
+        config,
+        signed_config: Some(signed),
+    };
+    let Some(protected) = protect_target(state, &target).await? else {
+        return Ok(false);
+    };
+    info!(
+        config_sequence = opened.sequence,
+        "Protected mode: applying the installed release again with newer signed config"
+    );
+    accept_target(state, &protected, false).await?;
+    Ok(true)
+}
+
+/// Start an empty deployment state with the resource prefix this installation
+/// was given, when the Operator has no state yet.
+pub(crate) async fn seed_local_deployment_state(state: &OperatorState) -> crate::error::Result<()> {
+    if state.db.get_deployment_state().await?.is_some() {
+        return Ok(());
+    }
+    let Some(prefix) = &state.config.resource_prefix else {
+        return Ok(());
+    };
+    state
+        .db
+        .set_deployment_state(&alien_core::DeploymentState {
+            platform: state.config.platform,
+            status: alien_core::DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                state.config.platform,
+                prefix.clone(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::deployment_protocol_version_for_platform(
+                state.config.platform,
+                state.config.base_platform,
+            ),
+        })
+        .await
+}
+
+/// The target this Operator may store for `target`. Unprotected, that is
+/// `target` itself. Protected, it is the verified release with a configuration
+/// rebuilt from what the installation allows (see [`crate::protected`]), and
+/// `None` when the target is refused: nothing is changed, and the refusal is
+/// logged. Sync and air-gapped bundles both deliver targets through here.
+pub(crate) async fn protect_target(
+    state: &OperatorState,
+    target: &alien_core::sync::TargetDeployment,
+) -> crate::error::Result<Option<alien_core::sync::TargetDeployment>> {
+    let Some(signing) = &state.config.release_signing else {
+        return Ok(Some(target.clone()));
+    };
+    let stored = state
+        .db
+        .get_signing_trust()
+        .await?
+        .unwrap_or_else(|| crate::protected::OperatorTrust::new(&signing.settings.prefix));
+    let release_id = target
+        .release_info
+        .release_id
+        .as_deref()
+        .unwrap_or_default();
+    match signing.protect_target(
+        state.config.platform,
+        &state.config.stack_input_values,
+        &stored,
+        target,
+    ) {
+        Ok((protected, verified, kept)) => {
+            if stored.release_sequence != Some(verified.sequence) {
+                info!(
+                    release_id,
+                    sequence = verified.sequence,
+                    signers = ?verified.signers,
+                    developer_inputs = ?crate::protected::developer_inputs(&verified.stack),
+                    config_sequence = ?kept.config_sequence,
+                    "Protected mode: accepted signed release. Values for these developer inputs come only from the deployment's signed config"
+                );
+            }
+            // The install's ledger first: it outlives the database.
+            signing.ledger.store(&kept.ledger).await?;
+            state.db.set_signing_trust(&kept).await?;
+            Ok(Some(protected))
+        }
+        Err(refusal) => {
+            error!(
+                release_id,
+                reason = %refusal,
+                "Protected mode: refused the target; nothing was changed"
+            );
+            record_refusal(state, &refusal).await?;
+            Ok(None)
+        }
+    }
+}
+
+/// Report a refused target the way a failed update is reported, so the
+/// manager stops offering it and a newer release can roll out. Only an idle
+/// or already failed deployment changes; the cluster is not touched.
+async fn record_refusal(
+    state: &OperatorState,
+    refusal: &crate::protected::Refusal,
+) -> crate::error::Result<()> {
+    let Some(mut deployment_state) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    deployment_state.status = match deployment_state.status {
+        DeploymentStatus::Running => DeploymentStatus::UpdateFailed,
+        DeploymentStatus::Pending => DeploymentStatus::ProvisioningFailed,
+        // Keep the failure, with this refusal as its reason.
+        status @ (DeploymentStatus::UpdateFailed | DeploymentStatus::ProvisioningFailed) => status,
+        _ => return Ok(()),
+    };
+    deployment_state.error = Some(
+        AlienError::new(crate::error::ErrorData::ReleaseRefused {
+            reason: refusal.to_string(),
+        })
+        .into_generic(),
+    );
+    deployment_state.retry_requested = false;
+    state.db.set_deployment_state(&deployment_state).await
 }
 
 /// What an enrolled Operator holds for the release it runs or is applying.
@@ -1085,9 +1307,12 @@ fn reported_operations_config(
 }
 
 fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityReport {
+    // A dynamic container is an image, command and environment the manager
+    // chooses, which no signed release names.
     let granted = config.platform == Platform::Kubernetes
         && config.namespace.is_some()
-        && config.dynamic_containers;
+        && config.dynamic_containers
+        && !config.is_protected();
     OperatorCapabilityReport {
         key: "dynamic-containers-v1".to_string(),
         state: if granted {
@@ -1097,6 +1322,15 @@ fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityR
         },
         detail: None,
     }
+}
+
+/// An installation that allows dynamic containers and turns on protected mode
+/// still has the access to remove the ones it ran before.
+fn dynamic_containers_removed_by_protection(config: &OperatorConfig) -> bool {
+    config.platform == Platform::Kubernetes
+        && config.namespace.is_some()
+        && config.dynamic_containers
+        && config.is_protected()
 }
 
 fn operation_command_address_capability(
@@ -1185,6 +1419,52 @@ fn apply_manager_control_state(
     protocol_changed || policy_changed || authorization_changed
 }
 
+/// The manager's control signals, without its copy of releases or resource
+/// state: a retry request, a delete command, the protocol version and terminal
+/// setup statuses. Each can stop or remove the deployment, none can change
+/// what it runs. The deletion policy is not one of them: a protected
+/// installation always retains its data, so a manager cannot turn a delete
+/// into an erase.
+fn apply_manager_control_signals(
+    local_state: &mut alien_core::DeploymentState,
+    manager_state: &alien_core::DeploymentState,
+) -> bool {
+    let accepts_protocol = alien_core::accepts_deployment_protocol_report(
+        local_state.protocol_version,
+        manager_state.protocol_version,
+    );
+    let mut changed = false;
+    if accepts_protocol && manager_state.protocol_version > local_state.protocol_version {
+        local_state.protocol_version = manager_state.protocol_version;
+        changed = true;
+    }
+    let terminal = accepts_protocol
+        && matches!(
+            manager_state.status,
+            alien_core::DeploymentStatus::RetentionRequired
+                | alien_core::DeploymentStatus::Retained
+                | alien_core::DeploymentStatus::TeardownRequired
+                | alien_core::DeploymentStatus::TeardownFailed
+                | alien_core::DeploymentStatus::Deleted
+        );
+    if (terminal || manager_state_is_delete_command(manager_state))
+        && !local_state_is_delete_or_deleted(local_state)
+        && local_state.status != manager_state.status
+    {
+        local_state.status = manager_state.status;
+        local_state.retry_requested = manager_state.retry_requested;
+        return true;
+    }
+    if manager_state.retry_requested
+        && !local_state.retry_requested
+        && local_state.status.is_failed()
+    {
+        local_state.retry_requested = true;
+        changed = true;
+    }
+    changed
+}
+
 /// The manager authorizes the deletion policy. The operator keeps its own resource
 /// checkpoints but must act on the manager's retain or erase choice.
 fn apply_manager_deletion_policy(
@@ -1256,6 +1536,43 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    /// Turning on protected mode removes the dynamic containers the install ran
+    /// before; unprotected installs and installs that never allowed them keep
+    /// today's behavior.
+    #[test]
+    fn protected_mode_removes_dynamic_containers_only_where_they_were_allowed() {
+        let config = |dynamic: bool, protected: bool, platform: Platform, namespace: bool| {
+            let mut config = OperatorConfig::builder()
+                .platform(platform)
+                .data_dir("/tmp/unused")
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build();
+            config.dynamic_containers = dynamic;
+            config.namespace = namespace.then(|| "apps".to_string());
+            if protected {
+                config.release_signing = Some(crate::protected::test_signing("shop"));
+            }
+            config
+        };
+        let k8s = Platform::Kubernetes;
+        let removes = |c: &OperatorConfig| super::dynamic_containers_removed_by_protection(c);
+        let granted = |c: &OperatorConfig| {
+            super::dynamic_containers_capability(c).state == OperatorCapabilityState::Granted
+        };
+
+        let protected = config(true, true, k8s, true);
+        assert!(removes(&protected));
+        assert!(!granted(&protected));
+
+        let unprotected = config(true, false, k8s, true);
+        assert!(!removes(&unprotected));
+        assert!(granted(&unprotected));
+
+        assert!(!removes(&config(false, true, k8s, true)));
+        assert!(!removes(&config(true, true, k8s, false)));
+        assert!(!removes(&config(true, true, Platform::Aws, true)));
+    }
+
     /// A chart upgrade to a new release with the same setup rewrites the release
     /// file in place; the next report names the new release.
     #[test]
@@ -1371,10 +1688,11 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        accept_target_release, apply_manager_control_state, create_authenticated_client,
-        dynamic_containers_capability, is_uninitialized_deployment_state,
-        operation_command_address_capability, report_operator_capabilities,
-        reported_operations_config, sync_with_manager, InstalledConfig,
+        accept_target_release, apply_manager_control_signals, apply_manager_control_state,
+        create_authenticated_client, dynamic_containers_capability,
+        is_uninitialized_deployment_state, operation_command_address_capability,
+        report_operator_capabilities, reported_operations_config, sync_with_manager,
+        InstalledConfig,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
@@ -1679,6 +1997,8 @@ mod tests {
             version: Some("1.0.0".to_string()),
             description: None,
             stack: Stack::new("test".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
@@ -1717,6 +2037,8 @@ mod tests {
             version: None,
             description: None,
             stack: Stack::new("corrected".into()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
@@ -1761,6 +2083,8 @@ mod tests {
             stack: Stack::new("corrected".into())
                 .add(storage, alien_core::ResourceLifecycle::Live)
                 .build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
             platform: Platform::Test,
@@ -1822,6 +2146,8 @@ mod tests {
             version: None,
             description: None,
             stack: Stack::new("corrected".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         for status in [
             DeploymentStatus::UpdateFailed,
@@ -2412,6 +2738,8 @@ mod tests {
             stack: Stack::new("app".into())
                 .add(worker(image), alien_core::ResourceLifecycle::Live)
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
         let mut internal = serde_json::to_value(
@@ -2594,6 +2922,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -2732,6 +3062,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let mut config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -2828,6 +3160,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let mut keyless = config.clone();
         keyless.runtime_identity_audience = None;
@@ -2926,6 +3260,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3023,6 +3359,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3170,6 +3508,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = |allow_frozen_changes: bool| {
             alien_core::DeploymentConfig::builder()
@@ -3272,6 +3612,7 @@ mod tests {
                 Some(&alien_core::sync::TargetDeployment {
                     release_info: release.clone(),
                     config: changed,
+                    signed_config: None,
                 }),
             )
             .await
@@ -4201,6 +4542,8 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("s".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let local = |current: &str| DeploymentState {
             platform: Platform::Local,
@@ -4283,6 +4626,90 @@ mod tests {
     }
 
     #[test]
+    fn a_protected_install_deletes_on_the_managers_say_but_keeps_its_retain_policy() {
+        let mut local_state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                ..Default::default()
+            }),
+            ..local_state.clone()
+        };
+
+        assert!(apply_manager_control_signals(
+            &mut local_state,
+            &manager_state
+        ));
+        assert_eq!(local_state.status, DeploymentStatus::DeletePending);
+        assert_eq!(
+            local_state.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Retain
+        );
+    }
+
+    #[test]
+    fn a_protected_install_takes_no_setup_update_authorization_from_the_manager() {
+        let local_state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::UpdateFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                setup_update_authorization: Some(alien_core::SetupUpdateAuthorization {
+                    nonce: "n".into(),
+                    baseline_frozen_digest: "a".into(),
+                    target_frozen_digest: "b".into(),
+                    release_id: "rel_2".into(),
+                    setup_target: "helm".into(),
+                    setup_fingerprint: "fp".into(),
+                    setup_fingerprint_version: 1,
+                }),
+                ..Default::default()
+            }),
+            ..local_state.clone()
+        };
+
+        let mut protected = local_state.clone();
+        assert!(!apply_manager_control_signals(
+            &mut protected,
+            &manager_state
+        ));
+        assert!(protected
+            .runtime_metadata
+            .unwrap()
+            .setup_update_authorization
+            .is_none());
+
+        // An unprotected Operator takes it, so the assertion above is the
+        // protected path's own refusal.
+        let mut unprotected = local_state;
+        assert!(apply_manager_control_state(
+            &mut unprotected,
+            &manager_state
+        ));
+    }
+
+    #[test]
     fn ignores_manager_retry_request_for_active_local_state() {
         let mut local_state = DeploymentState {
             platform: Platform::Local,
@@ -4362,6 +4789,295 @@ mod tests {
         assert_eq!(local_state.status, DeploymentStatus::Deleting);
     }
 
+    /// A refused target is reported as a failed update so the manager stops
+    /// offering it, and nothing else about the deployment changes.
+    #[tokio::test]
+    async fn a_refused_target_is_reported_as_a_failed_update() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let installed = ReleaseInfo {
+            release_id: Some("rel_installed".into()),
+            version: None,
+            description: None,
+            stack: Stack::new("shop".into()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let running = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: Some(installed.clone()),
+            target_release: Some(installed.clone()),
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "shop".into(),
+            )),
+            environment_info: None,
+            runtime_metadata: None,
+            error: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&running).await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let unsigned = alien_core::sync::TargetDeployment {
+            signed_config: None,
+            release_info: ReleaseInfo {
+                release_id: Some("rel_unsigned".into()),
+                ..installed.clone()
+            },
+            config: alien_core::DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build(),
+        };
+
+        assert!(super::protect_target(&state, &unsigned)
+            .await
+            .unwrap()
+            .is_none());
+        let reported = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(reported.status, DeploymentStatus::UpdateFailed);
+        assert_eq!(reported.error.unwrap().code, "RELEASE_REFUSED");
+        assert_eq!(reported.current_release, Some(installed.clone()));
+        assert_eq!(reported.target_release, Some(installed));
+    }
+
+    /// A newer signed config reaches the installed release with no new
+    /// release; the same config again changes nothing.
+    #[tokio::test]
+    async fn a_refused_target_does_not_block_a_newer_signed_config() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let installed = super::protect_target(&state, &fixtures::target(release.clone(), vec![]))
+            .await
+            .unwrap()
+            .expect("the signed release is accepted");
+        super::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
+        let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
+        deployed.status = DeploymentStatus::Running;
+        deployed.current_release = deployed.target_release.clone();
+        db.set_deployment_state(&deployed).await.unwrap();
+
+        // The manager sends an unsigned target: refused, the release keeps running.
+        let mut unsigned = release;
+        unsigned.signed = None;
+        assert!(
+            super::protect_target(&state, &fixtures::target(unsigned, vec![]))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let refused = db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refused.status, DeploymentStatus::UpdateFailed);
+        // A finished update clears the stored configuration; the last
+        // target the manager sent is what remains.
+        db.clear_deployment_config().await.unwrap();
+        db.set_sync_execution("pull-operator-test", None, Some(&installed))
+            .await
+            .unwrap();
+
+        let config = fixtures::signed_config(
+            3,
+            &fixtures::this_install(),
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        );
+        assert!(super::reapply_with_signed_config(&state, Some(config))
+            .await
+            .unwrap());
+        let applied = db.get_deployment_config().await.unwrap().unwrap();
+        assert!(applied
+            .environment_variables
+            .variables
+            .iter()
+            .any(|variable| variable.name == "LOG_LEVEL" && variable.value == "warn"));
+    }
+
+    #[tokio::test]
+    async fn a_newer_signed_config_may_drop_a_configurable_variable() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::release_with(
+            5,
+            &fixtures::stack(&fixtures::pinned()),
+            alien_core::release_statement::ReleaseOptions {
+                channel: "production".to_string(),
+                configurable_env: vec!["FEATURE_FLAGS".to_string()],
+                ..Default::default()
+            },
+            "ci",
+        );
+        let installed = super::protect_target(&state, &fixtures::target(release, vec![]))
+            .await
+            .unwrap()
+            .expect("the signed release is accepted");
+        super::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
+        let finish = || async {
+            let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
+            deployed.status = DeploymentStatus::Running;
+            deployed.current_release = deployed.target_release.clone();
+            db.set_deployment_state(&deployed).await.unwrap();
+        };
+        let flags = || async {
+            db.get_deployment_config()
+                .await
+                .unwrap()
+                .unwrap()
+                .environment_variables
+                .variables
+                .into_iter()
+                .find(|variable| variable.name == "FEATURE_FLAGS")
+                .map(|variable| variable.value)
+        };
+        finish().await;
+
+        let set = fixtures::signed_config(
+            3,
+            &fixtures::this_install(),
+            serde_json::json!({"env": {"FEATURE_FLAGS": "beta"}}),
+        );
+        assert!(super::reapply_with_signed_config(&state, Some(set))
+            .await
+            .unwrap());
+        assert_eq!(flags().await.as_deref(), Some("beta"));
+        finish().await;
+
+        // The next config drops the variable. The applied configuration
+        // still carries it, which must not refuse the new config.
+        let dropped = fixtures::signed_config(4, &fixtures::this_install(), serde_json::json!({}));
+        assert!(super::reapply_with_signed_config(&state, Some(dropped))
+            .await
+            .unwrap());
+        assert_eq!(flags().await, None);
+    }
+
+    #[tokio::test]
+    async fn a_newer_signed_config_applies_the_installed_release_again() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let installed = super::protect_target(&state, &fixtures::target(release, vec![]))
+            .await
+            .unwrap()
+            .expect("the signed release is accepted");
+        super::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
+        let finish = || async {
+            let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
+            deployed.status = DeploymentStatus::Running;
+            deployed.current_release = deployed.target_release.clone();
+            db.set_deployment_state(&deployed).await.unwrap();
+        };
+        finish().await;
+
+        let config = fixtures::signed_config(
+            3,
+            &fixtures::this_install(),
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        );
+        assert!(
+            super::reapply_with_signed_config(&state, Some(config.clone()))
+                .await
+                .unwrap()
+        );
+        let applied = db.get_deployment_config().await.unwrap().unwrap();
+        assert!(
+            applied
+                .environment_variables
+                .variables
+                .iter()
+                .any(|variable| variable.name == "LOG_LEVEL" && variable.value == "warn"),
+            "{:?}",
+            applied.environment_variables.variables
+        );
+        finish().await;
+        assert!(!super::reapply_with_signed_config(&state, Some(config))
+            .await
+            .unwrap());
+    }
+
     fn container_receiver(id: &str, reads_capability_file: bool) -> alien_core::Container {
         let mut container = alien_core::Container::new(id.to_string())
             .code(alien_core::ContainerCode::Image {
@@ -4437,6 +5153,8 @@ mod tests {
                         alien_core::ResourceLifecycle::Live,
                     )
                     .build(),
+                    signed: None,
+                    signer_lists: Vec::new(),
             };
             let applying = status == DeploymentStatus::UpdatePending;
             DeploymentState {

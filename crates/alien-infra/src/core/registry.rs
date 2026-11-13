@@ -502,6 +502,34 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        // Register the verifier controller: setup owns the verifier on every cloud.
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<
+                crate::signing_verifier::SigningVerifierController,
+            >::new()),
+        );
+
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<
+                crate::signing_verifier::SigningVerifierController,
+            >::new()),
+        );
+
+        #[cfg(feature = "azure")]
+        registry.register_controller_factory(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::signing_verifier::SigningVerifierController,
+            >::new()),
+        );
+
         // Register Test RemoteStackManagement controller
         #[cfg(feature = "test")]
         registry.register_controller_factory(

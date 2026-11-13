@@ -746,6 +746,22 @@ static CATALOG: &[CatalogModel] = &[
         client_apis: &[ClientApi::OpenAiChatCompletions],
         provider_api: ProviderApi::OpenAi,
     },
+    // Azure, GPT-5 family. Foundry serves these on Responses (also Chat Completions,
+    // but the gateway only advertises the Responses path, which carries `web_search`).
+    CatalogModel {
+        public_id: "gpt-5.5",
+        cloud: Platform::Azure,
+        upstream_id: "gpt-5.5",
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-5.6-sol",
+        cloud: Platform::Azure,
+        upstream_id: "gpt-5.6-sol",
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
+    },
     // Azure, Claude over the Foundry Anthropic endpoint. The upstream id is the
     // Foundry deployment name (defaults to the model id). Unlike the OpenAI list,
     // these are not in AZURE_DEPLOYMENTS: a first Claude deployment requires
@@ -833,10 +849,41 @@ pub const AI_CATALOG_REVISION: &str = "2026-08-20.1";
 /// Azure deployments to create at provision time: (deployment name, model name,
 /// model version). The deployment name is the catalog `upstream_id`. The version
 /// is validated against the target region's model catalog at deploy time.
-static AZURE_DEPLOYMENTS: &[(&str, &str, &str)] = &[
-    ("gpt-4.1", "gpt-4.1", "2025-04-14"),
-    ("model-router", "model-router", "2025-11-18"),
+///
+/// Each entry is (deployment name, model name, model version, capacity in
+/// thousands of tokens per minute). The GPT-5 deployments and the embeddings
+/// deployment get 50, enough for chat and document indexing; the others keep 1.
+static AZURE_DEPLOYMENTS: &[(&str, &str, &str, i32)] = &[
+    ("gpt-4.1", "gpt-4.1", "2025-04-14", 1),
+    ("model-router", "model-router", "2025-11-18", 1),
+    ("gpt-5.5", "gpt-5.5", "2026-04-24", 50),
+    ("gpt-5.6-sol", "gpt-5.6-sol", "2026-07-09", 50),
+    ("text-embedding-3-large", "text-embedding-3-large", "1", 50),
 ];
+
+/// One embeddings model. Embeddings are not text generation, so they stay out of
+/// [`CatalogModel`] and its client-API lists: the gateway serves them only on
+/// `POST /<name>/v1/embeddings`, and the model listing does not include them.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbeddingModel {
+    pub public_id: &'static str,
+    pub cloud: Platform,
+    /// For Azure, the deployment name the controller creates (see `AZURE_DEPLOYMENTS`).
+    pub upstream_id: &'static str,
+}
+
+static EMBEDDING_MODELS: &[EmbeddingModel] = &[EmbeddingModel {
+    public_id: "text-embedding-3-large",
+    cloud: Platform::Azure,
+    upstream_id: "text-embedding-3-large",
+}];
+
+/// The embeddings model a client-sent id names on `cloud`, or `None`.
+pub fn resolve_embedding_for(model_id: &str, cloud: Platform) -> Option<&'static EmbeddingModel> {
+    EMBEDDING_MODELS
+        .iter()
+        .find(|m| m.cloud == cloud && m.public_id == model_id)
+}
 
 /// Direct Anthropic aliases qualified for the native Messages API. Keep this
 /// explicit: the three cloud providers use different upstream IDs and cannot be
@@ -1267,7 +1314,7 @@ fn dot_minor_version(id: &str) -> String {
 }
 
 /// The Azure predefined model deployments, as (deployment name, model name, version).
-pub fn azure_deployments() -> Vec<(&'static str, &'static str, &'static str)> {
+pub fn azure_deployments() -> Vec<(&'static str, &'static str, &'static str, i32)> {
     AZURE_DEPLOYMENTS.to_vec()
 }
 
@@ -1476,14 +1523,24 @@ mod tests {
     #[test]
     fn azure_deployments_map_to_catalog() {
         assert!(!azure_deployments().is_empty());
-        for (deployment, _, _) in azure_deployments() {
+        for (deployment, ..) in azure_deployments() {
             assert!(
                 models_for(Platform::Azure)
                     .iter()
-                    .any(|m| m.upstream_id == deployment),
+                    .any(|m| m.upstream_id == deployment)
+                    || resolve_embedding_for(deployment, Platform::Azure).is_some(),
                 "azure deployment {deployment} must map to a catalog model"
             );
         }
+    }
+
+    #[test]
+    fn embeddings_resolve_only_on_the_cloud_that_serves_them() {
+        let m = resolve_embedding_for("text-embedding-3-large", Platform::Azure).unwrap();
+        assert_eq!(m.upstream_id, "text-embedding-3-large");
+        assert!(resolve_embedding_for("text-embedding-3-large", Platform::Aws).is_none());
+        // Embeddings never appear in the text-generation catalog.
+        assert!(lookup("text-embedding-3-large").is_none());
     }
 
     #[test]

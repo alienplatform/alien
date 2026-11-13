@@ -66,6 +66,9 @@ async fn write_json<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Re
     Ok(())
 }
 
+/// State key of a protected Operator's ledger.
+const SIGNING_LEDGER_KEY: &str = "signing_ledger";
+
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
 const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
@@ -2437,56 +2440,32 @@ impl OperatorDb {
         Ok(())
     }
 
-    /// Manager URL to open tunnel connections to, from the last sync.
-    /// `None` when the manager does not accept tunnels.
-    pub async fn get_tunnel_url(&self) -> Result<Option<String>> {
+    /// What this protected Operator accepted: the install's ledger and the
+    /// signer chain. `None` before it accepted anything.
+    pub async fn get_signing_trust(&self) -> Result<Option<crate::protected::OperatorTrust>> {
         let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query("SELECT value FROM state WHERE key = 'tunnel_url'", ())
-            .await
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to query tunnel_url".to_string(),
-            })?;
-        match rows
-            .next()
-            .await
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to fetch tunnel_url row".to_string(),
-            })? {
-            Some(row) => Ok(Some(row.get(0).into_alien_error().context(
-                ErrorData::DatabaseError {
-                    message: "Failed to read tunnel_url value".to_string(),
-                },
-            )?)),
-            None => Ok(None),
-        }
+        read_json(&conn, SIGNING_LEDGER_KEY).await
     }
 
-    /// Record the tunnel URL from the manager's sync response; `None` clears it.
-    pub async fn set_tunnel_url(&self, url: Option<&str>) -> Result<()> {
+    /// Store `accepted`. The stored ledger only rises: each entry keeps the
+    /// higher of what was stored and `accepted`, and a fork is an error.
+    pub async fn set_signing_trust(
+        &self,
+        accepted: &crate::protected::OperatorTrust,
+    ) -> Result<()> {
         let conn = self.conn.lock().await;
-        let result = match url {
-            Some(url) => {
-                conn.execute(
-                    "INSERT INTO state (key, value, updated_at) VALUES ('tunnel_url', ?, datetime('now'))
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                    (url.to_string(),),
-                )
-                .await
+        let mut merged = accepted.clone();
+        let stored: Option<crate::protected::OperatorTrust> =
+            read_json(&conn, SIGNING_LEDGER_KEY).await?;
+        if let Some(stored) = stored {
+            merged.ledger.merge(&stored.ledger).context(database_error(
+                "the stored ledger forks from the one being written",
+            ))?;
+            if stored.signer_lists.len() > merged.signer_lists.len() {
+                merged.signer_lists = stored.signer_lists;
             }
-            None => {
-                conn.execute("DELETE FROM state WHERE key = 'tunnel_url'", ())
-                    .await
-            }
-        };
-        result
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to set tunnel_url".to_string(),
-            })?;
-        Ok(())
+        }
+        write_json(&conn, SIGNING_LEDGER_KEY, &merged).await
     }
 
     /// Set the commands URL from the manager's sync response.
@@ -2658,6 +2637,8 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("finish".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         alien_core::DeploymentState {
             platform: alien_core::Platform::Test,
@@ -2848,6 +2829,47 @@ mod tests {
             .await
             .unwrap());
         assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![heartbeat]);
+    }
+
+    /// Put the retired `tunnel` field on every container in a saved value.
+    fn add_retired_tunnel(value: &mut serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut added = 0;
+                if map.contains_key("cpu") && map.contains_key("code") {
+                    map.insert("tunnel".into(), serde_json::json!({"port": 8080}));
+                    added += 1;
+                }
+                added + map.values_mut().map(add_retired_tunnel).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(add_retired_tunnel).sum(),
+            _ => 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_saved_with_a_container_tunnel_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let mut saved = serde_json::to_value(heartbeat_state()).unwrap();
+        assert_eq!(add_retired_tunnel(&mut saved), 2, "{saved}");
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))",
+                (saved.to_string(),),
+            )
+            .await
+            .unwrap();
+        let loaded = db
+            .get_deployment_state()
+            .await
+            .expect("the old checkpoint is readable")
+            .expect("checkpoint present");
+        assert_eq!(loaded.stack_state.unwrap().resources.len(), 2);
     }
 
     #[tokio::test]

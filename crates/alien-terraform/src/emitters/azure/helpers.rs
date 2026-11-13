@@ -443,9 +443,13 @@ pub fn emit_role_definition_and_assignments_for_target(
 /// controllers. Runtime reconciliation creates role assignments only; these
 /// definitions must already exist and use the same deterministic UUID seeds as
 /// `AzurePermissionsHelper`.
+///
+/// On a protected install (`signing_protected`) the management roles leave out what only the
+/// verifier may do and every write of what runs code, as the management emitter's own roles do.
 pub fn emit_setup_resource_role_definitions(
     stack: &Stack,
     fragment: &mut TfFragment,
+    signing_protected: bool,
 ) -> Result<()> {
     let mut seen_execution_roles = HashSet::new();
     let mut seen_management_roles = HashSet::new();
@@ -494,7 +498,7 @@ pub fn emit_setup_resource_role_definitions(
                 continue;
             }
 
-            emit_setup_management_role_definitions(fragment, &permission_set)?;
+            emit_setup_management_role_definitions(fragment, &permission_set, signing_protected)?;
         }
     }
 
@@ -545,7 +549,8 @@ fn emit_setup_execution_role_definitions(
     profile_name: &str,
     permission_set: &PermissionSet,
 ) -> Result<()> {
-    for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
+    // The workload's own identity: what it may do is what the release signed.
+    for (index, mut custom_role) in setup_resource_custom_roles(permission_set, false)?
         .into_iter()
         .enumerate()
     {
@@ -577,8 +582,9 @@ fn emit_setup_execution_role_definitions(
 fn emit_setup_management_role_definitions(
     fragment: &mut TfFragment,
     permission_set: &PermissionSet,
+    signing_protected: bool,
 ) -> Result<()> {
-    for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
+    for (index, mut custom_role) in setup_resource_custom_roles(permission_set, signing_protected)?
         .into_iter()
         .enumerate()
     {
@@ -604,12 +610,15 @@ fn emit_setup_management_role_definitions(
 }
 
 /// Emits custom roles used by the stack's dedicated Remote Bindings identity.
-/// These roles are deliberately separate from setup management permissions.
+/// These roles are deliberately separate from setup management permissions. The vendor holds
+/// that identity, so on a protected install (`signing_protected`) they are filtered like
+/// management's.
 pub fn emit_remote_bindings_role_definitions(
     fragment: &mut TfFragment,
     permission_set: &PermissionSet,
+    signing_protected: bool,
 ) -> Result<()> {
-    for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
+    for (index, mut custom_role) in setup_resource_custom_roles(permission_set, signing_protected)?
         .into_iter()
         .enumerate()
     {
@@ -637,10 +646,12 @@ pub fn emit_remote_bindings_role_definitions(
 
 fn setup_resource_custom_roles(
     permission_set: &PermissionSet,
+    signing_protected: bool,
 ) -> Result<Vec<alien_permissions::generators::AzureCustomRole>> {
     let generator = AzureRuntimePermissionsGenerator::new();
     let context = permission_context("setup-resource-permissions")
-        .with_resource_name("${local.resource_prefix}-setup-role-scope".to_string());
+        .with_resource_name("${local.resource_prefix}-setup-role-scope".to_string())
+        .with_signing_protected(signing_protected);
 
     let grant_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)

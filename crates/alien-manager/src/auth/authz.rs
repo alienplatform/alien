@@ -116,22 +116,6 @@ pub trait Authz: Send + Sync {
 
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-    /// Connecting an operator tunnel is separate from reconciling its deployment.
-    fn can_connect_operator_tunnel(
-        &self,
-        subject: &Subject,
-        deployment: &DeploymentRecord,
-    ) -> bool {
-        if subject.role == crate::auth::Role::OperatorTunnel {
-            return subject.workspace_id == deployment.workspace_id
-                && matches!(&subject.scope, crate::auth::Scope::Deployment { deployment_id, project_id }
-                    if deployment_id == &deployment.id && project_id == &deployment.project_id);
-        }
-        // A bounded sync credential is not a tunnel credential.
-        subject.role != crate::auth::Role::OperatorSync
-            && self.can_sync_deployment(subject, deployment)
-    }
-
     fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
 
     // -- Telemetry ingest --------------------------------------------------
@@ -160,11 +144,4 @@ pub trait Authz: Send + Sync {
     }
     /// Generic "can act on deployment".
     fn can_act_on_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-
-    /// Whether `subject` may send requests into the deployment through the
-    /// tunnel. Defaults to the command-dispatch rule: both run caller-chosen
-    /// requests against code inside the deployment.
-    fn can_call_tunnel(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
-        self.can_dispatch_command(subject, deployment)
-    }
 }

@@ -17,7 +17,7 @@ use alien_k8s_clients::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use k8s_openapi::{api::core::v1::Secret, ByteString};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     error::{ErrorData, Result},
@@ -26,6 +26,16 @@ use crate::{
 
 /// Container in the Operator Deployment that runs the Operator.
 const OPERATOR_CONTAINER: &str = "operator";
+
+/// The image to run: the manager's target, moved to the site registry on a mirrored install.
+fn resolve_target(target_image: &str, image_registry: Option<&str>) -> String {
+    match image_registry {
+        Some(registry) => {
+            alien_core::image_rewrite::rewrite_to_site_registry(target_image, registry)
+        }
+        None => target_image.to_string(),
+    }
+}
 
 /// Move the Operator's own Deployment to `target_image` if it runs another.
 pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
@@ -37,6 +47,9 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
             message: "self-update needs the Operator's namespace".to_string(),
         })
     })?;
+    // The manager advertises its own registry; a mirrored install pulls every image from its mirror.
+    let target_image = resolve_target(target_image, state.config.image_registry.as_deref());
+    let target_image = target_image.as_str();
     let failed = |message: &str| ErrorData::ConfigurationError {
         message: format!("self-update of Deployment '{deployment_name}': {message}"),
     };
@@ -65,6 +78,24 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
         .ok_or_else(|| AlienError::new(failed("no 'operator' container")))?;
     if container.image.as_deref() == Some(target_image) {
         return Ok(());
+    }
+    // Protected, the Operator moves only to the image digest its newest
+    // accepted release signed: the manager chooses when and from where, not what.
+    if state.config.is_protected() {
+        let signed = state
+            .db
+            .get_signing_trust()
+            .await?
+            .and_then(|stored| stored.operator_digest);
+        let target_digest = alien_core::release_statement::image_digest(target_image);
+        if signed.is_none() || signed.as_deref() != target_digest {
+            warn!(
+                image = target_image,
+                signed = signed.as_deref().unwrap_or("none"),
+                "Protected mode: refused to update the Operator to an image no accepted release signed"
+            );
+            return Ok(());
+        }
     }
     let current = container.image.clone().unwrap_or_default();
     container.image = Some(target_image.to_string());
@@ -267,6 +298,20 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[test]
+    fn mirrored_install_pulls_the_target_from_its_mirror() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let target = format!("registry.example.com/alien/operator@{digest}");
+        let resolved = super::resolve_target(&target, Some("mirror.local:5000/site"));
+        assert!(resolved.starts_with("mirror.local:5000/"), "{resolved}");
+        assert!(resolved.ends_with(&format!("@{digest}")), "{resolved}");
+    }
+
+    #[test]
+    fn unmirrored_install_keeps_the_target() {
+        assert_eq!(super::resolve_target("r.io/op:1", None), "r.io/op:1");
+    }
 
     const HOST: &str = "manager.example.test:8443";
 

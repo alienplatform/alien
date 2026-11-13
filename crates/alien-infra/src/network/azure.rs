@@ -2203,7 +2203,7 @@ mod tests {
             .stack_settings(StackSettings::default())
             .with_stack_resource(
                 Postgres::new("db".to_string()).build(),
-                alien_core::ResourceLifecycle::Live,
+                alien_core::ResourceLifecycle::Frozen,
             )
             .build()
             .await
@@ -2340,7 +2340,7 @@ mod tests {
             .service_provider(Arc::new(mock_provider))
             .with_stack_resource(
                 Postgres::new("db".to_string()).build(),
-                alien_core::ResourceLifecycle::Live,
+                alien_core::ResourceLifecycle::Frozen,
             )
             .build()
             .await

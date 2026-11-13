@@ -938,6 +938,8 @@ async fn prepare_for_render(stack: Stack) -> Stack {
 
 fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
     TerraformOptions {
+        setup_identity: None,
+        pins: alien_core::SetupPins::compiled_in(),
         registry,
         display_name: None,
         stack_settings: StackSettings::default(),
@@ -1027,6 +1029,7 @@ async fn a_vault_writes_no_copy_of_the_stack_level_policy() {
             targets_kubernetes: false,
             stack_settings: &settings,
             names: &names,
+            pins: &alien_core::SetupPins::default(),
         };
         let profile = &stack.permissions.profiles["execution"];
         // As the vault emitter selects them: sets named for the vault, then `"*"` ones.

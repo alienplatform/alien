@@ -89,7 +89,11 @@ impl TfEmitter for AzureRemoteBindingsEmitter {
                     ),
                 })
             })?;
-            emit_remote_bindings_role_definitions(&mut fragment, permission_set)?;
+            emit_remote_bindings_role_definitions(
+                &mut fragment,
+                permission_set,
+                ctx.stack_settings.signing.is_some(),
+            )?;
         }
         Ok(fragment)
     }

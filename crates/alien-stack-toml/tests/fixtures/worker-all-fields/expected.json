@@ -88,6 +88,9 @@
           "method": "GET",
           "path": "/ready"
         },
+        "security": {
+          "profile": "restricted"
+        },
         "timeoutSeconds": 600,
         "triggers": [
           {

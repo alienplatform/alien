@@ -28,6 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             git_metadata: None,
             project_id: "default".into(),
             channel: None,
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
         .send()
         .await?

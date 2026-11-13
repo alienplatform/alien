@@ -25,6 +25,16 @@ use chrono::Utc;
 use std::{fmt::Debug, time::Duration};
 use tracing::{debug, info, warn};
 
+/// The container as the cloud client sends it, for the verifier.
+fn container_body_json(body: &BlobContainer, resource_id: &str) -> Result<serde_json::Value> {
+    serde_json::to_value(body)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "The blob container does not serialize".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        })
+}
+
 pub(crate) fn get_azure_container_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
         .to_lowercase()
@@ -357,22 +367,39 @@ impl AzureStorageController {
             .service_provider
             .get_azure_blob_container_client(azure_config)?;
 
-        // Fail fast on any error - executor handles retries
-        client
-            .create_blob_container(
-                &resource_group_name,
-                &storage_account_name,
-                &container_name,
-                &container_body,
+        // On a protected install who may reach the container is the verifier's to set: it checks
+        // the request against the signed stack and sends it unchanged.
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, config.id())? {
+            crate::core::verifier::apply_resource_write(
+                &crate::core::verifier::azure_verifier(ctx).await?,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                config.id(),
+                vec![crate::core::verifier::ResourceWrite::CreateBlobContainer {
+                    account: storage_account_name.clone(),
+                    container: container_name.clone(),
+                    body: container_body_json(&container_body, config.id())?,
+                }],
             )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Azure Storage Container '{}'",
-                    container_name
-                ),
-                resource_id: Some(config.id().to_string()),
-            })?;
+            .await?;
+        } else {
+            // Fail fast on any error - executor handles retries
+            client
+                .create_blob_container(
+                    &resource_group_name,
+                    &storage_account_name,
+                    &container_name,
+                    &container_body,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create Azure Storage Container '{}'",
+                        container_name
+                    ),
+                    resource_id: Some(config.id().to_string()),
+                })?;
+        }
 
         info!(
             "Successfully created Azure Storage Container '{}'",
@@ -583,21 +610,36 @@ impl AzureStorageController {
                 .service_provider
                 .get_azure_blob_container_client(azure_config)?;
 
-            client
-                .update_blob_container(
-                    &resource_group_name,
-                    &storage_account_name,
-                    container_name,
-                    &container_body,
+            if let Some(release) = crate::core::verifier::protected_statements(ctx, config.id())? {
+                crate::core::verifier::apply_resource_write(
+                    &crate::core::verifier::azure_verifier(ctx).await?,
+                    release,
+                    ctx.deployment_config.signed_config.as_ref(),
+                    config.id(),
+                    vec![crate::core::verifier::ResourceWrite::UpdateBlobContainer {
+                        account: storage_account_name.clone(),
+                        container: container_name.clone(),
+                        body: container_body_json(&container_body, config.id())?,
+                    }],
                 )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update Azure Storage Container '{}': public_read change",
-                        container_name
-                    ),
-                    resource_id: Some(config.id().to_string()),
-                })?;
+                .await?;
+            } else {
+                client
+                    .update_blob_container(
+                        &resource_group_name,
+                        &storage_account_name,
+                        container_name,
+                        &container_body,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to update Azure Storage Container '{}': public_read change",
+                            container_name
+                        ),
+                        resource_id: Some(config.id().to_string()),
+                    })?;
+            }
             info!(
                 resource_id = %config.id(),
                 container_name,
@@ -1074,6 +1116,25 @@ mod tests {
     //! # Azure Storage Controller Tests
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
+
+    #[test]
+    fn the_container_sent_to_the_verifier_carries_only_its_public_access() {
+        for (access, expected) in [
+            (ContainerPropertiesPublicAccess::Blob, "Blob"),
+            (ContainerPropertiesPublicAccess::None, "None"),
+        ] {
+            let mut properties = ContainerProperties::default();
+            properties.public_access = Some(access);
+            let body = BlobContainer {
+                properties: Some(properties),
+                ..Default::default()
+            };
+            assert_eq!(
+                super::container_body_json(&body, "assets").unwrap(),
+                serde_json::json!({"properties": {"publicAccess": expected}})
+            );
+        }
+    }
 
     use std::{
         collections::HashSet,

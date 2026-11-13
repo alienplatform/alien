@@ -204,6 +204,44 @@ fn build_template_body(
     })
 }
 
+/// Create the template under `engine` and answer with the operation to poll. A protected install
+/// has its verifier create it, so the image a sandbox boots is the signed one; any other creates
+/// it directly.
+async fn create_template(
+    ctx: &ResourceControllerContext<'_>,
+    client: &std::sync::Arc<dyn alien_gcp_clients::gcp::agent_platform::AgentPlatformApi>,
+    sandbox_id: &str,
+    engine: &str,
+    body: SandboxEnvironmentTemplate,
+) -> Result<Option<String>> {
+    let wire = serde_json::to_value(&body)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "The sandbox template does not serialize".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    if let Some(name) = crate::core::verifier::gcp_sandbox_operation(
+        ctx,
+        sandbox_id,
+        crate::core::verifier::ResourceWrite::CreateSandboxTemplate {
+            engine: engine.to_string(),
+            body: wire,
+        },
+    )
+    .await?
+    {
+        return Ok(Some(name));
+    }
+    Ok(client
+        .create_template(engine, body)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create sandbox template under engine '{engine}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?
+        .name)
+}
+
 #[controller]
 pub struct GcpAgentPlatformTemplateController {
     /// Reasoning-engine id the template is created under, as the client's path interpolation wants
@@ -276,16 +314,8 @@ impl GcpAgentPlatformTemplateController {
         self.default_policy = config.default_policy.clone();
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
-        let operation =
-            client
-                .create_template(&engine, body)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create sandbox template under engine '{engine}'"),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-        self.pending_operation = Some(require_operation_name(operation.name, &config.id)?);
+        let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
+        self.pending_operation = Some(require_operation_name(operation_name, &config.id)?);
         Ok(HandlerAction::Continue {
             state: AwaitingTemplateOperation,
             suggested_delay: Some(Duration::from_secs(2)),
@@ -569,20 +599,11 @@ impl GcpAgentPlatformTemplateController {
         let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
-        let operation =
-            client
-                .create_template(&engine, body)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create replacement template under engine '{engine}'"
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
 
         // The old template stays in `template_id` and keeps serving; the reap after ACTIVE removes
         // it. Routing through the create flow's await states keeps one mutable op per state.
-        self.pending_operation = Some(require_operation_name(operation.name, &config.id)?);
+        self.pending_operation = Some(require_operation_name(operation_name, &config.id)?);
         Ok(HandlerAction::Continue {
             state: AwaitingTemplateOperation,
             suggested_delay: Some(Duration::from_secs(2)),

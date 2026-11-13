@@ -2,8 +2,9 @@
 //
 // Your control plane stays in your cloud. This is the part that has to live
 // next to the customer's data: it stores files in the customer's own
-// S3-compatible bucket, and your control plane calls it through your
-// manager, over a connection the cluster opens outbound.
+// S3-compatible bucket. The customer's cluster calls it inside the cluster;
+// to reach it from outside, the customer exposes it through their own
+// ingress (see the README).
 
 import * as alien from "@alienplatform/core"
 
@@ -32,9 +33,9 @@ const api = new alien.Container("api")
   })
   .cpu(0.5)
   .memory("512Mi")
-  // Reachable from your control plane through the manager, and from nowhere
-  // else: the customer opens no inbound port.
-  .tunnel(8080)
+  // Reachable inside the customer's cluster only, until the customer exposes
+  // it with an ingress.
+  .port(8080)
   .healthCheck({ path: "/health", method: "GET", timeoutSeconds: 2, failureThreshold: 3 })
   .link(bucket)
   .permissions("api")

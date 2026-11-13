@@ -42,7 +42,7 @@
 use crate::{ErrorData, Result};
 use alien_build::dependencies::install_dependencies;
 use alien_core::{alien_event, AlienEvent, Stack};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use tracing::{debug, error, info, warn};
@@ -460,6 +460,7 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
         "Parsing JSON configuration from {} output...",
         runtime.name()
     );
+    reject_removed_tunnels(&stack_str)?;
     let stack: Stack = serde_json::from_str(&stack_str)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -546,6 +547,7 @@ pub async fn test_with_specific_runtime(
             message: format!("Failed to parse {} output as UTF-8", runtime.name()),
         })?;
 
+    reject_removed_tunnels(&stack_str)?;
     let stack: Stack = serde_json::from_str(&stack_str)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -570,6 +572,7 @@ async fn load_json_config(config_file: PathBuf) -> Result<Stack> {
         })?;
 
     debug!("Parsing JSON configuration content...");
+    reject_removed_tunnels(&config_content)?;
     let stack: Stack = serde_json::from_str(&config_content)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -585,6 +588,40 @@ async fn load_json_config(config_file: PathBuf) -> Result<Stack> {
         config_file.display()
     );
     Ok(stack)
+}
+
+/// Container tunnels were removed. A stack that still declares one fails here
+/// with a message that says what to do, instead of an unknown-field error.
+fn reject_removed_tunnels(stack_json: &str) -> Result<()> {
+    let Ok(stack) = serde_json::from_str::<serde_json::Value>(stack_json) else {
+        // Not valid JSON: the stack parse reports it.
+        return Ok(());
+    };
+    let Some(resources) = stack.get("resources").and_then(|r| r.as_object()) else {
+        return Ok(());
+    };
+    let mut tunneled: Vec<&str> = resources
+        .iter()
+        .filter(|(_, entry)| {
+            let config = &entry["config"];
+            config["type"] == "container" && config.get("tunnel").is_some()
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+    if tunneled.is_empty() {
+        return Ok(());
+    }
+    tunneled.sort_unstable();
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "Container tunnels were removed, but {} still declare one. Remove `.tunnel()` and expose the port with a public endpoint, or call the service from inside the cluster.",
+            tunneled
+                .iter()
+                .map(|id| format!("'{id}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }))
 }
 
 /// Load a declarative `alien.toml`. Nothing in it is executed.
@@ -1142,5 +1179,25 @@ health-check = { port = 8080 }
                 assert!(error_msg.contains("Failed to load JavaScript/TypeScript configuration"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod removed_tunnel_tests {
+    use super::reject_removed_tunnels;
+
+    #[test]
+    fn a_stack_that_declares_a_tunnel_fails_with_a_clear_error() {
+        let stack = r#"{"id":"app","resources":{"api":{"config":{"type":"container","id":"api","tunnel":{"port":8080}}}}}"#;
+        let error = reject_removed_tunnels(stack).unwrap_err();
+        assert!(error.message.contains("'api'"), "{}", error.message);
+        assert!(error.message.contains("removed"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_stack_without_a_tunnel_passes() {
+        let stack =
+            r#"{"id":"app","resources":{"api":{"config":{"type":"container","id":"api"}}}}"#;
+        reject_removed_tunnels(stack).unwrap();
     }
 }

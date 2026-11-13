@@ -260,4 +260,17 @@ pub trait TfEmitter: Send + Sync {
     fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         Ok(None)
     }
+
+    /// Where a protected GCP or Azure install's verifier launches this resource's machines:
+    /// an expression that renders the JSON the verifier reads from `VERIFIER_MACHINE_NETWORK`.
+    /// Called only for compute clusters on protected GCP and Azure renders; a protected render
+    /// with machines and no network is refused.
+    ///
+    /// - GCP: `{"subnetIds": ["projects/<p>/regions/<r>/subnetworks/<s>"],
+    ///   "securityGroupIds": ["<network tag>"], "identity": "<machine service account email>"}`
+    /// - Azure: `{"subnetIds": ["<subnet id>"], "securityGroupIds": ["<network security group
+    ///   id>"], "identity": "<user-assigned identity id>"}`
+    fn machine_network(&self, _ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        Ok(None)
+    }
 }

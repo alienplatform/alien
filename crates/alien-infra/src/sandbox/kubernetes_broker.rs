@@ -394,13 +394,15 @@ async fn cold_create(
             now_unix + started.elapsed().as_secs() as i64,
         ) {
             let _ = pods.delete_pod(namespace, &name).await;
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "the sandbox pod for '{sandbox_id}' was not running before the session's lifetime ended; create it again with a longer timeout"
-                ),
-                resource_id: Some(sandbox_id.to_string()),
-            })
-            .into());
+            let reason = pod_not_ready_reason(current.as_ref());
+            let advice = if reason.is_empty() {
+                "; create it again with a longer timeout"
+            } else {
+                ""
+            };
+            return Err(SessionRequestError::NotReady(format!(
+                "the sandbox pod for '{sandbox_id}' was not running before the session's lifetime ended{advice}{reason}"
+            )));
         }
         if let Some(address) = address {
             // Record the proof so a retry after an Operator restart can tell this pod from one
@@ -434,14 +436,11 @@ async fn cold_create(
         if started.elapsed() >= COLD_CREATE_TIMEOUT {
             // Nobody holds this session yet, so leaving the pod would leak it.
             let _ = pods.delete_pod(namespace, &name).await;
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "a new sandbox pod for '{sandbox_id}' did not start within {} seconds",
-                    COLD_CREATE_TIMEOUT.as_secs()
-                ),
-                resource_id: Some(sandbox_id.to_string()),
-            })
-            .into());
+            return Err(SessionRequestError::NotReady(format!(
+                "a new sandbox pod for '{sandbox_id}' did not start within {} seconds{}",
+                COLD_CREATE_TIMEOUT.as_secs(),
+                pod_not_ready_reason(current.as_ref())
+            )));
         }
         tokio::time::sleep(COLD_CREATE_POLL).await;
     }
@@ -646,6 +645,31 @@ pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
     )
 }
 
+/// Why a running pod is still not Ready, when the cause is the policy gate: its container runs
+/// but its network check has not passed: most likely the cluster does not enforce the pod's
+/// NetworkPolicy, though a pod that only just started may still be running the check. Empty when the pod is not in that state (it may simply still be pulling its image).
+pub(crate) fn pod_not_ready_reason(pod: Option<&Pod>) -> &'static str {
+    let Some(pod) = pod else { return "" };
+    let running = pod
+        .status
+        .as_ref()
+        .is_some_and(|status| status.phase.as_deref() == Some("Running"));
+    let gated = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.containers.first())
+        .and_then(|container| container.env.as_ref())
+        .is_some_and(|env| {
+            env.iter()
+                .any(|var| var.name == "ALIEN_SANDBOX_POLICY_CANARY")
+        });
+    if running && gated && !pod_condition_ready(pod) {
+        ": the pod is running but its network check has not passed, so it is not marked Ready. The usual cause is a cluster that does not enforce NetworkPolicy: use a network plugin that does (on EKS Auto Mode, enable network policy in the vpc-cni ConfigMap). If the cluster does enforce it, the check may only need more time"
+    } else {
+        ""
+    }
+}
+
 fn mark_policy_verified(pod: &mut Pod) {
     pod.metadata
         .annotations
@@ -834,6 +858,9 @@ pub(crate) enum SessionRequestError {
     TenantMismatch,
     /// The requested timeout is longer than the sandbox's declared lifetime.
     LifetimeTooLong(crate::sandbox::LifetimeTooLong),
+    /// A new pod did not become usable in time. The text is written for the caller (it names no
+    /// internals) and is returned in the response body.
+    NotReady(String),
     /// Anything else; retryable from the caller's point of view.
     Unavailable(AlienError<ErrorData>),
 }
@@ -854,6 +881,10 @@ impl SessionRequestError {
     fn into_alien(self) -> AlienError<ErrorData> {
         match self {
             Self::Unavailable(error) => error,
+            Self::NotReady(message) => AlienError::new(ErrorData::CloudPlatformError {
+                message,
+                resource_id: None,
+            }),
             Self::TenantMismatch => AlienError::new(ErrorData::CloudPlatformError {
                 message: "the session belongs to another tenant".to_string(),
                 resource_id: None,
@@ -1668,6 +1699,36 @@ mod tests {
             pod_is_ready_for(&pod, None),
             "no Operator address: nothing to compare"
         );
+    }
+
+    /// A running pod with the policy gate that is not Ready says why: the cluster does not enforce
+    /// its NetworkPolicy. A pod without the gate, or not yet running, gets no such claim.
+    #[test]
+    fn a_running_gated_pod_that_is_not_ready_names_the_missing_policy_enforcement() {
+        use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
+        let mut pod = idle_pod("p", "10.0.0.7");
+        pod.status.as_mut().unwrap().phase = Some("Running".into());
+        pod.status.as_mut().unwrap().conditions = Some(ready_condition(false));
+        assert_eq!(pod_not_ready_reason(Some(&pod)), "", "no gate, no claim");
+        pod.spec = Some(PodSpec {
+            containers: vec![Container {
+                name: "p".into(),
+                env: Some(vec![EnvVar {
+                    name: "ALIEN_SANDBOX_POLICY_CANARY".into(),
+                    value: Some("10.0.0.5:8080".into()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(pod_not_ready_reason(Some(&pod)).contains("network check has not passed"));
+        pod.status.as_mut().unwrap().phase = Some("Pending".into());
+        assert_eq!(pod_not_ready_reason(Some(&pod)), "");
+        pod.status.as_mut().unwrap().phase = Some("Running".into());
+        pod.status.as_mut().unwrap().conditions = Some(ready_condition(true));
+        assert_eq!(pod_not_ready_reason(Some(&pod)), "");
+        assert_eq!(pod_not_ready_reason(None), "");
     }
 
     fn ready_condition(ready: bool) -> Vec<k8s_openapi::api::core::v1::PodCondition> {
@@ -3183,6 +3244,71 @@ mod tests {
         .await
         .expect_err("the pod was not running before the lifetime ended");
         assert!(format!("{error:?}").contains("lifetime ended"));
+    }
+
+    /// A short session whose gated pod runs but never passes its network check gets the same
+    /// explanation as a long one, and no advice to lengthen the timeout.
+    #[tokio::test(start_paused = true)]
+    async fn a_short_session_with_a_failing_network_check_names_it() {
+        use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
+        let mut template = idle_pod("ignored", "0.0.0.0");
+        template.metadata.name = None;
+        template.metadata.uid = None;
+        template.status = None;
+        let mut pods = pods_returning(Vec::new());
+        pods.expect_create_pod().times(1).returning(|_, pod| {
+            let mut created = pod.clone();
+            created.metadata.name = Some("cold-0".to_string());
+            created.metadata.uid = Some("uid-cold-0".to_string());
+            Ok(created)
+        });
+        pods.expect_get_pod().returning(|_, _| {
+            let mut pod = idle_pod("cold-0", "10.9.9.9");
+            pod.status = Some(PodStatus {
+                phase: Some("Running".to_string()),
+                pod_ip: Some("10.9.9.9".to_string()),
+                conditions: Some(ready_condition(false)),
+                ..Default::default()
+            });
+            pod.spec = Some(PodSpec {
+                containers: vec![Container {
+                    name: "p".into(),
+                    env: Some(vec![EnvVar {
+                        name: "ALIEN_SANDBOX_POLICY_CANARY".into(),
+                        value: Some("10.0.0.5:8080".into()),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            Ok(pod)
+        });
+        pods.expect_delete_pod().times(1).returning(|_, _| Ok(()));
+        let pods: Arc<dyn PodApi> = Arc::new(pods);
+
+        let error = cold_create(
+            &pods,
+            &ed25519_compact::KeyPair::generate().sk,
+            "ns",
+            "sbx",
+            "s1",
+            "k",
+            1_000,
+            template,
+            None,
+            Some(3),
+        )
+        .await
+        .expect_err("the pod never became Ready");
+        let SessionRequestError::NotReady(message) = error else {
+            panic!("expected NotReady, got {error:?}");
+        };
+        assert!(
+            message.contains("network check has not passed"),
+            "{message}"
+        );
+        assert!(!message.contains("longer timeout"), "{message}");
     }
 
     /// Before the controller's first tick there is no template; the caller is told to retry.

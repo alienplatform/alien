@@ -105,7 +105,7 @@ let stackBuilder = new alien.Stack("alien-rs-stack")
   .add(eventsQueue, "frozen")
   .add(serviceAccount, "frozen")
 if (postgres) {
-  stackBuilder = stackBuilder.add(postgres, "live")
+  stackBuilder = stackBuilder.add(postgres, "frozen")
 }
 if (sandbox) {
   stackBuilder = stackBuilder.add(sandbox, "frozen")

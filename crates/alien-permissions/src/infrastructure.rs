@@ -1,4 +1,6 @@
-use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+use alien_core::{
+    StackSettings, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+};
 
 // Core types are re-exported by the generators that need them
 
@@ -43,6 +45,16 @@ pub struct PermissionContext {
     /// GCP custom-role namespace to use instead of the one derived from
     /// `stack_prefix`, for deployments whose roles already use another one.
     pub gcp_custom_role_namespace: Option<String>,
+
+    /// AWS account that publishes the machine images a protected install's verifier may
+    /// boot. Set only when rendering the verifier; it is a constant of this build.
+    pub machine_image_publisher: Option<String>,
+
+    /// The install is protected: it runs only what the vendor signed. Set only when rendering
+    /// the management identity of a protected install. It never receives the grants kept for
+    /// setups that recorded no boundary, it loses what only the verifier may do (see
+    /// [`crate::generators::verifier_owned`]), and the catalog's `signing-` statements apply.
+    pub signing_protected: bool,
 }
 
 impl PermissionContext {
@@ -72,6 +84,8 @@ impl PermissionContext {
             managing_role_arn: None,
             managing_account_id: None,
             gcp_custom_role_namespace: None,
+            machine_image_publisher: None,
+            signing_protected: false,
         }
     }
 
@@ -213,6 +227,23 @@ impl PermissionContext {
         self
     }
 
+    /// Builder pattern for the AWS account that publishes bootable machine images
+    pub fn with_machine_image_publisher(mut self, account_id: impl Into<String>) -> Self {
+        self.machine_image_publisher = Some(account_id.into());
+        self
+    }
+
+    /// Builder pattern for a protected install's management identity
+    pub fn with_signing_protected(mut self, protected: bool) -> Self {
+        self.signing_protected = protected;
+        self
+    }
+
+    /// Mark the management identity protected when the stack settings pin signing.
+    pub fn with_signing(self, settings: &StackSettings) -> Self {
+        self.with_signing_protected(settings.signing.is_some())
+    }
+
     /// Extract AWS account ID from an IAM role ARN
     /// Format: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
     pub fn extract_account_id_from_role_arn(role_arn: &str) -> Option<String> {
@@ -249,6 +280,7 @@ impl PermissionContext {
             "managingProjectId" => self.managing_project_id.as_deref(),
             "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
             "managingResourceGroup" => self.managing_resource_group.as_deref(),
+            "machineImagePublisher" => self.machine_image_publisher.as_deref(),
             "stackTag" => Some(ALIEN_STACK_TAG_KEY),
             "resourceTag" => Some(ALIEN_RESOURCE_TAG_KEY),
             "managedByTag" => Some(ALIEN_MANAGED_BY_TAG_KEY),
