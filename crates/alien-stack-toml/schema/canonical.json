@@ -1739,6 +1739,12 @@
             "null"
           ]
         },
+        "startupTimeoutSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "timeoutSeconds": {
           "type": "integer"
         }

@@ -431,6 +431,11 @@ pub struct HealthCheck {
     /// Number of consecutive failures before marking replica unhealthy
     #[serde(default = "default_failure_threshold")]
     pub failure_threshold: u32,
+    /// Daemons only: how long a replica may run without passing its health check before the
+    /// update fails, in seconds, counted from when the replica first reports running.
+    /// Defaults to 600 (10 minutes); at most 86400 (24 hours).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_timeout_seconds: Option<u32>,
 }
 
 impl Default for HealthCheck {
@@ -442,6 +447,7 @@ impl Default for HealthCheck {
             method: default_health_method(),
             timeout_seconds: default_timeout_seconds(),
             failure_threshold: default_failure_threshold(),
+            startup_timeout_seconds: None,
         }
     }
 }
@@ -1422,6 +1428,7 @@ mod tests {
                 method: "GET".to_string(),
                 timeout_seconds: 1,
                 failure_threshold: 3,
+                startup_timeout_seconds: None,
             })
             .permissions("frontend".to_string())
             .build();

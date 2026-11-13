@@ -1421,6 +1421,7 @@ mod tests {
                         method: "GET".to_string(),
                         timeout_seconds: 1,
                         failure_threshold: 3,
+                        startup_timeout_seconds: None,
                     })
                     .build(),
             ),

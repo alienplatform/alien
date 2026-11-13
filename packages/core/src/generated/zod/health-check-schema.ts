@@ -13,6 +13,7 @@ export const HealthCheckSchema = z.object({
 "method": z.optional(z.string().describe("HTTP method to use for health check")),
 "path": z.optional(z.string().describe("HTTP endpoint path to check (e.g., \"/health\", \"/ready\")")),
 "port": z.int().min(0).describe("Port to check (defaults to container port if not specified)").nullish(),
+"startupTimeoutSeconds": z.int().min(0).describe("Daemons only: how long a replica may run without passing its health check before the\nupdate fails, in seconds, counted from when the replica first reports running.\nDefaults to 600 (10 minutes); at most 86400 (24 hours).").nullish(),
 "timeoutSeconds": z.optional(z.int().min(0).describe("Request timeout in seconds (1-5)"))
     }).describe("HTTP health check configuration.")
 

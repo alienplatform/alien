@@ -102,6 +102,7 @@ async fn a_container_reaches_the_sandbox_it_links_with_its_binding_across_a_mana
             method: "GET".to_string(),
             timeout_seconds: 1,
             failure_threshold: 20,
+            startup_timeout_seconds: None,
         })
         .link(&sandbox)
         .build();
@@ -312,6 +313,7 @@ async fn a_container_created_before_its_sandbox_route_returns_waits_and_then_sta
             port: Some(8080),
             method: "GET".to_string(),
             timeout_seconds: 1,
+            startup_timeout_seconds: None,
             failure_threshold: 20,
         })
         .link(&sandbox)

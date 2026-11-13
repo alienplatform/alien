@@ -112,6 +112,7 @@ impl StackMutation for SandboxGatewayMutation {
                 method: "GET".into(),
                 timeout_seconds: 3,
                 failure_threshold: 3,
+                startup_timeout_seconds: None,
             })
             .commands_enabled(false)
             .build();
