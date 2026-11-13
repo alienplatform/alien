@@ -361,6 +361,10 @@ the route or credential again. Query `session_capabilities(id)` in Rust, or
 `capabilities(id)` in TypeScript/Python, when reusing a session across upgrades;
 no-argument capabilities describe new sessions from the current binding.
 
+## Azure egress `none` limits
+
+On Azure, `none` blocks TCP/UDP egress and HTTP(S) (Azure's proxy answers 403), but the sandbox can still resolve DNS names through Azure's resolver, which can carry small amounts of data out. The egress policy this client can set has host rules for HTTP(S) and a default action; it has no control for the platform resolver, so nothing here closes that channel. Measurements are in the PR's evidence.
+
 ## Process lifecycle
 
 Boot commands receive HOME from their passwd entry (or `/`) and the container
