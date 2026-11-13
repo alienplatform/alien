@@ -1307,7 +1307,16 @@ pub fn check_sandbox_template(
             spec.image_uri
         )));
     }
-    let expected_ports = [(i32::from(GCP_AGENT_PLATFORM.port), Some("TCP".to_string()))];
+    // The agent's own port, then every preview port the signed sandbox declares, once each: the
+    // controller sorts and dedups the same way, so an undeclared port is a port nobody signed.
+    let mut expected_ports = vec![i32::from(GCP_AGENT_PLATFORM.port)];
+    expected_ports.extend(sandbox.preview_ports.iter().map(|port| i32::from(*port)));
+    expected_ports.sort_unstable();
+    expected_ports.dedup();
+    let expected_ports: Vec<_> = expected_ports
+        .into_iter()
+        .map(|port| (port, Some("TCP".to_string())))
+        .collect();
     let ports: Vec<_> = environment
         .ports
         .iter()
@@ -1315,7 +1324,7 @@ pub fn check_sandbox_template(
         .collect();
     if ports != expected_ports {
         return Err(refused(
-            "the template's ports are not the agent's one TCP port",
+            "the template's ports are not the agent's TCP port and the signed preview ports",
         ));
     }
     let resources = environment.resources.unwrap_or_default();

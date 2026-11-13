@@ -277,6 +277,12 @@ pub(crate) async fn build_sandbox_agent_image(
             for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
             }
+            // The edge consumes `Authorization`, so a preview caller's bearer needs a header of
+            // its own; the agent reads which one from here.
+            builder = builder.env(
+                alien_core::sandbox_image::ENV_CALLER_AUTHORIZATION_HEADER,
+                alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER,
+            );
             Ok(builder)
         },
     )

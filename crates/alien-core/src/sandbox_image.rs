@@ -207,6 +207,12 @@ pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
     let mut env = GCP_AGENT_PLATFORM.contract_env_vars().to_vec();
     env.push(("RUST_LOG", GCP_AGENT_LOG_FILTER.to_string()));
     env.push(("ALIEN_SANDBOX_IMAGE_COMMAND", "true".into()));
+    // The edge consumes `Authorization` for its own JWT, so a caller's bearer travels in a
+    // header of its own and the agent re-emits it towards the code inside.
+    env.push((
+        ENV_CALLER_AUTHORIZATION_HEADER,
+        CALLER_AUTHORIZATION_HEADER.into(),
+    ));
     env
 }
 
@@ -528,6 +534,10 @@ COPY --from=binary-selector --chown=0:0 --chmod={AGENT_MODE:04o} \
 # filter discards the startup warning saying this image serves requests without a capability.
 ENV RUST_LOG={GCP_AGENT_LOG_FILTER} \
     ALIEN_SANDBOX_IMAGE_COMMAND=true
+
+# The edge consumes `Authorization` for its own credential, so a preview caller's bearer arrives in
+# this header and the agent hands it to the code inside as `Authorization`.
+ENV {ENV_CALLER_AUTHORIZATION_HEADER}={CALLER_AUTHORIZATION_HEADER}
 
 # These published agent images have no application startup command. Declare that explicitly so
 # inherited base CMD values cannot become agent arguments or a second shell process.
