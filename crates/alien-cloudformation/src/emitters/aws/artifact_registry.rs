@@ -296,6 +296,24 @@ fn replication_resources(
             ));
         }
     }
+    if let Some(input_id) = from_input {
+        let input = crate::generator::stack_inputs_for_platform(ctx.stack, deployment_platform(ctx))
+            .into_iter()
+            .find(|input| input.id == input_id);
+        if let Some(input) = input {
+            if input.kind != alien_core::StackInputKind::StringList {
+                return Err(alien_error::AlienError::new(
+                    alien_core::ErrorData::GenericError {
+                        message: format!(
+                            "Artifact registry '{}': the regions input '{input_id}' must be a list of strings (StringList), not {:?}",
+                            registry.id(),
+                            input.kind
+                        ),
+                    },
+                ));
+            }
+        }
+    }
     let conditional = match from_input {
         Some(input_id) => replication_input_is_conditional(ctx.stack, deployment_platform(ctx), input_id)
             .ok_or_else(|| {

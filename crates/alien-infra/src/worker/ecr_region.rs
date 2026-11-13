@@ -33,9 +33,15 @@ pub(crate) fn parse_ecr_image_ref(image_uri: &str) -> Option<EcrImageRef> {
         Some((repo, tag)) if !tag.contains('/') => (repo, Some(tag.to_string())),
         _ => (name, None),
     };
-    if repository.is_empty() || (tag.is_none() && digest.is_none()) {
+    if repository.is_empty() {
         return None;
     }
+    // A reference with neither tag nor digest means `latest`, which is what the registry resolves.
+    let tag = if tag.is_none() && digest.is_none() {
+        Some("latest".to_string())
+    } else {
+        tag
+    };
     Some(EcrImageRef {
         account_id: parts[0].to_string(),
         region: parts[3].to_string(),
@@ -206,7 +212,9 @@ mod tests {
             parse_ecr_image_ref("1.dkr.ecr.eu-west-1.amazonaws.com/team/app:latest").unwrap();
         assert_eq!(nested.repository, "team/app");
         assert!(parse_ecr_image_ref("docker.io/library/app:1").is_none());
-        assert!(parse_ecr_image_ref(SRC).is_none());
+        let untagged = parse_ecr_image_ref(SRC).unwrap();
+        assert_eq!(untagged.tag.as_deref(), Some("latest"));
+        assert!(untagged.digest.is_none());
     }
 
     #[tokio::test]

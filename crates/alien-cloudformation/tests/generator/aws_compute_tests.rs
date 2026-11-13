@@ -850,3 +850,12 @@ fn eks_registry_regions_input_scoped_to_kubernetes_renders_and_aws_scoped_one_is
 fn plain_aws_registry_regions_input_still_renders() {
     render_template_json(&input_registry_stack());
 }
+
+#[test]
+fn aws_registry_regions_input_that_is_not_a_string_list_fails_with_a_clear_error() {
+    let mut stack = input_registry_stack();
+    stack.inputs[0].kind = alien_core::StackInputKind::String;
+    stack.inputs[0].default = None;
+    let error = try_render_registry(&stack).expect_err("a string input must not feed the slots");
+    assert!(error.contains("StringList"), "{error}");
+}
