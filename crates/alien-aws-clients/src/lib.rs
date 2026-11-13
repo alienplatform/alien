@@ -1,4 +1,5 @@
 pub mod aws;
+pub mod runtime_identity;
 pub use aws::*;
 
 // Re-export commonly used types for convenience
@@ -37,3 +38,8 @@ pub use aws::sts::{StsApi, StsClient};
 
 // Re-export error types from alien-client-core
 pub use alien_client_core::{Error, ErrorData, Result};
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod fake_sts;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime_proof_signer;

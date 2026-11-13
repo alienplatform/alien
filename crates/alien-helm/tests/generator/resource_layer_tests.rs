@@ -91,6 +91,43 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
     assert_helm_valid(&chart, "sandbox_layer");
 }
 
+/// A live sandbox gets the same chart-owned rules as a frozen one: the deployment template
+/// refers to the RuntimeClass helper whenever the stack has a sandbox, so skipping the emitter for
+/// a live one leaves a chart that fails at install with a missing template.
+#[test]
+fn a_live_sandbox_emits_the_same_chart_resources_as_a_frozen_one() {
+    let stack = Stack::new("sandbox-live-chart".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(3600),
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+
+    for file in [
+        "templates/sandbox-agent-networkpolicy.yaml",
+        "templates/sandbox-broker-rbac.yaml",
+        "templates/_sandbox.tpl",
+    ] {
+        assert!(
+            chart.files.contains_key(file),
+            "{file} must render for a live sandbox: {:?}",
+            chart.files.keys().collect::<Vec<_>>()
+        );
+    }
+    assert_helm_valid(&chart, "sandbox_layer_live");
+}
+
 /// Internet sessions can only reach this release's gateway, which resolves names on
 /// their behalf. Helm/kubeconform validate the complete rendered resource set.
 #[test]
@@ -1189,6 +1226,211 @@ fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
     );
 }
 
+/// The probe's client pods run where sessions run: they get `sandbox.nodeSelector` and
+/// `sandbox.tolerations`, or the probe would test whichever node the scheduler preferred.
+#[test]
+fn the_cni_probe_runs_its_clients_on_the_nodes_sessions_use() {
+    let stack = Stack::new("sandbox-probe-placement".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  runtimeClassName: gvisor\n  clusterDNS:\n    - 10.100.0.10\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+    );
+    rendered.assert_ok("probe placement");
+    let probe = rendered_documents(&rendered)
+        .into_iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("the NetworkPolicy probe");
+    let env = |name: &str| {
+        probe["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("{name} missing from the probe"))
+    };
+    assert_eq!(env("PROBE_NODE_SELECTOR"), r#"{"pool":"sandboxes"}"#);
+    assert!(env("PROBE_TOLERATIONS").contains("\"key\":\"sandbox\""));
+}
+
+fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<String> {
+    rendered_documents(rendered)
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .and_then(|operator| {
+            operator["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .and_then(|env| {
+                    env.iter().find(|variable| {
+                        variable["name"] == alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS
+                    })
+                })
+                .and_then(|variable| variable["value"].as_str().map(str::to_string))
+        })
+}
+
+/// The Operator learns its own pod address from the downward API, so a sandbox pod can prove its
+/// NetworkPolicy refuses it before the pod takes a session.
+#[test]
+fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
+        "acme",
+        None,
+    );
+    let operator = rendered_documents(&rendered)
+        .into_iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let find = |name: &str| env.iter().find(|variable| variable["name"] == name).cloned();
+    let pod_ip = find("ALIEN_OPERATOR_POD_IP").expect("the pod address variable");
+    assert_eq!(pod_ip["valueFrom"]["fieldRef"]["fieldPath"], "status.podIP");
+    let address = find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).expect("the address");
+    let value = address["value"].as_str().unwrap();
+    assert!(value.starts_with("$(ALIEN_OPERATOR_POD_IP):"), "{value}");
+    // The variable must be defined before the one that expands it.
+    let position = |name: &str| env.iter().position(|variable| variable["name"] == name);
+    assert!(
+        position("ALIEN_OPERATOR_POD_IP")
+            < position(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+    );
+}
+
+/// The chart, not the Operator, chooses the sandbox RuntimeClass: the value wins, and without
+/// one the cluster's own version string picks the vendor class.
+#[test]
+fn the_sandbox_runtime_class_follows_the_value_then_the_cluster_version() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let render_for = |values: Option<&str>, version: &str| {
+        super::test_utils::helm_template_for_kube_version(
+            &chart.files,
+            values,
+            "acme",
+            Some(version),
+        )
+    };
+    for (version, expected) in [
+        ("v1.36.0-eks-1234567", "isolated-sandbox"),
+        ("v1.33.5-gke.1080000", "gvisor"),
+    ] {
+        let rendered = render_for(Some("management:\n  name: customer-1\n"), version);
+        rendered.assert_ok(version);
+        assert_eq!(
+            sandbox_runtime_class_env(&rendered).as_deref(),
+            Some(expected),
+            "{version}"
+        );
+    }
+
+    let rendered = render_for(
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: kata-vm-isolation\n"),
+        "v1.33.4",
+    );
+    rendered.assert_ok("explicit value on AKS");
+    assert_eq!(
+        sandbox_runtime_class_env(&rendered).as_deref(),
+        Some("kata-vm-isolation")
+    );
+
+    // An explicit value beats the version default.
+    let rendered = render_for(
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: kata\n"),
+        "v1.36.0-eks-1234567",
+    );
+    rendered.assert_ok("explicit value on EKS");
+    assert_eq!(
+        sandbox_runtime_class_env(&rendered).as_deref(),
+        Some("kata")
+    );
+}
+
+/// A cluster the chart cannot name a class for fails the render, naming the value to set.
+#[test]
+fn an_unknown_cluster_without_a_runtime_class_fails_the_render() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\n"),
+        "acme",
+        Some("v1.33.4"),
+    );
+    assert!(!rendered.is_ok(), "the render must fail");
+    for needle in [
+        "sandbox.runtimeClassName",
+        "kata-vm-isolation",
+        "gvisor",
+        "isolated-sandbox",
+    ] {
+        assert!(
+            rendered.stderr.contains(needle),
+            "missing {needle}: {}",
+            rendered.stderr
+        );
+    }
+}
+
+#[test]
+fn sandbox_node_placement_values_reach_the_operator() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n  warmPoolSize: 0\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+        "acme",
+        None,
+    );
+    rendered.assert_ok("sandbox placement");
+    let documents = rendered_documents(&rendered);
+    let operator = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("operator");
+    let env = |name: &str| {
+        operator["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("{name} missing"))
+    };
+    assert_eq!(
+        env(alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR),
+        r#"{"pool":"sandboxes"}"#
+    );
+    assert!(env(alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS).contains("\"key\":\"sandbox\""));
+    assert_eq!(
+        env(alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE),
+        "0",
+        "an explicit zero turns the pool off; every create is cold"
+    );
+}
+
 /// An upgrade of a stack with an allow-egress sandbox and no `sandbox.clusterDNS` must stop at
 /// render time with a message that names the value and how to find it, so the release that is
 /// running keeps its policy. Without the value the policy would admit no DNS at all.
@@ -1224,4 +1466,37 @@ fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
         Some("sandbox:\n  clusterDNS:\n    - kube-dns.kube-system\n"),
     );
     assert!(format!("{bad:?}").contains("clusterDNS"), "{bad:?}");
+}
+
+/// A chart whose only egress user is a Container has no sandbox, so no sandbox RuntimeClass
+/// helper. The network-policy probe it carries must not refer to that helper.
+#[test]
+fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
+    use alien_core::{Container, ContainerCode, ContainerEgress, ResourceSpec};
+    let container = Container::new("app".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/app:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.1".to_string(),
+            desired: "0.1".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "128Mi".to_string(),
+            desired: "128Mi".to_string(),
+        })
+        .permissions("app".to_string())
+        .egress(ContainerEgress::Internet)
+        .build();
+    let stack = Stack::new("container-egress-chart".to_string())
+        .add(container, ResourceLifecycle::Frozen)
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    assert!(
+        chart.files.contains_key("templates/sandbox-cni-probe.yaml"),
+        "{:?}",
+        chart.files.keys().collect::<Vec<_>>()
+    );
+    assert!(!chart.files.contains_key("templates/_sandbox.tpl"));
+    assert_helm_valid(&chart, "container_egress_no_sandbox");
 }

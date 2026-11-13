@@ -17,6 +17,16 @@ use crate::auth::Subject;
 /// to forward it. There is no separate per-handler bearer extraction.
 #[async_trait]
 pub trait AuthValidator: Send + Sync {
+    /// Absolute authority deadline for an authenticated caller. Long-lived
+    /// streams and delegated response credentials must not outlive this bound.
+    /// Validators with expiring credentials must revalidate before returning it.
+    fn authority_deadline(
+        &self,
+        _subject: &Subject,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, AlienError> {
+        Ok(None)
+    }
+
     /// Validate the Bearer token from the Authorization header.
     ///
     /// Returns `Ok(None)` if no token is provided (for optional-auth endpoints).

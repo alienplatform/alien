@@ -72,8 +72,14 @@ export interface RefreshingConnectionProvider<Connection> {
   /**
    * Refresh credentials after an authentication failure. Returns `undefined`
    * when this connection is fixed and the request must not be retried.
+   * `rejected` is the connection the server refused.
    */
-  refresh(signal?: AbortSignal): Promise<Connection | undefined>
+  refresh(signal?: AbortSignal, rejected?: Connection): Promise<Connection | undefined>
+  /**
+   * Called when the server also refused the connection returned by `refresh`,
+   * so the provider does not offer it again.
+   */
+  reject?(rejected: Connection): void
 }
 
 export type CommandConnectionProvider = RefreshingConnectionProvider<CommandConnection>
@@ -90,13 +96,15 @@ export async function requestWithRefreshingConnection<
   request: (connection: Connection) => Promise<Result>,
   signal?: AbortSignal,
 ): Promise<Result> {
-  let result = await request(await provider.get(signal))
+  const connection = await provider.get(signal)
+  let result = await request(connection)
   if (result.response.status !== 401) return result
 
-  const refreshed = await provider.refresh(signal)
+  const refreshed = await provider.refresh(signal, connection)
   if (refreshed === undefined) return result
 
   result = await request(refreshed)
+  if (result.response.status === 401) provider.reject?.(refreshed)
   return result
 }
 

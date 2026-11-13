@@ -1959,6 +1959,32 @@ async fn suggested_delay_defers_reacquisition_until_external_work_wakes_it() {
     assert_eq!(woken.len(), 1);
 }
 
+/// Deleting a deployment ends its commands key, and only its own.
+#[tokio::test]
+async fn delete_deployment_removes_its_commands_keys() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let tokens = SqliteTokenStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let gone = create_test_deployment(&store, &group_id, "gone", Platform::Aws).await;
+    let kept = create_test_deployment(&store, &group_id, "kept", Platform::Aws).await;
+    for (deployment, hash) in [(&gone, "hash-gone"), (&kept, "hash-kept")] {
+        tokens
+            .create_commands_key(&deployment.id, "ax_cmds_test", hash, 0)
+            .await
+            .unwrap()
+            .expect("stored at the current generation");
+    }
+
+    store
+        .delete_deployment(&test_subject(), &gone.id)
+        .await
+        .unwrap();
+
+    assert!(tokens.validate_token("hash-gone").await.unwrap().is_none());
+    assert!(tokens.validate_token("hash-kept").await.unwrap().is_some());
+}
+
 #[tokio::test]
 async fn delete_deployment() {
     let db = fresh_db().await;

@@ -194,6 +194,7 @@ fn main() -> Result<()> {
         if !state.image_process.waiting_for_activation()? {
             state.start_image_once()?;
         }
+        alien_sandbox_agent::policy_canary::start_from_env();
         tracing::info!("sandbox agent listening on {address}");
 
         let server = axum::serve(

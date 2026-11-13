@@ -1,28 +1,33 @@
-# ExternalBindingExternal
+# ExternalBindingExternalPostgres
 
 Operator-provided / BYO database (Kubernetes, on-prem, or cloud override).
 
 ## Example Usage
 
 ```typescript
-import { ExternalBindingExternal } from "@alienplatform/manager-api/models";
+import { ExternalBindingExternalPostgres } from "@alienplatform/manager-api/models";
 
-let value: ExternalBindingExternal = {
+let value: ExternalBindingExternalPostgres = {
   database: {
     secretRef: {
       key: "<key>",
       name: "<value>",
     },
   },
-  host: "yellow-handover.net",
+  host: "pink-godparent.name",
   password: {
-    secretKeyRef: {
+    secretRef: {
       key: "<key>",
       name: "<value>",
     },
   },
-  port: 106185,
-  username: "Wiley_Ortiz",
+  port: 204073,
+  username: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
   service: "external",
   type: "postgres",
 };

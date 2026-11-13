@@ -188,6 +188,8 @@
         "grant": {
           "actions": [
             "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/importImage/action",
+            "Microsoft.Authorization/roleAssignments/read",
             "Microsoft.ContainerRegistry/registries/metadata/read",
             "Microsoft.ContainerRegistry/registries/quarantine/read",
             "Microsoft.ContainerRegistry/registries/quarantine/write",

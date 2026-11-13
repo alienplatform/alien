@@ -26,6 +26,7 @@ impl ResourceImporter for AwsServiceAccountImporter {
         let controller = AwsServiceAccountController {
             state: AwsServiceAccountState::Ready,
             role_arn: Some(data.role_arn),
+            role_id: None,
             role_name: Some(data.role_name),
             stack_permissions_applied: data.stack_permissions_applied,
             assume_role_policy: None,

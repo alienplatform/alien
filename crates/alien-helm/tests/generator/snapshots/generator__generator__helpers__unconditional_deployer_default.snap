@@ -16,10 +16,18 @@ management:
   existingSecret:
     name: ""
     tokenKey: sync-token
+  # One-hour, one-use code that enrolls the Operator for a registered
+  # deployment, instead of token. The Operator then keeps its own key, which
+  # it replaces every day. Requires deploymentId, audience and persistence.
+  enrollmentCode: ""
+  # The manager audience returned with the enrollment code.
+  audience: ""
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
-  # Override the captured or installed endpoint when routing changes.
+  # Override the captured or installed endpoint when routing changes. The Operator sends its
+  # deployment token to this URL: use https. An http URL still works; the Operator and
+  # NOTES.txt warn about it.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -134,12 +142,31 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
+  # Off by default. When enabled, `mode: open` (the default) keeps the Operator Pod
+  # reachable and unrestricted; `mode: restricted` limits it. Restricted ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
+    mode: open
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
     ingress:
       enabled: true
+      extraRules: []
     egress:
       enabled: true
+      ports: [443, 6443]
+      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -709,7 +736,20 @@ postgres: {}
     },
     "management": {
       "additionalProperties": false,
+      "if": {
+        "properties": {
+          "enrollmentCode": {
+            "minLength": 1
+          }
+        },
+        "required": [
+          "enrollmentCode"
+        ]
+      },
       "properties": {
+        "audience": {
+          "type": "string"
+        },
         "defaultUrl": {
           "type": "string"
         },
@@ -718,6 +758,9 @@ postgres: {}
             "string",
             "null"
           ]
+        },
+        "enrollmentCode": {
+          "type": "string"
         },
         "existingSecret": {
           "additionalProperties": false,
@@ -773,6 +816,35 @@ postgres: {}
         "telemetry",
         "healthChecks"
       ],
+      "then": {
+        "properties": {
+          "audience": {
+            "minLength": 1
+          },
+          "deploymentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "existingSecret": {
+            "properties": {
+              "name": {
+                "enum": [
+                  ""
+                ]
+              }
+            }
+          },
+          "token": {
+            "enum": [
+              ""
+            ]
+          }
+        },
+        "required": [
+          "audience",
+          "deploymentId"
+        ]
+      },
       "type": "object"
     },
     "managerServiceAccount": {
@@ -998,11 +1070,44 @@ postgres: {}
         "networkPolicy": {
           "additionalProperties": false,
           "properties": {
+            "dns": {
+              "additionalProperties": false,
+              "properties": {
+                "clusterIPs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "namespace": {
+                  "type": "string"
+                },
+                "podLabels": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
             "egress": {
               "additionalProperties": false,
               "properties": {
                 "enabled": {
                   "type": "boolean"
+                },
+                "extraRules": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "ports": {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
                 }
               },
               "type": "object"
@@ -1015,9 +1120,22 @@ postgres: {}
               "properties": {
                 "enabled": {
                   "type": "boolean"
+                },
+                "extraRules": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "type": "array"
                 }
               },
               "type": "object"
+            },
+            "mode": {
+              "enum": [
+                "open",
+                "restricted"
+              ],
+              "type": "string"
             }
           },
           "type": "object"
@@ -1420,7 +1538,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
+{{- if .Values.management.enrollmentCode -}}
+enrollment-code
+{{- else -}}
 {{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deployment.managementCredentialFile" -}}
+{{- ternary "enrollment-code" "sync-token" (not (empty .Values.management.enrollmentCode)) -}}
 {{- end -}}
 
 {{- define "deployment.encryptionSecretName" -}}
@@ -1445,7 +1571,19 @@ different namespaces of one cluster from colliding. */ -}}
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
 {{- end -}}
+{{- if and .Values.management.enrollmentCode (not $storage.enabled) -}}
+  {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
+{{- end -}}
 {{- $name := include "deployment.fullname" . -}}
+{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not .Values.management.existingSecret.name) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
+  {{- /* An enrolled Operator runs on the key stored in its volume, so an
+  upgrade needs no code. A new installation with no credential would crash-loop. */ -}}
+  {{- $installedSecret := lookup "v1" "Secret" .Release.Namespace $name -}}
+  {{- $installedClaim := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (default (printf "%s-runtime-data" $name) $storage.existingClaim) -}}
+  {{- if not (or .Release.IsUpgrade $installedSecret $installedClaim) -}}
+    {{- fail "This is a new installation, and no enrollment code or token was given. Check the kube context and namespace, or get a new enrollment code." -}}
+  {{- end -}}
+{{- end -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace $name -}}
 {{- if $installed -}}
   {{- $claim := default (printf "%s-runtime-data" $name) $storage.existingClaim -}}
@@ -1730,7 +1868,14 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
+  {{- if .Values.management.enrollmentCode }}
+  enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- /* Blank the token an earlier install stored. On upgrade Helm drops the
+  old stringData key, but the Secret keeps its stored value. */}}
+  sync-token: ""
+  {{- else }}
   sync-token: {{ .Values.management.token | quote }}
+  {{- end }}
   {{- end }}
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
@@ -1747,18 +1892,47 @@ stringData:
 {{- end }}
 
 === templates/registry-secret.yaml ===
-{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
+{{- /* An enrolled Operator upgraded with no code and no token keeps the pull
+Secret it already has; the Operator keeps refreshing it. */ -}}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
-{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+{{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
+{{- $user := default "deployment" .Values.management.name }}
+{{- $codeHash := "" }}
+{{- $config := "" }}
+{{- if .Values.management.token }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else if not .Values.management.enrollmentCode }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $codeHash = dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" (default dict $existing) }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" dict | toJson | b64enc }}
+{{- end }}
+{{- else }}
+{{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) $codeHash) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "deployment.fullname" . }}-registry
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+  {{- if $codeHash }}
+  annotations:
+    alien.dev/enrollment-code-sha256: {{ $codeHash | quote }}
+  {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
-  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+  .dockerconfigjson: {{ $config }}
 {{- end }}
 
 === templates/configmap.yaml ===
@@ -1824,7 +1998,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret "enrollmentCode" .Values.management.enrollmentCode) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
         {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
@@ -1837,7 +2011,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -1967,9 +2141,25 @@ spec:
             {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            - name: OPERATOR_DATA_PERSISTENT
+              value: {{ .Values.runtime.data.persistence.enabled | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
+            {{- if .Values.management.enrollmentCode }}
+            - name: OPERATOR_ENROLLMENT_CODE_FILE
+              value: /etc/deployment/secrets/enrollment-code
+            - name: ALIEN_MANAGER_AUDIENCE
+              value: {{ .Values.management.audience | quote }}
+            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
+            {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- else if and .Release.IsUpgrade (dig "pullWithManagementToken" false .Values.runtime.image) }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
@@ -2055,8 +2245,8 @@ spec:
               readOnly: true
             {{- end }}
             - name: management-token
-              mountPath: /etc/deployment/secrets/sync-token
-              subPath: sync-token
+              mountPath: /etc/deployment/secrets/{{ include "deployment.managementCredentialFile" . }}
+              subPath: {{ include "deployment.managementCredentialFile" . }}
               readOnly: true
             - name: encryption-key
               mountPath: /etc/deployment/secrets/encryption-key
@@ -2100,7 +2290,7 @@ spec:
             secretName: {{ include "deployment.managementSecretName" . }}
             items:
               - key: {{ include "deployment.managementSecretTokenKey" . }}
-                path: sync-token
+                path: {{ include "deployment.managementCredentialFile" . }}
             defaultMode: 384
         - name: encryption-key
           secret:
@@ -3408,12 +3598,101 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Pods of this release namespace: log collectors and linked workloads.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.runtime.api.port }}
+    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
+    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
+        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+        - ipBlock:
+            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
+    # ports the bindings use (a database, a cache) and the manager's own port.
+    {{- $ports := list }}
+    {{- range (.Values.runtime.networkPolicy.egress.ports | default list) }}{{- $ports = append $ports (int .) }}{{- end }}
+    {{- $managerUrl := urlParse (default "" (include "deployment.managementUrl" .)) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" $managerUrl.host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}
+    {{- else if eq $managerUrl.scheme "http" }}{{- $ports = append $ports 80 }}
+    {{- else if eq $managerUrl.scheme "https" }}{{- $ports = append $ports 443 }}{{- end }}
+    {{- if $ports }}
+    - ports:
+        {{- range $ports | uniq }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "gcp" }}
+    # GKE: the Operator's cloud credentials come from the metadata server
+    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
+    # with the Workload Identity metadata server on dataplane v1).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "aws" }}
+    # EKS Pod Identity: the Operator's cloud credentials come from the Pod Identity agent
+    # on the node (AWS_CONTAINER_CREDENTIALS_FULL_URI, 169.254.170.23:80, fd00:ec2::23 on IPv6).
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+        - ipBlock:
+            cidr: fd00:ec2::23/128
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
+{{- end }}
+
+=== templates/NOTES.txt ===
+{{- $managementUrl := include "deployment.managementUrl" . }}
+{{- if and $managementUrl (not (hasPrefix "https://" (lower $managementUrl))) }}
+WARNING: the management URL {{ $managementUrl }} is not https. The Operator sends its deployment token to it in clear text. Set management.url (or management.defaultUrl) to the manager's https:// address.
 {{- end }}
 
 === templates/_infrastructure.tpl ===
