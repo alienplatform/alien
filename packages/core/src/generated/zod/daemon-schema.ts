@@ -10,6 +10,7 @@ import { HealthCheckSchema } from "./health-check-schema.js";
 import { PublicEndpointSchema } from "./public-endpoint-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceSpecSchema } from "./resource-spec-schema.js";
+import { WorkloadPrioritySchema } from "./workload-priority-schema.js";
 
 export const DaemonSchema = z.object({
     "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for managed cloud\ncompute backends. Kubernetes and Local runtimes ignore this field.").nullish(),
@@ -17,6 +18,7 @@ get "code"(){
                 return DaemonCodeSchema
               },
 "command": z.array(z.string()).describe("Command to override the image default.").nullish(),
+"commandsCapabilityFile": z.optional(z.boolean().describe("Set by `alien build` when the daemon's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.")),
 "commandsEnabled": z.optional(z.boolean().default(false).describe("Whether an app-owned command receiver can lease pending commands for\nthis Daemon and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.").optional()
@@ -36,6 +38,9 @@ get "memory"(){
               },
 "permissions": z.string().describe("Named workload permission profile. Absent means no workload cloud identity.").nullish(),
 "pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish(),
+get "priority"(){
+                return z.union([WorkloadPrioritySchema, z.null()]).optional()
+              },
 get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.").optional()
               },

@@ -16,6 +16,12 @@ pub struct AzureArtifactRegistryImportData {
     pub login_server: String,
     /// UAMI principal id with `AcrPull` access.
     pub pull_principal_id: String,
+    /// Setup-owned pull identity ARM ID; absent in older setup payloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_identity_resource_id: Option<String>,
+    /// Setup-owned registry-scoped AcrPull assignment ARM ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_role_assignment_id: Option<String>,
     /// UAMI principal id with `AcrPush` access.
     pub push_principal_id: String,
 }

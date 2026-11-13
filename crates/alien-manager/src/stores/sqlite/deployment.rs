@@ -759,6 +759,27 @@ impl DeploymentStore for SqliteDeploymentStore {
         true
     }
 
+    async fn record_operator_version(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        operator_version: &str,
+    ) -> Result<(), AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(
+                Deployments::RuntimeMetadata,
+                Expr::cust_with_values(
+                    "json_set(COALESCE(runtime_metadata, '{}'), '$.operatorVersion', ?)",
+                    [operator_version],
+                ),
+            )
+            .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute_returning_rows_affected(&sql).await?;
+        Ok(())
+    }
+
     async fn create_deployment(
         &self,
         caller: &crate::auth::Subject,
@@ -1244,6 +1265,19 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to remove deployment metadata".to_string(),
             })?;
+        // The deployment's commands keys end with it. On the manager's own
+        // deploy path no sync ever revokes them.
+        for statement in [
+            "DELETE FROM tokens WHERE type = 'commands-receiver' AND deployment_id = ?1",
+            "DELETE FROM commands_key_generations WHERE deployment_id = ?1",
+        ] {
+            conn.execute(statement, [id.to_owned()])
+                .await
+                .into_alien_error()
+                .context(GenericError {
+                    message: "Failed to remove the deployment's commands keys".to_string(),
+                })?;
+        }
         Ok(())
     }
 
@@ -1544,6 +1578,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             "provisioning-failed",
         ];
 
+        // A deployment waiting for a secret keeps its status (a first install must not turn into
+        // an update) but takes the newer release, which its next step reads as the target.
+        let waiting_for_secrets = "waiting-for-secrets";
+
         let sql = {
             let mut query = Query::update();
             query
@@ -1557,12 +1595,17 @@ impl DeploymentStore for SqliteDeploymentStore {
                             .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
                         Expr::col(Deployments::Status),
                     )
+                    .case(
+                        Expr::col(Deployments::Status).eq(waiting_for_secrets),
+                        Expr::col(Deployments::Status),
+                    )
                     .finally("update-pending"),
                 )
                 .value(Deployments::NextStepAfter, Option::<String>::None)
                 .cond_where(
                     sea_query::Cond::any()
                         .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
+                        .add(Expr::col(Deployments::Status).eq(waiting_for_secrets))
                         // Only the persisted installed grant permits a release to retry
                         // setup work. A requested setting must not authorize manual setup.
                         .add(
@@ -1936,6 +1979,21 @@ impl DeploymentStore for SqliteDeploymentStore {
             )
             .into_generic());
         }
+        // The Operator's version comes from the sync request, not from its
+        // reported state, so the manager records it with the state it keeps. A
+        // report without one keeps the version recorded before.
+        let operator_version = data.operator_version.clone().or_else(|| {
+            installed_record
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.operator_version.clone())
+        });
+        if let Some(operator_version) = operator_version {
+            data.state
+                .runtime_metadata
+                .get_or_insert_default()
+                .operator_version = Some(operator_version);
+        }
         // A late retention checkpoint cannot complete a newer erase request,
         // including after an expired setup lease reopens delete-pending.
         if matches!(
@@ -1976,6 +2034,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 record: installed_record.clone(),
                 target_operations_bundle_set: None,
                 target_dynamic_containers: None,
+                target_operator_image: None,
             });
         }
         let installed_grant = deployment
@@ -2197,6 +2256,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             record,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            target_operator_image: None,
         })
     }
 
@@ -2572,6 +2632,53 @@ mod gcp_project_consumer_tests {
             .await
             .expect("create GCP deployment")
             .id
+    }
+
+    #[tokio::test]
+    async fn recording_an_operator_version_changes_only_that_field() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manager.db");
+        let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
+        let store = SqliteDeploymentStore::new(db);
+        let caller = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &caller,
+                CreateDeploymentGroupParams {
+                    name: "operator-version".into(),
+                    max_deployments: 20,
+                    setup: DeploymentGroupSetup::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let id = create_gcp_deployment(
+            &store,
+            &group.id,
+            "operator-version",
+            "222222222222",
+            "running",
+        )
+        .await;
+        let before = store.get_deployment(&caller, &id).await.unwrap().unwrap();
+        assert_eq!(
+            before
+                .runtime_metadata
+                .as_ref()
+                .and_then(|m| m.operator_version.clone()),
+            None
+        );
+
+        store
+            .record_operator_version(&caller, &id, "1.2.3")
+            .await
+            .unwrap();
+
+        let after = store.get_deployment(&caller, &id).await.unwrap().unwrap();
+        let mut expected = before.runtime_metadata.clone().unwrap_or_default();
+        expected.operator_version = Some("1.2.3".to_string());
+        assert_eq!(after.runtime_metadata, Some(expected));
+        assert_eq!(after.status, before.status);
     }
 
     #[tokio::test]

@@ -218,6 +218,9 @@ fn gcp_provider(
             _ => return Err(transport_error()),
         };
         Ok(CryptoKey {
+            labels: Default::default(),
+            version_template: None,
+            rotation_period: None,
             name: GCP_KEY.to_string(),
             purpose: "ENCRYPT_DECRYPT".to_string(),
             primary: Some(CryptoKeyVersion {
@@ -254,11 +257,13 @@ fn azure_provider(
                 kid: format!("{AZURE_KEY}/v1"),
                 kty: "RSA-HSM".to_string(),
                 key_ops: vec!["wrapKey".to_string(), "unwrapKey".to_string()],
+                n: None,
             },
             attributes: KeyAttributes {
                 enabled: Some(enabled),
                 recovery_level: Some("Recoverable".to_string()),
             },
+            tags: Default::default(),
         })
     });
     let keys = Arc::new(keys);
@@ -302,6 +307,7 @@ fn import_key(platform: Platform, stack: &Stack) -> StackResourceState {
                 key_name: "key".to_string(),
                 lineage_version_id: "v1".to_string(),
                 key_id: format!("{AZURE_KEY}/v1"),
+                disk_encryption_set_id: None,
             },
             &ctx,
         ),

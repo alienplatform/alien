@@ -6,7 +6,6 @@ license-file.workspace = true
 
 [dependencies]
 subtle = { workspace = true }
-httparse = "1.10"
 alien-core = { workspace = true, features = ["sandbox-capability", "sandbox-process"] }
 alien-error = { workspace = true }
 serde = { workspace = true }
@@ -20,6 +19,9 @@ chrono = { workspace = true }
 futures = { workspace = true }
 ed25519-compact = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+httparse = "1.10"
 uuid = { workspace = true, features = ["v4"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 

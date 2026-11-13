@@ -21,6 +21,8 @@ use crate::traits::*;
 /// A fully-configured alien-manager instance.
 pub struct AlienManager {
     pub(crate) config: Arc<ManagerConfig>,
+    pub(crate) runtime_credentials:
+        Option<Arc<crate::auth::runtime_capability::RuntimeCredentials>>,
     pub(crate) router: axum::Router,
     pub(crate) deployment_store: Arc<dyn DeploymentStore>,
     pub(crate) release_store: Arc<dyn ReleaseStore>,
@@ -28,6 +30,7 @@ pub struct AlienManager {
     pub(crate) server_bindings: Arc<ServerBindings>,
     pub(crate) dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     pub(crate) log_buffer: Arc<LogBuffer>,
+    pub(crate) token_store: Arc<dyn crate::traits::TokenStore>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
     pub(crate) values: Option<Arc<crate::values::ValueStore>>,
     pub(crate) release_channels: Option<Arc<dyn ReleaseChannelStore>>,
@@ -113,6 +116,8 @@ impl AlienManager {
                         self.server_bindings.clone(),
                         self.dev_status_tx,
                     )
+                    .with_runtime_credentials(self.runtime_credentials.clone())
+                    .with_commands_keys(self.token_store.clone(), self.log_buffer.clone())
                     .with_value_store(self.values.clone())
                     .with_release_channels(self.release_channels.clone()),
                 ))

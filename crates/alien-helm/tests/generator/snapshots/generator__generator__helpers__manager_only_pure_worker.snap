@@ -16,6 +16,12 @@ management:
   existingSecret:
     name: ""
     tokenKey: sync-token
+  # One-hour, one-use code that enrolls the Operator for a registered
+  # deployment, instead of token. The Operator then keeps its own key, which
+  # it replaces every day. Requires deploymentId, audience and persistence.
+  enrollmentCode: ""
+  # The manager audience returned with the enrollment code.
+  audience: ""
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
@@ -39,7 +45,9 @@ runtime:
     # the manager this chart connects to).
     pullWithManagementToken: false
     # Follow the Operator image the manager targets, so upgrades need no helm
-    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    # upgrade. The Deployment is Recreate: the running pod stops before the
+    # new one starts. Set false when you deliver upgrades yourself (Argo CD,
+    # Flux, Renovate): the Operator then changes only with the chart version.
     selfUpdate: true
   # Pull secrets for the Operator and for the application's workloads (added
   # to their ServiceAccounts), for images in a registry that needs credentials.
@@ -116,6 +124,19 @@ runtime:
     topologySpreadConstraints: []
     priorityClassName: ""
     runtimeClassName: ""
+  # Scheduling priority of the workloads the Operator creates. The stack declares a level per
+  # container or daemon (critical, high, normal, low); each level maps to a PriorityClass here.
+  # An empty entry leaves workloads at that level without a PriorityClass. Nothing changes for
+  # existing installs until an entry is set.
+  workloadPriority:
+    # Create one PriorityClass per level named <release>-<hash>-<level> (the hash is derived from namespace and release), for clusters without their
+    # own. Needs cluster-scoped write rights from whoever runs helm, never the Operator.
+    create: false
+    classes:
+      critical: ""
+      high: ""
+      normal: ""
+      low: ""
   pdb:
     enabled: false
     minAvailable: 1
@@ -297,6 +318,8 @@ postgres: {}
             "tokenKey": { "type": "string", "minLength": 1 }
           }
         },
+        "enrollmentCode": { "type": "string" },
+        "audience": { "type": "string" },
         "name": { "type": "string" },
         "url": { "type": "string" },
         "defaultUrl": { "type": "string" },
@@ -305,6 +328,19 @@ postgres: {}
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
+      },
+      "if": {
+        "required": ["enrollmentCode"],
+        "properties": { "enrollmentCode": { "minLength": 1 } }
+      },
+      "then": {
+        "required": ["audience", "deploymentId"],
+        "properties": {
+          "audience": { "minLength": 1 },
+          "deploymentId": { "type": "string", "minLength": 1 },
+          "token": { "enum": [""] },
+          "existingSecret": { "properties": { "name": { "enum": [""] } } }
+        }
       }
     },
     "runtime": {
@@ -423,6 +459,23 @@ postgres: {}
             "topologySpreadConstraints": { "type": "array" },
             "priorityClassName": { "type": "string" },
             "runtimeClassName": { "type": "string" }
+          }
+        },
+        "workloadPriority": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "classes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "critical": { "type": "string" },
+                "high": { "type": "string" },
+                "normal": { "type": "string" },
+                "low": { "type": "string" }
+              }
+            }
           }
         },
         "pdb": {
@@ -845,6 +898,20 @@ postgres: {}
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 
+{{- /* Level -> PriorityClass name for the workloads the Operator creates; "{}" when none is set. */ -}}
+{{- define "deployment.priorityClassMap" -}}
+{{- $priority := default dict .Values.runtime.workloadPriority -}}
+{{- $configured := default dict $priority.classes -}}
+{{- $classes := dict -}}
+{{- range $level := list "critical" "high" "normal" "low" -}}
+{{- $name := default (ternary (include "deployment.releaseScopedName" (dict "root" $ "suffix" (printf "-%s" $level))) "" (default false $priority.create)) (get $configured $level) -}}
+{{- if $name -}}
+{{- $_ := set $classes $level $name -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $classes -}}
+{{- end -}}
+
 {{- define "deployment.logCollectorName" -}}
 {{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
 {{- end -}}
@@ -931,7 +998,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
+{{- if .Values.management.enrollmentCode -}}
+enrollment-code
+{{- else -}}
 {{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deployment.managementCredentialFile" -}}
+{{- ternary "enrollment-code" "sync-token" (not (empty .Values.management.enrollmentCode)) -}}
 {{- end -}}
 
 {{- define "deployment.encryptionSecretName" -}}
@@ -956,7 +1031,19 @@ different namespaces of one cluster from colliding. */ -}}
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
 {{- end -}}
+{{- if and .Values.management.enrollmentCode (not $storage.enabled) -}}
+  {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
+{{- end -}}
 {{- $name := include "deployment.fullname" . -}}
+{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not .Values.management.existingSecret.name) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
+  {{- /* An enrolled Operator runs on the key stored in its volume, so an
+  upgrade needs no code. A new installation with no credential would crash-loop. */ -}}
+  {{- $installedSecret := lookup "v1" "Secret" .Release.Namespace $name -}}
+  {{- $installedClaim := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (default (printf "%s-runtime-data" $name) $storage.existingClaim) -}}
+  {{- if not (or .Release.IsUpgrade $installedSecret $installedClaim) -}}
+    {{- fail "This is a new installation, and no enrollment code or token was given. Check the kube context and namespace, or get a new enrollment code." -}}
+  {{- end -}}
+{{- end -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace $name -}}
 {{- if $installed -}}
   {{- $claim := default (printf "%s-runtime-data" $name) $storage.existingClaim -}}
@@ -1241,7 +1328,14 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
+  {{- if .Values.management.enrollmentCode }}
+  enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- /* Blank the token an earlier install stored. On upgrade Helm drops the
+  old stringData key, but the Secret keeps its stored value. */}}
+  sync-token: ""
+  {{- else }}
   sync-token: {{ .Values.management.token | quote }}
+  {{- end }}
   {{- end }}
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
@@ -1258,18 +1352,47 @@ stringData:
 {{- end }}
 
 === templates/registry-secret.yaml ===
-{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
+{{- /* An enrolled Operator upgraded with no code and no token keeps the pull
+Secret it already has; the Operator keeps refreshing it. */ -}}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
-{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+{{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
+{{- $user := default "deployment" .Values.management.name }}
+{{- $codeHash := "" }}
+{{- $config := "" }}
+{{- if .Values.management.token }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else if not .Values.management.enrollmentCode }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $codeHash = dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" (default dict $existing) }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" dict | toJson | b64enc }}
+{{- end }}
+{{- else }}
+{{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) $codeHash) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "deployment.fullname" . }}-registry
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+  {{- if $codeHash }}
+  annotations:
+    alien.dev/enrollment-code-sha256: {{ $codeHash | quote }}
+  {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
-  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+  .dockerconfigjson: {{ $config }}
 {{- end }}
 
 === templates/configmap.yaml ===
@@ -1335,7 +1458,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret "enrollmentCode" .Values.management.enrollmentCode) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
         {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
@@ -1348,7 +1471,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -1392,6 +1515,11 @@ spec:
             {{- if .Values.basePlatform }}
             - name: OPERATOR_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- $priorityClasses := include "deployment.priorityClassMap" . }}
+            {{- if ne $priorityClasses "{}" }}
+            - name: ALIEN_KUBERNETES_PRIORITY_CLASSES
+              value: {{ $priorityClasses | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
             - name: AWS_REGION
@@ -1473,9 +1601,25 @@ spec:
             {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            - name: OPERATOR_DATA_PERSISTENT
+              value: {{ .Values.runtime.data.persistence.enabled | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
+            {{- if .Values.management.enrollmentCode }}
+            - name: OPERATOR_ENROLLMENT_CODE_FILE
+              value: /etc/deployment/secrets/enrollment-code
+            - name: ALIEN_MANAGER_AUDIENCE
+              value: {{ .Values.management.audience | quote }}
+            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
+            {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- else if and .Release.IsUpgrade (dig "pullWithManagementToken" false .Values.runtime.image) }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
@@ -1561,8 +1705,8 @@ spec:
               readOnly: true
             {{- end }}
             - name: management-token
-              mountPath: /etc/deployment/secrets/sync-token
-              subPath: sync-token
+              mountPath: /etc/deployment/secrets/{{ include "deployment.managementCredentialFile" . }}
+              subPath: {{ include "deployment.managementCredentialFile" . }}
               readOnly: true
             - name: encryption-key
               mountPath: /etc/deployment/secrets/encryption-key
@@ -1606,7 +1750,7 @@ spec:
             secretName: {{ include "deployment.managementSecretName" . }}
             items:
               - key: {{ include "deployment.managementSecretTokenKey" . }}
-                path: sync-token
+                path: {{ include "deployment.managementCredentialFile" . }}
             defaultMode: 384
         - name: encryption-key
           secret:
@@ -2869,6 +3013,29 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+=== templates/priorityclass.yaml ===
+{{- if .Values.runtime.workloadPriority.create }}
+{{- $classes := include "deployment.priorityClassMap" . | fromJson }}
+{{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
+{{- range $level := list "critical" "high" "normal" "low" }}
+{{- $configured := default dict $.Values.runtime.workloadPriority.classes }}
+{{- $ownName := include "deployment.releaseScopedName" (dict "root" $ "suffix" (printf "-%s" $level)) }}
+{{- /* Keep creating the class when an explicit mapping names this release's own class, otherwise Helm would delete a class workloads still use. */}}
+{{- if or (not (get $configured $level)) (eq (get $configured $level) $ownName) }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ get $classes $level }}
+  labels:
+    {{- include "deployment.labels" $ | nindent 4 }}
+value: {{ get $values $level }}
+globalDefault: false
+description: {{ printf "Created by the %s Helm release for workloads declared with priority %s." $.Release.Name $level | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 === templates/networkpolicy.yaml ===
 {{- if .Values.runtime.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -3255,6 +3422,40 @@ edit them in the deployment dashboard and retain the original Helm values.
 Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
 values with the installed Secret. Client-side `helm template --is-upgrade`
 cannot do that.
+
+## Workload priority
+
+A stack can declare a priority level on a container or daemon: `critical`, `high`,
+`normal` or `low`. The levels say which workloads matter more under node pressure;
+the cluster administrator decides which Kubernetes PriorityClass each level means.
+Map them in the install values:
+
+```yaml
+runtime:
+  workloadPriority:
+    classes:
+      critical: platform-critical
+      high: platform-high
+      normal: ""
+      low: platform-batch
+```
+
+A workload gets the class mapped to its level. A workload with no declared level, or
+a level whose entry is empty, gets no `priorityClassName`, as before. An install
+that sets none of these values renders and restarts exactly as it did.
+
+PriorityClasses are cluster-scoped, so the Operator never creates them. Point the
+levels at classes your cluster already has, or set
+`runtime.workloadPriority.create: true` and Helm creates `<release>-<hash>-critical`,
+`-high`, `-normal` and `-low` (the hash keeps same-named releases in different namespaces apart) (values 1000000, 100000, 0 and -100, never the
+default class) for any level you did not map yourself. Creating them needs
+cluster-scoped rights from whoever runs Helm. Removing the release removes the
+classes; running pods keep the priority they were admitted with.
+
+If a mapped class does not exist, Kubernetes rejects the pods and the workload
+reports `no PriorityClass with name ...`, followed by the values key to fix.
+Changing a mapping restarts only the workloads at that level. Sandboxes do not use
+priority levels, and platforms other than Kubernetes ignore the field.
 
 ## Logs
 

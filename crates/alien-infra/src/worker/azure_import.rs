@@ -28,6 +28,7 @@ impl ResourceImporter for AzureWorkerImporter {
     ) -> Result<StackResourceState> {
         let _ = (data.subscription_id, data.resource_group);
         let controller = AzureWorkerController {
+            registry_image: None,
             state: AzureWorkerState::Ready,
             container_app_name: Some(data.container_app_name),
             resource_id: None,

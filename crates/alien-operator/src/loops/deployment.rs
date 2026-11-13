@@ -15,9 +15,10 @@ use crate::config::OperatorConfig;
 use crate::db::{AutomaticRetry, OperatorDb};
 use crate::OperatorState;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
-    ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    commands_types::CommandTargetType, ClientConfig, DeploymentConfig, DeploymentState,
+    DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, KubernetesClientConfig,
+    ObservedInventoryBatch, Platform, ReceiverCommandCredential, ResourceHeartbeat,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -260,7 +261,12 @@ pub(crate) async fn run_deployment_continuously(
     // Check if there's a target to deploy
     let target_release = match &current.target_release {
         Some(r) => r,
-        None => return Ok((0, Duration::ZERO)),
+        None => {
+            if crate::daily_identity::has_runtime_identity(&state.db).await? {
+                refresh_installed_deployment(state).await?;
+            }
+            return Ok((0, Duration::ZERO));
+        }
     };
     // A pushed target always carries an Alien release id (observe deployments never
     // receive a target), so an empty fallback is unreachable in practice.
@@ -275,6 +281,7 @@ pub(crate) async fn run_deployment_continuously(
         {
             Some(crate::db::ApprovalStatus::Pending) => {
                 debug!("Target release pending approval, skipping deployment");
+                renew_installed_credentials_or_warn(state).await;
                 return Ok((0, Duration::ZERO));
             }
             Some(crate::db::ApprovalStatus::Rejected) => {
@@ -340,6 +347,7 @@ pub(crate) async fn run_deployment_continuously(
             } => {
                 info!(release_id = %target_release_id, attempt, delay_seconds,
                     "Scheduled automatic retry of failed deployment");
+                renew_installed_credentials_or_warn(state).await;
                 return Ok((0, Duration::ZERO));
             }
             AutomaticRetry::Requested { attempt } => {
@@ -347,7 +355,10 @@ pub(crate) async fn run_deployment_continuously(
                 info!(release_id = %target_release_id, attempt,
                     "Resuming failed deployment from saved checkpoints");
             }
-            AutomaticRetry::Idle => return Ok((0, Duration::ZERO)),
+            AutomaticRetry::Idle => {
+                renew_installed_credentials_or_warn(state).await;
+                return Ok((0, Duration::ZERO));
+            }
         }
     }
     // Identifies this apply once it completes; the config itself is moved into
@@ -444,6 +455,13 @@ pub(crate) async fn run_deployment_continuously(
         .and_then(|execution| execution.claim)
         .map(|claim| claim.operation_id);
 
+    // An update can wait for a long time, for example on a rollout that never
+    // becomes ready. The step loop does not reach the workloads it is not
+    // changing, so renew the installed credentials on every pass.
+    if operation == LoopOperation::Deploy {
+        renew_installed_credentials_or_warn(state).await;
+    }
+
     let result = alien_deployment::runner::run_step_loop(
         &mut current,
         &mut enriched_config,
@@ -486,7 +504,8 @@ pub(crate) async fn run_deployment_continuously(
                     .await?;
             }
             // A disconnected Operator needs the installed config for health refreshes.
-            if state.config.airgap_target_secret.is_none()
+            if (state.config.airgap_target_secret.is_none()
+                && enriched_config.runtime_identity_audience.is_none())
                 || loop_result.final_status != DeploymentStatus::Running
             {
                 debug!("Deployment synced, clearing deployment config");
@@ -517,8 +536,8 @@ pub(crate) async fn run_deployment_continuously(
     Ok((steps_executed, delay))
 }
 
-/// Refresh an installed disconnected deployment before exporting its status.
-pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<()> {
+/// Refresh an installed deployment for health reporting and bounded credential renewal.
+pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Result<()> {
     let Some(mut current) = state.db.get_deployment_state().await? else {
         return Ok(());
     };
@@ -528,7 +547,7 @@ pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<(
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
         )
     {
-        return Ok(());
+        return renew_installed_credentials(state).await;
     }
     let Some(release) = current.current_release.as_ref() else {
         return Ok(());
@@ -596,6 +615,70 @@ pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<(
     }
 }
 
+/// Renew the credential Secrets of the installed workloads when the installed
+/// release cannot be refreshed: an update waits for approval, waits to retry,
+/// runs, or failed. Workloads keep running on their old revision, so their
+/// credentials must not expire meanwhile.
+async fn renew_installed_credentials(state: &OperatorState) -> Result<()> {
+    if !crate::daily_identity::has_runtime_identity(&state.db).await? {
+        return Ok(());
+    }
+    let Some(current) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    let (Some(stack_state), Some(release)) = (&current.stack_state, &current.current_release)
+    else {
+        return Ok(());
+    };
+    // The stored config belongs to the target while an update is pending, so it
+    // is prepared with the target's stack: the installed release may have a
+    // command receiver the update replaces, and the update's config carries no
+    // key for it. Renewal only rewrites the capability-file and pull Secrets
+    // from the installed stack; it never changes a receiver's commands key.
+    let Some(config) = state.db.get_deployment_config().await? else {
+        return Ok(());
+    };
+    let config_release = current.target_release.as_ref().unwrap_or(release);
+    let config = enrich_config(
+        config,
+        &state.config,
+        current.platform,
+        &state.db,
+        Some(&config_release.stack),
+    )
+    .await?;
+    let client_config = resolve_client_config(
+        current.platform,
+        config.base_platform.or(state.config.base_platform),
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let service_provider = state
+        .service_provider
+        .clone()
+        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+    alien_infra::refresh_installed_credentials(
+        stack_state,
+        &release.stack,
+        &config,
+        client_config,
+        &service_provider,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        message: "Cannot renew installed workload credentials".to_string(),
+    })
+}
+
+/// A renewal failure never blocks the update work that follows.
+async fn renew_installed_credentials_or_warn(state: &OperatorState) {
+    if let Err(error) = renew_installed_credentials(state).await {
+        tracing::warn!(error = %error, "Cannot renew installed workload credentials");
+    }
+}
+
 /// One Running refresh pass over the installed release.
 async fn run_maintenance_refresh(
     state: &OperatorState,
@@ -659,13 +742,29 @@ async fn finish_maintenance_refresh(
 /// Applies public_endpoints and stack_settings from operator config,
 /// and injects command delivery env vars for K8s/Local platforms.
 /// External bindings also populate DeploymentConfig for executor preflights.
-async fn enrich_config(
+pub(super) async fn enrich_config(
     mut config: DeploymentConfig,
     operator_config: &OperatorConfig,
     platform: Platform,
     db: &OperatorDb,
     stack: Option<&alien_core::Stack>,
 ) -> Result<DeploymentConfig> {
+    // The previous Operator pod accepted this config before it enrolled, so it
+    // still carries the deployment token and no manager audience, and the
+    // manager does not send it again. Treat it the way a synced target is
+    // treated. The deployment token goes to no workload: the manager revokes
+    // it after the first rollout, and a command receiver built before
+    // capability files gets the commands key the manager supplies instead.
+    if config.runtime_identity_audience.is_none() {
+        if let Some(identity) = db.read_enrolled_daily_identity().await? {
+            super::sync::sanitize_identity_config(
+                &mut config,
+                &identity.manager_url,
+                &identity.audience,
+            )?;
+        }
+    }
+
     // Pass through public endpoints from operator config.
     if operator_config.public_endpoints.is_some() {
         config.public_endpoints = operator_config.public_endpoints.clone();
@@ -738,30 +837,153 @@ async fn enrich_config(
 
             let mut vars = config.environment_variables.variables.clone();
 
-            // The Manager authenticates command delivery with the deployment's
-            // sync token. The Worker runtime keeps it out of the application
-            // child environment; Container/Daemon receivers necessarily read it.
-            if let Some(stack) = stack {
-                vars.extend(
-                    stack
-                        .worker_command_push_env_vars(Some(&sync_config.token))
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to build Worker command push auth env".to_string(),
-                        })?,
-                );
-                // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
-                // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
-                // Container/Daemon always deliver via Pull; the operator
-                // only ever manages K8s/Local, so this block already covers every
-                // platform it serves. It uses the same deployment-token auth
-                // contract as Worker push handling above.
-                vars.extend(
-                    stack
-                        .receiver_command_env_vars(&commands_url, Some(&sync_config.token))
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to build command receiver env".to_string(),
-                        })?,
-                );
+            if let (Some(stack), Some(audience)) =
+                (stack, config.runtime_identity_audience.as_deref())
+            {
+                if platform == Platform::Local
+                    && stack.resources().any(|(_, resource)| {
+                        resource
+                            .config
+                            .downcast_ref::<alien_core::Container>()
+                            .is_some()
+                    })
+                {
+                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: "Local container credential file access is not configured".into(),
+                    }));
+                }
+                // A Container or Daemon whose receiver the build did not record as
+                // reading the capability file is an older receiver. It cannot
+                // start without `ALIEN_COMMANDS_TOKEN`, so that token stays for
+                // it and for no one else.
+                let unmarked: std::collections::BTreeSet<String> = stack
+                    .command_receivers_without_capability_file()
+                    .into_iter()
+                    .collect();
+                vars.retain(|variable| {
+                    variable.name != "ALIEN_COMMANDS_TOKEN"
+                        || variable.target_resources.as_ref().is_some_and(|targets| {
+                            !targets.is_empty()
+                                && targets.iter().all(|target| unmarked.contains(target))
+                        })
+                });
+                // Worker runtimes built before capability files accept a push
+                // only with `ALIEN_COMMANDS_TOKEN`. Give them the Operator's
+                // own push secret, which grants nothing at the manager. Newer
+                // runtimes use the capability file and ignore it.
+                let targets = stack.command_targets();
+                let push_secret = if targets
+                    .iter()
+                    .any(|target| target.resource_type == CommandTargetType::Worker)
+                {
+                    Some(db.worker_push_secret().await?)
+                } else {
+                    None
+                };
+                for target in targets {
+                    if unmarked.contains(&target.resource_id) {
+                        // The manager supplied this receiver's commands key
+                        // with its other settings. Without it the receiver
+                        // cannot start, so fail here where the cause can be
+                        // named. A config saved before enrollment has none;
+                        // the sync loop asks the manager for a fresh one.
+                        let has_token = vars.iter().any(|variable| {
+                            variable.name == "ALIEN_COMMANDS_TOKEN"
+                                && variable
+                                    .target_resources
+                                    .as_ref()
+                                    .is_some_and(|targets| targets.contains(&target.resource_id))
+                        });
+                        if !has_token {
+                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: format!(
+                                    "Command receiver '{}' was built before capability files and needs ALIEN_COMMANDS_TOKEN, which the manager did not supply",
+                                    target.resource_id
+                                ),
+                            }));
+                        }
+                        let values = [
+                            ("ALIEN_COMMANDS_URL", commands_url.clone()),
+                            (
+                                "ALIEN_COMMANDS_TARGET_RESOURCE_ID",
+                                target.resource_id.clone(),
+                            ),
+                            (
+                                "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE",
+                                target.resource_type.as_str().to_owned(),
+                            ),
+                        ];
+                        vars.extend(values.into_iter().map(|(name, value)| EnvironmentVariable {
+                            name: name.into(),
+                            value,
+                            var_type: EnvironmentVariableType::Plain,
+                            target_resources: Some(vec![target.resource_id.clone()]),
+                        }));
+                        continue;
+                    }
+                    if let (CommandTargetType::Worker, Some(secret)) =
+                        (target.resource_type, push_secret.as_ref())
+                    {
+                        vars.push(EnvironmentVariable {
+                            name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.into(),
+                            value: secret.clone(),
+                            var_type: EnvironmentVariableType::Secret,
+                            target_resources: Some(vec![target.resource_id.clone()]),
+                        });
+                    }
+                    let values = [
+                        ("ALIEN_IDENTITY_PROVIDER", "capabilityFile".to_owned()),
+                        ("ALIEN_MANAGER_URL", sync_config.url.to_string()),
+                        ("ALIEN_MANAGER_AUDIENCE", audience.to_owned()),
+                        (
+                            "ALIEN_COMMANDS_CAPABILITY_FILE",
+                            "/var/run/alien-runtime/commands.json".to_owned(),
+                        ),
+                        ("ALIEN_COMMANDS_URL", commands_url.clone()),
+                        (
+                            "ALIEN_COMMANDS_TARGET_RESOURCE_ID",
+                            target.resource_id.clone(),
+                        ),
+                        (
+                            "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE",
+                            target.resource_type.as_str().to_owned(),
+                        ),
+                    ];
+                    vars.extend(values.into_iter().map(|(name, value)| EnvironmentVariable {
+                        name: name.into(),
+                        value,
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: Some(vec![target.resource_id.clone()]),
+                    }));
+                }
+            } else {
+                // The Manager authenticates command delivery with the deployment's
+                // sync token. The Worker runtime keeps it out of the application
+                // child environment; Container/Daemon receivers necessarily read it.
+                if let Some(stack) = stack {
+                    vars.extend(
+                        stack
+                            .worker_command_push_env_vars(Some(&sync_config.token))
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to build Worker command push auth env".to_string(),
+                            })?,
+                    );
+                    // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
+                    // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
+                    // Container/Daemon always deliver via Pull; the operator
+                    // only ever manages K8s/Local, so this block already covers every
+                    // platform it serves. It uses the same deployment-token auth
+                    // contract as Worker push handling above.
+                    vars.extend(
+                        stack
+                            .receiver_command_env_vars(&commands_url, |_| {
+                                ReceiverCommandCredential::Token(Some(sync_config.token.clone()))
+                            })
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to build command receiver env".to_string(),
+                            })?,
+                    );
+                }
             }
 
             // Ensure ALIEN_DEPLOYMENT_ID is present (should come from manager config,
@@ -895,6 +1117,7 @@ mod tests {
             domain_metadata: None,
             monitoring: None,
             manager_url: None,
+            runtime_identity_audience: None,
             deployment_token: None,
             native_image_host: None,
             volume_restores: Vec::new(),
@@ -1062,10 +1285,22 @@ mod tests {
             .await
             .unwrap(),
         );
-        let mut stack = Stack::new("secret-test".into()).build();
+        // One Worker reads the secret; only it is held while the key is missing.
+        let mut stack = Stack::new("secret-test".into())
+            .add(
+                alien_core::Worker::new("reader".into())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "test:latest".into(),
+                    })
+                    .permissions("default".into())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
         stack.inputs = vec![serde_json::from_value(serde_json::json!({
             "id": "key", "kind": "secret", "providedBy": ["deployer"],
-            "required": true, "label": "Test key", "description": ""
+            "required": true, "label": "Test key", "description": "",
+            "env": [{"name": "KEY", "targetResources": ["reader"]}]
         }))
         .unwrap()];
         let mut vault = StackResourceState::new_pending(
@@ -1610,6 +1845,370 @@ mod tests {
             }));
         }
     }
+    fn receiver_container(id: &str, reads_capability_file: bool) -> alien_core::Container {
+        let mut container = alien_core::Container::new(id.to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        container.commands_capability_file = reads_capability_file;
+        container
+    }
+
+    fn manager_receiver_token(resource_id: &str) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+            value: "ax_dep_manager".to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: Some(vec![resource_id.to_string()]),
+        }
+    }
+
+    async fn enrich_enrolled_kubernetes(
+        stack: &alien_core::Stack,
+        manager_tokens: &[&str],
+    ) -> Result<DeploymentConfig> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_k8s").await.unwrap();
+        let mut config = test_deployment_config();
+        config.runtime_identity_audience = Some("https://manager.example.com".to_string());
+        config.environment_variables.variables = manager_tokens
+            .iter()
+            .map(|id| manager_receiver_token(id))
+            .collect();
+        // After enrollment the operator's own token is a short session token.
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .agent_name("k8s-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_session_not_for_workloads".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+        enrich_config(
+            config,
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            Some(stack),
+        )
+        .await
+    }
+
+    fn scoped_values<'a>(
+        config: &'a DeploymentConfig,
+        resource_id: &str,
+        name: &str,
+    ) -> Vec<&'a str> {
+        config
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|var| {
+                var.name == name
+                    && var.target_resources.as_deref() == Some(&[resource_id.to_string()][..])
+            })
+            .map(|var| var.value.as_str())
+            .collect()
+    }
+
+    async fn enrolled_db(temp_dir: &tempfile::TempDir, encryption_key: &str) -> OperatorDb {
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_k8s").await.unwrap();
+        db.write_daily_identity(&crate::daily_identity::DailyIdentityState {
+            manager_url: "https://manager.example.com".into(),
+            audience: "https://manager.example.com".into(),
+            deployment_id: "dep_k8s".into(),
+            current: "ax_day_v1_fixture".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+            previous: None,
+        })
+        .await
+        .unwrap();
+        db
+    }
+
+    fn enrolled_operator_config(encryption_key: &str) -> OperatorConfig {
+        OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .agent_name("k8s-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_session_not_for_workloads".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build()
+    }
+
+    /// The previous Operator pod accepted this config before it enrolled, so it
+    /// has no manager audience and still carries the deployment token. That
+    /// token is not a workload credential and the manager has since revoked
+    /// it, so no receiver gets it: a receiver built before capability files has
+    /// no key in this config and the Operator says so, until the manager sends
+    /// the release again with the commands key. Receivers that read the
+    /// capability file need nothing.
+    #[tokio::test]
+    async fn a_stale_deployment_token_is_never_handed_to_a_receiver() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = enrolled_db(&temp_dir, encryption_key).await;
+        let operator_config = enrolled_operator_config(encryption_key);
+        let mixed = alien_core::Stack::new("mixed".to_string())
+            .add(
+                receiver_container("old-api", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                receiver_container("new-api", true),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        let mut config = test_deployment_config();
+        config.deployment_token = Some("ax_dep_before_enrollment".to_string());
+
+        let error = enrich_config(
+            config,
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            Some(&mixed),
+        )
+        .await
+        .expect_err("the receiver has no credential in a config saved before enrollment");
+        let message = error.to_string();
+        assert!(message.contains("old-api"), "{message}");
+        assert!(message.contains("ALIEN_COMMANDS_TOKEN"), "{message}");
+        assert!(!message.contains("ax_dep_before_enrollment"), "{message}");
+
+        let marked = alien_core::Stack::new("marked".to_string())
+            .add(
+                receiver_container("new-api", true),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        let mut config = test_deployment_config();
+        config.deployment_token = Some("ax_dep_before_enrollment".to_string());
+        let enriched = enrich_config(
+            config,
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            Some(&marked),
+        )
+        .await
+        .unwrap();
+        assert!(enriched.deployment_token.is_none());
+        assert!(scoped_values(&enriched, "new-api", "ALIEN_COMMANDS_TOKEN").is_empty());
+        assert_eq!(
+            scoped_values(&enriched, "new-api", "ALIEN_COMMANDS_CAPABILITY_FILE"),
+            ["/var/run/alien-runtime/commands.json"]
+        );
+        assert!(enriched.environment_variables.variables.iter().all(|var| {
+            var.value != "ax_session_not_for_workloads" && var.value != "ax_dep_before_enrollment"
+        }));
+    }
+
+    /// A receiver built before capability files runs on the commands key the
+    /// manager supplied with the config. The Operator passes that key on as it
+    /// is, to that receiver only, and never swaps in another credential.
+    #[tokio::test]
+    async fn the_commands_key_the_manager_supplied_reaches_only_its_receiver() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = enrolled_db(&temp_dir, encryption_key).await;
+        let operator_config = enrolled_operator_config(encryption_key);
+        let stack = alien_core::Stack::new("mixed".to_string())
+            .add(
+                receiver_container("old-api", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                receiver_container("new-api", true),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        let mut config = test_deployment_config();
+        config.runtime_identity_audience = Some("https://manager.example.com".to_string());
+        config
+            .environment_variables
+            .variables
+            .push(EnvironmentVariable {
+                name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                value: "ax_cmds_supplied_by_the_manager".to_string(),
+                var_type: EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["old-api".to_string()]),
+            });
+
+        let enriched = enrich_config(
+            config,
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            Some(&stack),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            scoped_values(&enriched, "old-api", "ALIEN_COMMANDS_TOKEN"),
+            ["ax_cmds_supplied_by_the_manager"]
+        );
+        assert!(scoped_values(&enriched, "new-api", "ALIEN_COMMANDS_TOKEN").is_empty());
+        assert!(enriched
+            .environment_variables
+            .variables
+            .iter()
+            .all(|var| var.value != "ax_session_not_for_workloads"));
+    }
+
+    /// While an update to a release whose receivers read the capability file
+    /// is waiting or running, the installed release still has a receiver built
+    /// before capability files, and the stored config belongs to the update
+    /// and has no commands key. Renewing the installed workloads' credentials
+    /// takes that config with the update's stack, so it neither fails nor
+    /// logs a warning for a receiver the update replaces.
+    #[tokio::test]
+    async fn renewing_credentials_during_a_marked_update_needs_no_commands_key() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = enrolled_db(&temp_dir, encryption_key).await;
+        let release = |id: &str, marked: bool| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("app".to_string())
+                .add(
+                    receiver_container("agent", marked),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .build(),
+        };
+        db.set_deployment_state(&DeploymentState {
+            status: DeploymentStatus::UpdatePending,
+            platform: Platform::Kubernetes,
+            current_release: Some(release("rel_old", false)),
+            target_release: Some(release("rel_new", true)),
+            stack_state: Some(alien_core::StackState::new(Platform::Kubernetes)),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .await
+        .unwrap();
+        let mut config = test_deployment_config();
+        config.runtime_identity_audience = Some("https://manager.example.com".to_string());
+        db.set_deployment_config(&config).await.unwrap();
+        let state = OperatorState {
+            config: enrolled_operator_config(encryption_key),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        renew_installed_credentials(&state)
+            .await
+            .expect("the update's config pairs with the update's stack");
+    }
+
+    #[tokio::test]
+    async fn enrolled_receivers_get_the_capability_file_only_when_the_build_marked_them() {
+        let mut daemon = alien_core::Daemon::new("old-agent".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        daemon.commands_capability_file = false;
+        let stack = alien_core::Stack::new("operator-marker-stack".to_string())
+            .add(
+                receiver_container("new-web", true),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                receiver_container("old-web", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let enriched = enrich_enrolled_kubernetes(&stack, &["new-web", "old-web", "old-agent"])
+            .await
+            .unwrap();
+
+        // Marked: only the capability file, no token.
+        assert!(scoped_values(&enriched, "new-web", "ALIEN_COMMANDS_TOKEN").is_empty());
+        assert_eq!(
+            scoped_values(&enriched, "new-web", "ALIEN_COMMANDS_CAPABILITY_FILE"),
+            ["/var/run/alien-runtime/commands.json"]
+        );
+        // Unmarked (older receiver): the token the manager supplied, no file.
+        for id in ["old-web", "old-agent"] {
+            assert_eq!(
+                scoped_values(&enriched, id, "ALIEN_COMMANDS_TOKEN"),
+                ["ax_dep_manager"],
+                "{id} keeps its token"
+            );
+            assert!(
+                scoped_values(&enriched, id, "ALIEN_COMMANDS_CAPABILITY_FILE").is_empty(),
+                "{id} gets no capability file"
+            );
+            assert_eq!(
+                scoped_values(&enriched, id, "ALIEN_COMMANDS_URL"),
+                ["https://manager.example.com/v1"]
+            );
+        }
+        // The session token is never given to a workload.
+        assert!(!enriched
+            .environment_variables
+            .variables
+            .iter()
+            .any(|var| var.value == "ax_session_not_for_workloads"));
+    }
+
+    #[tokio::test]
+    async fn an_older_receiver_without_a_manager_token_fails_the_deploy_with_its_name() {
+        let stack = alien_core::Stack::new("operator-marker-stack".to_string())
+            .add(
+                receiver_container("old-web", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        let error = enrich_enrolled_kubernetes(&stack, &[]).await.unwrap_err();
+
+        assert!(
+            error.to_string().contains("old-web"),
+            "the error names the receiver: {error}"
+        );
+    }
+
     #[tokio::test]
     async fn disconnected_commands_are_disabled_only_for_command_targets() {
         let directory = tempfile::tempdir().unwrap();
@@ -1666,8 +2265,8 @@ mod tests {
                 || v.name == alien_core::ENV_ALIEN_COMMANDS_URL));
     }
 
-    #[tokio::test]
-    async fn disconnected_health_refresh_observes_failure_and_recovery() {
+    /// An installed Test deployment whose `worker` fails its first health refresh.
+    async fn installed_refresh_fixture() -> (OperatorState, tempfile::TempDir) {
         alien_deployment::set_ephemeral_secrets_digest_key();
         let directory = tempfile::tempdir().unwrap();
         let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1753,8 +2352,15 @@ mod tests {
         }
         let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(installed.status, DeploymentStatus::Running);
+        (state, directory)
+    }
+
+    #[tokio::test]
+    async fn disconnected_health_refresh_observes_failure_and_recovery() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert!(state.db.get_deployment_config().await.unwrap().is_some());
-        refresh_airgap_deployment(&state).await.unwrap();
+        refresh_installed_deployment(&state).await.unwrap();
         let failed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(failed.status, DeploymentStatus::RefreshFailed);
         assert_eq!(
@@ -1762,7 +2368,7 @@ mod tests {
             alien_core::ResourceStatus::RefreshFailed
         );
         assert_eq!(failed.current_release, installed.current_release);
-        refresh_airgap_deployment(&state).await.unwrap();
+        refresh_installed_deployment(&state).await.unwrap();
         let recovered = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(recovered.status, DeploymentStatus::Running);
         let resources = &recovered.stack_state.as_ref().unwrap().resources;
@@ -1780,6 +2386,61 @@ mod tests {
         assert_eq!(recovered.current_release, installed.current_release);
         assert!(recovered.target_release.is_none());
         assert!(state.db.get_deployment_config().await.unwrap().is_some());
+    }
+
+    /// An enrolled Operator refreshes its installed deployment on every idle
+    /// pass. That pass runs each workload's ready handler, which rewrites the
+    /// workload's credential Secret before the previous leaf expires.
+    #[tokio::test]
+    async fn enrolled_operator_refreshes_installed_workloads_on_every_idle_pass() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        // A legacy Operator leaves an idle installed deployment alone.
+        run_deployment_continuously(&state).await.unwrap();
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::Running
+        );
+
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: "https://manager.example".into(),
+                audience: "https://manager.example".into(),
+                deployment_id: "dep_site".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+                previous: None,
+            })
+            .await
+            .unwrap();
+        run_deployment_continuously(&state).await.unwrap();
+        let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refreshed.status, DeploymentStatus::RefreshFailed);
+        assert_eq!(
+            refreshed.stack_state.as_ref().unwrap().resources["worker"].status,
+            alien_core::ResourceStatus::RefreshFailed
+        );
+        run_deployment_continuously(&state).await.unwrap();
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::Running
+        );
     }
 
     /// A resource wait's poll budget is `max_times` steps, one per requested

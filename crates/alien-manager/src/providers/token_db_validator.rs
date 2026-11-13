@@ -150,6 +150,14 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
             },
             Role::TunnelCaller,
         ),
+        (TokenType::CommandsReceiver, _, deployment_id) => (
+            Scope::Deployment {
+                project_id: "default".to_string(),
+                // A key with no deployment names none, so no deployment matches.
+                deployment_id: deployment_id.unwrap_or_default().to_string(),
+            },
+            Role::CommandsReceiver,
+        ),
     };
 
     Subject {

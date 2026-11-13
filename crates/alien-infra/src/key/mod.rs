@@ -6,6 +6,54 @@ pub use aws::{AwsKeyController, AwsKeyImporter};
 pub use azure::{AzureKeyController, AzureKeyImporter};
 pub use gcp::{GcpKeyController, GcpKeyImporter};
 
+/// Who made the cloud key a controller tracks.
+///
+/// Every state saved before controllers could create keys is an import, so `Imported` is the
+/// default. A controller writes to a key only when it created it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum KeyOrigin {
+    /// The setup template (CloudFormation or Terraform) made the key and owns it.
+    #[default]
+    Imported,
+    /// Alien made the key during a direct setup run.
+    Created,
+}
+
+/// Whether this step may write to the cloud key: only a direct setup run, which has the admin's
+/// credentials. After setup the manager steps key controllers with management credentials, and
+/// the management identity never creates, changes the policy of, disables or deletes a key.
+pub(crate) fn may_write_keys(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+    ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        && ctx.deployment_config.setup_run
+}
+
+/// The refusal for a key that was not made in this deployment's setup run.
+pub(crate) fn key_created_by_setup(
+    key_id: &str,
+) -> alien_error::AlienError<crate::error::ErrorData> {
+    alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+        resource_id: Some(key_id.to_string()),
+        message: format!(
+            "Key '{key_id}' is created by initial setup. Rerun setup (`alien deploy`, CloudFormation or Terraform) to add it."
+        ),
+    })
+}
+
+/// Hex digest of what a created key's access depends on, to see when a rerun must rewrite it.
+pub(crate) fn access_revision(parts: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn merge_key_reimport(
     existing: alien_core::StackResourceState,
     imported: alien_core::StackResourceState,

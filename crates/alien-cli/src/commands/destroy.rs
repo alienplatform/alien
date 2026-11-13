@@ -616,6 +616,8 @@ async fn destroy_tracked_deployment(
     // Deployer secrets were written by the deployer, not Alien, so deletion
     // keeps them. Name each one with the command that deletes it.
     let kept_deployer_secrets = kept_deployer_secrets(current.runtime_metadata.as_ref());
+    // Keys Alien created in the setup stay too: read before teardown removes their state.
+    let kept_keys = alien_cli_common::kept_keys::kept_keys(current.stack_state.as_ref());
 
     let stack_settings: alien_core::StackSettings = deployment
         .stack_settings
@@ -873,6 +875,7 @@ async fn destroy_tracked_deployment(
     drop(steps);
 
     print_kept_deployer_secrets(&kept_deployer_secrets);
+    alien_cli_common::kept_keys::print_kept_keys(&kept_keys);
     println!(
         "{} {} ({})",
         dim_label("Deployment"),

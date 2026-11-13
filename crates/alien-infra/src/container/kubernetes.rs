@@ -1,10 +1,11 @@
+use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
-    delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
+    direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
     pod_template_annotations, projected_env_vars,
     reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
@@ -71,26 +72,18 @@ async fn create_registry_pull_secret(
     .await
 }
 
-/// The container's image when the deployment token must become pull
-/// credentials for it. With a token (every connected deployment), that is
-/// every image. Without one (an air-gapped deployment), images from another
-/// registry, such as the environment's own, are pulled with the access the
-/// cluster already has; an image still pointing at the manager is returned
-/// so the missing token fails loudly.
+/// The container's image when it is served by the manager's registry, whose pull needs the
+/// deployment's token. An image from any other registry is pulled with the access the cluster
+/// already has: no Secret is created and the token is never offered to that registry. With no
+/// token, an image on the manager's registry is still returned so the missing token fails loudly.
 fn image_needing_pull_secret<'a>(
     code: &'a ContainerCode,
-    has_deployment_token: bool,
     manager_url: Option<&str>,
 ) -> Option<&'a str> {
     let ContainerCode::Image { image } = code else {
         return None;
     };
-    if has_deployment_token {
-        return Some(image);
-    }
-    let Some(manager_url) = manager_url else {
-        return Some(image);
-    };
+    let manager_url = manager_url?;
     let manager_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
     let image_host = image.split('/').next().unwrap_or_default();
     (image_host == manager_host).then_some(image.as_str())
@@ -129,7 +122,9 @@ fn deployment_failure_progress(deployment: &Deployment) -> Option<String> {
         .message
         .as_deref()
         .unwrap_or("Could not create replicas");
-    Some(format!("{reason}: {message}"))
+    Some(alien_core::kubernetes_priority_class_failure_hint(
+        &format!("{reason}: {message}"),
+    ))
 }
 
 fn workload_ready(
@@ -215,6 +210,10 @@ pub struct KubernetesContainerController {
     /// Kubernetes' explanation for a workload that cannot create replicas.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) workload_failure: Option<String>,
+    /// PriorityClass name applied to the pod spec last. The chart's class mapping is read at
+    /// pod-spec build time, so a Helm upgrade that changes it is invisible to config diffing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_priority_class: Option<String>,
 }
 
 #[controller]
@@ -367,17 +366,18 @@ impl KubernetesContainerController {
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
-            &config.code,
-            ctx.deployment_config.deployment_token.is_some(),
-            ctx.deployment_config.manager_url.as_deref(),
-        ) {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                })
-            })?;
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &container_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Container,
+        )
+        .await?;
+        let image_pull_secret_name = if let Some(image) =
+            image_needing_pull_secret(&config.code, ctx.deployment_config.manager_url.as_deref())
+        {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -388,7 +388,7 @@ impl KubernetesContainerController {
                 &namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -408,6 +408,13 @@ impl KubernetesContainerController {
             )
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
         self.reconcile_network_policy(config, &container_name, &namespace, ctx)
             .await?;
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
@@ -754,6 +761,16 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
+        if self.is_stateful {
+            self.workload_failure =
+                crate::kubernetes_priority_events::missing_priority_class_progress(
+                    ctx,
+                    config.priority,
+                    namespace,
+                    workload_name,
+                )
+                .await;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -829,6 +846,25 @@ impl KubernetesContainerController {
         {
             let workload_name = &workload_name;
             let namespace = &namespace;
+            crate::kubernetes_runtime_credentials::reconcile(
+                ctx,
+                namespace,
+                workload_name,
+                &config.id,
+                alien_core::commands_types::CommandTargetType::Container,
+            )
+            .await?;
+
+            if let ContainerCode::Image { image } = &config.code {
+                crate::kubernetes_registry::refresh_pull_secret(
+                    ctx,
+                    namespace,
+                    workload_name,
+                    &config.id,
+                    image,
+                )
+                .await?;
+            }
             // Gateway configuration is read from the vault, so its changes are detected
             // here rather than by the synchronous deployment-snapshot check.
             if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
@@ -1322,17 +1358,18 @@ impl KubernetesContainerController {
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
-            &config.code,
-            ctx.deployment_config.deployment_token.is_some(),
-            ctx.deployment_config.manager_url.as_deref(),
-        ) {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                })
-            })?;
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            namespace,
+            workload_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Container,
+        )
+        .await?;
+        let image_pull_secret_name = if let Some(image) =
+            image_needing_pull_secret(&config.code, ctx.deployment_config.manager_url.as_deref())
+        {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -1343,7 +1380,7 @@ impl KubernetesContainerController {
                 namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -1363,6 +1400,13 @@ impl KubernetesContainerController {
             )
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.applied_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
         self.service_port = first_declared_container_port(config);
         self.reconcile_network_policy(config, workload_name, namespace, ctx)
             .await?;
@@ -1548,6 +1592,16 @@ impl KubernetesContainerController {
             });
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
+        if self.is_stateful {
+            self.workload_failure =
+                crate::kubernetes_priority_events::missing_priority_class_progress(
+                    ctx,
+                    config.priority,
+                    namespace,
+                    workload_name,
+                )
+                .await;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -2103,6 +2157,16 @@ impl KubernetesContainerController {
             // Ready checks the vault value alongside the deployment snapshot.
             return Ok(false);
         }
+        let desired_priority_class = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        if desired_priority_class != self.applied_priority_class {
+            return Ok(true);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -2182,6 +2246,7 @@ mod output_tests {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -2251,6 +2316,7 @@ mod output_tests {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -2319,6 +2385,7 @@ impl KubernetesContainerController {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         }
@@ -2423,7 +2490,7 @@ impl KubernetesContainerController {
         let selector_labels = self.build_labels(container_name);
         let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
-        let pod_spec = self
+        let mut pod_spec = self
             .build_pod_spec(
                 config,
                 namespace,
@@ -2433,6 +2500,14 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
+        if ctx.deployment_config.runtime_identity_audience.is_some() {
+            crate::kubernetes_runtime_credentials::mount(
+                &mut pod_spec,
+                &kubernetes_resource_name("", &config.id),
+                container_name,
+            )?;
+        }
+
         let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         let deployment = Deployment {
@@ -2478,7 +2553,7 @@ impl KubernetesContainerController {
         let selector_labels = self.build_labels(container_name);
         let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
-        let pod_spec = self
+        let mut pod_spec = self
             .build_pod_spec(
                 config,
                 namespace,
@@ -2488,6 +2563,14 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
+        if ctx.deployment_config.runtime_identity_audience.is_some() {
+            crate::kubernetes_runtime_credentials::mount(
+                &mut pod_spec,
+                &kubernetes_resource_name("", &config.id),
+                container_name,
+            )?;
+        }
+
         let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         // Build volume claim templates for persistent storage
@@ -2841,8 +2924,16 @@ impl KubernetesContainerController {
                 message,
             })
         })?;
-        let pod_spec = PodSpec {
+        let priority_class_name = alien_core::kubernetes_priority_class_name(config.priority)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        let mut pod_spec = PodSpec {
             node_selector,
+            priority_class_name,
             service_account_name: Some(service_account_name.to_string()),
             // The gateway never calls the Kubernetes API; its configuration is projected.
             automount_service_account_token: gateway.then_some(false),
@@ -2871,6 +2962,8 @@ impl KubernetesContainerController {
             restart_policy: Some("Always".to_string()),
             ..Default::default()
         };
+        // A workload that links a sandbox calls the session broker with a token projected for it.
+        crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
         Ok(pod_spec)
     }
@@ -3042,6 +3135,26 @@ impl KubernetesContainerController {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_images_on_the_manager_registry_get_a_pull_secret() {
+        let image = |name: &str| ContainerCode::Image {
+            image: name.to_string(),
+        };
+        let manager = Some("https://manager.example.test");
+        assert_eq!(
+            image_needing_pull_secret(&image("manager.example.test/app:1"), manager),
+            Some("manager.example.test/app:1")
+        );
+        assert_eq!(
+            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), manager),
+            None
+        );
+        assert_eq!(
+            image_needing_pull_secret(&image("ghcr.io/org/gateway:1"), None),
+            None
+        );
+    }
+
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
 
@@ -3619,6 +3732,7 @@ mod tests {
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             workload_failure: None,
+            applied_priority_class: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -3805,7 +3919,7 @@ mod tests {
                                 .map(|data| data.keys().cloned().collect())
                                 .unwrap_or_default();
                             keys.sort();
-                            keys == ["ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS", "FOR_GATEWAY"]
+                            keys == ["ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS"]
                         })
                     });
                 then.status(201).json_body(serde_json::json!({
@@ -4139,6 +4253,75 @@ mod tests {
             );
         }
         assert!(GATEWAY_READY_DELAY_SECONDS > 30);
+    }
+
+    /// Containers carry the PriorityClass the administrator mapped to their level; a container
+    /// without a level (or with a level nobody mapped) gets a pod spec identical to before.
+    #[tokio::test]
+    async fn pod_spec_carries_the_class_mapped_to_the_declared_priority() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let render = |priority: Option<alien_core::WorkloadPriority>| async move {
+            let mut config = manifest_test_container(&[], false);
+            config.priority = priority;
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let state = secrets_vault_state();
+            let mut ctx = harness.ctx();
+            ctx.state = &state;
+            let pod = manifest_test_controller()
+                .build_deployment(&config, "web", "test-ns", "web-sa", None, None, &ctx)
+                .await
+                .expect("deployment manifest")
+                .spec
+                .expect("deployment spec")
+                .template
+                .spec
+                .expect("pod spec");
+            (
+                pod.priority_class_name.clone(),
+                serde_json::to_string(&pod).unwrap(),
+            )
+        };
+        use alien_core::WorkloadPriority::*;
+        assert_eq!(
+            render(Some(Critical)).await.0.as_deref(),
+            Some("vendor-core")
+        );
+        assert_eq!(render(Some(Low)).await.0.as_deref(), Some("vendor-batch"));
+        // Declared but unmapped, and undeclared: no class, same bytes as a container
+        // that never heard of priorities.
+        let (unmapped, unmapped_json) = render(Some(High)).await;
+        let (none, none_json) = render(None).await;
+        assert_eq!((unmapped, none), (None, None));
+        assert_eq!(unmapped_json, none_json);
+        assert!(!none_json.contains("priorityClassName"));
+    }
+
+    #[test]
+    fn replica_failure_for_a_missing_priority_class_names_the_values_key() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 1},
+            "status": {"observedGeneration": 1, "conditions": [{
+                "type": "ReplicaFailure", "status": "True", "reason": "FailedCreate",
+                "message": "pods \"web-1\" is forbidden: no PriorityClass with name vendor-core was found"}]}
+        }))
+        .unwrap();
+        let message = deployment_failure_progress(&deployment).unwrap();
+        assert!(message.contains("'vendor-core'"), "{message}");
+        assert!(
+            message.contains("runtime.workloadPriority.classes.critical"),
+            "{message}"
+        );
     }
 
     /// Renders the Deployment the controller would submit for a fresh copy of
@@ -4561,6 +4744,34 @@ mod tests {
             templates[0].metadata, templates[2].metadata,
             "a new secret version must change the pod template (rollout)"
         );
+    }
+
+    /// A Helm upgrade that remaps a level changes the pod spec without touching the stack,
+    /// so the controller compares the class it applied with the one now mapped.
+    #[test]
+    fn needs_update_detects_a_changed_priority_class_mapping() {
+        unsafe {
+            std::env::set_var(
+                alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES,
+                r#"{"critical":"vendor-core","low":"vendor-batch"}"#,
+            )
+        };
+        let mut config = manifest_test_container(&[], false);
+        config.priority = Some(alien_core::WorkloadPriority::Critical);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+
+        let mut controller = manifest_test_controller();
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+        controller.applied_priority_class = Some("old-class".to_string());
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+        controller.applied_priority_class = Some("vendor-core".to_string());
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
     }
 
     #[test]

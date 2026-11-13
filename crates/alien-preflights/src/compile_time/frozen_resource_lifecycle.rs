@@ -64,11 +64,11 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
             // AWS-only even where a runtime sandbox controller exists, as on Azure.
             if resource_entry.config.downcast_ref::<Sandbox>().is_some()
                 && resource_entry.lifecycle == ResourceLifecycle::Live
-                && platform != Platform::Aws
+                && !matches!(platform, Platform::Aws | Platform::Kubernetes)
             {
                 errors.push(format!(
                     "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
-                     support; only AWS provisions a sandbox at runtime",
+                     support; only AWS and Kubernetes provision a sandbox at runtime",
                     resource_id,
                     platform.as_str()
                 ));
@@ -151,10 +151,25 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     resource_id
                 ));
             }
-            if storage.is_none() && platform != Platform::Aws {
+            // AWS, GCP and Azure apply the key to these resources. The other platforms never
+            // read `encryptionKey`, so the data would be stored without the customer's key.
+            // This holds for every setup method, not only a direct one.
+            if storage.is_none()
+                && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+            {
+                let kind = if postgres.is_some() {
+                    "Postgres"
+                } else {
+                    "Container persistent volume"
+                };
                 errors.push(format!(
-                    "Resource '{}' native encryptionKey is supported only on AWS",
-                    resource_id
+                    "{} '{}' uses encryptionKey, which {} does not apply to it yet; only AWS, \
+                     GCP and Azure do. Remove encryptionKey from '{}' to deploy on {}",
+                    kind,
+                    resource_id,
+                    platform.as_str(),
+                    resource_id,
+                    platform.as_str()
                 ));
             }
             if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
@@ -493,14 +508,26 @@ mod tests {
 
     /// On Azure or GCP a remote grant names a parent that must exist when the package applies,
     /// which only the package that creates the sandbox can do, so only AWS may declare one Live.
+    /// Kubernetes has no remote grant: the Operator builds the pods itself, so it may as well.
     #[tokio::test]
-    async fn a_live_sandbox_is_refused_on_every_platform_but_aws() {
-        for platform in [
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
+    async fn a_live_sandbox_is_accepted_on_kubernetes() {
+        let result = FrozenResourceLifecycleCheck
+            .check(
+                &sandbox_stack(ResourceLifecycle::Live),
+                Platform::Kubernetes,
+            )
+            .await
+            .expect("the check runs");
+        assert!(
+            !result.errors.iter().any(|e| e.contains("Live lifecycle")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_sandbox_is_refused_where_a_remote_grant_needs_a_parent() {
+        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
             let result = FrozenResourceLifecycleCheck
                 .check(&sandbox_stack(ResourceLifecycle::Live), platform)
                 .await
@@ -513,7 +540,9 @@ mod tests {
             let message = result
                 .errors
                 .iter()
-                .find(|error| error.contains("only AWS provisions a sandbox at runtime"))
+                .find(|error| {
+                    error.contains("only AWS and Kubernetes provision a sandbox at runtime")
+                })
                 .unwrap_or_else(|| {
                     panic!(
                         "the refusal must name why, on {platform:?}: {:?}",
@@ -879,6 +908,103 @@ mod tests {
         }
     }
 
+    fn stack_with_encrypted_consumer(consumer: alien_core::Resource, id: &str) -> Stack {
+        let mut stack = stack_with_encrypted_storage(ResourceLifecycle::Frozen);
+        stack.resources.shift_remove("customer-data");
+        stack.resources.insert(
+            id.to_string(),
+            ResourceEntry {
+                config: consumer,
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    fn encrypted_postgres() -> alien_core::Resource {
+        let mut postgres = Postgres::new("database".to_string()).build();
+        postgres.encryption_key = Some(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"));
+        alien_core::Resource::new(postgres)
+    }
+
+    fn encrypted_volume_container() -> alien_core::Resource {
+        alien_core::Resource::new(
+            Container::new("db".to_string())
+                .cluster("compute".to_string())
+                .code(ContainerCode::Image {
+                    image: "postgres:16".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "1".to_string(),
+                    desired: "2".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "2Gi".to_string(),
+                    desired: "4Gi".to_string(),
+                })
+                .stateful(true)
+                .replicas(1)
+                .persistent_storage(alien_core::PersistentStorage {
+                    encryption_key: Some(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key")),
+                    size: "100Gi".to_string(),
+                    mount_path: "/data".to_string(),
+                    backups: Default::default(),
+                })
+                .permissions("database".to_string())
+                .build(),
+        )
+    }
+
+    #[tokio::test]
+    async fn key_consumers_without_native_encryption_are_refused_by_name_and_cloud() {
+        for platform in [Platform::Kubernetes, Platform::Local] {
+            for (consumer, id, kind) in [
+                (encrypted_postgres(), "database", "Postgres"),
+                (
+                    encrypted_volume_container(),
+                    "db",
+                    "Container persistent volume",
+                ),
+            ] {
+                let result = FrozenResourceLifecycleCheck
+                    .check(&stack_with_encrypted_consumer(consumer, id), platform)
+                    .await
+                    .unwrap();
+                assert!(!result.success, "{kind} on {}", platform.as_str());
+                let expected = format!(
+                    "{kind} '{id}' uses encryptionKey, which {} does not apply to it yet",
+                    platform.as_str()
+                );
+                assert!(
+                    result.errors.iter().any(|error| error.contains(&expected)),
+                    "{:?}",
+                    result.errors
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn key_consumers_are_accepted_on_aws_gcp_and_azure() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for (consumer, id) in [
+                (encrypted_postgres(), "database"),
+                (encrypted_volume_container(), "db"),
+            ] {
+                let result = FrozenResourceLifecycleCheck
+                    .check(&stack_with_encrypted_consumer(consumer, id), platform)
+                    .await
+                    .unwrap();
+                assert!(result.success, "{:?}", result.errors);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn encrypted_storage_must_be_frozen() {
         let result = FrozenResourceLifecycleCheck
@@ -939,5 +1065,50 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("must contain exactly one Storage resource")));
+    }
+
+    fn stack_with_encrypted_postgres() -> Stack {
+        let mut stack = stack_with_encrypted_storage(ResourceLifecycle::Frozen);
+        stack.resources.shift_remove("customer-data");
+        stack.resources.insert(
+            "db".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Postgres::new("db".to_string())
+                        .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                        .build(),
+                ),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    /// The customer key reaches Postgres natively on AWS, GCP and Azure, and nowhere else.
+    #[tokio::test]
+    async fn encrypted_postgres_is_accepted_on_the_clouds_that_implement_it() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack_with_encrypted_postgres(), platform)
+                .await
+                .unwrap();
+            assert!(result.success, "{platform:?}: {:?}", result.errors);
+        }
+        for platform in [Platform::Kubernetes, Platform::Local] {
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack_with_encrypted_postgres(), platform)
+                .await
+                .unwrap();
+            assert!(!result.success, "{platform:?} must refuse a native key");
+            assert!(result
+                .errors
+                .iter()
+                .any(|error| error.contains("only AWS, GCP and Azure do")));
+        }
     }
 }

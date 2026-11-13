@@ -155,6 +155,7 @@ pub enum DeploymentsCmd {
     SetDomains {
         /// Deployment ID or reference
         id: String,
+        /// Resource that serves the endpoints (its ID in the stack)
         #[arg(long)]
         resource: String,
         /// Endpoint name and hostname (repeat for each endpoint)
@@ -1946,6 +1947,16 @@ async fn resolve_deployment_reference(
 // Manager API operations (unified for all modes)
 // ---------------------------------------------------------------------------
 
+/// The Operator column: its version, and a marker when the manager's charts
+/// would upgrade it.
+fn operator_cell(version: Option<&str>, behind_target: Option<bool>) -> String {
+    match (version, behind_target) {
+        (None, _) => "—".to_string(),
+        (Some(version), Some(true)) => format!("{version} (behind target)"),
+        (Some(version), _) => version.to_string(),
+    }
+}
+
 async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -> Result<()> {
     let response = client
         .list_deployments()
@@ -1974,6 +1985,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
         "ID",
         "Status",
         "Platform",
+        "Operator",
         "Current release",
         "Desired release",
         "Updated",
@@ -1984,6 +1996,11 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
             deployment.id.clone().into(),
             status_cell(&deployment.status),
             deployment.platform.to_string().into(),
+            operator_cell(
+                deployment.operator_version.as_deref(),
+                deployment.operator_behind_target,
+            )
+            .into(),
             deployment
                 .current_release_id
                 .clone()
@@ -2167,6 +2184,13 @@ async fn get_deployment_task(
     println!("{} {}", dim_label("ID"), deployment.id);
     println!("{} {}", dim_label("Status"), deployment.status);
     println!("{} {}", dim_label("Platform"), deployment.platform);
+    if let Some(version) = deployment.operator_version.as_deref() {
+        println!(
+            "{} {}",
+            dim_label("Operator"),
+            operator_cell(Some(version), deployment.operator_behind_target)
+        );
+    }
     println!("{} {}", dim_label("Group"), deployment.deployment_group_id);
     println!("{} {}", dim_label("Created"), deployment.created_at);
 
@@ -2559,6 +2583,13 @@ async fn delete_deployment_task(
             message: "Failed to deserialize runtime_metadata".to_string(),
         })?;
     let kept_secrets = kept_deployer_secrets(runtime_metadata.as_ref());
+    let kept_keys = alien_cli_common::kept_keys::kept_keys(
+        deployment
+            .stack_state
+            .as_ref()
+            .and_then(|state| serde_json::from_value::<alien_core::StackState>(state.clone()).ok())
+            .as_ref(),
+    );
 
     let action = match request {
         DeleteRequest::Cleanup { yes, erase_data } => {
@@ -2638,6 +2669,7 @@ async fn delete_deployment_task(
         | DeleteDeploymentAction::Retain
         | DeleteDeploymentAction::Erase => {
             print_kept_deployer_secrets(&kept_secrets);
+            alien_cli_common::kept_keys::print_kept_keys(&kept_keys);
             println!(
                 "{} {}",
                 dim_label("Next"),
@@ -3969,6 +4001,7 @@ async fn create_deployment_task(
         deployment_group_external_id: None,
         installation: None,
         base_platform: None,
+        setup_capabilities: Vec::new(),
         setup_item: None,
         name: alien_platform_api::types::NewDeploymentRequestName::try_from(name.to_string())
             .into_alien_error()
@@ -4414,6 +4447,22 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
     }
 
     Some((key, value, patterns))
+}
+
+#[cfg(test)]
+mod operator_cell_tests {
+    use super::operator_cell;
+
+    #[test]
+    fn marks_an_operator_that_is_behind_the_target() {
+        assert_eq!(operator_cell(None, None), "—");
+        assert_eq!(operator_cell(Some("3.3.59"), Some(false)), "3.3.59");
+        assert_eq!(operator_cell(Some("3.3.59"), None), "3.3.59");
+        assert_eq!(
+            operator_cell(Some("3.3.40"), Some(true)),
+            "3.3.40 (behind target)"
+        );
+    }
 }
 
 #[cfg(test)]

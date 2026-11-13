@@ -7,6 +7,10 @@
 
 mod setup_update;
 
+/// Identifies this binary and its version to the platform, as `alien-cli/<version>` does.
+pub(crate) const DEPLOY_CLI_USER_AGENT: &str =
+    concat!("alien-deploy-cli/", env!("CARGO_PKG_VERSION"));
+
 use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
@@ -3130,6 +3134,238 @@ platform = "aws"
         initialize.assert_async().await;
     }
 
+    /// The rendered install holds the one-use code, and no deployment token
+    /// reaches the release Secret, its values or the Operator.
+    #[test]
+    fn kubernetes_install_carries_an_enrollment_code_and_no_token() {
+        let stack = Stack::new("orders".to_string()).build();
+        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
+            .expect("chart renders");
+        let values = write_kubernetes_helm_values(
+            chart.path(),
+            "https://manager.example.test",
+            Some(&OperatorEnrollment {
+                code: "ax_enroll_fixture",
+                audience: "https://manager.example.test",
+            }),
+            "dep_fixture",
+            "orders-eu",
+            "korders",
+            &StackSettings::default(),
+            "ghcr.io/example/operator:1.0.0",
+            None,
+            None,
+        )
+        .expect("values are written");
+        let output = std::process::Command::new("helm")
+            .arg("template")
+            .arg("orders")
+            .arg(chart.path())
+            .arg("-f")
+            .arg(&values)
+            .output()
+            .expect("helm runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let documents: Vec<serde_yaml::Value> =
+            serde_yaml::Deserializer::from_str(&String::from_utf8(output.stdout).unwrap())
+                .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+                .filter(|document| !document.is_null())
+                .collect();
+        let of_kind = |kind: &str| {
+            documents
+                .iter()
+                .filter(|document| document["kind"].as_str() == Some(kind))
+                .collect::<Vec<_>>()
+        };
+        // The release Secret holds the code and no token value.
+        let release = of_kind("Secret")
+            .into_iter()
+            .find(|secret| secret["stringData"]["enrollment-code"].is_string())
+            .expect("release Secret with the code");
+        assert_eq!(
+            release["stringData"]["enrollment-code"].as_str(),
+            Some("ax_enroll_fixture")
+        );
+        assert!(release["stringData"]["sync-token"]
+            .as_str()
+            .is_none_or(str::is_empty));
+        // The Operator reads the code from that Secret, and no token file.
+        let operator = of_kind("Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let pod = &operator["spec"]["template"]["spec"];
+        let env: Vec<(&str, Option<&str>)> = pod["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|variable| {
+                (
+                    variable["name"].as_str().unwrap(),
+                    variable["value"].as_str(),
+                )
+            })
+            .collect();
+        assert!(env.contains(&(
+            "OPERATOR_ENROLLMENT_CODE_FILE",
+            Some("/etc/deployment/secrets/enrollment-code")
+        )));
+        assert!(env.iter().all(|(name, _)| *name != "SYNC_TOKEN_FILE"));
+        let volume = pod["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|volume| volume["name"].as_str() == Some("management-token"))
+            .expect("credential volume");
+        assert_eq!(
+            volume["secret"]["secretName"].as_str(),
+            release["metadata"]["name"].as_str()
+        );
+        assert_eq!(
+            volume["secret"]["items"][0]["key"].as_str(),
+            Some("enrollment-code")
+        );
+        // The values file holds no token.
+        let written: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&values).unwrap()).unwrap();
+        assert!(written["management"]["token"]
+            .as_str()
+            .is_none_or(str::is_empty));
+        assert_eq!(
+            written["management"]["enrollmentCode"].as_str(),
+            Some("ax_enroll_fixture")
+        );
+    }
+
+    /// A manager mock for a Kubernetes install: the deployment, its release
+    /// stack, and an enrollment-code answer. The returned directory holds a
+    /// fake `helm` that records the values file it was given.
+    async fn kubernetes_install_with_code_answer(
+        status: u16,
+        body: serde_json::Value,
+    ) -> (Result<()>, Option<serde_json::Value>, usize) {
+        use std::os::unix::fs::PermissionsExt;
+        let server = MockServer::start_async().await;
+        let mut deployment = installed_deployment("running", Some("rel_k8s"));
+        deployment["platform"] = serde_json::json!("kubernetes");
+        deployment["stackState"] = serde_json::json!({
+            "platform": "kubernetes",
+            "resourcePrefix": "korders",
+            "resources": {}
+        });
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(deployment);
+            })
+            .await;
+        let mut release = mock_release("rel_k8s");
+        release["stack"]["kubernetes"] = release["stack"]["aws"].take();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_k8s");
+                then.status(200).json_body(release);
+            })
+            .await;
+        let code = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_demo/enrollment-code");
+                then.status(status).json_body(body);
+            })
+            .await;
+
+        let out = tempfile::tempdir().unwrap();
+        let helm = out.path().join("helm");
+        std::fs::write(
+            &helm,
+            format!(
+                "#!/bin/sh\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-f\" ]; then cp \"$a\" {out}/values.json; fi\n  prev=\"$a\"\ndone\necho \"$@\" > {out}/args\n",
+                out = out.path().display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helm, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let client = create_manager_client("ax_dg_fixture", &server.base_url()).unwrap();
+        let args =
+            UpArgs::parse_from(["deploy", "--name", "orders-eu", "--platform", "kubernetes"]);
+        let result = run_kubernetes_pull_model(
+            helm.to_str().unwrap(),
+            &client,
+            &args,
+            &server.base_url(),
+            "dep_demo",
+            "orders-eu",
+            &StackSettings::default(),
+            None,
+        )
+        .await;
+        let values = std::fs::read_to_string(out.path().join("values.json"))
+            .ok()
+            .map(|contents| serde_json::from_str(&contents).unwrap());
+        (result, values, code.hits_async().await)
+    }
+
+    /// Running `deploy` again with a group key, after the Operator enrolled,
+    /// upgrades the release without a new code and keeps its stored state.
+    #[tokio::test]
+    async fn kubernetes_deploy_of_an_enrolled_operator_upgrades_without_a_code() {
+        for status in [403, 409] {
+            let (result, values, hits) = kubernetes_install_with_code_answer(
+                status,
+                serde_json::json!({
+                    "code": "ENROLLMENT_KEY_EXISTS",
+                    "message": "Deployment 'dep_demo' already has an operator key",
+                    "retryable": false, "internal": false
+                }),
+            )
+            .await;
+            result.unwrap_or_else(|error| panic!("{status}: {error:?}"));
+            assert_eq!(hits, 1);
+            let values = values.expect("helm ran with a values file");
+            assert_eq!(values["management"]["enrollmentCode"], "");
+            assert_eq!(values["management"]["audience"], "");
+            // The chart keeps the installed encryption key when none is given.
+            assert_eq!(values["runtime"]["encryption"]["key"], "");
+            assert_eq!(values["management"]["deploymentId"], "dep_demo");
+        }
+    }
+
+    /// Any other failure to get a code is still a failure, and Helm never runs.
+    #[tokio::test]
+    async fn kubernetes_deploy_still_fails_when_the_code_request_fails() {
+        for (status, body) in [
+            (
+                500,
+                serde_json::json!({
+                    "code": "INTERNAL_ERROR", "message": "boom",
+                    "retryable": true, "internal": true
+                }),
+            ),
+            (
+                409,
+                serde_json::json!({
+                    "code": "SOMETHING_ELSE", "message": "other conflict",
+                    "retryable": false, "internal": false
+                }),
+            ),
+        ] {
+            let (result, values, _) = kubernetes_install_with_code_answer(status, body).await;
+            assert!(result.is_err(), "{status} must fail");
+            assert!(values.is_none(), "{status}: helm must not run");
+        }
+    }
+
     /// Running `deploy` again against an installed release must not ask Helm to
     /// change the runtime encryption key: the chart refuses that, since it would
     /// make the stored state unreadable. The key is left empty so the chart keeps
@@ -3143,7 +3379,7 @@ platform = "aws"
             let values = write_kubernetes_helm_values(
                 chart.path(),
                 "https://manager.example.test",
-                "ax_dep_fixture",
+                None,
                 "dep_fixture",
                 "orders-eu",
                 "korders",
@@ -5859,7 +6095,7 @@ async fn fetch_deployment_info(
                     message: "Invalid token format".to_string(),
                 })?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
         reqwest::Client::builder()
             .default_headers(headers)
@@ -6282,7 +6518,7 @@ async fn discover_manager_install_context(
                     message: "Invalid token format".to_string(),
                 })?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
         reqwest::Client::builder()
             .default_headers(headers)
@@ -6380,7 +6616,7 @@ pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client>
                 message: "Invalid token format".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+    headers.insert(USER_AGENT, HeaderValue::from_static(DEPLOY_CLI_USER_AGENT));
 
     reqwest::Client::builder()
         .default_headers(headers)
@@ -6941,10 +7177,10 @@ async fn run_pull_model(
     match platform {
         Platform::Kubernetes => {
             run_kubernetes_pull_model(
+                "helm",
                 client,
                 args,
                 manager_url,
-                token,
                 deployment_id,
                 deployment_name,
                 stack_settings,
@@ -7207,10 +7443,10 @@ async fn run_operator_foreground(
 }
 
 async fn run_kubernetes_pull_model(
+    helm: &str,
     client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
-    token: &str,
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
@@ -7227,11 +7463,43 @@ async fn run_kubernetes_pull_model(
         .clone()
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
 
+    // The Helm values carry a one-hour, one-use code, never a deployment
+    // token. The Operator trades it for its own key on first start. Once it has
+    // a key, a group key is refused a code, and the upgrade runs without one:
+    // the Operator keeps using the key it stored.
+    let enrollment = match client
+        .issue_enrollment_code()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .await
+    {
+        Ok(response) => Some(response.into_inner()),
+        Err(error) if error.code == "ENROLLMENT_KEY_EXISTS" => {
+            output::info(
+                "The Operator is already enrolled; upgrading it without a new enrollment code.",
+            );
+            None
+        }
+        Err(error) => {
+            return Err(error.context(ErrorData::ConfigurationError {
+                message: "Failed to get an Operator enrollment code from the manager".to_string(),
+            }))
+        }
+    };
+
     let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
     let values_file = write_kubernetes_helm_values(
         chart_dir.path(),
         manager_url,
-        token,
+        enrollment
+            .as_ref()
+            .map(|enrollment| OperatorEnrollment {
+                code: &enrollment.code,
+                audience: &enrollment.manager_audience,
+            })
+            .as_ref(),
         deployment_id,
         deployment_name,
         &resource_prefix,
@@ -7242,6 +7510,7 @@ async fn run_kubernetes_pull_model(
     )?;
 
     helm_upgrade_install(
+        helm,
         chart_dir.path(),
         &values_file,
         &release,
@@ -7393,10 +7662,16 @@ fn render_kubernetes_helm_chart(
     Ok(chart_dir)
 }
 
+/// What the Operator needs to enroll with the manager.
+struct OperatorEnrollment<'a> {
+    code: &'a str,
+    audience: &'a str,
+}
+
 fn write_kubernetes_helm_values(
     chart_dir: &Path,
     manager_url: &str,
-    token: &str,
+    enrollment: Option<&OperatorEnrollment<'_>>,
     deployment_id: &str,
     deployment_name: &str,
     resource_prefix: &str,
@@ -7411,7 +7686,8 @@ fn write_kubernetes_helm_values(
     helm_settings.deployment_model = DeploymentModel::Pull;
     let values = serde_json::json!({
         "management": {
-            "token": token,
+            "enrollmentCode": enrollment.map_or("", |enrollment| enrollment.code),
+            "audience": enrollment.map_or("", |enrollment| enrollment.audience),
             "name": deployment_name,
             "url": manager_url,
             "deploymentId": deployment_id,
@@ -7455,6 +7731,7 @@ fn write_kubernetes_helm_values(
 }
 
 async fn helm_upgrade_install(
+    helm: &str,
     chart_dir: &Path,
     values_file: &Path,
     release: &str,
@@ -7462,7 +7739,7 @@ async fn helm_upgrade_install(
     kubeconfig: Option<&str>,
     kube_context: Option<&str>,
 ) -> Result<()> {
-    let mut cmd = tokio::process::Command::new("helm");
+    let mut cmd = tokio::process::Command::new(helm);
     cmd.arg("upgrade")
         .arg("--install")
         .arg(release)
@@ -8185,6 +8462,27 @@ async fn push_initial_setup_targeted(
             has_runtime_metadata = state.runtime_metadata.is_some(),
             "push_initial_setup: state after re-fetch (before step loop)"
         );
+
+        // With the admin's setup credentials in hand, ask the cloud whether each model the app
+        // declares can be called. The answer rides in the runtime metadata (checkpointed with the
+        // setup steps); the AI controller reports it. A refusal never fails the setup.
+        if let Some(stack) = state.target_release.as_ref().map(|r| r.stack.clone()) {
+            let checks =
+                alien_deployment::check_declared_ai_models(
+                &stack,
+                platform,
+                &client_config,
+                &config.external_bindings,
+            )
+            .await;
+            // Replace the earlier answers: a model no longer declared must not keep one.
+            if !checks.is_empty() || state.runtime_metadata.is_some() {
+                state
+                    .runtime_metadata
+                    .get_or_insert_with(Default::default)
+                    .ai_access_checks = checks;
+            }
+        }
 
         // Run the shared step loop with per-step reconciliation via the manager API
         let transport = SetupRevisionTransport {

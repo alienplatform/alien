@@ -15,14 +15,15 @@ use alien_aws_clients::{
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
     eks::{EksApi, EksClient},
+    elasticache::{ElastiCacheApi, ElastiCacheClient},
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
     kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
     lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient},
-    elasticache::{ElastiCacheApi, ElastiCacheClient},
     rds::{RdsApi, RdsClient},
+    resourcegroupstagging::{ResourceGroupsTaggingApi, ResourceGroupsTaggingClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
     service_quotas::{ServiceQuotasApi, ServiceQuotasClient},
@@ -43,8 +44,6 @@ use alien_azure_clients::{
     disks::{AzureManagedDisksClient, ManagedDisksApi},
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
-    managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
-    monitor::{AzureMonitorClient, MonitorApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
         AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
@@ -54,6 +53,8 @@ use alien_azure_clients::{
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
     managed_clusters::{AzureManagedClustersClient, ManagedClustersApi},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
+    managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
+    monitor::{AzureMonitorClient, MonitorApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
     private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
     resource_skus::{AzureResourceSkusClient, ResourceSkusApi},
@@ -69,16 +70,13 @@ use alien_azure_clients::{
     tables::{AzureTableManagementClient, TableManagementApi},
     AzureClientConfig, AzureTokenCache,
 };
+use alien_client_core::runtime_credentials::RuntimeCapability;
 use alien_error::Context;
 use alien_gcp_clients::{
     agent_platform::{AgentPlatformApi, AgentPlatformClient},
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
-    monitoring::{MonitoringApi, MonitoringClient},
-    memorystore::{
-        MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
-    },
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
@@ -87,7 +85,12 @@ use alien_gcp_clients::{
     firestore::{FirestoreApi, FirestoreClient},
     gcs::{GcsApi, GcsClient},
     iam::{IamApi as GcpIamApi, IamClient as GcpIamClient},
+    memorystore::{
+        MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi,
+        ServiceConnectionPolicyClient,
+    },
     model_garden::{ModelGardenApi, ModelGardenClient},
+    monitoring::{MonitoringApi, MonitoringClient},
     pubsub::{PubSubApi, PubSubClient},
     resource_manager::{ResourceManagerApi, ResourceManagerClient},
     secret_manager::{SecretManagerApi, SecretManagerClient},
@@ -106,6 +109,42 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
 
+/// Supplies transient source-registry authority without serializing it into
+/// deployment configuration or controller state.
+#[async_trait::async_trait]
+pub trait RuntimeRegistryCredentialProvider: Send + Sync {
+    /// Publish only after the workload credential file or Secret write succeeds.
+    async fn runtime_credential_published(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+        _credential: RuntimeCapability,
+    ) -> Result<()> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential publication is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+
+    async fn registry_pull_credential(&self, deployment_id: &str) -> Result<RuntimeCapability>;
+
+    /// Issue one exact-purpose leaf for a workload; never return parent authority.
+    async fn runtime_credential(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+    ) -> Result<RuntimeCapability> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential issuance is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+}
+
 /// Trait that provides methods to get platform service clients.
 /// This enables dependency injection for testing by allowing mock clients to be provided.
 ///
@@ -114,6 +153,54 @@ use mockall::automock;
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait PlatformServiceProvider: Send + Sync {
+    /// Publish only after the workload credential file or Secret write succeeds.
+    async fn runtime_credential_published(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+        _credential: RuntimeCapability,
+    ) -> Result<()> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential publication is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+
+    async fn runtime_credential(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+    ) -> Result<RuntimeCapability> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential issuance is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+
+    async fn runtime_registry_pull_credential(
+        &self,
+        _deployment_id: &str,
+    ) -> Result<Option<RuntimeCapability>> {
+        Ok(None)
+    }
+
+    /// The digest of `repository:reference` in the registry at `registry_origin`,
+    /// read with the runtime registry pull token.
+    async fn resolve_registry_manifest_digest(
+        &self,
+        registry_origin: &str,
+        repository: &str,
+        reference: &str,
+        token: &str,
+    ) -> Result<String> {
+        crate::registry_digest::fetch_manifest_digest(registry_origin, repository, reference, token)
+            .await
+    }
+
     /// Setup authority available to this runtime without a separate setup handoff.
     fn runtime_setup_authority(
         &self,
@@ -193,6 +280,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
     async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
+    async fn get_aws_resource_groups_tagging_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>>;
     async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>>;
 
     // GCP clients
@@ -222,8 +313,12 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>>;
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>>;
-    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>>;
-    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>>;
+    fn get_gcp_memorystore_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn MemorystoreApi>>;
+    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig)
+        -> Result<Arc<dyn MonitoringApi>>;
     fn get_gcp_service_connection_policy_client(
         &self,
         config: &GcpClientConfig,
@@ -530,10 +625,19 @@ pub trait PlatformServiceProvider: Send + Sync {
 ///
 /// For cloud platforms, creates HTTP API clients on demand.
 /// For local platform, stores reference to the local bindings provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultPlatformServiceProvider {
+    runtime_registry_credentials: Option<Arc<dyn RuntimeRegistryCredentialProvider>>,
     #[cfg(feature = "local")]
     local_bindings: Option<Arc<alien_local::LocalBindingsProvider>>,
+}
+
+impl std::fmt::Debug for DefaultPlatformServiceProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DefaultPlatformServiceProvider")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for DefaultPlatformServiceProvider {
@@ -541,11 +645,20 @@ impl Default for DefaultPlatformServiceProvider {
         Self {
             #[cfg(feature = "local")]
             local_bindings: None,
+            runtime_registry_credentials: None,
         }
     }
 }
 
 impl DefaultPlatformServiceProvider {
+    pub fn with_runtime_registry_credentials(
+        mut self,
+        provider: Arc<dyn RuntimeRegistryCredentialProvider>,
+    ) -> Self {
+        self.runtime_registry_credentials = Some(provider);
+        self
+    }
+
     /// Creates a new service provider with local bindings provider.
     ///
     /// This is used for the local platform to enable controllers to access
@@ -554,12 +667,57 @@ impl DefaultPlatformServiceProvider {
     pub fn with_local_bindings(local_bindings: Arc<alien_local::LocalBindingsProvider>) -> Self {
         Self {
             local_bindings: Some(local_bindings),
+            runtime_registry_credentials: None,
         }
     }
 }
 
 #[async_trait::async_trait]
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
+    async fn runtime_credential_published(
+        &self,
+        deployment_id: &str,
+        purpose: serde_json::Value,
+        credential: RuntimeCapability,
+    ) -> Result<()> {
+        let provider = self.runtime_registry_credentials.as_ref().ok_or_else(|| {
+            alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential publication is unavailable".into(),
+                resource_id: None,
+            })
+        })?;
+        provider
+            .runtime_credential_published(deployment_id, purpose, credential)
+            .await
+    }
+
+    async fn runtime_credential(
+        &self,
+        deployment_id: &str,
+        purpose: serde_json::Value,
+    ) -> Result<RuntimeCapability> {
+        let provider = self.runtime_registry_credentials.as_ref().ok_or_else(|| {
+            alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential issuance is unavailable".into(),
+                resource_id: None,
+            })
+        })?;
+        provider.runtime_credential(deployment_id, purpose).await
+    }
+
+    async fn runtime_registry_pull_credential(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Option<RuntimeCapability>> {
+        match &self.runtime_registry_credentials {
+            Some(provider) => provider
+                .registry_pull_credential(deployment_id)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
     fn runtime_setup_authority(
         &self,
         platform: alien_core::Platform,
@@ -664,6 +822,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(KmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_resource_groups_tagging_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ResourceGroupsTaggingClient::new(
             reqwest::Client::new(),
             credentials,
         )))
@@ -1118,14 +1292,20 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
-    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>> {
+    fn get_gcp_memorystore_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn MemorystoreApi>> {
         Ok(Arc::new(MemorystoreClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))
     }
 
-    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>> {
+    fn get_gcp_monitoring_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn MonitoringApi>> {
         Ok(Arc::new(MonitoringClient::new(
             reqwest::Client::new(),
             config.clone(),

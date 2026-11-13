@@ -1,5 +1,5 @@
 use crate::{
-    block::{attr, nested, resource_block},
+    block::{attr, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{downcast, labels, required_label, service_account_member_for_label},
     expr,
@@ -8,7 +8,7 @@ use alien_core::{
     import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_error::AlienError;
-use alien_permissions::key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY};
+use alien_permissions::key_access::{cryptography_service_accounts, key_access_plan};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -18,6 +18,11 @@ impl TfEmitter for GcpKeyEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let key = downcast::<Key>(ctx, Key::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let plan = key_access_plan(ctx.stack, ctx.resource_id).map_err(|error| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!("Failed to work out the key's access plan: {error}"),
+            })
+        })?;
         let ring_label = format!("{label}_ring");
         let ring_suffix_label = format!("{label}_ring_suffix");
         let mut fragment = TfFragment::default()
@@ -67,7 +72,7 @@ impl TfEmitter for GcpKeyEmitter {
             ));
 
         if let Some(access_label) = remote_bindings_label(ctx) {
-            let role = gcp_remote_role()?;
+            let role = gcp_remote_role(&plan)?;
             fragment.resource_blocks.push(resource_block(
                 "google_kms_crypto_key_iam_member",
                 &format!("{label}_remote_cryptography"),
@@ -99,8 +104,65 @@ impl TfEmitter for GcpKeyEmitter {
                         "crypto_key_id",
                         expr::traversal(["google_kms_crypto_key", label, "id"]),
                     ),
-                    attr("role", Expression::String(gcp_remote_role()?)),
+                    attr("role", Expression::String(gcp_remote_role(&plan)?)),
                     attr("member", service_account_member_for_label(account_label)),
+                ],
+            ));
+        }
+
+        // A Container volume encrypted with this key is created at run time by Compute Engine,
+        // which wraps the disk's data key as its own service agent. Setup grants that agent the
+        // key because the runtime never edits key policy.
+        if volumes_use_key(ctx) {
+            // The agent is `service-<project number>@compute-system.iam.gserviceaccount.com`.
+            // `google_project_service_identity` cannot name it: for Compute it returns a null
+            // email, which `terraform validate` accepts and only `apply` rejects. It still
+            // creates the agent, so the grant waits for it: a project that never used Compute
+            // has no agent until then, and Google rejects a grant to a missing account.
+            let agent_label = format!("{label}_compute_agent");
+            fragment.resource_blocks.push(resource_block(
+                "google_project_service_identity",
+                &agent_label,
+                [
+                    // Service agents exist only in the google-beta provider.
+                    attr("provider", expr::raw("google-beta")),
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "service",
+                        Expression::String("compute.googleapis.com".to_string()),
+                    ),
+                ],
+            ));
+            let project_label = format!("{label}_project");
+            fragment.data_blocks.push(data_block(
+                "google_project",
+                &project_label,
+                [attr("project_id", expr::raw("var.gcp_project"))],
+            ));
+            fragment.resource_blocks.push(resource_block(
+                "google_kms_crypto_key_iam_member",
+                &format!("{label}_compute_disks"),
+                [
+                    attr(
+                        "crypto_key_id",
+                        expr::traversal(["google_kms_crypto_key", label, "id"]),
+                    ),
+                    attr(
+                        "role",
+                        Expression::String(
+                            "roles/cloudkms.cryptoKeyEncrypterDecrypter".to_string(),
+                        ),
+                    ),
+                    attr(
+                        "member",
+                        expr::template(format!(
+                            "serviceAccount:service-${{data.google_project.{project_label}.number}}@compute-system.iam.gserviceaccount.com"
+                        )),
+                    ),
+                    attr(
+                        "depends_on",
+                        expr::raw(format!("[google_project_service_identity.{agent_label}]")),
+                    ),
                 ],
             ));
         }
@@ -156,29 +218,14 @@ impl TfEmitter for GcpKeyEmitter {
     }
 }
 
-fn gcp_remote_role() -> Result<String> {
-    let permission_set =
-        alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY).ok_or_else(|| {
+fn gcp_remote_role(plan: &alien_permissions::key_access::KeyAccessPlan) -> Result<String> {
+    alien_permissions::key_access::gcp_key_roles(plan)
+        .map(|roles| roles.cryptography)
+        .map_err(|error| {
             AlienError::new(ErrorData::GenericError {
-                message: "key/remote-cryptography permission set is not registered".to_string(),
+                message: format!("key/remote-cryptography has no GCP role: {error}"),
             })
-        })?;
-    let roles = permission_set
-        .platforms
-        .gcp
-        .as_ref()
-        .and_then(|entries| entries.first())
-        .and_then(|entry| entry.grant.predefined_roles.as_ref())
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::GenericError {
-                message: "key/remote-cryptography has no GCP predefined role".to_string(),
-            })
-        })?;
-    roles.first().cloned().ok_or_else(|| {
-        AlienError::new(ErrorData::GenericError {
-            message: "key/remote-cryptography has an empty GCP role list".to_string(),
         })
-    })
 }
 
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
@@ -209,4 +256,16 @@ fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
                 .flatten()
         })
     })?
+}
+
+/// Whether a Container volume in the stack is encrypted with this key.
+fn volumes_use_key(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::Container>()
+            .and_then(|container| container.persistent_storage.as_ref())
+            .and_then(|storage| storage.encryption_key.as_ref())
+            .is_some_and(|key| key.id() == ctx.resource_id)
+    })
 }

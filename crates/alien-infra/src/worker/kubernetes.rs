@@ -1,9 +1,10 @@
+use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    delete_environment_secret, kubernetes_cleanup_resource_labels, linked_bindings,
-    reconcile_environment_secret, ResourceControllerContext,
+    kubernetes_cleanup_resource_labels, linked_bindings, reconcile_environment_secret,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -143,15 +144,28 @@ impl KubernetesWorkerController {
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
 
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &function_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Worker,
+        )
+        .await?;
+
         // Create a Docker config Secret so kubelet can authenticate when pulling
         // from the manager's registry. Required for image-based deployments.
-        let image_pull_secret_name = if let WorkerCode::Image { image } = &config.code {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        let proxy_image = match &config.code {
+            WorkerCode::Image { image }
+                if ctx.deployment_config.runtime_identity_audience.is_none()
+                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+            {
+                Some(image)
+            }
+            _ => None,
+        };
+        let image_pull_secret_name = if let Some(image) = proxy_image {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -162,7 +176,7 @@ impl KubernetesWorkerController {
                 &namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -390,6 +404,24 @@ impl KubernetesWorkerController {
         if let (Some(deployment_name), Some(namespace)) =
             (self.deployment_name.clone(), self.namespace.clone())
         {
+            crate::kubernetes_runtime_credentials::reconcile(
+                ctx,
+                &namespace,
+                &deployment_name,
+                &config.id,
+                alien_core::commands_types::CommandTargetType::Worker,
+            )
+            .await?;
+            if let WorkerCode::Image { image } = &config.code {
+                crate::kubernetes_registry::refresh_pull_secret(
+                    ctx,
+                    &namespace,
+                    &deployment_name,
+                    &config.id,
+                    image,
+                )
+                .await?;
+            }
             let deployment_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
@@ -643,14 +675,26 @@ impl KubernetesWorkerController {
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            namespace,
+            deployment_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Worker,
+        )
+        .await?;
         // Registry pull secret is required for image-based deployments.
-        let image_pull_secret_name = if let WorkerCode::Image { image } = &config.code {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        let proxy_image = match &config.code {
+            WorkerCode::Image { image }
+                if ctx.deployment_config.runtime_identity_audience.is_none()
+                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+            {
+                Some(image)
+            }
+            _ => None,
+        };
+        let image_pull_secret_name = if let Some(image) = proxy_image {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -661,7 +705,7 @@ impl KubernetesWorkerController {
                 namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,

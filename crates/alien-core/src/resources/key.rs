@@ -18,6 +18,11 @@ pub struct Key {
     pub id: String,
 }
 
+/// The description every setup-owned AWS key carries, from CloudFormation or a direct setup.
+pub fn key_description(key_id: &str) -> String {
+    format!("Encryption key '{key_id}'")
+}
+
 impl Key {
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("key");
 
@@ -59,6 +64,10 @@ pub struct KeyOutputs {
     pub fingerprint: KeyFingerprint,
     /// Exact provider key version used for new wrapping operations.
     pub wrapping_key_id: String,
+    /// Azure only: the Disk Encryption Set setup created for volumes that use this key.
+    /// Absent when no volume references the key, and on states imported before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_encryption_set_id: Option<String>,
 }
 
 impl ResourceDefinition for Key {
@@ -159,14 +168,41 @@ mod tests {
             available: None,
             fingerprint: fingerprint.clone(),
             wrapping_key_id: "projects/example/locations/us/keyRings/data/cryptoKeys/customer/cryptoKeyVersions/1".to_string(),
+            disk_encryption_set_id: None,
         };
         let after = KeyOutputs {
             available: None,
             fingerprint,
             wrapping_key_id: "projects/example/locations/us/keyRings/data/cryptoKeys/customer/cryptoKeyVersions/2".to_string(),
+            disk_encryption_set_id: None,
         };
 
         assert_eq!(before.fingerprint, after.fingerprint);
         assert_ne!(before.wrapping_key_id, after.wrapping_key_id);
+    }
+
+    #[test]
+    fn outputs_written_before_the_disk_encryption_set_existed_still_read() {
+        let old = serde_json::json!({
+            "fingerprint": {
+                "provider": "azure",
+                "vault_resource_id": "/subscriptions/s/resourceGroups/g/providers/Microsoft.KeyVault/vaults/v",
+                "key_name": "key",
+                "lineage_version_id": "https://v.vault.azure.net/keys/key/1",
+            },
+            "wrappingKeyId": "https://v.vault.azure.net/keys/key/1",
+        });
+        let outputs: KeyOutputs = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(outputs.disk_encryption_set_id, None);
+        // Nothing new is written until a set exists, so an unchanged state serializes as before.
+        assert_eq!(serde_json::to_value(&outputs).unwrap(), old);
+
+        let with_set = KeyOutputs {
+            disk_encryption_set_id: Some("/subscriptions/s/resourceGroups/g/providers/Microsoft.Compute/diskEncryptionSets/d".into()),
+            ..outputs
+        };
+        let round_trip: KeyOutputs =
+            serde_json::from_value(serde_json::to_value(&with_set).unwrap()).unwrap();
+        assert_eq!(round_trip, with_set);
     }
 }

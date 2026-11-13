@@ -30,6 +30,17 @@ export class AI extends ResourceBuilder {
   }
 
   /**
+   * Declares the models the app calls. A deployment checks that the cloud lets it use each
+   * one; a refused `required` model is reported as needing attention and never blocks the
+   * deployment.
+   * @param models Model ids as the app uses them, each with a `required` flag.
+   */
+  public models(models: Array<{ id: string; required?: boolean }>): this {
+    this._config.models = models.map(model => ({ id: model.id, required: model.required ?? false }))
+    return this
+  }
+
+  /**
    * Builds and validates the AI configuration.
    * @returns An immutable Resource representing the configured AI Gateway.
    * @throws Error if the AI configuration is invalid.

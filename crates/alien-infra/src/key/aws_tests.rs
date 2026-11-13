@@ -346,14 +346,14 @@ async fn teardown_after_a_key_failed_to_create_drops_the_key() {
         .as_ref()
         .unwrap()
         .to_string()
-        .contains("enter a deployment through stack import"));
+        .contains("is created by initial setup"));
 
     // Setup teardown, as `alien destroy` runs it.
     let prepared = state
         .prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
         .expect("a key that was never created must not block teardown");
     assert_eq!(prepared, vec![key.id.clone()]);
-    assert_eq!(state.resources[&key.id].status, ResourceStatus::Deleted);
+    // The delete flow sees there is no key and finishes; the loop below steps it.
     let teardown = StackExecutor::builder(&Stack::new("teardown".to_string()).build(), config)
         .deployment_config(&deployment_config)
         .resource_registry(registry)
@@ -383,6 +383,7 @@ async fn teardown_after_a_key_failed_to_create_drops_the_key() {
             key_arn: KEY_ARN.to_string(),
         },
         wrapping_key_id: KEY_ARN.to_string(),
+        disk_encryption_set_id: None,
     }));
     imported_key
         .set_internal_controller(Some(Box::new(AwsKeyController {
@@ -392,7 +393,378 @@ async fn teardown_after_a_key_failed_to_create_drops_the_key() {
         })))
         .unwrap();
     imported.resources.insert(key.id.clone(), imported_key);
-    assert!(imported
+    imported
         .prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
-        .is_err());
+        .expect("an imported key enters the delete flow, which refuses it");
+    let mut refused = None;
+    for _ in 0..4 {
+        imported = teardown.step(imported).await.unwrap().next_state;
+        if imported.resources[&key.id].status == ResourceStatus::DeleteFailed {
+            refused = imported.resources[&key.id].error.clone();
+            break;
+        }
+    }
+    let refused = refused.expect("deleting an imported key must fail");
+    assert!(
+        refused
+            .message
+            .contains("owned by the setup that created it"),
+        "{refused:?}"
+    );
+}
+
+mod created_keys {
+    use super::*;
+    use crate::key::KeyOrigin;
+    use crate::{
+        core::controller_test::SingleControllerExecutor,
+        remote_stack_management::AwsRemoteStackManagementController,
+    };
+    use alien_aws_clients::iam::MockIamApi;
+    use alien_aws_clients::{
+        kms::KmsApi,
+        resourcegroupstagging::{
+            GetResourcesResponse, MockResourceGroupsTaggingApi, ResourceTagMapping,
+        },
+    };
+    use alien_core::{InitialSetupAuthority, Platform};
+    use std::sync::Mutex;
+
+    const NEW_ARN: &str =
+        "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000001";
+    const OTHER_ARN: &str =
+        "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-0000-0000-0000-000000000002";
+
+    fn metadata(arn: &str, spec: &str, origin: &str, state: &str) -> DescribeKeyResponse {
+        DescribeKeyResponse {
+            key_metadata: KeyMetadata {
+                origin: Some(origin.to_string()),
+                arn: arn.to_string(),
+                key_id: arn.rsplit('/').next().unwrap().to_string(),
+                enabled: state == "Enabled",
+                key_state: state.to_string(),
+                key_usage: "ENCRYPT_DECRYPT".to_string(),
+                key_spec: spec.to_string(),
+                deletion_date: None,
+            },
+        }
+    }
+
+    async fn executor(
+        provider: MockPlatformServiceProvider,
+        controller: AwsKeyController,
+        setup_run: bool,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(Key::new("data-key".to_string()).build())
+            .resource_prefix("test")
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .setup_run(setup_run)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".into()).build(),
+                AwsRemoteStackManagementController::mock_ready("test-management"),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn provider(
+        kms: MockKmsApi,
+        tagging: MockResourceGroupsTaggingApi,
+        iam: MockIamApi,
+    ) -> MockPlatformServiceProvider {
+        let (kms, tagging, iam) = (Arc::new(kms), Arc::new(tagging), Arc::new(iam));
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_kms_client()
+            .returning(move |_| Ok(kms.clone() as Arc<dyn KmsApi>));
+        provider
+            .expect_get_aws_resource_groups_tagging_client()
+            .returning(move |_| Ok(tagging.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+    }
+
+    #[tokio::test]
+    async fn a_direct_setup_creates_the_key_with_the_plans_policy_and_tags() {
+        let created = Arc::new(Mutex::new(Vec::new()));
+        let mut kms = MockKmsApi::new();
+        let seen = created.clone();
+        kms.expect_create_key().times(1).returning(move |request| {
+            seen.lock().unwrap().push(request);
+            Ok(metadata(NEW_ARN, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled"))
+        });
+        kms.expect_enable_key_rotation()
+            .times(1)
+            .withf(|key| key == NEW_ARN)
+            .returning(|_| Ok(()));
+        kms.expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        let mut iam = MockIamApi::new();
+        iam.expect_put_role_policy().returning(|_, _, _| Ok(()));
+        let mut executor = executor(
+            provider(kms, tagged(&[]), iam),
+            AwsKeyController::default(),
+            true,
+        )
+        .await;
+        for _ in 0..4 {
+            executor.step().await.unwrap();
+        }
+        let requests = created.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert!(request
+            .tags
+            .iter()
+            .any(|tag| tag.tag_key == "alien-create-marker" && !tag.tag_value.is_empty()));
+        assert_eq!(request.key_spec, "SYMMETRIC_DEFAULT");
+        assert_eq!(request.key_usage, "ENCRYPT_DECRYPT");
+        assert_eq!(request.description, "Encryption key 'data-key'");
+        let mut tags: Vec<_> = request
+            .tags
+            .iter()
+            .filter(|tag| tag.tag_key != "alien-create-marker")
+            .map(|tag| (tag.tag_key.as_str(), tag.tag_value.as_str()))
+            .collect();
+        tags.sort();
+        let mut expected: Vec<_> = alien_core::standard_resource_tags("test", "data-key")
+            .into_iter()
+            .collect();
+        expected.sort();
+        assert_eq!(
+            tags,
+            expected
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>()
+        );
+        let policy: serde_json::Value = serde_json::from_str(&request.policy).unwrap();
+        let denies = policy["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|statement| statement["Sid"] == "DenyManagementKeyAdministration")
+            .expect("the management role is denied key administration");
+        assert_eq!(
+            denies["Condition"]["ArnEquals"]["aws:PrincipalArn"],
+            "arn:aws:iam::123456789012:role/test-management"
+        );
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let controller = executor.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(controller.origin, KeyOrigin::Created);
+        assert_eq!(controller.key_arn.as_deref(), Some(NEW_ARN));
+        assert!(controller.access_revision.is_some());
+    }
+
+    #[tokio::test]
+    async fn outside_a_setup_run_create_refuses_and_calls_no_cloud() {
+        let mut provider = MockPlatformServiceProvider::new();
+        provider.expect_get_aws_kms_client().never();
+        provider.expect_get_aws_iam_client().never();
+        provider
+            .expect_get_aws_resource_groups_tagging_client()
+            .never();
+        let mut executor = executor(provider, AwsKeyController::default(), false).await;
+        refused(&mut executor).await;
+    }
+
+    /// Steps until the controller would have created or adopted a key, and checks it did not.
+    async fn refused(executor: &mut SingleControllerExecutor) {
+        for _ in 0..4 {
+            let _ = executor.step().await;
+        }
+        assert_ne!(executor.status(), ResourceStatus::Running);
+        let controller = executor.internal_state::<AwsKeyController>().unwrap();
+        assert!(controller.key_arn.is_none(), "the key must not be adopted");
+    }
+
+    fn crashed_controller() -> AwsKeyController {
+        AwsKeyController {
+            state: AwsKeyState::CreatingKey,
+            create_requested: true,
+            create_marker: Some("marker-from-the-lost-attempt".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn tagged(arns: &[&str]) -> MockResourceGroupsTaggingApi {
+        let arns: Vec<String> = arns.iter().map(|arn| arn.to_string()).collect();
+        let mut tagging = MockResourceGroupsTaggingApi::new();
+        tagging.expect_get_resources().returning(move |request| {
+            assert_eq!(request.resource_type_filters, vec!["kms:key"]);
+            // The deployment's three tags and the creation marker: a key that only carries the
+            // predictable tags is never listed, so it is never adopted.
+            assert_eq!(request.tag_filters.len(), 4);
+            assert!(request
+                .tag_filters
+                .iter()
+                .any(|filter| filter.key == "alien-create-marker" && !filter.values[0].is_empty()));
+            Ok(GetResourcesResponse {
+                pagination_token: None,
+                resource_tag_mapping_list: arns
+                    .iter()
+                    .map(|arn| ResourceTagMapping {
+                        resource_arn: arn.clone(),
+                        tags: vec![],
+                        compliance_details: None,
+                    })
+                    .collect(),
+            })
+        });
+        tagging
+    }
+
+    #[tokio::test]
+    async fn a_crash_after_create_key_adopts_the_tagged_key_and_rewrites_its_policy() {
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        kms.expect_put_key_policy()
+            .times(1)
+            .withf(|key, policy| key == NEW_ARN && policy.contains("EnableAccountAdministration"))
+            .returning(|_, _| Ok(()));
+        kms.expect_enable_key_rotation().returning(|_| Ok(()));
+        let mut iam = MockIamApi::new();
+        iam.expect_put_role_policy().returning(|_, _, _| Ok(()));
+        let mut executor = executor(
+            provider(kms, tagged(&[NEW_ARN]), iam),
+            crashed_controller(),
+            true,
+        )
+        .await;
+        for _ in 0..3 {
+            executor.step().await.unwrap();
+        }
+        let controller = executor.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(controller.key_arn.as_deref(), Some(NEW_ARN));
+        assert_eq!(controller.origin, KeyOrigin::Created);
+    }
+
+    #[tokio::test]
+    async fn the_create_flag_is_saved_before_create_key_is_ever_sent() {
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        let mut first = executor(
+            provider(kms, MockResourceGroupsTaggingApi::new(), MockIamApi::new()),
+            AwsKeyController::default(),
+            true,
+        )
+        .await;
+        // One step: CreateStart. Nothing has called the cloud yet, and the state a crash
+        // here would leave behind already has the flag.
+        first.step().await.unwrap();
+        let saved = first.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(saved.state, AwsKeyState::CreatingKey);
+        assert!(saved.create_requested);
+        assert!(saved.create_marker.is_some());
+        assert!(saved.key_arn.is_none());
+
+        // The rerun starts from that saved state and finds the key the lost call made.
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        kms.expect_put_key_policy().returning(|_, _| Ok(()));
+        let mut second = executor(
+            provider(kms, tagged(&[NEW_ARN]), MockIamApi::new()),
+            saved.clone(),
+            true,
+        )
+        .await;
+        second.step().await.unwrap();
+        let adopted = second.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(adopted.key_arn.as_deref(), Some(NEW_ARN));
+    }
+
+    #[tokio::test]
+    async fn a_planted_key_with_our_tags_but_the_wrong_spec_is_not_adopted() {
+        for (spec, origin) in [
+            ("RSA_2048", "AWS_KMS"),
+            ("SYMMETRIC_DEFAULT", "EXTERNAL"),
+            ("SYMMETRIC_DEFAULT", "EXTERNAL_KEY_STORE"),
+        ] {
+            let mut kms = MockKmsApi::new();
+            kms.expect_create_key().never();
+            kms.expect_put_key_policy().never();
+            kms.expect_describe_key()
+                .returning(move |arn| Ok(metadata(arn, spec, origin, "Enabled")));
+            let mut executor = executor(
+                provider(kms, tagged(&[OTHER_ARN]), MockIamApi::new()),
+                crashed_controller(),
+                true,
+            )
+            .await;
+            refused(&mut executor).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tagged_key_in_another_account_is_not_adopted() {
+        let foreign = "arn:aws:kms:us-east-1:999999999999:key/aaaaaaaa-0000-0000-0000-000000000009";
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_put_key_policy().never();
+        kms.expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        let mut executor = executor(
+            provider(kms, tagged(&[foreign]), MockIamApi::new()),
+            crashed_controller(),
+            true,
+        )
+        .await;
+        refused(&mut executor).await;
+    }
+
+    #[tokio::test]
+    async fn two_tagged_keys_fail_and_name_both() {
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_put_key_policy().never();
+        kms.expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        let mut executor = executor(
+            provider(kms, tagged(&[NEW_ARN, OTHER_ARN]), MockIamApi::new()),
+            crashed_controller(),
+            true,
+        )
+        .await;
+        refused(&mut executor).await;
+    }
+
+    #[tokio::test]
+    async fn deleting_a_created_key_removes_its_grants_and_never_touches_the_key() {
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_put_key_policy().never();
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role_policy()
+            .times(1)
+            .withf(|role, policy| role == "test-access" && policy == "data-key-key-access")
+            .returning(|_, _| Ok(()));
+        let controller = AwsKeyController {
+            state: AwsKeyState::Ready,
+            key_arn: Some(NEW_ARN.to_string()),
+            origin: KeyOrigin::Created,
+            grants: vec![("test-access".to_string(), "data-key-key-access".to_string())],
+            ..Default::default()
+        };
+        let mut executor = executor(
+            provider(kms, MockResourceGroupsTaggingApi::new(), iam),
+            controller,
+            true,
+        )
+        .await;
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
 }

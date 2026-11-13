@@ -140,7 +140,20 @@ impl Schema {
 }
 
 /// Fields no fixture can write, and why.
-const UNCOVERED: &[(&str, &str)] = &[];
+const UNCOVERED: &[(&str, &str)] = &[
+    (
+        "#Container/commands-capability-file",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Daemon/commands-capability-file",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Worker/runtime-identity-exchange",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+];
 
 #[test]
 fn every_field_of_the_editor_schema_is_written_by_a_fixture() {

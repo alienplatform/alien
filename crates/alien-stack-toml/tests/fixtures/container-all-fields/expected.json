@@ -154,6 +154,7 @@
             "port": 7000
           }
         ],
+        "priority": "high",
         "publicEndpoints": [
           {
             "hostLabel": "ledger",

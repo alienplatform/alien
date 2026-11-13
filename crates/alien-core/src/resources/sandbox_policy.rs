@@ -331,9 +331,15 @@ impl Target {
 
 /// Whether an IPv4 address is public unicast, excluding metadata and special-use ranges.
 pub fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    !DENIED_RANGES.iter().any(|&(address, prefix)| {
-        Ipv4Net::new_assert(Ipv4Addr::from(address), prefix).contains(&ip)
-    })
+    !non_public_ipv4_ranges().any(|range| range.contains(&ip))
+}
+
+/// The IPv4 ranges `is_public_ipv4` refuses, for enforcement points that match ranges
+/// rather than single addresses, such as a NetworkPolicy `ipBlock`.
+pub fn non_public_ipv4_ranges() -> impl Iterator<Item = Ipv4Net> {
+    DENIED_RANGES
+        .iter()
+        .map(|&(address, prefix)| Ipv4Net::new_assert(Ipv4Addr::from(address), prefix))
 }
 
 // Includes shared address space, metadata endpoints and non-unicast/reserved ranges.

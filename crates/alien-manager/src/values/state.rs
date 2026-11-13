@@ -261,6 +261,11 @@ fn with_stored_values(deployment: &DeploymentRecord, stored: &[StoredValue]) -> 
     held
 }
 
+/// Stands in for the commands key when `held_variables` builds both
+/// environments. It is the same on both sides, so it never shows up as a
+/// difference.
+const HELD_DIFF_COMMANDS_KEY: &str = "ax_cmds_held_variables_diff";
+
 /// The variables in the environment built with `held`'s values and not in the
 /// one built without them: whatever those values contribute, whether as
 /// variables or through stack inputs mapped to variables. A variable named by
@@ -275,14 +280,19 @@ fn held_variables(
     env_slots: &[String],
 ) -> Result<Vec<(String, String)>> {
     let environment = |record: &DeploymentRecord| {
-        crate::loops::deployment::deployment_environment_variables(config, record, stack)
-            .map(|snapshot| snapshot.variables)
-            .map_err(|e| {
-                ErrorData::internal(format!(
-                    "Could not resolve the environment of '{}': {}",
-                    record.id, e.message
-                ))
-            })
+        crate::loops::deployment::deployment_environment_variables(
+            config,
+            record,
+            stack,
+            Some(HELD_DIFF_COMMANDS_KEY),
+        )
+        .map(|snapshot| snapshot.variables)
+        .map_err(|e| {
+            ErrorData::internal(format!(
+                "Could not resolve the environment of '{}': {}",
+                record.id, e.message
+            ))
+        })
     };
     let without = environment(deployment)?;
     Ok(environment(held)?

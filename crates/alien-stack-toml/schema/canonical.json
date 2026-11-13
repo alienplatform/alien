@@ -5,6 +5,27 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/components/schemas/AiModel"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "AiModel": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -890,6 +911,9 @@
             "null"
           ]
         },
+        "commandsCapabilityFile": {
+          "type": "boolean"
+        },
         "commandsEnabled": {
           "type": "boolean"
         },
@@ -1000,6 +1024,16 @@
             "$ref": "#/components/schemas/ContainerPort"
           },
           "type": "array"
+        },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/WorkloadPriority"
+            }
+          ]
         },
         "publicEndpoints": {
           "items": {
@@ -1306,6 +1340,9 @@
             "null"
           ]
         },
+        "commandsCapabilityFile": {
+          "type": "boolean"
+        },
         "commandsEnabled": {
           "type": "boolean"
         },
@@ -1350,6 +1387,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "priority": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/WorkloadPriority"
+            }
           ]
         },
         "publicEndpoints": {
@@ -2999,6 +3046,9 @@
             }
           ]
         },
+        "runtimeIdentityExchange": {
+          "type": "boolean"
+        },
         "timeoutSeconds": {
           "type": "integer"
         },
@@ -3156,6 +3206,15 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadPriority": {
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low"
+      ],
+      "type": "string"
     }
   }
 }

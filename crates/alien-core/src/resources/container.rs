@@ -234,6 +234,32 @@ pub struct KubernetesHttpProbe {
     pub port: u16,
 }
 
+/// Relative scheduling importance of a workload.
+///
+/// On Kubernetes the deployment's cluster administrator maps each level to a
+/// PriorityClass at install time. Other platforms ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum WorkloadPriority {
+    Critical,
+    High,
+    Normal,
+    Low,
+}
+
+impl WorkloadPriority {
+    /// The level name used in chart values and the Operator's class map.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::High => "high",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+}
+
 /// Security profile shared by container runtimes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -516,6 +542,15 @@ pub struct Container {
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
     pub commands_enabled: bool,
 
+    /// Set by `alien build` when the container's command receiver reads its
+    /// credential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the
+    /// receiver may be older, so a deployer that rotates credentials keeps
+    /// the long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any
+    /// value written in the stack definition.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commands_capability_file: bool,
+
     /// Grace period in seconds for stopping replicas during updates, drains, and deletes.
     ///
     /// When omitted, the runtime backend applies its default. Valid values are
@@ -523,6 +558,12 @@ pub struct Container {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 86400))]
     pub stop_grace_period_seconds: Option<u32>,
+
+    /// Relative scheduling importance. On Kubernetes the cluster administrator maps each
+    /// level to a PriorityClass at install time; unset leaves the pod without one. Other
+    /// platforms ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<WorkloadPriority>,
 }
 
 impl Container {

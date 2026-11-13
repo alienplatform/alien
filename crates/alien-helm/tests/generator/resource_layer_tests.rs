@@ -91,6 +91,43 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
     assert_helm_valid(&chart, "sandbox_layer");
 }
 
+/// A live sandbox gets the same chart-owned rules as a frozen one: the deployment template
+/// refers to the RuntimeClass helper whenever the stack has a sandbox, so skipping the emitter for
+/// a live one leaves a chart that fails at install with a missing template.
+#[test]
+fn a_live_sandbox_emits_the_same_chart_resources_as_a_frozen_one() {
+    let stack = Stack::new("sandbox-live-chart".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(3600),
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+
+    for file in [
+        "templates/sandbox-agent-networkpolicy.yaml",
+        "templates/sandbox-broker-rbac.yaml",
+        "templates/_sandbox.tpl",
+    ] {
+        assert!(
+            chart.files.contains_key(file),
+            "{file} must render for a live sandbox: {:?}",
+            chart.files.keys().collect::<Vec<_>>()
+        );
+    }
+    assert_helm_valid(&chart, "sandbox_layer_live");
+}
+
 /// Internet sessions can only reach this release's gateway, which resolves names on
 /// their behalf. Helm/kubeconform validate the complete rendered resource set.
 #[test]
@@ -519,7 +556,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         .collect::<Vec<_>>()
         .join("\n");
     for required in [
-        format!("object.metadata.name in ['{probe_name}', '{probe_name}-ingress']"),
+        format!("object.metadata.name == '{probe_name}'"),
         "size(object.spec.podSelector.matchLabels) == 2".to_string(),
         format!("matchLabels['alien.dev/cni-probe'] == '{probe_name}'"),
         "size(object.spec.ingress) == 0".to_string(),
@@ -530,6 +567,67 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             "{required}: {policy_rules}"
         );
     }
+    // Under default-deny pod networking (EKS Auto Mode strict) a pod with no policy has no
+    // network: the runner needs its API server egress, and the probe's own pods need allow
+    // rules that never select the `denied` pod (policies are additive).
+    let allow = |suffix: &str| {
+        documents
+            .iter()
+            .find(|doc| {
+                doc["kind"] == "NetworkPolicy"
+                    && doc["metadata"]["name"] == format!("{probe_name}-{suffix}").as_str()
+            })
+            .unwrap_or_else(|| panic!("the probe installs its {suffix} allow policy"))
+    };
+    let runner = allow("runner");
+    assert_eq!(
+        runner["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-probe-runner"],
+        probe_name
+    );
+    // The runner's egress keeps its port list: without it the EKS network policy agent stopped
+    // refusing the `denied` probe pod.
+    let runner_ports: Vec<_> = runner["spec"]["egress"][0]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|port| port["port"].as_u64().unwrap())
+        .collect();
+    assert_eq!(runner_ports, vec![443, 6443]);
+    // No `to` block: on Cilium a CIDR rule does not match node addresses, and the API server
+    // often runs on a node. The rule allows any destination on those ports.
+    assert!(
+        runner["spec"]["egress"][0]["to"].is_null(),
+        "{}",
+        serde_yaml::to_string(runner).unwrap()
+    );
+    // A failed install must not leave any probe policy behind.
+    for suffix in ["runner", "egress", "listener"] {
+        let policy = allow(suffix);
+        let delete_policy = policy["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+            .as_str()
+            .unwrap();
+        assert!(
+            delete_policy.contains("hook-failed"),
+            "{suffix}: {delete_policy}"
+        );
+    }
+    let egress = serde_yaml::to_string(allow("egress")).unwrap();
+    assert!(
+        egress.contains("denied") && egress.contains("NotIn"),
+        "{egress}"
+    );
+    let listener = serde_yaml::to_string(allow("listener")).unwrap();
+    // The denied pod must reach the listener's ingress, so only the egress bound can refuse it;
+    // the ingress-denied pod must not, so only the ingress bound can refuse it.
+    let listener_roles: Vec<&str> = allow("listener")["spec"]["ingress"][0]["from"][0]
+        ["podSelector"]["matchExpressions"][0]["values"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|role| role.as_str().unwrap())
+        .collect();
+    assert!(listener_roles.contains(&"denied"), "{listener}");
+    assert!(!listener_roles.contains(&"ingress-denied"), "{listener}");
     assert!(documents
         .iter()
         .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"
@@ -781,4 +879,624 @@ fn platform_scoped_storage_is_absent_from_kubernetes_chart() {
     assert_helm_valid(&chart, "off-platform storage");
     let values: serde_yaml::Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
     assert!(values["infrastructure"]["data"].is_null());
+}
+
+/// The operator's `ALIEN_KUBERNETES_PRIORITY_CLASSES` and the PriorityClass documents the chart
+/// renders for the given values, for a release named `acme`.
+fn priority_render(values: &str) -> (Option<String>, Vec<serde_yaml::Value>) {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_release(
+        &chart.files,
+        Some(&format!("management:\n  name: customer-1\n{values}")),
+        "acme",
+    );
+    rendered.assert_ok("workload priority values");
+    let documents = rendered_documents(&rendered);
+    let operator = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let map = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .expect("operator env")
+        .iter()
+        .find(|variable| variable["name"] == alien_core::ENV_ALIEN_KUBERNETES_PRIORITY_CLASSES)
+        .and_then(|variable| variable["value"].as_str())
+        .map(str::to_string);
+    let classes = documents
+        .into_iter()
+        .filter(|document| document["kind"] == "PriorityClass")
+        .collect();
+    (map, classes)
+}
+
+/// An existing install upgraded to this chart must not restart: with nothing mapped the
+/// operator's pod template gains no variable and no PriorityClass appears.
+#[test]
+fn workload_priority_renders_nothing_until_a_class_is_mapped() {
+    let (map, classes) = priority_render("");
+    assert_eq!(map, None);
+    assert!(classes.is_empty());
+}
+
+#[test]
+fn workload_priority_maps_each_level_to_the_class_the_admin_names() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    classes:\n      critical: vendor-core\n      low: vendor-batch\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.expect("env is set")).unwrap();
+    assert_eq!(
+        map,
+        serde_json::json!({"critical": "vendor-core", "low": "vendor-batch"})
+    );
+    assert!(classes.is_empty(), "the chart creates nothing unless asked");
+}
+
+#[test]
+fn workload_priority_create_renders_four_release_named_classes_below_system_ones() {
+    let (map, classes) = priority_render("runtime:\n  workloadPriority:\n    create: true\n");
+    let map: serde_json::Value = serde_json::from_str(&map.expect("env is set")).unwrap();
+    let rendered: Vec<(String, i64, bool)> = classes
+        .iter()
+        .map(|class| {
+            (
+                class["metadata"]["name"].as_str().unwrap().to_string(),
+                class["value"].as_i64().unwrap(),
+                class["globalDefault"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    // Cluster-scoped names carry a namespace/release hash so two releases that share a
+    // name in different namespaces never collide.
+    let name = |level: &str| map[level].as_str().unwrap().to_string();
+    for level in ["critical", "high", "normal", "low"] {
+        let n = name(level);
+        assert!(
+            n.starts_with("acme-") && n.ends_with(&format!("-{level}")),
+            "{n}"
+        );
+        assert_ne!(n, format!("acme-{level}"), "name must be namespace-scoped");
+    }
+    assert_eq!(
+        rendered,
+        vec![
+            (name("critical"), 1_000_000, false),
+            (name("high"), 100_000, false),
+            (name("normal"), 0, false),
+            (name("low"), -100, false),
+        ]
+    );
+    assert!(classes[0]["description"].as_str().unwrap().contains("acme"));
+}
+
+/// With `create` on, an admin override points one level at their own class and the chart
+/// creates only the remaining levels.
+#[test]
+fn workload_priority_create_skips_levels_the_admin_mapped_elsewhere() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: vendor-core\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    assert_eq!(map["critical"], "vendor-core");
+    let names: Vec<_> = classes
+        .iter()
+        .map(|class| class["metadata"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            map["high"].as_str().unwrap(),
+            map["normal"].as_str().unwrap(),
+            map["low"].as_str().unwrap()
+        ]
+    );
+}
+
+/// An explicit mapping whose name equals a generated name is still the admin's class:
+/// the chart must not try to create it.
+#[test]
+fn workload_priority_create_never_creates_a_class_the_admin_named() {
+    let (map, classes) = priority_render(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: acme-critical\n",
+    );
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    assert_eq!(map["critical"], "acme-critical");
+    assert_eq!(classes.len(), 3);
+    assert!(classes
+        .iter()
+        .all(|c| c["metadata"]["name"] != "acme-critical"));
+}
+
+/// Mapping a level to the name this release would generate anyway (for example by copying
+/// the rendered map into values) must keep creating that class; otherwise the next upgrade
+/// would delete a class running workloads still use.
+#[test]
+fn workload_priority_create_keeps_the_releases_own_class_when_mapped_to_its_name() {
+    let (map, _) = priority_render("runtime:\n  workloadPriority:\n    create: true\n");
+    let map: serde_json::Value = serde_json::from_str(&map.unwrap()).unwrap();
+    let own = map["critical"].as_str().unwrap().to_string();
+    let (mapped, classes) = priority_render(&format!(
+        "runtime:\n  workloadPriority:\n    create: true\n    classes:\n      critical: {own}\n"
+    ));
+    let mapped: serde_json::Value = serde_json::from_str(&mapped.unwrap()).unwrap();
+    assert_eq!(mapped["critical"], own.as_str());
+    assert_eq!(classes.len(), 4);
+    assert!(classes
+        .iter()
+        .any(|c| c["metadata"]["name"] == own.as_str()));
+}
+
+#[test]
+fn workload_priority_schema_rejects_unknown_levels() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_release(
+        &chart.files,
+        Some("management:\n  name: customer-1\nruntime:\n  workloadPriority:\n    classes:\n      urgent: x\n"),
+        "acme",
+    );
+    assert!(
+        !rendered.is_ok() && rendered.stderr.contains("urgent"),
+        "{}",
+        rendered.stderr
+    );
+}
+
+/// Legacy `allow` has no gateway: the rendered NetworkPolicy alone keeps a session off node
+/// metadata, node credentials and private ranges. Evaluate the rendered policy the way the API
+/// server's peers do — a destination is reachable when some rule's ports match and some peer's
+/// `ipBlock` contains it outside every `except` — rather than looking for strings.
+#[test]
+fn an_allow_sandbox_policy_admits_only_public_ipv4_and_dns() {
+    use std::net::IpAddr;
+
+    let stack = Stack::new("sandbox-legacy-allow".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  clusterDNS:\n    - 10.100.0.10\n"),
+    );
+    rendered.assert_ok("legacy allow sandbox");
+    let documents = rendered_documents(&rendered);
+    let policy = documents
+        .iter()
+        .find(|doc| doc["kind"] == "NetworkPolicy" && doc["metadata"]["name"] == "alien-sbx-agent")
+        .expect("the session NetworkPolicy");
+    let rules = policy["spec"]["egress"]
+        .as_sequence()
+        .expect("allow lists egress rules");
+
+    let contains = |cidr: &str, ip: IpAddr| -> bool {
+        let (network, prefix) = cidr.split_once('/').expect("CIDR");
+        let prefix: u32 = prefix.parse().expect("prefix length");
+        match (network.parse::<IpAddr>().expect("network address"), ip) {
+            (IpAddr::V4(network), IpAddr::V4(ip)) => {
+                let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+                u32::from(network) & mask == u32::from(ip) & mask
+            }
+            (IpAddr::V6(network), IpAddr::V6(ip)) => {
+                let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+                u128::from(network) & mask == u128::from(ip) & mask
+            }
+            _ => false,
+        }
+    };
+    let reachable = |address: &str, protocol: &str, port: u64| -> bool {
+        let ip: IpAddr = address.parse().expect("test address");
+        rules.iter().any(|rule| {
+            let ports_match = match rule["ports"].as_sequence() {
+                None => true,
+                Some(ports) => ports.iter().any(|entry| {
+                    entry["protocol"].as_str().unwrap_or("TCP") == protocol
+                        && entry["port"].as_u64() == Some(port)
+                }),
+            };
+            ports_match
+                && rule["to"].as_sequence().is_some_and(|peers| {
+                    peers.iter().any(|peer| {
+                        let block = &peer["ipBlock"];
+                        block["cidr"]
+                            .as_str()
+                            .is_some_and(|cidr| contains(cidr, ip))
+                            && !block["except"].as_sequence().is_some_and(|excepts| {
+                                excepts.iter().any(|except| {
+                                    contains(except.as_str().expect("except CIDR"), ip)
+                                })
+                            })
+                    })
+                })
+        })
+    };
+
+    for address in [
+        "169.254.169.254", // instance metadata (AWS, GCP, Azure)
+        "169.254.170.2",   // ECS task credentials
+        "169.254.170.23",  // EKS Pod Identity agent
+        "169.254.20.10",   // a node-local resolver that is not the configured one
+        "169.254.169.253", // the VPC resolver: only the configured cluster DNS is admitted
+        "10.100.0.11",     // another private host on port 53, next to the configured resolver
+        "10.100.0.0",
+        "168.63.129.16", // Azure wire server
+        "100.64.0.10",   // shared address space: CGNAT, EKS custom pod networking
+        "100.127.255.254",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.1.1",
+        "127.0.0.1",
+        "0.0.0.1",
+        "192.0.0.170",
+        "198.18.0.1",
+        "198.19.255.254",
+        "224.0.0.251",
+        "240.0.0.1",
+        "255.255.255.255",
+        // No IPv6 is admitted: the AWS IPv6 metadata endpoint and public IPv6 alike.
+        "fd00:ec2::254",
+        "::1",
+        "fe80::1",
+        "2606:4700:4700::1111",
+    ] {
+        for (protocol, port) in [
+            ("TCP", 80),
+            ("TCP", 443),
+            ("UDP", 54),
+            ("UDP", 53),
+            ("TCP", 53),
+        ] {
+            assert!(
+                !reachable(address, protocol, port),
+                "{address} {protocol}/{port} must be denied: {rules:#?}"
+            );
+        }
+    }
+    for (address, protocol, port) in [
+        ("8.8.8.8", "TCP", 443),
+        ("1.1.1.1", "UDP", 53),
+        ("203.0.114.1", "TCP", 22),
+    ] {
+        assert!(
+            reachable(address, protocol, port),
+            "{address} {protocol}/{port} must stay reachable: {rules:#?}"
+        );
+    }
+    // A CNI that checks after the Service address is translated sees a DNS pod address, so the
+    // kube-dns pods are admitted by selector, on port 53 alone.
+    let kube_dns = rules
+        .iter()
+        .find(|rule| {
+            rule["to"].as_sequence().is_some_and(|peers| {
+                peers.iter().any(|peer| {
+                    peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]
+                        == "kube-system"
+                        && peer["podSelector"]["matchLabels"]["k8s-app"] == "kube-dns"
+                })
+            })
+        })
+        .expect("a rule admitting the cluster's DNS pods");
+    assert_eq!(
+        kube_dns["ports"],
+        serde_yaml::from_str::<serde_yaml::Value>(
+            "[{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]"
+        )
+        .unwrap()
+    );
+    // The configured resolver lives in a denied private range, so it is admitted by address, on
+    // port 53 alone: any other port on it stays refused.
+    for (protocol, port) in [("UDP", 53), ("TCP", 53)] {
+        assert!(
+            reachable("10.100.0.10", protocol, port),
+            "the configured cluster DNS must answer on {protocol}/{port}: {rules:#?}"
+        );
+    }
+    for (protocol, port) in [("TCP", 80), ("TCP", 443), ("TCP", 10250), ("UDP", 54)] {
+        assert!(
+            !reachable("10.100.0.10", protocol, port),
+            "the cluster DNS address is admitted on port 53 only, not {protocol}/{port}: {rules:#?}"
+        );
+    }
+
+    // These denials are real only on a CNI that enforces NetworkPolicy, so installing and
+    // upgrading the chart first proves enforcement.
+    let probe = documents
+        .iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("an allow sandbox's install verifies NetworkPolicy enforcement");
+    assert_eq!(
+        probe["metadata"]["annotations"]["helm.sh/hook"],
+        "pre-install,pre-upgrade"
+    );
+}
+
+/// The probe's client pods run where sessions run: they get `sandbox.nodeSelector` and
+/// `sandbox.tolerations`, or the probe would test whichever node the scheduler preferred.
+#[test]
+fn the_cni_probe_runs_its_clients_on_the_nodes_sessions_use() {
+    let stack = Stack::new("sandbox-probe-placement".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  runtimeClassName: gvisor\n  clusterDNS:\n    - 10.100.0.10\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+    );
+    rendered.assert_ok("probe placement");
+    let probe = rendered_documents(&rendered)
+        .into_iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("the NetworkPolicy probe");
+    let env = |name: &str| {
+        probe["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("{name} missing from the probe"))
+    };
+    assert_eq!(env("PROBE_NODE_SELECTOR"), r#"{"pool":"sandboxes"}"#);
+    assert!(env("PROBE_TOLERATIONS").contains("\"key\":\"sandbox\""));
+}
+
+fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<String> {
+    rendered_documents(rendered)
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .and_then(|operator| {
+            operator["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .and_then(|env| {
+                    env.iter().find(|variable| {
+                        variable["name"] == alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS
+                    })
+                })
+                .and_then(|variable| variable["value"].as_str().map(str::to_string))
+        })
+}
+
+/// The Operator learns its own pod address from the downward API, so a sandbox pod can prove its
+/// NetworkPolicy refuses it before the pod takes a session.
+#[test]
+fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
+        "acme",
+        None,
+    );
+    let operator = rendered_documents(&rendered)
+        .into_iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let find = |name: &str| env.iter().find(|variable| variable["name"] == name).cloned();
+    let pod_ip = find("ALIEN_OPERATOR_POD_IP").expect("the pod address variable");
+    assert_eq!(pod_ip["valueFrom"]["fieldRef"]["fieldPath"], "status.podIP");
+    let address = find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).expect("the address");
+    let value = address["value"].as_str().unwrap();
+    assert!(value.starts_with("$(ALIEN_OPERATOR_POD_IP):"), "{value}");
+    // The variable must be defined before the one that expands it.
+    let position = |name: &str| env.iter().position(|variable| variable["name"] == name);
+    assert!(
+        position("ALIEN_OPERATOR_POD_IP")
+            < position(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+    );
+}
+
+/// The chart, not the Operator, chooses the sandbox RuntimeClass: the value wins, and without
+/// one the cluster's own version string picks the vendor class.
+#[test]
+fn the_sandbox_runtime_class_follows_the_value_then_the_cluster_version() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let render_for = |values: Option<&str>, version: &str| {
+        super::test_utils::helm_template_for_kube_version(
+            &chart.files,
+            values,
+            "acme",
+            Some(version),
+        )
+    };
+    for (version, expected) in [
+        ("v1.36.0-eks-1234567", "isolated-sandbox"),
+        ("v1.33.5-gke.1080000", "gvisor"),
+    ] {
+        let rendered = render_for(Some("management:\n  name: customer-1\n"), version);
+        rendered.assert_ok(version);
+        assert_eq!(
+            sandbox_runtime_class_env(&rendered).as_deref(),
+            Some(expected),
+            "{version}"
+        );
+    }
+
+    let rendered = render_for(
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: kata-vm-isolation\n"),
+        "v1.33.4",
+    );
+    rendered.assert_ok("explicit value on AKS");
+    assert_eq!(
+        sandbox_runtime_class_env(&rendered).as_deref(),
+        Some("kata-vm-isolation")
+    );
+
+    // An explicit value beats the version default.
+    let rendered = render_for(
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: kata\n"),
+        "v1.36.0-eks-1234567",
+    );
+    rendered.assert_ok("explicit value on EKS");
+    assert_eq!(
+        sandbox_runtime_class_env(&rendered).as_deref(),
+        Some("kata")
+    );
+}
+
+/// A cluster the chart cannot name a class for fails the render, naming the value to set.
+#[test]
+fn an_unknown_cluster_without_a_runtime_class_fails_the_render() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\n"),
+        "acme",
+        Some("v1.33.4"),
+    );
+    assert!(!rendered.is_ok(), "the render must fail");
+    for needle in [
+        "sandbox.runtimeClassName",
+        "kata-vm-isolation",
+        "gvisor",
+        "isolated-sandbox",
+    ] {
+        assert!(
+            rendered.stderr.contains(needle),
+            "missing {needle}: {}",
+            rendered.stderr
+        );
+    }
+}
+
+#[test]
+fn sandbox_node_placement_values_reach_the_operator() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n  warmPoolSize: 0\n  nodeSelector:\n    pool: sandboxes\n  tolerations:\n    - key: sandbox\n      operator: Exists\n"),
+        "acme",
+        None,
+    );
+    rendered.assert_ok("sandbox placement");
+    let documents = rendered_documents(&rendered);
+    let operator = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("operator");
+    let env = |name: &str| {
+        operator["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("{name} missing"))
+    };
+    assert_eq!(
+        env(alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR),
+        r#"{"pool":"sandboxes"}"#
+    );
+    assert!(env(alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS).contains("\"key\":\"sandbox\""));
+    assert_eq!(
+        env(alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE),
+        "0",
+        "an explicit zero turns the pool off; every create is cold"
+    );
+}
+
+/// An upgrade of a stack with an allow-egress sandbox and no `sandbox.clusterDNS` must stop at
+/// render time with a message that names the value and how to find it, so the release that is
+/// running keeps its policy. Without the value the policy would admit no DNS at all.
+#[test]
+fn an_allow_sandbox_without_cluster_dns_fails_the_render_and_names_the_value() {
+    let stack = Stack::new("sandbox-allow-no-dns".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let rendered = super::test_utils::helm_template(&chart.files, None);
+    let output = format!("{rendered:?}");
+    assert!(
+        output.contains("sandbox.clusterDNS")
+            && output.contains("grep nameserver /etc/resolv.conf"),
+        "the failure must name the value and the command that finds it: {output}"
+    );
+    // An address that is not an IPv4 literal is refused by the values schema.
+    let bad = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  clusterDNS:\n    - kube-dns.kube-system\n"),
+    );
+    assert!(format!("{bad:?}").contains("clusterDNS"), "{bad:?}");
+}
+
+/// A chart whose only egress user is a Container has no sandbox, so no sandbox RuntimeClass
+/// helper. The network-policy probe it carries must not refer to that helper.
+#[test]
+fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
+    use alien_core::{Container, ContainerCode, ContainerEgress, ResourceSpec};
+    let container = Container::new("app".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/app:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.1".to_string(),
+            desired: "0.1".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "128Mi".to_string(),
+            desired: "128Mi".to_string(),
+        })
+        .permissions("app".to_string())
+        .egress(ContainerEgress::Internet)
+        .build();
+    let stack = Stack::new("container-egress-chart".to_string())
+        .add(container, ResourceLifecycle::Frozen)
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    assert!(
+        chart.files.contains_key("templates/sandbox-cni-probe.yaml"),
+        "{:?}",
+        chart.files.keys().collect::<Vec<_>>()
+    );
+    assert!(!chart.files.contains_key("templates/_sandbox.tpl"));
+    assert_helm_valid(&chart, "container_egress_no_sandbox");
 }

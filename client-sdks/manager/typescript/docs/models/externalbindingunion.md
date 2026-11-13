@@ -118,6 +118,24 @@ const value: models.ExternalBindingUnion6 = {
 };
 ```
 
+### `models.ExternalBindingUnion7`
+
+```typescript
+const value: models.ExternalBindingUnion7 = {
+  databaseResourceId: "<id>",
+  host: "grown-labourer.org",
+  port: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
+  username: "Stanford_Moore39",
+  service: "azure-managed-redis",
+  type: "redis",
+};
+```
+
 ### `models.ExternalBindingAi`
 
 ```typescript
