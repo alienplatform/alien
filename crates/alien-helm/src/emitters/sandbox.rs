@@ -146,6 +146,14 @@ impl HelmEmitter for SandboxEmitter {
                 super::sandbox_cni::template(true),
             );
         }
+        // Only a root-boot image needs a namespace that admits Pod Security `baseline`, and only
+        // then does the install check for one. A non-root sandbox renders exactly what it did.
+        if sandbox.image_user == Some(0) {
+            fragment.extra_templates.insert(
+                super::sandbox_root_boot_check::TEMPLATE.to_string(),
+                super::sandbox_root_boot_check::template(),
+            );
+        }
         Ok(fragment)
     }
 }

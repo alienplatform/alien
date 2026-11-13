@@ -787,8 +787,12 @@ fn rendered_documents(rendered: &super::test_utils::LinterRun) -> Vec<serde_yaml
 }
 
 fn sandbox_with_linked_app() -> Stack {
+    sandbox_with_linked_app_as(None)
+}
+
+fn sandbox_with_linked_app_as(image_user: Option<u32>) -> Stack {
     use alien_core::{Container, ContainerCode, ResourceSpec};
-    let sandbox = Sandbox::new("agent".to_string())
+    let mut sandbox = Sandbox::new("agent".to_string())
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
             bundled_from: None,
@@ -799,6 +803,7 @@ fn sandbox_with_linked_app() -> Stack {
             idle_pause_seconds: None,
         })
         .build();
+    sandbox.image_user = image_user;
     let container = |id: &str| {
         Container::new(id.to_string())
             .code(ContainerCode::Image {
@@ -1744,4 +1749,84 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
                 })
             })
     }));
+}
+
+fn root_boot_check_documents(image_user: Option<u32>, values: &str) -> Vec<serde_yaml::Value> {
+    let chart = render(
+        &sandbox_with_linked_app_as(image_user),
+        StackSettings::default(),
+    );
+    let rendered =
+        super::test_utils::helm_template_for_kube_version(&chart.files, Some(values), "acme", None);
+    rendered.assert_ok("root-boot check render");
+    rendered_documents(&rendered)
+}
+
+/// A root-boot sandbox gets an install-time dry-run of a root-boot pod in the sandbox namespace,
+/// with the right to create pods there and nothing else; a non-root sandbox renders none of it.
+#[test]
+fn a_root_boot_sandbox_checks_its_namespace_at_install_and_a_non_root_one_does_not() {
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n";
+    let is_check = |document: &serde_yaml::Value| {
+        document["metadata"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("-root-boot-check"))
+    };
+    assert!(
+        !root_boot_check_documents(Some(1001), values)
+            .iter()
+            .any(is_check),
+        "a non-root sandbox carries no check"
+    );
+    let documents = root_boot_check_documents(Some(0), values);
+    let job = documents
+        .iter()
+        .find(|document| document["kind"] == "Job" && is_check(document))
+        .expect("the check Job");
+    let hook = |document: &serde_yaml::Value| {
+        document["metadata"]["annotations"]["helm.sh/hook"]
+            .as_str()
+            .map(str::to_string)
+    };
+    assert_eq!(hook(job).as_deref(), Some("pre-install,pre-upgrade"));
+    let env = job["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let value = |name: &str| {
+        env.iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(value("SANDBOX_NAMESPACE"), "acme-sandboxes");
+    assert_eq!(value("SANDBOX_RUNTIME_CLASS"), "gvisor");
+    let capabilities = value("BOOT_CAPABILITIES");
+    for forbidden in ["NET_ADMIN", "SYS_ADMIN", "NET_RAW"] {
+        assert!(!capabilities.split(',').any(|name| name == forbidden));
+    }
+    assert!(!capabilities.is_empty());
+    let role = documents
+        .iter()
+        .find(|document| document["kind"] == "Role" && is_check(document))
+        .expect("the check Role");
+    assert_eq!(role["metadata"]["namespace"], "acme-sandboxes");
+    let rules = role["rules"].as_sequence().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["resources"][0], "pods");
+    assert_eq!(rules[0]["verbs"].as_sequence().unwrap().len(), 1);
+    assert_eq!(rules[0]["verbs"][0], "create");
+    assert!(!documents
+        .iter()
+        .any(|document| document["kind"] == "ClusterRole" && is_check(document)));
+    // Unset, the check runs in the release namespace the sandboxes would use.
+    let unset = root_boot_check_documents(
+        Some(0),
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n",
+    );
+    let unset_role = unset
+        .iter()
+        .find(|document| document["kind"] == "Role" && is_check(document))
+        .expect("the check Role");
+    assert_eq!(unset_role["metadata"]["namespace"], "default");
 }
