@@ -49,8 +49,12 @@ impl StackMutation for SecretsVaultMutation {
             || config.external_bindings.has(SECRETS_VAULT_ID);
         // Containers and daemons on AWS machines receive their secret values
         // through this vault rather than through the machine control plane.
-        let machine_workloads =
-            stack_state.platform == Platform::Aws && !machine_workload_profiles(stack).is_empty();
+        // Only new installs opt in: adding the vault and read grants to an
+        // installed stack would make ordinary releases require setup. Installed
+        // stacks keep their current secret path until setup is re-run.
+        let machine_workloads = stack_state.platform == Platform::Aws
+            && stack_state.resources.is_empty()
+            && !machine_workload_profiles(stack).is_empty();
         let worker_needs_vault = stack.resources.values().any(|entry| {
             entry.config.resource_type() == Worker::RESOURCE_TYPE
                 && (!SecretDelivery::resolve(stack_state.platform, ComputeKind::Worker)
@@ -162,7 +166,7 @@ impl StackMutation for SecretsVaultMutation {
             )?;
         }
 
-        if stack_state.platform == Platform::Aws {
+        if stack_state.platform == Platform::Aws && stack_state.resources.is_empty() {
             add_machine_workload_secret_read(&mut stack, secrets_vault_id)?;
         }
 
@@ -1783,6 +1787,65 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[tokio::test]
+    async fn installed_aws_machine_stack_without_the_vault_is_left_alone() {
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("web".to_string())
+            .build();
+        let mut stack = compute_cluster_stack();
+        stack.resources.insert(
+            "web".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+            .permissions
+            .profiles
+            .insert("web".to_string(), PermissionProfile::new());
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        // An installed stack has resources in its state already.
+        let mut state = StackState::new(Platform::Aws);
+        for (id, entry) in stack.resources.iter() {
+            if id == "web" {
+                continue;
+            }
+            state.resources.insert(
+                id.clone(),
+                alien_core::StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    Vec::new(),
+                ),
+            );
+        }
+        assert!(!state.resources.is_empty());
+        assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
     }
 
     #[tokio::test]

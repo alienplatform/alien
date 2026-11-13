@@ -346,6 +346,11 @@ fn replication_resources(
         )]),
     );
 
+    // Note: ECR applies a creation template in the registry that creates the
+    // replica, i.e. the destination region. A stack deploys to one region, so
+    // this template only covers repositories created here; replicas in the
+    // declared regions get their settings from templates set up in those
+    // regions (not created by this stack).
     let mut template = CfResource::new(
         format!("{logical_id}ReplicaTemplate"),
         "AWS::ECR::RepositoryCreationTemplate".to_string(),

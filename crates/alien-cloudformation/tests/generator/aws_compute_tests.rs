@@ -46,8 +46,14 @@ fn aws_registry_without_regions_emits_no_replication() {
 #[test]
 fn aws_registry_declared_regions_emit_replication_and_a_creation_template() {
     let rendered = try_render_registry(&registry_stack(&["us-east-2", "eu-west-1"])).unwrap();
-    assert!(rendered.contains("AWS::ECR::ReplicationConfiguration"), "{rendered}");
-    assert!(rendered.contains("AWS::ECR::RepositoryCreationTemplate"), "{rendered}");
+    assert!(
+        rendered.contains("AWS::ECR::ReplicationConfiguration"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("AWS::ECR::RepositoryCreationTemplate"),
+        "{rendered}"
+    );
     assert!(rendered.contains("us-east-2") && rendered.contains("eu-west-1"));
     assert!(rendered.contains("PREFIX_MATCH"));
     // The template carries no repository policy: grants are written per region.
@@ -84,7 +90,10 @@ fn render_template_json(stack: &Stack) -> serde_json::Value {
     // CI has cfn-lint and must pass; a box without it skips the lint.
     let yaml = alien_cloudformation::to_yaml(&template).unwrap();
     let lint = alien_cloudformation::test_utils::cfn_lint(&yaml);
-    if !matches!(lint.status, alien_cloudformation::test_utils::LinterStatus::Skipped(_)) {
+    if !matches!(
+        lint.status,
+        alien_cloudformation::test_utils::LinterStatus::Skipped(_)
+    ) {
         lint.assert_ok("registry replication input");
     }
     serde_json::to_value(&template).unwrap()
@@ -119,6 +128,34 @@ fn aws_registry_regions_input_is_read_at_deploy_time_and_empty_writes_nothing() 
         template["Parameters"]["InputDeploymentRegions"]["Type"],
         "CommaDelimitedList"
     );
+}
+
+#[test]
+fn aws_registry_regions_input_with_custom_resource_registration_defines_every_condition() {
+    let template = super::helpers::try_render_built_ins(
+        &input_registry_stack(),
+        StackSettings::default(),
+        RegistrationMode::CustomResource {
+            lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".to_string(),
+            callback_url: None,
+        },
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "registry replication input custom resource",
+    )
+    .expect("template should render");
+    let value = serde_json::to_value(&template).unwrap();
+    let conditions = value["Conditions"].as_object().unwrap();
+    let mut without = value.clone();
+    without.as_object_mut().unwrap().remove("Conditions");
+    let text = without.to_string();
+    // Every condition named in Fn::If / Condition must exist.
+    for needle in ["\"Fn::If\":[\"", "\"Condition\":\""] {
+        for part in text.split(needle).skip(1) {
+            let name = part.split('"').next().unwrap();
+            assert!(conditions.contains_key(name), "undefined condition {name}");
+        }
+    }
 }
 
 #[test]

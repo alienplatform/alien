@@ -740,6 +740,7 @@ pub fn generate_cloudformation_template_with_profile(
     lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
     validate_acyclic(&template)?;
+    prune_unused_replication_input_conditions(&mut template, stack);
     Ok(template)
 }
 
@@ -2394,12 +2395,6 @@ fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
         let Some(input_id) = registry.replication_regions_input.as_deref() else {
             continue;
         };
-        // The slots read the parameter directly, so the generic "has a value"
-        // condition for this input would be defined and never used (W8001).
-        template.conditions.shift_remove(&format!(
-            "Has{}",
-            crate::generator::stack_input_parameter_name_for_id(input_id)
-        ));
         for slot in 0..=MAX_REPLICATION_REGION_SLOTS {
             template.conditions.insert(
                 replication_slot_condition(input_id, slot),
@@ -2410,6 +2405,38 @@ fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
             );
         }
     }
+}
+
+/// The slots read the parameter directly, so the generic "has a value"
+/// condition for a replication input is defined and unused (W8001) unless
+/// registration uses it. Runs once the whole template is built.
+fn prune_unused_replication_input_conditions(template: &mut CfTemplate, stack: &Stack) {
+    for (_, entry) in stack.resources() {
+        let Some(registry) = entry.config.downcast_ref::<alien_core::ArtifactRegistry>() else {
+            continue;
+        };
+        let Some(input_id) = registry.replication_regions_input.as_deref() else {
+            continue;
+        };
+        let generic = format!(
+            "Has{}",
+            crate::generator::stack_input_parameter_name_for_id(input_id)
+        );
+        if !condition_is_referenced(template, &generic) {
+            template.conditions.shift_remove(&generic);
+        }
+    }
+}
+
+/// True when a resource, output or other section (not Conditions) names the
+/// condition, e.g. in `Condition` or `Fn::If`.
+fn condition_is_referenced(template: &CfTemplate, name: &str) -> bool {
+    let needle = format!("\"{name}\"");
+    let mut without_conditions = template.clone();
+    without_conditions.conditions.clear();
+    serde_json::to_string(&without_conditions)
+        .map(|text| text.contains(&needle))
+        .unwrap_or(true)
 }
 
 fn add_list_parameter_condition(template: &mut CfTemplate, parameter: &str) {
