@@ -590,8 +590,10 @@ mod tests {
         let db = SqliteDatabase::new(&directory.path().join("manager.db").to_string_lossy())
             .await
             .unwrap();
+        let db = Arc::new(db);
         let mut verifier = StandaloneRuntimeIdentity {
-            store: Arc::new(SqliteRuntimeIdentityStore::new(Arc::new(db))),
+            store: Arc::new(SqliteRuntimeIdentityStore::new(db.clone())),
+            tokens: Some(Arc::new(crate::stores::sqlite::SqliteTokenStore::new(db))),
             deployments: Arc::new(Deployments(
                 records.into_iter().map(|r| (r.id.clone(), r)).collect(),
             )),
@@ -820,6 +822,127 @@ mod tests {
             )
             .await
             .is_ok());
+    }
+
+    /// Enroll `key` for `deployment` and return the verifier's view of the world.
+    async fn enroll_operator(verifier: &StandaloneRuntimeIdentity, deployment: &str, key: &str) {
+        let (code, _) = verifier
+            .issue_enrollment_code(&record(deployment, Platform::Kubernetes, None))
+            .await
+            .unwrap();
+        verifier
+            .enroll(&IdentityEnrollmentRequest {
+                code,
+                initial_key_hash: sha256_hash(key),
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_operator_key_mints_one_short_lived_key_for_its_own_deployment_only() {
+        let (verifier, _directory) = verifier(
+            vec![
+                record("dep-1", Platform::Kubernetes, None),
+                record("dep-2", Platform::Kubernetes, None),
+            ],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
+        enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+        enroll_operator(&verifier, "dep-2", "ax_day_v1_two").await;
+        let tokens = verifier.tokens.clone().unwrap();
+
+        let before = Utc::now();
+        let first = verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .unwrap();
+        let lifetime = first.expires_at - before;
+        assert!(
+            lifetime >= Duration::minutes(15) && lifetime < Duration::minutes(16),
+            "{lifetime}"
+        );
+        let record = tokens
+            .validate_token(&sha256_hash(&first.token))
+            .await
+            .unwrap()
+            .expect("the key is live");
+        assert_eq!(record.token_type, TokenType::Setup);
+        assert_eq!(record.deployment_id.as_deref(), Some("dep-1"));
+
+        // A second mint replaces the first: at most one is live.
+        let second = verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .unwrap();
+        assert!(tokens
+            .validate_token(&sha256_hash(&first.token))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(tokens
+            .validate_token(&sha256_hash(&second.token))
+            .await
+            .unwrap()
+            .is_some());
+        // Another deployment's setup key is untouched.
+        let other = verifier
+            .issue_setup_credential("dep-2", "ax_day_v1_two")
+            .await
+            .unwrap();
+        assert!(tokens
+            .validate_token(&sha256_hash(&second.token))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(tokens
+            .validate_token(&sha256_hash(&other.token))
+            .await
+            .unwrap()
+            .is_some());
+
+        // Refused: another deployment's key, a made-up key, a setup key itself.
+        for (deployment, key) in [
+            ("dep-1", "ax_day_v1_two"),
+            ("dep-2", "ax_day_v1_one"),
+            ("dep-1", "ax_day_v1_unknown"),
+            ("dep-1", second.token.as_str()),
+            ("dep-unknown", "ax_day_v1_one"),
+        ] {
+            assert!(
+                verifier.issue_setup_credential(deployment, key).await.is_err(),
+                "{deployment} accepted a refused key"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_setup_key_is_refused_once_it_expires() {
+        let (verifier, _directory) =
+            verifier(vec![record("dep-1", Platform::Kubernetes, None)], Arc::new(Utc::now), None)
+                .await;
+        let tokens = verifier.tokens.clone().unwrap();
+        tokens
+            .create_setup_token("dep-1", "ax_setup_exp", &sha256_hash("expired"), Utc::now() - Duration::seconds(1))
+            .await
+            .unwrap();
+        assert!(tokens.validate_token(&sha256_hash("expired")).await.unwrap().is_none());
+    }
+
+    /// The verifier can only issue into a token store it was given.
+    #[tokio::test]
+    async fn no_token_store_means_no_setup_key() {
+        let (mut verifier, _directory) =
+            verifier(vec![record("dep-1", Platform::Kubernetes, None)], Arc::new(Utc::now), None)
+                .await;
+        enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+        verifier.tokens = None;
+        assert!(verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .is_err());
     }
 
     /// An enrolled Operator finishes a deletion, so it keeps its sync authority while the
