@@ -340,6 +340,27 @@ mod tests {
     }
 
     #[test]
+    fn a_retired_saved_key_keeps_the_servers_message() {
+        // An old tracker file holds a key the platform retired when the Operator enrolled. The
+        // server answers 409 with its own explanation; it is not a takeover and is shown as is.
+        let mut retired = AlienError::new(ErrorData::GenericError {
+            message: "This deployment key was retired. Use the setup token.".into(),
+        });
+        retired.http_status_code = Some(409);
+        retired.code = "DEPLOYMENT_KEY_RETIRED".into();
+        for usage in [InClusterUse::default(), {
+            let usage = InClusterUse::default();
+            usage.mark("prod");
+            usage
+        }] {
+            let shown = usage.explain(retired.clone());
+            assert_eq!(shown.code, "DEPLOYMENT_KEY_RETIRED");
+            assert!(shown.to_string().contains("was retired"), "{shown}");
+            assert!(!shown.to_string().contains("took over"));
+        }
+    }
+
+    #[test]
     fn debug_output_never_holds_the_key() {
         let token = RerunToken {
             token: "ax_setup_secret_value".into(),
