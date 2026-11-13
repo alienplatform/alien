@@ -349,6 +349,10 @@ const GCP_REACH_PREFIXES: &[&str] = &[
     "cloudsql.instances.update",
     "cloudsql.instances.restore",
     "cloudsql.instances.clone",
+    // A firewall rule chooses which sources may connect to the install's machines. Setup creates
+    // the rules the install needs; management does not.
+    "compute.firewalls.create",
+    "compute.firewalls.update",
     // Not listed on purpose: `compute.addresses.*` and `compute.forwardingRules.*`. A Cloud SQL
     // private service connect endpoint is an internal address in the install's subnet plus a
     // forwarding rule to the instance's service attachment. That opens nothing from outside,
@@ -737,6 +741,9 @@ mod tests {
             ("cloudsql.instances.update", Family::Reach),
             ("cloudscheduler.jobs.create", Family::Reach),
             ("cloudscheduler.jobs.update", Family::Reach),
+            // A firewall rule chooses which sources may connect to the install's machines.
+            ("compute.firewalls.create", Family::Reach),
+            ("compute.firewalls.update", Family::Reach),
             ("run.*", Family::Run),
         ] {
             assert_eq!(gcp_family(permission), Some(family), "{permission}");
@@ -751,6 +758,8 @@ mod tests {
             "run.jobs.run",
             "compute.instances.get",
             "compute.instances.delete",
+            "compute.firewalls.get",
+            "compute.firewalls.delete",
             "compute.instanceGroups.create",
             "run.services.delete",
             "storage.hmacKeys.delete",
