@@ -677,7 +677,7 @@ pub(crate) async fn export_values(
     path = "/v1/values/{scope}/move",
     operation_id = "move_values",
     tag = "values",
-    description = "Moves the values of a setup link or registration scope into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
+    description = "Copies a setup link's values, or moves a registration's values, into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
     params(("scope" = String, Path, description = "link:<setupLinkId> or reg:<registrationId>")),
     responses(
         (status = 200, description = "Metadata of the values now held by the deployment", body = ValueSlotsResponse),
@@ -703,7 +703,13 @@ pub(crate) async fn move_values(
         if claim.from != source || claim.to.kind() != ScopeKind::Deployment {
             return Err(ErrorData::forbidden("This claim does not cover this move"));
         }
-        let moved = values.store.move_scope(&claim.from, &claim.to).await?;
+        // A setup link keeps its values for the next deployment; a registration
+        // creates one deployment, so its values move.
+        let moved = if source.kind() == ScopeKind::SetupLink {
+            values.store.copy_scope(&claim.from, &claim.to).await?
+        } else {
+            values.store.move_scope(&claim.from, &claim.to).await?
+        };
         Ok(ValueSlotsResponse {
             slots: moved.into_iter().map(Into::into).collect(),
         })

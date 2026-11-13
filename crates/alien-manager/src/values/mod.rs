@@ -130,16 +130,15 @@ impl ValueStore {
         stored.meta(scope).map(Some)
     }
 
-    /// Moves every value of `from` into `to`, then empties `from`. A slot
-    /// that `to` already holds is kept and the source's copy is dropped, so
-    /// repeating a move that stopped halfway finishes it without overwriting
-    /// anything written since. Returns the metadata of what `to` holds for
-    /// the moved slots.
-    pub async fn move_scope(&self, from: &ValueScope, to: &ValueScope) -> Result<Vec<ValueMeta>> {
+    /// Copies every value of `from` into `to`, leaving `from` untouched, and
+    /// returns the metadata of what `to` holds for those slots. A slot that
+    /// `to` already holds is kept, so repeating a copy never overwrites
+    /// anything written since.
+    pub async fn copy_scope(&self, from: &ValueScope, to: &ValueScope) -> Result<Vec<ValueMeta>> {
         if self.refuse_writes {
             return Err(durability::ephemeral_state_error());
         }
-        let mut moved = Vec::new();
+        let mut copied = Vec::new();
         for stored in self.list(from).await? {
             let stored = StoredValue {
                 updated_at: now_in_stored_precision(),
@@ -147,10 +146,20 @@ impl ValueStore {
             };
             self.backend.put_if_absent(to, &stored).await?;
             let held = self.get(to, &stored.slot).await?.ok_or_else(|| {
-                ErrorData::internal(format!("Slot '{}' vanished during a move", stored.slot))
+                ErrorData::internal(format!("Slot '{}' vanished during a copy", stored.slot))
             })?;
-            moved.push(held.meta(to)?);
-            self.backend.delete(from, &stored.slot).await?;
+            copied.push(held.meta(to)?);
+        }
+        Ok(copied)
+    }
+
+    /// Moves every value of `from` into `to`, then empties `from`: a copy
+    /// followed by deleting the source's slots. Repeating a move that stopped
+    /// halfway finishes it.
+    pub async fn move_scope(&self, from: &ValueScope, to: &ValueScope) -> Result<Vec<ValueMeta>> {
+        let moved = self.copy_scope(from, to).await?;
+        for meta in &moved {
+            self.backend.delete(from, &meta.slot).await?;
         }
         Ok(moved)
     }
@@ -381,6 +390,26 @@ mod tests {
         // The digest is keyed by the new scope, and the move reports it.
         assert_eq!(moved[1].digest, held[1].digest(&dep).unwrap());
         assert_eq!(store.list(&scope("link:lnk_2")).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_copy_keeps_the_source_and_serves_every_deployment_made_from_it() {
+        let (_dir, store) = kv_store().await;
+        let link = scope("link:lnk_1");
+        store
+            .put(&link, &slot("input:key"), ValueKind::Secret, "\"s3\"".into())
+            .await
+            .unwrap();
+        for dep in ["dep:dep_1", "dep:dep_2"] {
+            let dep = scope(dep);
+            let copied = store.copy_scope(&link, &dep).await.unwrap();
+            assert_eq!(copied.len(), 1);
+            let held = store.list(&dep).await.unwrap();
+            assert_eq!(held[0].value, "\"s3\"");
+            // Each deployment's digest is keyed by its own scope.
+            assert_eq!(copied[0].digest, held[0].digest(&dep).unwrap());
+        }
+        assert_eq!(store.list(&link).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
