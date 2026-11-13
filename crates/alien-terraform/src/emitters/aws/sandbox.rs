@@ -249,7 +249,7 @@ impl TfEmitter for AwsSandboxEmitter {
                             })?;
                             vec![
                                 attr("from_port", Expression::from(3128)),
-                                attr("to_port", Expression::from(3129)),
+                                attr("to_port", Expression::from(3128)),
                                 attr("protocol", Expression::from("tcp")),
                                 attr(
                                     "cidr_blocks",

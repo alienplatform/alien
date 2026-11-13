@@ -468,6 +468,7 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let keys = KeyPair::from_seed(Seed::new([7u8; 32]));
         let state = Arc::new(AgentState {
+            preview: Default::default(),
             image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
             #[cfg(target_os = "linux")]
             gateway_egress: None,

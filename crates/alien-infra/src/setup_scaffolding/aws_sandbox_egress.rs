@@ -2258,6 +2258,22 @@ mod tests {
                 .desired_state();
             assert!(connector_mismatches(&account.connectors[0].1, &expected).is_empty());
         }
+        // A group from a CloudFormation or Terraform setup that predates the proxy-only rule
+        // carries the range 3128-3129; setup narrows it to 3128 and keeps the group.
+        {
+            let mut account = cloud.lock().unwrap();
+            account.groups[0].egress[0].to_port = Some(3129);
+        }
+        let narrowed = converge(&cloud, &stack, &state, &mut records).await;
+        assert!(
+            !narrowed.is_empty(),
+            "the old 3128-3129 range is revoked and re-granted"
+        );
+        assert!(cloud.lock().unwrap().groups[0]
+            .egress
+            .iter()
+            .all(|rule| rule.from_port == Some(3128) && rule.to_port == Some(3128)));
+        assert_eq!(cloud.lock().unwrap().groups.len(), 1, "same security group");
         // Repair an accidental admin-port grant and a missing CONNECT destination without opening anything else.
         {
             let mut account = cloud.lock().unwrap();
