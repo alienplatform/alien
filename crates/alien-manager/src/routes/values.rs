@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::AppState;
 use crate::error::{ErrorData, Result};
 use crate::values::{
-    SlotSelection, ValueAccess, ValueAccessAuthorizer, ValueGrant, ValueKind, ValueMeta,
+    ScopeKind, SlotSelection, ValueAccess, ValueAccessAuthorizer, ValueGrant, ValueKind, ValueMeta,
     ValueScope, ValueSlot, ValueStore,
 };
 
@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
             "/v1/values/{scope}",
             get(list_values)
                 .put(put_values)
+                .delete(delete_scope)
                 .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)),
         )
         .route(
@@ -43,6 +44,7 @@ pub fn router() -> Router<AppState> {
             "/v1/values/{scope}/export",
             post(export_values).layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)),
         )
+        .route("/v1/values/{scope}/move", post(move_values))
         .route("/v1/values/{scope}/{slot}", delete(delete_value))
 }
 
@@ -505,6 +507,45 @@ fn export_target_allowed(url: &str) -> bool {
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
+    delete,
+    path = "/v1/values/{scope}",
+    operation_id = "delete_scope",
+    tag = "values",
+    description = "Removes every value of a setup link or registration scope, for when the link is revoked or the registration expires. A deployment scope is refused: its values go with the deployment.",
+    params(("scope" = String, Path, description = "link:<setupLinkId> or reg:<registrationId>")),
+    responses((status = 204, description = "Deleted, or there was nothing to delete")),
+    security(("bearer" = []))
+))]
+pub(crate) async fn delete_scope(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(scope): Path<String>,
+) -> Response {
+    async fn run(state: &AppState, headers: &HeaderMap, scope: &str) -> Result<()> {
+        let values = values(state)?;
+        let scope: ValueScope = scope.parse()?;
+        if scope.kind() == ScopeKind::Deployment {
+            return Err(ErrorData::bad_request(
+                "Delete a deployment's values slot by slot".to_string(),
+            ));
+        }
+        authorize(
+            &values,
+            headers,
+            &scope,
+            ValueAccess::Write,
+            &SlotSelection::All,
+        )
+        .await?;
+        values.store.delete_scope(&scope).await
+    }
+    match run(&state, &headers, &scope).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/values/{scope}/export",
     operation_id = "export_values",
@@ -626,6 +667,48 @@ pub(crate) async fn export_values(
         Err(response) => return response,
     };
     match run(&state, &headers, &scope, request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/values/{scope}/move",
+    operation_id = "move_values",
+    tag = "values",
+    description = "Moves the values of a setup link or registration scope into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
+    params(("scope" = String, Path, description = "link:<setupLinkId> or reg:<registrationId>")),
+    responses(
+        (status = 200, description = "Metadata of the values now held by the deployment", body = ValueSlotsResponse),
+        (status = 403, description = "The claim does not cover this move")
+    ),
+    security(("bearer" = []))
+))]
+pub(crate) async fn move_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(scope): Path<String>,
+) -> Response {
+    async fn run(state: &AppState, headers: &HeaderMap, scope: &str) -> Result<ValueSlotsResponse> {
+        let values = values(state)?;
+        let source: ValueScope = scope.parse()?;
+        if source.kind() == ScopeKind::Deployment {
+            return Err(ErrorData::bad_request(
+                "Only the values of a setup link or registration can be moved".to_string(),
+            ));
+        }
+        let claim = values.authorizer.authorize_move(headers, &source).await?;
+        // The authorizer must answer for exactly this source and a deployment scope.
+        if claim.from != source || claim.to.kind() != ScopeKind::Deployment {
+            return Err(ErrorData::forbidden("This claim does not cover this move"));
+        }
+        let moved = values.store.move_scope(&claim.from, &claim.to).await?;
+        Ok(ValueSlotsResponse {
+            slots: moved.into_iter().map(Into::into).collect(),
+        })
+    }
+    match run(&state, &headers, &scope).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => e.into_response(),
     }

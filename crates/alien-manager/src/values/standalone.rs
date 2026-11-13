@@ -50,7 +50,11 @@ impl ValueAccessAuthorizer for StandaloneValueAccess {
         needed: ValueAccess,
     ) -> std::result::Result<ValueGrant, AlienError<ErrorData>> {
         let subject = self.subject(headers).await?;
-        let deployment_id = scope.deployment_id();
+        let Some(deployment_id) = scope.deployment_id() else {
+            return Err(ErrorData::forbidden(
+                "This manager holds values only for deployments",
+            ));
+        };
         if matches!(needed, ValueAccess::Migrate | ValueAccess::Export) {
             return Err(ErrorData::forbidden(
                 "Migrating or exporting values is not supported here",

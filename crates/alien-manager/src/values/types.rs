@@ -18,7 +18,19 @@ pub const MAX_VALUE_BYTES: usize = 24_000;
 const MAX_ID_LEN: usize = 128;
 const MAX_CONTAINER_NAME_LEN: usize = 63;
 
-/// Who a group of values belongs to: `dep:<deploymentId>`.
+/// What a scope belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeKind {
+    /// A deployment: `dep:<deploymentId>`.
+    Deployment,
+    /// A setup link, before any deployment exists: `link:<setupLinkId>`.
+    SetupLink,
+    /// A setup registration, before any deployment exists: `reg:<registrationId>`.
+    Registration,
+}
+
+/// Who a group of values belongs to: `dep:<deploymentId>`, `link:<setupLinkId>`
+/// or `reg:<registrationId>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueScope(String);
 
@@ -28,13 +40,39 @@ impl ValueScope {
         format!("dep:{deployment_id}").parse()
     }
 
+    /// The scope of the values given to a setup link.
+    pub fn setup_link(setup_link_id: &str) -> Result<Self> {
+        format!("link:{setup_link_id}").parse()
+    }
+
+    /// The scope of the answers given to a setup registration.
+    pub fn registration(registration_id: &str) -> Result<Self> {
+        format!("reg:{registration_id}").parse()
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The deployment this scope belongs to.
-    pub fn deployment_id(&self) -> &str {
-        &self.0["dep:".len()..]
+    pub fn kind(&self) -> ScopeKind {
+        if self.0.starts_with("link:") {
+            ScopeKind::SetupLink
+        } else if self.0.starts_with("reg:") {
+            ScopeKind::Registration
+        } else {
+            ScopeKind::Deployment
+        }
+    }
+
+    /// The id after the scope's prefix.
+    pub fn id(&self) -> &str {
+        let (_, id) = self.0.split_once(':').expect("a scope always has a prefix");
+        id
+    }
+
+    /// The deployment this scope belongs to, for a deployment scope.
+    pub fn deployment_id(&self) -> Option<&str> {
+        (self.kind() == ScopeKind::Deployment).then(|| self.id())
     }
 }
 
@@ -42,9 +80,12 @@ impl FromStr for ValueScope {
     type Err = AlienError<ErrorData>;
 
     fn from_str(s: &str) -> Result<Self> {
-        if !s.strip_prefix("dep:").is_some_and(valid_id) {
+        let valid = ["dep:", "link:", "reg:"]
+            .iter()
+            .any(|prefix| s.strip_prefix(prefix).is_some_and(valid_id));
+        if !valid {
             return Err(ErrorData::bad_request(format!(
-                "'{s}' is not a value scope; use dep:<deploymentId>"
+                "'{s}' is not a value scope; use dep:<deploymentId>, link:<setupLinkId> or reg:<registrationId>"
             )));
         }
         Ok(Self(s.to_string()))
@@ -319,7 +360,7 @@ mod tests {
 
     #[test]
     fn scopes_and_slots_accept_the_documented_forms_only() {
-        for ok in ["dep:dep_abc123", "dep:a-b.c"] {
+        for ok in ["dep:dep_abc123", "dep:a-b.c", "link:key1", "reg:op.1"] {
             assert!(ok.parse::<ValueScope>().is_ok(), "{ok}");
         }
         for bad in [
@@ -328,8 +369,8 @@ mod tests {
             "dep:a:b",
             "dep:a/b",
             "other:x",
-            "link:key1",
-            "reg:op.1",
+            "link:",
+            "reg:a:b",
             "dep_x",
             "dep:a b",
         ] {

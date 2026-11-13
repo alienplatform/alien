@@ -608,11 +608,30 @@ async fn callers_without_rights_and_unknown_scopes_are_refused() {
         .await;
     assert_eq!(status, 404);
 
-    // Only deployments have values.
+    // Only the platform-connected manager holds values for setup links; this one
+    // holds them for deployments only, and takes no move claims.
     let (status, _) = server
         .call(
             reqwest::Method::PUT,
             "/v1/values/link:key1",
+            Some(&server.admin),
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(status, 403);
+    let (status, _) = server
+        .call(
+            reqwest::Method::POST,
+            "/v1/values/link:key1/move",
+            Some(&server.admin),
+            None,
+        )
+        .await;
+    assert_eq!(status, 403);
+    let (status, _) = server
+        .call(
+            reqwest::Method::PUT,
+            "/v1/values/other:key1",
             Some(&server.admin),
             Some(body.clone()),
         )
