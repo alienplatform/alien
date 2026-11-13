@@ -1,0 +1,28 @@
+{
+  "id": "sandbox/preview-edge",
+  "description": "Lets the identity that signs a GCP sandbox's edge credential pass the Agent Platform ingress check",
+  "platforms": {
+    "gcp": [
+      {
+        "label": "sandbox-preview-edge",
+        "description": "Pass the Agent Platform edge's execute check for sessions under one reasoning engine.",
+        // The edge accepts a JWT only from a principal holding this verb on the session. It is
+        // held by a dedicated per-deployment identity that exists only to sign that JWT, never by
+        // the workload itself, so the workload reaches the edge only through a short-lived token
+        // it asks that identity to sign. Measured against the live edge: with no grant the JWT is
+        // refused 403, with this one verb on the engine it is accepted, so nothing else is needed.
+        // Custom role: no predefined role carries this verb without the rest of Vertex AI.
+        "grant": {
+          "permissions": ["aiplatform.sandboxEnvironments.execute"]
+        },
+        // The engine, and nothing wider: the same boundary `sandbox/remote-execute` draws. No
+        // `stack` binding, because `projects/${projectName}` is the only GCP stack-level scope.
+        "binding": {
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}
