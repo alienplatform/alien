@@ -33,15 +33,21 @@ pub fn check_bucket_iam(
             "version" | "kind" | "resourceId" | "bindings" | "etag"
         )
     }) {
-        return Err(format!("the bucket IAM policy has an unknown field '{key}'"));
+        return Err(format!(
+            "the bucket IAM policy has an unknown field '{key}'"
+        ));
     }
     let held = bindings(current)?;
     for binding in bindings(&Value::Object(new.clone()))? {
         let (role, condition, members) = binding;
         for member in members {
-            let already_held = held.iter().any(|(held_role, held_condition, held_members)| {
-                *held_role == role && *held_condition == condition && held_members.contains(&member)
-            });
+            let already_held = held
+                .iter()
+                .any(|(held_role, held_condition, held_members)| {
+                    *held_role == role
+                        && *held_condition == condition
+                        && held_members.contains(&member)
+                });
             let derived_grant = derived.iter().any(|grant| {
                 grant.role == role
                     && grant.members.contains(&member)
@@ -83,7 +89,9 @@ fn bindings(policy: &Value) -> Result<Vec<ParsedBinding>, String> {
     let Some(list) = policy.get("bindings") else {
         return Ok(Vec::new());
     };
-    let list = list.as_array().ok_or("the policy's bindings are not a list")?;
+    let list = list
+        .as_array()
+        .ok_or("the policy's bindings are not a list")?;
     list.iter()
         .map(|binding| {
             let role = binding
@@ -183,7 +191,10 @@ mod tests {
                    "condition": {"title": "t", "expression": "true"}}),
         ] {
             let mut new = current();
-            new["bindings"].as_array_mut().unwrap().push(binding.clone());
+            new["bindings"]
+                .as_array_mut()
+                .unwrap()
+                .push(binding.clone());
             check_bucket_iam(&new, &current(), &[], true).expect_err(&binding.to_string());
         }
     }
@@ -191,8 +202,13 @@ mod tests {
     #[test]
     fn an_unknown_field_or_malformed_binding_is_refused() {
         check_bucket_iam(&json!({"auditConfigs": []}), &current(), &[], false).expect_err("field");
-        check_bucket_iam(&json!({"bindings": [{"members": []}]}), &current(), &[], false)
-            .expect_err("no role");
+        check_bucket_iam(
+            &json!({"bindings": [{"members": []}]}),
+            &current(),
+            &[],
+            false,
+        )
+        .expect_err("no role");
         check_bucket_iam(&json!("x"), &current(), &[], false).expect_err("not an object");
     }
 
@@ -223,27 +239,47 @@ mod derived_tests {
 
     #[test]
     fn a_grant_the_stack_derives_is_accepted_and_nothing_else_is() {
-        let derived = [grant("projects/p/roles/app_storage_data_write", "serviceAccount:app@p.iam")];
+        let derived = [grant(
+            "projects/p/roles/app_storage_data_write",
+            "serviceAccount:app@p.iam",
+        )];
         let held = json!({});
         let new = json!({"bindings": [{"role": "projects/p/roles/app_storage_data_write",
             "members": ["serviceAccount:app@p.iam"]}]});
         check_bucket_iam(&new, &held, &derived, false).expect("derived grant");
         for (name, binding) in [
-            ("a foreign member", json!({"role": "projects/p/roles/app_storage_data_write",
-                "members": ["user:attacker@x.y"]})),
+            (
+                "a foreign member",
+                json!({"role": "projects/p/roles/app_storage_data_write",
+                "members": ["user:attacker@x.y"]}),
+            ),
             // The derived role bound to the member of another resource (management, the verifier,
             // the setup identity or another profile's account).
-            ("another account", json!({"role": "projects/p/roles/app_storage_data_write",
-                "members": ["serviceAccount:other@p.iam"]})),
-            ("another role", json!({"role": "roles/storage.admin",
-                "members": ["serviceAccount:app@p.iam"]})),
-            ("a condition the stack does not know", json!({
+            (
+                "another account",
+                json!({"role": "projects/p/roles/app_storage_data_write",
+                "members": ["serviceAccount:other@p.iam"]}),
+            ),
+            (
+                "another role",
+                json!({"role": "roles/storage.admin",
+                "members": ["serviceAccount:app@p.iam"]}),
+            ),
+            (
+                "a condition the stack does not know",
+                json!({
                 "role": "projects/p/roles/app_storage_data_write",
                 "members": ["serviceAccount:app@p.iam"],
-                "condition": {"title": "t", "expression": "true"}})),
+                "condition": {"title": "t", "expression": "true"}}),
+            ),
         ] {
-            check_bucket_iam(&json!({"bindings": [binding.clone()]}), &held, &derived, true)
-                .expect_err(name);
+            check_bucket_iam(
+                &json!({"bindings": [binding.clone()]}),
+                &held,
+                &derived,
+                true,
+            )
+            .expect_err(name);
         }
     }
 
@@ -260,8 +296,13 @@ mod derived_tests {
             json!({"bindings": [{"role": "projects/p/roles/r", "members": ["serviceAccount:app@p.iam"],
                 "condition": {"title": "t", "description": "d", "expression": expression}}]})
         };
-        check_bucket_iam(&with("resource.name.startsWith('x')"), &held, &[conditioned.clone()], false)
-            .expect("same condition");
+        check_bucket_iam(
+            &with("resource.name.startsWith('x')"),
+            &held,
+            &[conditioned.clone()],
+            false,
+        )
+        .expect("same condition");
         check_bucket_iam(&with("true"), &held, &[conditioned.clone()], false)
             .expect_err("other expression");
         // The unconditioned grant is not the conditioned one.

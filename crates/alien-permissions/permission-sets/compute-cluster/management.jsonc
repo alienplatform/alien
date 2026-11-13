@@ -576,6 +576,7 @@
           }
         }
       },
+      // Updates may not name subnets; see bounded-role-asg-update.
       {
         "label": "legacy-role-asg-management",
         "grant": {
@@ -594,8 +595,8 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
-              "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "true"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -608,8 +609,8 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
-              "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "true"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -620,6 +621,8 @@
         }
       },
       // Capacity-only updates omit the version key; template changes supply it.
+      // Updates never move a group to other subnets: AWS does not check the new subnets
+      // against the caller's RunInstances grant, so only creates may name subnets.
       {
         "label": "bounded-role-asg-update",
         "grant": {
@@ -635,10 +638,8 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
-              },
-              "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "true"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -655,10 +656,8 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
-              },
-              "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "true"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

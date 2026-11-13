@@ -6,7 +6,9 @@
 //! Bindings account; the roles and conditions come from the profiles' permission sets. Nothing
 //! here reads the request, management, the verifier or the setup identity.
 
-use alien_core::{gcp_naming::gcp_service_account_id, remote_bindings, PermissionSetReference, Stack};
+use alien_core::{
+    gcp_naming::gcp_service_account_id, remote_bindings, PermissionSetReference, Stack,
+};
 
 use crate::{
     generators::gcp_runtime::{
@@ -36,7 +38,10 @@ pub fn profile_service_account_email(install: &GcpInstall<'_>, profile: &str) ->
 }
 
 /// The email of the service account setup creates for the Remote Bindings resource `resource_id`.
-pub fn remote_bindings_service_account_email(install: &GcpInstall<'_>, resource_id: &str) -> String {
+pub fn remote_bindings_service_account_email(
+    install: &GcpInstall<'_>,
+    resource_id: &str,
+) -> String {
     service_account_email(install, resource_id)
 }
 
@@ -181,12 +186,23 @@ mod tests {
 
     #[test]
     fn each_profile_gets_its_own_sets_for_its_own_account_and_no_other_member() {
-        let bindings =
-            gcp_resource_scoped_bindings(&stack(false), &install(), "assets", "storage", "acme-prod-assets")
-                .expect("derived");
+        let bindings = gcp_resource_scoped_bindings(
+            &stack(false),
+            &install(),
+            "assets",
+            "storage",
+            "acme-prod-assets",
+        )
+        .expect("derived");
         assert!(!bindings.is_empty());
-        let execution = format!("serviceAccount:{}", profile_service_account_email(&install(), "execution"));
-        let reader = format!("serviceAccount:{}", profile_service_account_email(&install(), "reader"));
+        let execution = format!(
+            "serviceAccount:{}",
+            profile_service_account_email(&install(), "execution")
+        );
+        let reader = format!(
+            "serviceAccount:{}",
+            profile_service_account_email(&install(), "reader")
+        );
         let members: std::collections::BTreeSet<&str> = bindings
             .iter()
             .flat_map(|binding| binding.members.iter().map(String::as_str))
@@ -205,11 +221,35 @@ mod tests {
 
     #[test]
     fn the_derivation_does_not_depend_on_anything_but_the_stack_and_the_install() {
-        let first = gcp_resource_scoped_bindings(&stack(false), &install(), "assets", "storage", "acme-prod-assets").unwrap();
-        let second = gcp_resource_scoped_bindings(&stack(false), &install(), "assets", "storage", "acme-prod-assets").unwrap();
+        let first = gcp_resource_scoped_bindings(
+            &stack(false),
+            &install(),
+            "assets",
+            "storage",
+            "acme-prod-assets",
+        )
+        .unwrap();
+        let second = gcp_resource_scoped_bindings(
+            &stack(false),
+            &install(),
+            "assets",
+            "storage",
+            "acme-prod-assets",
+        )
+        .unwrap();
         assert_eq!(first, second);
-        let elsewhere = GcpInstall { prefix: "other-prod", ..install() };
-        let other = gcp_resource_scoped_bindings(&stack(false), &elsewhere, "assets", "storage", "other-prod-assets").unwrap();
+        let elsewhere = GcpInstall {
+            prefix: "other-prod",
+            ..install()
+        };
+        let other = gcp_resource_scoped_bindings(
+            &stack(false),
+            &elsewhere,
+            "assets",
+            "storage",
+            "other-prod-assets",
+        )
+        .unwrap();
         assert_ne!(first, other, "another install's accounts and roles");
     }
 }

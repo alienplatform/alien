@@ -172,8 +172,12 @@ fn auto_scaling_group(action: &'static str, subnets: &[&str]) -> Request {
             "arn:aws:autoscaling:{REGION}:{ACCOUNT}:autoScalingGroup:1:autoScalingGroupName/stack-a-compute-general"
         ),
     )
-    .with("autoscaling:LaunchTemplateVersionSpecified", "true")
-    .with_values("autoscaling:VPCZoneIdentifiers", subnets);
+    .with("autoscaling:LaunchTemplateVersionSpecified", "true");
+    let request = if subnets.is_empty() {
+        request
+    } else {
+        request.with_values("autoscaling:VPCZoneIdentifiers", subnets)
+    };
     if action == "autoscaling:CreateAutoScalingGroup" {
         request.request_tags(&[
             (ALIEN_STACK_TAG_KEY, "stack-a"),
@@ -193,9 +197,15 @@ fn launches_stay_in_the_stacks_vpc(
     #[values(BindingTarget::Stack, BindingTarget::Resource)] binding: BindingTarget,
 ) {
     let statements = statements(cloudformation, binding, Network::Pinned, true);
-    assert!(allowed(&statements, &launch_subnet(OWN_SUBNETS[0], OWN_VPC)));
+    assert!(allowed(
+        &statements,
+        &launch_subnet(OWN_SUBNETS[0], OWN_VPC)
+    ));
     assert!(allowed(&statements, &launch_interface(OWN_VPC)));
-    assert!(!allowed(&statements, &launch_subnet(OTHER_SUBNET, OTHER_VPC)));
+    assert!(!allowed(
+        &statements,
+        &launch_subnet(OTHER_SUBNET, OTHER_VPC)
+    ));
     assert!(!allowed(&statements, &launch_interface(OTHER_VPC)));
 }
 
@@ -228,21 +238,40 @@ fn load_balancers_are_created_only_in_the_stacks_subnets(
 }
 
 #[rstest]
-fn auto_scaling_groups_use_only_the_stacks_subnets(
+fn auto_scaling_groups_are_created_only_in_the_stacks_subnets(
     #[values(false, true)] cloudformation: bool,
     #[values(false, true)] boundary: bool,
-    #[values(
-        "autoscaling:CreateAutoScalingGroup",
-        "autoscaling:UpdateAutoScalingGroup"
-    )]
-    action: &'static str,
 ) {
-    let statements = statements(cloudformation, BindingTarget::Stack, Network::Pinned, boundary);
-    assert!(allowed(&statements, &auto_scaling_group(action, &OWN_SUBNETS)));
+    let statements = statements(
+        cloudformation,
+        BindingTarget::Stack,
+        Network::Pinned,
+        boundary,
+    );
+    let create =
+        |subnets: &[&str]| auto_scaling_group("autoscaling:CreateAutoScalingGroup", subnets);
+    assert!(allowed(&statements, &create(&OWN_SUBNETS)));
     assert!(!allowed(
         &statements,
-        &auto_scaling_group(action, &[OWN_SUBNETS[0], OTHER_SUBNET])
+        &create(&[OWN_SUBNETS[0], OTHER_SUBNET])
     ));
+    assert!(!allowed(&statements, &create(&[OTHER_SUBNET])));
+}
+
+/// AWS checks a group's subnets against the caller's launch grant when the group is created,
+/// not when an update moves it, so an update may not name subnets in any network mode.
+#[rstest]
+fn auto_scaling_group_updates_keep_the_groups_subnets(
+    #[values(false, true)] cloudformation: bool,
+    #[values(false, true)] boundary: bool,
+    #[values(Network::Pinned, Network::Tagged, Network::Unknown)] network: Network,
+) {
+    let statements = statements(cloudformation, BindingTarget::Stack, network, boundary);
+    let update =
+        |subnets: &[&str]| auto_scaling_group("autoscaling:UpdateAutoScalingGroup", subnets);
+    assert!(allowed(&statements, &update(&[])));
+    assert!(!allowed(&statements, &update(&[OTHER_SUBNET])));
+    assert!(!allowed(&statements, &update(&OWN_SUBNETS)));
 }
 
 #[rstest]
@@ -287,11 +316,12 @@ fn a_network_management_creates_is_scoped_by_its_tags(
 /// Without a VPC setup can name (the account's default VPC), the conditions render as
 /// wildcards: the same reach as before network scoping.
 #[rstest]
-fn an_unknown_network_keeps_the_account_wide_reach(
-    #[values(false, true)] cloudformation: bool,
-) {
+fn an_unknown_network_keeps_the_account_wide_reach(#[values(false, true)] cloudformation: bool) {
     let statements = statements(cloudformation, BindingTarget::Stack, Network::Unknown, true);
-    assert!(allowed(&statements, &launch_subnet(OTHER_SUBNET, OTHER_VPC)));
+    assert!(allowed(
+        &statements,
+        &launch_subnet(OTHER_SUBNET, OTHER_VPC)
+    ));
     assert!(allowed(&statements, &security_group_in(OTHER_VPC)));
     assert!(allowed(&statements, &new_security_group_in(OTHER_VPC)));
     assert!(allowed(&statements, &load_balancer_in(&[OTHER_SUBNET])));
