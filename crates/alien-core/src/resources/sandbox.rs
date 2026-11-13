@@ -1214,6 +1214,13 @@ impl Sandbox {
             }));
         }
 
+        if platform == Platform::Gcp && !self.preview_ports.is_empty() {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: "preview: preview is not available on GCP yet; remove the preview ports".to_string(),
+                platform: platform.to_string(),
+            }));
+        }
+
         if !self.preview_ports.is_empty() {
             capabilities.require(SandboxCapability::Preview, platform)?;
         }
@@ -1869,6 +1876,21 @@ mod tests {
             idle_pause_seconds: None,
         })
         .expect("a lifetime is a TTL on GCP");
+    }
+
+    #[test]
+    fn gcp_refuses_preview_ports_at_plan_time() {
+        let error = sandbox_with(SandboxEgress::Deny, vec![8080])
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("preview is refused on GCP");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(
+            error.to_string().contains("preview is not available on GCP yet"),
+            "{error}"
+        );
+        sandbox_with(SandboxEgress::Deny, vec![])
+            .validate_for_platform(Platform::Gcp)
+            .expect("a sandbox without preview ports is unaffected");
     }
 
     #[test]
