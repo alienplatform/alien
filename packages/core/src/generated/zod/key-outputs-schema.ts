@@ -11,6 +11,7 @@ import { KeyFingerprintSchema } from "./key-fingerprint-schema.js";
  */
 export const KeyOutputsSchema = z.object({
     "available": z.boolean().describe("Latest key availability observation. Absent on older imported states.\nA false observation suspends dependent reconciliation without replacing resources.").nullish(),
+"diskEncryptionSetId": z.string().describe("Azure only: the Disk Encryption Set setup created for volumes that use this key.\nAbsent when no volume references the key, and on states imported before it existed.").nullish(),
 get "fingerprint"(){
                 return KeyFingerprintSchema.describe("Stable identity of a provider key family.\n\nProvider-native version rotation does not change this value. Replacing the\nprovider key does.")
               },
