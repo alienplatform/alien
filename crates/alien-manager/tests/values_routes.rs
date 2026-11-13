@@ -145,6 +145,54 @@ impl alien_manager::values::ValueAccessAuthorizer for ExportTo {
     }
 }
 
+/// Stands in for a control plane that issues claims: any caller may write any
+/// setup-link or registration scope, with the slots named in `x-slots` (all
+/// when absent), and a move claim is the header `x-claim: <from>|<to>|<id>`.
+struct ClaimAuthorizer;
+
+#[async_trait]
+impl alien_manager::values::ValueAccessAuthorizer for ClaimAuthorizer {
+    async fn authorize(
+        &self,
+        headers: &axum::http::HeaderMap,
+        _scope: &alien_manager::values::ValueScope,
+        _needed: alien_manager::values::ValueAccess,
+    ) -> Result<
+        alien_manager::values::ValueGrant,
+        alien_error::AlienError<alien_manager::error::ErrorData>,
+    > {
+        let slots = headers
+            .get("x-slots")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(',').map(|s| s.parse().unwrap()).collect());
+        Ok(alien_manager::values::ValueGrant {
+            access: alien_manager::values::ValueAccess::Migrate,
+            slots,
+            export_target: None,
+        })
+    }
+
+    async fn authorize_move(
+        &self,
+        headers: &axum::http::HeaderMap,
+        _source: &alien_manager::values::ValueScope,
+    ) -> Result<
+        alien_manager::values::ValueMove,
+        alien_error::AlienError<alien_manager::error::ErrorData>,
+    > {
+        let claim = headers
+            .get("x-claim")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| alien_manager::error::ErrorData::unauthorized("no claim"))?;
+        let parts: Vec<&str> = claim.split('|').collect();
+        Ok(alien_manager::values::ValueMove {
+            from: parts[0].parse()?,
+            to: parts[1].parse()?,
+            claim_id: parts[2].to_string(),
+        })
+    }
+}
+
 async fn start_with_access(
     ephemeral_state_dir: bool,
     backend: Backend,
@@ -1060,4 +1108,151 @@ async fn export_reports_a_refusing_target_as_a_bad_gateway() {
     .await;
     assert_eq!(status, 502, "{body}");
     assert!(!body.to_string().contains(CANARY));
+}
+
+fn claim(from: &str, to: &str, id: &str) -> [(&'static str, String); 1] {
+    [("x-claim", format!("{from}|{to}|{id}"))]
+}
+
+async fn raw(
+    server: &Server,
+    method: reqwest::Method,
+    path: &str,
+    headers: &[(&str, String)],
+    body: Option<Value>,
+) -> (u16, Value) {
+    let mut request = reqwest::Client::new()
+        .request(method, format!("{}{path}", server.url))
+        .bearer_auth("any");
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    let text = response.text().await.unwrap();
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    )
+}
+
+async fn put_scope(server: &Server, scope: &str, slot: &str, value: &str, headers: &[(&str, String)]) -> u16 {
+    raw(
+        server,
+        reqwest::Method::PUT,
+        &format!("/v1/values/{scope}"),
+        headers,
+        Some(json!({ "values": [{ "slot": slot, "value": value, "kind": "secret" }] })),
+    )
+    .await
+    .0
+}
+
+async fn slots_of(server: &Server, scope: &str) -> Vec<String> {
+    let (status, body) = raw(
+        server,
+        reqwest::Method::GET,
+        &format!("/v1/values/{scope}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    body["slots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["slot"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_registration_claim_moves_its_values_and_a_replay_changes_nothing() {
+    let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
+    let dep = server.scope();
+    assert_eq!(put_scope(&server, "reg:reg_1", "env:A", "\"a\"", &[]).await, 200);
+    assert_eq!(put_scope(&server, "reg:reg_1", "env:B", "b", &[]).await, 200);
+    let headers = claim("reg:reg_1", &dep, "claim-1");
+
+    let (status, moved) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_1/move", &headers, None).await;
+    assert_eq!(status, 200, "{moved}");
+    assert_eq!(moved["slots"].as_array().unwrap().len(), 2);
+    assert_eq!(slots_of(&server, "reg:reg_1").await, Vec::<String>::new());
+    assert_eq!(slots_of(&server, &dep).await, ["env:A", "env:B"]);
+
+    // The deployment drops a slot, and a new slot appears on the source. The
+    // same claim presented again must not undo or add anything.
+    let (status, _) = raw(&server, reqwest::Method::DELETE, &format!("/v1/values/{dep}/env:A"), &[], None).await;
+    assert_eq!(status, 204);
+    assert_eq!(put_scope(&server, "reg:reg_1", "env:C", "c", &[]).await, 200);
+    let (status, replay) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_1/move", &headers, None).await;
+    assert_eq!(status, 200, "{replay}");
+    assert_eq!(slots_of(&server, &dep).await, ["env:B"]);
+    assert_eq!(slots_of(&server, "reg:reg_1").await, ["env:C"]);
+
+    // A different claim is a different move.
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_1/move", &claim("reg:reg_1", &dep, "claim-2"), None).await;
+    assert_eq!(status, 200);
+    assert_eq!(slots_of(&server, &dep).await, ["env:B", "env:C"]);
+}
+
+#[tokio::test]
+async fn a_setup_link_claim_copies_and_keeps_the_link_values() {
+    let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
+    let dep = server.scope();
+    assert_eq!(put_scope(&server, "link:lnk_1", "input:key", "\"s\"", &[]).await, 200);
+    let (status, copied) = raw(&server, reqwest::Method::POST, "/v1/values/link:lnk_1/move", &claim("link:lnk_1", &dep, "c1"), None).await;
+    assert_eq!(status, 200, "{copied}");
+    assert_eq!(slots_of(&server, "link:lnk_1").await, ["input:key"]);
+    assert_eq!(slots_of(&server, &dep).await, ["input:key"]);
+}
+
+#[tokio::test]
+async fn a_claim_for_another_source_or_a_non_deployment_destination_is_refused() {
+    let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
+    let dep = server.scope();
+    assert_eq!(put_scope(&server, "reg:reg_a", "env:A", "a", &[]).await, 200);
+    assert_eq!(put_scope(&server, "reg:reg_b", "env:B", "b", &[]).await, 200);
+
+    // Wrong source: a claim for reg_b presented on reg_a's path.
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_a/move", &claim("reg:reg_b", &dep, "c1"), None).await;
+    assert_eq!(status, 403);
+    // Non-deployment destination.
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_a/move", &claim("reg:reg_a", "link:lnk_x", "c2"), None).await;
+    assert_eq!(status, 403);
+    // A deployment as the source is not movable.
+    let (status, _) = raw(&server, reqwest::Method::POST, &format!("/v1/values/{dep}/move"), &claim(&dep, &dep, "c3"), None).await;
+    assert_eq!(status, 400);
+    // No claim at all.
+    let (status, _) = raw(&server, reqwest::Method::POST, "/v1/values/reg:reg_a/move", &[], None).await;
+    assert_eq!(status, 401);
+
+    assert_eq!(slots_of(&server, "reg:reg_a").await, ["env:A"]);
+    assert_eq!(slots_of(&server, "reg:reg_b").await, ["env:B"]);
+    assert!(slots_of(&server, &dep).await.is_empty());
+}
+
+#[tokio::test]
+async fn deleting_a_scope_needs_a_grant_over_the_whole_scope_and_refuses_deployments() {
+    let server = start_with_access(false, Backend::Sqlite, Some(Arc::new(ClaimAuthorizer))).await;
+    let dep = server.scope();
+    assert_eq!(put_scope(&server, "link:lnk_1", "env:A", "a", &[]).await, 200);
+    assert_eq!(put_scope(&server, "link:lnk_2", "env:A", "a", &[]).await, 200);
+
+    // A token limited to some slots cannot empty the scope.
+    let limited = [("x-slots", "env:A".to_string())];
+    let (status, _) = raw(&server, reqwest::Method::DELETE, "/v1/values/link:lnk_1", &limited, None).await;
+    assert_eq!(status, 403);
+    assert_eq!(slots_of(&server, "link:lnk_1").await, ["env:A"]);
+
+    let (status, _) = raw(&server, reqwest::Method::DELETE, "/v1/values/link:lnk_1", &[], None).await;
+    assert_eq!(status, 204);
+    assert!(slots_of(&server, "link:lnk_1").await.is_empty());
+    assert_eq!(slots_of(&server, "link:lnk_2").await, ["env:A"]);
+
+    let (status, _) = raw(&server, reqwest::Method::DELETE, &format!("/v1/values/{dep}"), &[], None).await;
+    assert_eq!(status, 400);
 }

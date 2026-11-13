@@ -37,6 +37,7 @@ pub use types::{
     ScopeKind, SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot, MAX_VALUE_BYTES,
 };
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use alien_error::AlienError;
@@ -51,6 +52,10 @@ pub struct ValueStore {
     /// Set when the backend cannot keep a value across a restart: reads and
     /// deletes still work, writes are refused.
     refuse_writes: bool,
+    /// One lock per setup-link or registration scope. A write to such a scope
+    /// and a move out of it never overlap, so a value written while a move is
+    /// running is never lost.
+    scope_locks: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 /// The current time at the precision a stored value keeps (milliseconds), so
@@ -66,7 +71,23 @@ impl ValueStore {
         Self {
             backend,
             refuse_writes: false,
+            scope_locks: Arc::default(),
         }
+    }
+
+    /// Holds the scope's lock until dropped. Deployment scopes are never
+    /// moved out of, so they take none.
+    async fn lock_scope(&self, scope: &ValueScope) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        if scope.kind() == ScopeKind::Deployment {
+            return None;
+        }
+        let lock = {
+            let mut locks = self.scope_locks.lock().unwrap_or_else(|e| e.into_inner());
+            // Forget locks nobody holds or waits for.
+            locks.retain(|key, lock| key == scope.as_str() || Arc::strong_count(lock) > 1);
+            locks.entry(scope.as_str().to_string()).or_default().clone()
+        };
+        Some(lock.lock_owned().await)
     }
 
     /// Refuses writes because the backend's storage is not durable. Values
@@ -94,6 +115,7 @@ impl ValueStore {
             return Err(durability::ephemeral_state_error());
         }
         check_size(slot, &value)?;
+        let _guard = self.lock_scope(scope).await;
         let stored = StoredValue {
             slot: slot.clone(),
             kind,
@@ -118,6 +140,7 @@ impl ValueStore {
             return Err(durability::ephemeral_state_error());
         }
         check_size(slot, &value)?;
+        let _guard = self.lock_scope(scope).await;
         let stored = StoredValue {
             slot: slot.clone(),
             kind,
@@ -132,17 +155,62 @@ impl ValueStore {
 
     /// Copies every value of `from` into `to`, leaving `from` untouched, and
     /// returns the metadata of what `to` holds for those slots. A slot that
-    /// `to` already holds is kept, so repeating a copy never overwrites
-    /// anything written since.
-    pub async fn copy_scope(&self, from: &ValueScope, to: &ValueScope) -> Result<Vec<ValueMeta>> {
+    /// `to` already holds is kept, so a copy never overwrites anything written
+    /// since. The copy is recorded under `claim_id`: presenting the same claim
+    /// again changes nothing and returns what the first copy produced.
+    pub async fn copy_scope(
+        &self,
+        from: &ValueScope,
+        to: &ValueScope,
+        claim_id: &str,
+    ) -> Result<Vec<ValueMeta>> {
+        self.transfer(from, to, claim_id, false).await
+    }
+
+    /// Moves every value of `from` into `to`, then empties `from`. Recorded
+    /// under `claim_id` like [`Self::copy_scope`]. A move that stopped halfway
+    /// is finished by presenting the claim again.
+    pub async fn move_scope(
+        &self,
+        from: &ValueScope,
+        to: &ValueScope,
+        claim_id: &str,
+    ) -> Result<Vec<ValueMeta>> {
+        self.transfer(from, to, claim_id, true).await
+    }
+
+    async fn transfer(
+        &self,
+        from: &ValueScope,
+        to: &ValueScope,
+        claim_id: &str,
+        remove_source: bool,
+    ) -> Result<Vec<ValueMeta>> {
         if self.refuse_writes {
             return Err(durability::ephemeral_state_error());
         }
+        // Writes to the source wait while this runs, so nothing is written
+        // between the copy and the removal.
+        let _guard = self.lock_scope(from).await;
+        let record = ValueSlot::moved(&transfer_key(from, to, claim_id));
+        if let Some(done) = self.backend.get(to, &record).await? {
+            // Already finished: report what the destination holds, change nothing.
+            let slots: Vec<String> = serde_json::from_str(&done.value)
+                .map_err(|_| ErrorData::internal("A move record is unreadable".to_string()))?;
+            let mut held = Vec::new();
+            for slot in slots {
+                if let Some(stored) = self.get(to, &ValueSlot::from_stored(&slot)?).await? {
+                    held.push(stored.meta(to)?);
+                }
+            }
+            return Ok(held);
+        }
+        let sources = self.list(from).await?;
         let mut copied = Vec::new();
-        for stored in self.list(from).await? {
+        for stored in &sources {
             let stored = StoredValue {
                 updated_at: now_in_stored_precision(),
-                ..stored
+                ..stored.clone()
             };
             self.backend.put_if_absent(to, &stored).await?;
             let held = self.get(to, &stored.slot).await?.ok_or_else(|| {
@@ -150,22 +218,30 @@ impl ValueStore {
             })?;
             copied.push(held.meta(to)?);
         }
-        Ok(copied)
-    }
-
-    /// Moves every value of `from` into `to`, then empties `from`: a copy
-    /// followed by deleting the source's slots. Repeating a move that stopped
-    /// halfway finishes it.
-    pub async fn move_scope(&self, from: &ValueScope, to: &ValueScope) -> Result<Vec<ValueMeta>> {
-        let moved = self.copy_scope(from, to).await?;
-        for meta in &moved {
-            self.backend.delete(from, &meta.slot).await?;
+        if remove_source {
+            for stored in &sources {
+                self.backend.delete(from, &stored.slot).await?;
+            }
         }
-        Ok(moved)
+        let names: Vec<&str> = copied.iter().map(|m| m.slot.as_str()).collect();
+        self.backend
+            .put(
+                to,
+                &StoredValue {
+                    slot: record,
+                    kind: ValueKind::Plain,
+                    value: serde_json::to_string(&names)
+                        .map_err(|e| ErrorData::internal(e.to_string()))?,
+                    updated_at: now_in_stored_precision(),
+                },
+            )
+            .await?;
+        Ok(copied)
     }
 
     /// Removes every value of the scope, including the records of served values.
     pub async fn delete_scope(&self, scope: &ValueScope) -> Result<()> {
+        let _guard = self.lock_scope(scope).await;
         for stored in self.backend.list(scope).await? {
             self.backend.delete(scope, &stored.slot).await?;
         }
@@ -174,6 +250,7 @@ impl ValueStore {
 
     /// Removes the slot. Removing an empty slot is not an error.
     pub async fn delete(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<()> {
+        let _guard = self.lock_scope(scope).await;
         self.backend.delete(scope, slot).await
     }
 
@@ -184,7 +261,7 @@ impl ValueStore {
     /// Every value in the scope, sorted by slot.
     pub async fn list(&self, scope: &ValueScope) -> Result<Vec<StoredValue>> {
         let mut values = self.backend.list(scope).await?;
-        values.retain(|v| v.slot.served_digest().is_none());
+        values.retain(|v| !v.slot.is_record());
         values.sort_by(|a, b| a.slot.cmp(&b.slot));
         Ok(values)
     }
@@ -196,7 +273,7 @@ impl ValueStore {
         slot_prefix: &str,
     ) -> Result<Vec<StoredValue>> {
         let mut values = self.backend.list_prefix(scope, slot_prefix).await?;
-        values.retain(|v| v.slot.served_digest().is_none());
+        values.retain(|v| !v.slot.is_record());
         values.sort_by(|a, b| a.slot.cmp(&b.slot));
         Ok(values)
     }
@@ -257,6 +334,17 @@ impl ValueStore {
             None => false,
         })
     }
+}
+
+/// Names one move: a hash of its source, destination and claim id.
+fn transfer_key(from: &ValueScope, to: &ValueScope, claim_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [from.as_str(), to.as_str(), claim_id] {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    hex::encode(hasher.finalize())
 }
 
 fn check_size(slot: &ValueSlot, value: &str) -> Result<()> {
@@ -381,7 +469,7 @@ mod tests {
             .await
             .unwrap();
 
-        let moved = store.move_scope(&link, &dep).await.unwrap();
+        let moved = store.move_scope(&link, &dep, "c").await.unwrap();
         let slots: Vec<_> = moved.iter().map(|m| m.slot.to_string()).collect();
         assert_eq!(slots, ["env:A", "input:key"]);
         assert!(store.list(&link).await.unwrap().is_empty());
@@ -402,7 +490,7 @@ mod tests {
             .unwrap();
         for dep in ["dep:dep_1", "dep:dep_2"] {
             let dep = scope(dep);
-            let copied = store.copy_scope(&link, &dep).await.unwrap();
+            let copied = store.copy_scope(&link, &dep, &format!("c-{dep}")).await.unwrap();
             assert_eq!(copied.len(), 1);
             let held = store.list(&dep).await.unwrap();
             assert_eq!(held[0].value, "\"s3\"");
@@ -420,24 +508,89 @@ mod tests {
             .put(&reg, &slot("env:A"), ValueKind::Plain, "from-registration".into())
             .await
             .unwrap();
-        store.move_scope(&reg, &dep).await.unwrap();
+        store.move_scope(&reg, &dep, "c1").await.unwrap();
         store
             .put(&dep, &slot("env:A"), ValueKind::Plain, "edited".into())
             .await
             .unwrap();
-        // A retry after a lost response finds the source empty.
-        assert!(store.move_scope(&reg, &dep).await.unwrap().is_empty());
+        // A retry of the same claim after a lost response changes nothing.
+        let again = store.move_scope(&reg, &dep, "c1").await.unwrap();
+        assert_eq!(again.len(), 1);
         // A source slot that came back never overwrites the deployment's value.
         store
             .put(&reg, &slot("env:A"), ValueKind::Plain, "stale".into())
             .await
             .unwrap();
-        store.move_scope(&reg, &dep).await.unwrap();
+        store.move_scope(&reg, &dep, "c2").await.unwrap();
         assert_eq!(
             store.get(&dep, &slot("env:A")).await.unwrap().unwrap().value,
             "edited"
         );
         assert!(store.list(&reg).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_repeated_claim_neither_restores_deleted_slots_nor_adds_new_ones() {
+        let (_dir, store) = kv_store().await;
+        let (link, dep) = (scope("link:lnk_1"), scope("dep:dep_1"));
+        store
+            .put(&link, &slot("env:A"), ValueKind::Plain, "a".into())
+            .await
+            .unwrap();
+        store.copy_scope(&link, &dep, "claim").await.unwrap();
+        store.delete(&dep, &slot("env:A")).await.unwrap();
+        store
+            .put(&link, &slot("env:B"), ValueKind::Plain, "b".into())
+            .await
+            .unwrap();
+
+        store.copy_scope(&link, &dep, "claim").await.unwrap();
+        assert!(store.list(&dep).await.unwrap().is_empty());
+        // The record is not a value: it is never listed or served.
+        assert!(store.list_prefix(&dep, "moved:").await.unwrap().is_empty());
+        // Another claim id copies again.
+        store.copy_scope(&link, &dep, "other").await.unwrap();
+        assert_eq!(store.list(&dep).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_write_during_a_move_is_never_lost() {
+        let (_dir, store) = kv_store().await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        for i in 0..200 {
+            store
+                .put(&reg, &slot(&format!("env:V{i}")), ValueKind::Plain, "old".into())
+                .await
+                .unwrap();
+        }
+        let writer = {
+            let store = store.clone();
+            let reg = reg.clone();
+            tokio::spawn(async move {
+                for i in 0..200 {
+                    store
+                        .put(&reg, &slot(&format!("env:V{i}")), ValueKind::Plain, "new".into())
+                        .await
+                        .unwrap();
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+        store.move_scope(&reg, &dep, "c").await.unwrap();
+        writer.await.unwrap();
+        // Every slot's newest value is in the source (written after the move)
+        // or in the deployment (copied before the write): never in neither.
+        for i in 0..200 {
+            let name = slot(&format!("env:V{i}"));
+            let newest = |v: Option<StoredValue>| v.map(|v| v.value);
+            let in_reg = newest(store.get(&reg, &name).await.unwrap());
+            let in_dep = newest(store.get(&dep, &name).await.unwrap());
+            assert!(in_reg.is_some() || in_dep.is_some(), "slot {i} was lost");
+            if in_reg.is_none() {
+                // Moved out whole: the write came first and was carried over.
+                assert_eq!(in_dep.as_deref(), Some("new"), "slot {i} lost its newer value");
+            }
+        }
     }
 
     #[tokio::test]

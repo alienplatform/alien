@@ -124,6 +124,17 @@ impl ValueSlot {
         Self(format!("{SERVED_PREFIX}{digest}"))
     }
 
+    /// The slot that records a finished move or copy, by a hash of its source,
+    /// destination and claim id. It is never listed or addressable through the API.
+    pub(crate) fn moved(key: &str) -> Self {
+        Self(format!("{MOVED_PREFIX}{key}"))
+    }
+
+    /// Whether this slot is a bookkeeping record, not a value.
+    pub(crate) fn is_record(&self) -> bool {
+        self.0.starts_with(SERVED_PREFIX) || self.0.starts_with(MOVED_PREFIX)
+    }
+
     /// The digest, for the slot of a served value.
     pub(crate) fn served_digest(&self) -> Option<&str> {
         self.0.strip_prefix(SERVED_PREFIX)
@@ -131,7 +142,10 @@ impl ValueSlot {
 
     /// Reads a slot name from a backend, which also holds served-value slots.
     pub(crate) fn from_stored(s: &str) -> Result<Self> {
-        match s.strip_prefix(SERVED_PREFIX) {
+        match s
+            .strip_prefix(SERVED_PREFIX)
+            .or_else(|| s.strip_prefix(MOVED_PREFIX))
+        {
             Some(digest) if !digest.is_empty() && digest.chars().all(|c| c.is_ascii_hexdigit()) => {
                 Ok(Self(s.to_string()))
             }
@@ -182,6 +196,7 @@ fn valid_container_name(name: &str) -> bool {
 }
 
 const SERVED_PREFIX: &str = "served:";
+const MOVED_PREFIX: &str = "moved:";
 
 impl FromStr for ValueSlot {
     type Err = AlienError<ErrorData>;
