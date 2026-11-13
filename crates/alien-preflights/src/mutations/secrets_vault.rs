@@ -52,7 +52,7 @@ impl StackMutation for SecretsVaultMutation {
         // Only new installs opt in: adding the vault and read grants to an
         // installed stack would make ordinary releases require setup. Installed
         // stacks keep their current secret path until setup is re-run.
-        let machine_workloads = machine_secrets_opted_in(stack_state)
+        let machine_workloads = machine_secrets_opted_in(stack_state, config)
             && !machine_workload_profiles(stack).is_empty();
         let worker_needs_vault = stack.resources.values().any(|entry| {
             entry.config.resource_type() == Worker::RESOURCE_TYPE
@@ -165,7 +165,7 @@ impl StackMutation for SecretsVaultMutation {
             )?;
         }
 
-        if machine_secrets_opted_in(stack_state) {
+        if machine_secrets_opted_in(stack_state, config) {
             add_machine_workload_secret_read(&mut stack, secrets_vault_id)?;
         }
 
@@ -787,13 +787,15 @@ fn deployer_secrets_read_permission_set(keys: &BTreeSet<String>) -> Result<Permi
     })
 }
 
-/// New AWS installs, and installs that already have the secrets vault, take
-/// the machine workload vault grants. An installed stack without the vault
-/// keeps its current secret path, so ordinary releases never need setup.
-fn machine_secrets_opted_in(stack_state: &StackState) -> bool {
+/// New AWS installs, installs that already have the secrets vault, and runs
+/// with setup authority take the machine workload vault grants. An installed
+/// stack without the vault keeps its current secret path on ordinary releases,
+/// so they never need setup; re-running setup opts it in.
+fn machine_secrets_opted_in(stack_state: &StackState, config: &DeploymentConfig) -> bool {
     stack_state.platform == Platform::Aws
         && (stack_state.resources.is_empty()
-            || stack_state.resources.contains_key(SECRETS_VAULT_ID))
+            || stack_state.resources.contains_key(SECRETS_VAULT_ID)
+            || config.setup_run)
 }
 
 /// Permission profiles of the containers and daemons that run on machines.
@@ -1854,6 +1856,67 @@ mod tests {
         }
         assert!(!state.resources.is_empty());
         assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
+    }
+
+    #[tokio::test]
+    async fn setup_rerun_opts_an_installed_aws_machine_stack_in() {
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("web".to_string())
+            .build();
+        let mut stack = compute_cluster_stack();
+        stack.resources.insert(
+            "web".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+            .permissions
+            .profiles
+            .insert("web".to_string(), PermissionProfile::new());
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        // An installed stack has resources in its state already.
+        let mut state = StackState::new(Platform::Aws);
+        for (id, entry) in stack.resources.iter() {
+            if id == "web" {
+                continue;
+            }
+            state.resources.insert(
+                id.clone(),
+                alien_core::StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    Vec::new(),
+                ),
+            );
+        }
+        assert!(!state.resources.is_empty());
+        assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
+        config.setup_run = true;
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
     }
 
     #[tokio::test]
