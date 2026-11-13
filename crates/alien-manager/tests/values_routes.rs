@@ -112,11 +112,44 @@ impl alien_manager::values::ValueAccessAuthorizer for AllowMigrate {
         Ok(alien_manager::values::ValueGrant {
             access: alien_manager::values::ValueAccess::Migrate,
             slots: None,
+            export_target: None,
         })
     }
 }
 
 async fn start_full(ephemeral_state_dir: bool, backend: Backend, migrating: bool) -> Server {
+    let access: Option<Arc<dyn alien_manager::values::ValueAccessAuthorizer>> =
+        migrating.then(|| Arc::new(AllowMigrate) as _);
+    start_with_access(ephemeral_state_dir, backend, access).await
+}
+
+/// Grants export access to any caller, naming the one target it may send to.
+struct ExportTo(String);
+
+#[async_trait]
+impl alien_manager::values::ValueAccessAuthorizer for ExportTo {
+    async fn authorize(
+        &self,
+        _headers: &axum::http::HeaderMap,
+        _scope: &alien_manager::values::ValueScope,
+        needed: alien_manager::values::ValueAccess,
+    ) -> Result<
+        alien_manager::values::ValueGrant,
+        alien_error::AlienError<alien_manager::error::ErrorData>,
+    > {
+        Ok(alien_manager::values::ValueGrant {
+            access: needed,
+            slots: None,
+            export_target: Some(self.0.clone()),
+        })
+    }
+}
+
+async fn start_with_access(
+    ephemeral_state_dir: bool,
+    backend: Backend,
+    access: Option<Arc<dyn alien_manager::values::ValueAccessAuthorizer>>,
+) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -198,8 +231,8 @@ async fn start_full(ephemeral_state_dir: bool, backend: Backend, migrating: bool
     let mut builder = AlienManagerBuilder::new(config)
         .token_store(token_store)
         .ephemeral_state_dir(ephemeral_state_dir);
-    if migrating {
-        builder = builder.value_access(Arc::new(AllowMigrate));
+    if let Some(access) = access {
+        builder = builder.value_access(access);
     }
     if let Backend::SealedKv = backend {
         let kv: Arc<dyn Kv> = Arc::new(
@@ -852,4 +885,160 @@ async fn conditional_puts_never_overwrite_in_the_sqlite_store() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn conditional_puts_never_overwrite_in_the_sealed_kv_store() {
     conditional_puts_never_overwrite(Backend::SealedKv).await;
+}
+
+async fn export_pair() -> (Server, Server) {
+    let target = start().await;
+    let source = start_with_access(
+        false,
+        Backend::Sqlite,
+        Some(Arc::new(ExportTo(target.url.clone()))),
+    )
+    .await;
+    (source, target)
+}
+
+/// The source holds `values` under the target's scope, so one scope name serves both managers.
+async fn seed(source: &Server, scope: &str, values: Value) {
+    let (status, body) = source
+        .call(
+            reqwest::Method::PUT,
+            &format!("/v1/values/{scope}"),
+            Some("any"),
+            Some(json!({ "values": values })),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+}
+
+async fn export(
+    source: &Server,
+    scope: &str,
+    target_url: &str,
+    token: &str,
+    slots: Value,
+) -> (u16, Value) {
+    source
+        .call(
+            reqwest::Method::POST,
+            &format!("/v1/values/{scope}/export"),
+            Some("any"),
+            Some(json!({ "targetUrl": target_url, "targetToken": token, "slots": slots })),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn export_sends_the_values_to_the_named_manager_and_returns_only_its_metadata() {
+    let (source, target) = export_pair().await;
+    let scope = target.scope();
+    seed(
+        &source,
+        &scope,
+        json!([
+            { "slot": "env:PIN", "value": CANARY, "kind": "secret" },
+            { "slot": "env:REGION", "value": "eu", "kind": "plain" },
+        ]),
+    )
+    .await;
+
+    let (status, body) = export(
+        &source,
+        &scope,
+        &target.url,
+        &target.admin,
+        json!(["env:PIN", "env:REGION"]),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    // Only metadata comes back: no value, not even for the plain slot.
+    assert!(!body.to_string().contains(CANARY), "{body}");
+    assert!(body["slots"][0].get("value").is_none(), "{body}");
+    assert_eq!(body["slots"].as_array().unwrap().len(), 2);
+
+    // The target holds them now.
+    let (status, listed) = target
+        .call(
+            reqwest::Method::GET,
+            &format!("/v1/values/{scope}"),
+            Some(&target.admin),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{listed}");
+    let slots = listed["slots"].as_array().unwrap();
+    assert_eq!(slots.len(), 2, "{listed}");
+    assert!(slots.iter().any(|s| s["slot"] == "env:REGION" && s["value"] == "eu"));
+    let pin = slots.iter().find(|s| s["slot"] == "env:PIN").unwrap();
+    assert_eq!(pin["digest"], body["slots"][0]["digest"], "{listed} {body}");
+}
+
+#[tokio::test]
+async fn export_refuses_a_target_the_token_does_not_name() {
+    let (source, target) = export_pair().await;
+    let scope = target.scope();
+    seed(&source, &scope, json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }])).await;
+
+    let (status, body) = export(
+        &source,
+        &scope,
+        "http://127.0.0.1:9",
+        &target.admin,
+        json!(["env:PIN"]),
+    )
+    .await;
+    assert_eq!(status, 403, "{body}");
+    let (_, listed) = target
+        .call(
+            reqwest::Method::GET,
+            &format!("/v1/values/{scope}"),
+            Some(&target.admin),
+            None,
+        )
+        .await;
+    assert_eq!(listed["slots"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn export_with_a_missing_slot_sends_nothing() {
+    let (source, target) = export_pair().await;
+    let scope = target.scope();
+    seed(&source, &scope, json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }])).await;
+
+    let (status, body) = export(
+        &source,
+        &scope,
+        &target.url,
+        &target.admin,
+        json!(["env:PIN", "env:GONE"]),
+    )
+    .await;
+    assert_eq!(status, 404, "{body}");
+    let (_, listed) = target
+        .call(
+            reqwest::Method::GET,
+            &format!("/v1/values/{scope}"),
+            Some(&target.admin),
+            None,
+        )
+        .await;
+    assert_eq!(listed["slots"].as_array().unwrap().len(), 0, "{listed}");
+}
+
+#[tokio::test]
+async fn export_reports_a_refusing_target_as_a_bad_gateway() {
+    let (source, target) = export_pair().await;
+    let scope = target.scope();
+    seed(&source, &scope, json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }])).await;
+
+    let (status, body) = export(
+        &source,
+        &scope,
+        &target.url,
+        "not-a-token",
+        json!(["env:PIN"]),
+    )
+    .await;
+    assert_eq!(status, 502, "{body}");
+    assert!(!body.to_string().contains(CANARY));
 }

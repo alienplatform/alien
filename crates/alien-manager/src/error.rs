@@ -541,6 +541,26 @@ pub enum ErrorData {
     )]
     PendingChangeNotFound { id: String },
 
+    /// An export asked for a slot that holds no value
+    #[error(
+        code = "VALUE_EXPORT_SLOT_MISSING",
+        message = "Slot '{slot}' holds no value to export",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ValueExportSlotMissing { slot: String },
+
+    /// The manager an export sends to refused or could not be reached
+    #[error(
+        code = "VALUE_EXPORT_FAILED",
+        message = "Exporting values failed: {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 502
+    )]
+    ValueExportFailed { reason: String },
+
     /// Internal server error
     #[error(
         code = "INTERNAL_ERROR",

@@ -2474,6 +2474,53 @@
         ]
       }
     },
+    "/v1/values/{scope}/export": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "description": "Sends the stored values of the named slots to another manager, which writes them with the token given. The values go from this manager to the target; the response carries only the target's metadata. The caller's token must be an export token naming the target URL, and the request may name no other.",
+        "operationId": "export_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "dep:<deploymentId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportValuesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The target's metadata of the stored values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSlotsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/values/{scope}/verify": {
       "post": {
         "tags": [
@@ -8691,6 +8738,30 @@
           },
           "operationId": {
             "type": "string"
+          }
+        }
+      },
+      "ExportValuesRequest": {
+        "type": "object",
+        "required": [
+          "targetUrl",
+          "targetToken",
+          "slots"
+        ],
+        "properties": {
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "targetToken": {
+            "type": "string",
+            "description": "Token the target accepts for writing these slots. Passed on as is."
+          },
+          "targetUrl": {
+            "type": "string",
+            "description": "Base URL of the manager that takes the values. The caller's token names the one URL\nallowed; any other is refused."
           }
         }
       },
