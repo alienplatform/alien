@@ -102,12 +102,12 @@ const AWS_MAX_LIFETIME_SECONDS: u32 = 28_800;
 /// int64, but pod validation caps it at the largest i32.
 const KUBERNETES_MAX_LIFETIME_SECONDS: u32 = i32::MAX as u32;
 
-/// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
-/// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
 /// Largest ephemeral storage Agent Platform accepts on a sandbox template (10 GiB). A larger
 /// request is refused when the template is created.
 const GCP_MAX_DISK_MIB: i64 = 10 * 1024;
 
+/// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
+/// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
 const AZURE_CPU_STEP_MILLICORES: i64 = 250;
 const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
 const AZURE_MEMORY_MIB_PER_CORE: i64 = 2 * 1024;
