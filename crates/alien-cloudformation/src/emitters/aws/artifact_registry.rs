@@ -253,11 +253,11 @@ fn ecr_lifecycle_policy() -> CfExpression {
 
 /// ECR replication for the regions the registry's owner declares. Lambda only
 /// pulls from ECR in its own region, so the images must exist there. The rule
-/// covers this registry's repository prefix only. The creation template makes
-/// the replicated repositories match the source (immutable tags, scanning,
-/// retention); cross-account pull grants are written per region by the
-/// registry binding. Replication configuration is one per account and region:
-/// only a stack that declares regions writes it.
+/// covers this registry's repository prefix only. No repository creation
+/// template is written: replicas use the ECR defaults for tag immutability and
+/// lifecycle (an accepted limitation), and cross-account pull grants are
+/// written on each replica by the registry binding. Replication configuration
+/// is one per account and region: only a stack that declares regions writes it.
 fn replication_resources(
     ctx: &EmitContext<'_>,
     registry: &ArtifactRegistry,
@@ -346,46 +346,15 @@ fn replication_resources(
         )]),
     );
 
-    // Note: ECR applies a creation template in the registry that creates the
-    // replica, i.e. the destination region. A stack deploys to one region, so
-    // this template only covers repositories created here; replicas in the
-    // declared regions get their settings from templates set up in those
-    // regions (not created by this stack).
-    let mut template = CfResource::new(
-        format!("{logical_id}ReplicaTemplate"),
-        "AWS::ECR::RepositoryCreationTemplate".to_string(),
-    );
-    template
-        .properties
-        .insert("Prefix".to_string(), stack_name(registry.id()));
-    template.properties.insert(
-        "AppliedFor".to_string(),
-        CfExpression::list([CfExpression::from("REPLICATION")]),
-    );
-    template.properties.insert(
-        "ImageTagMutability".to_string(),
-        CfExpression::from("IMMUTABLE"),
-    );
-    template.properties.insert(
-        "EncryptionConfiguration".to_string(),
-        CfExpression::object([("EncryptionType", CfExpression::from("AES256"))]),
-    );
-    template.properties.insert(
-        "LifecyclePolicy".to_string(),
-        CfExpression::to_json_string(ecr_lifecycle_policy()),
-    );
     if let Some(input_id) = from_input {
         // No region answered: write nothing, so an install that leaves the
         // input empty keeps whatever replication its account already has.
         configuration.condition = Some(replication_slot_condition(input_id, 0));
-        template.condition = Some(replication_slot_condition(input_id, 0));
     }
     configuration
         .depends_on
         .push(format!("{logical_id}Repository"));
-    // The template must exist before replication creates the first replica.
-    configuration.depends_on.push(template.logical_id.clone());
-    Ok(vec![configuration, template])
+    Ok(vec![configuration])
 }
 
 /// Region slots a deployer-provided list can fill. CloudFormation cannot loop

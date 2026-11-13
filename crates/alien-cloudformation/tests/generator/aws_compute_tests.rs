@@ -44,14 +44,14 @@ fn aws_registry_without_regions_emits_no_replication() {
 }
 
 #[test]
-fn aws_registry_declared_regions_emit_replication_and_a_creation_template() {
+fn aws_registry_declared_regions_emit_replication_and_no_creation_template() {
     let rendered = try_render_registry(&registry_stack(&["us-east-2", "eu-west-1"])).unwrap();
     assert!(
         rendered.contains("AWS::ECR::ReplicationConfiguration"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("AWS::ECR::RepositoryCreationTemplate"),
+        !rendered.contains("RepositoryCreationTemplate"),
         "{rendered}"
     );
     assert!(rendered.contains("us-east-2") && rendered.contains("eu-west-1"));
@@ -117,13 +117,11 @@ fn aws_registry_regions_input_is_read_at_deploy_time_and_empty_writes_nothing() 
     // The region comes from the parameter, never a literal.
     assert!(rendered.contains("InputDeploymentRegions"), "{rendered}");
     assert!(rendered.contains("too-many-regions"), "{rendered}");
-    let template_resource = resources
+    assert!(!resources
         .as_object()
         .unwrap()
         .values()
-        .find(|r| r["Type"] == "AWS::ECR::RepositoryCreationTemplate")
-        .unwrap();
-    assert_eq!(template_resource["Condition"], configuration["Condition"]);
+        .any(|r| r["Type"] == "AWS::ECR::RepositoryCreationTemplate"));
     assert_eq!(
         template["Parameters"]["InputDeploymentRegions"]["Type"],
         "CommaDelimitedList"
