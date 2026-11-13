@@ -224,6 +224,7 @@ impl AwsCloudFormationPermissionsGenerator {
             || template.contains("${!");
         let contains_regular_vars = [
             "${awsPermissionsBoundaryArn}",
+            "${awsVpcId}",
             "${stackPrefix}",
             "${resourceId}",
             "${resourceName}",
@@ -254,6 +255,7 @@ impl AwsCloudFormationPermissionsGenerator {
                     .replace("${awsPermissionsBoundaryArn}", arn)
                     .replace("arn:aws:", "arn:${AWS::Partition}:");
             }
+            result = result.replace("${awsVpcId}", context.aws_vpc_id());
             if let Some(stack_prefix) = context.stack_prefix.as_ref() {
                 if stack_prefix.is_empty() {
                     // Empty stack prefix means just use the stack name
@@ -366,6 +368,19 @@ impl AwsCloudFormationPermissionsGenerator {
                         crate::VariableInterpolator::interpolate_variables(value_key, context)?;
                     let value_template = &condition_values[value_key];
                     let interpolated_value = match value_template {
+                        alien_core::AwsConditionValue::String(value)
+                            if value == crate::AWS_SUBNET_IDS_VARIABLE =>
+                        {
+                            JsonValue::Array(
+                                context
+                                    .aws_subnet_ids()
+                                    .iter()
+                                    .map(|value| {
+                                        self.interpolate_cloudformation_string(value, context)
+                                    })
+                                    .collect::<Result<Vec<_>>>()?,
+                            )
+                        }
                         alien_core::AwsConditionValue::String(value) => {
                             self.interpolate_cloudformation_string(value, context)?
                         }

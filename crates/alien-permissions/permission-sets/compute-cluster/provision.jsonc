@@ -377,6 +377,93 @@
           }
         }
       },
+      // Instances launch only into the stack's own VPC: its subnets, and the network
+      // interfaces created in them. Without a VPC setup knows (the account's default VPC),
+      // ${awsVpcId} renders as "*".
+      {
+        "label": "vpc-pinned-launch-network",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+            ],
+            "condition": {
+              "StringLike": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+            ],
+            "condition": {
+              "StringLike": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}"
+              }
+            }
+          }
+        }
+      },
+      // A network management creates itself gets its VPC ID only at runtime, but every subnet
+      // in it carries the stack's tags from creation. An interface the launch creates has no
+      // tags yet; an existing one must be the stack's.
+      {
+        "label": "vpc-tagged-launch-subnets",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-launch-interfaces",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      // The machine image and the root volume the launch creates.
       {
         "label": "Use RunInstances companion resources",
         "grant": {
@@ -386,16 +473,12 @@
           "stack": {
             "resources": [
               "arn:aws:ec2:${awsRegion}::image/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
             ]
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}::image/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
             ]
           }
@@ -480,6 +563,9 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
@@ -491,6 +577,9 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
@@ -516,6 +605,9 @@
               "Null": {
                 "autoscaling:LaunchConfigurationName": "true"
               },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
@@ -532,6 +624,9 @@
               },
               "Null": {
                 "autoscaling:LaunchConfigurationName": "true"
+              },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -556,6 +651,9 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
@@ -567,6 +665,9 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
@@ -593,6 +694,9 @@
               "Null": {
                 "autoscaling:LaunchConfigurationName": "true"
               },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+              },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
@@ -609,6 +713,9 @@
               },
               "Null": {
                 "autoscaling:LaunchConfigurationName": "true"
+              },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

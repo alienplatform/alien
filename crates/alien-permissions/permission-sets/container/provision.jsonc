@@ -95,13 +95,52 @@
           }
         }
       },
-      // Load Balancer (ALB/NLB) for exposed containers
+      // Load Balancer (ALB/NLB) for exposed containers, only in the stack's own subnets. Without
+      // subnets setup knows (the default VPC, or a network management creates itself),
+      // ${awsSubnetIds} renders as "*".
       {
         "grant": {
-          "actions": [
-            "elasticloadbalancing:CreateLoadBalancer",
-            "elasticloadbalancing:CreateTargetGroup"
-          ]
+          "actions": ["elasticloadbalancing:CreateLoadBalancer"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "ForAllValues:StringLike": {
+                "elasticloadbalancing:Subnet": "${awsSubnetIds}"
+              },
+              "Null": {
+                "elasticloadbalancing:Subnet": "false"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "ForAllValues:StringLike": {
+                "elasticloadbalancing:Subnet": "${awsSubnetIds}"
+              },
+              "Null": {
+                "elasticloadbalancing:Subnet": "false"
+              }
+            }
+          }
+        }
+      },
+      // Target groups take no network condition in IAM. A group reaches nothing on its own:
+      // registering targets and attaching it to a listener both need this stack's tags.
+      {
+        "grant": {
+          "actions": ["elasticloadbalancing:CreateTargetGroup"]
         },
         "binding": {
           "stack": {
@@ -978,9 +1017,12 @@
         }
       },
       // Security group for LB (created by container controller, not cluster).
-      // AWS authorizes CreateSecurityGroup against the target VPC. The created
-      // security group is tag-bound by the paired CreateTags-on-create grant.
+      // AWS authorizes CreateSecurityGroup against the target VPC and the new group, which
+      // must both be in the stack's own VPC. The created security group is tag-bound by the
+      // paired CreateTags-on-create grant. Without a VPC setup knows (the account's default
+      // VPC), ${awsVpcId} renders as "*".
       {
+        "label": "vpc-pinned-create-security-group",
         "grant": {
           "actions": ["ec2:CreateSecurityGroup"]
         },
@@ -989,13 +1031,66 @@
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+            ],
+            "condition": {
+              "StringLikeIfExists": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}",
+                "ec2:VpcID": "${awsVpcId}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+            ],
+            "condition": {
+              "StringLikeIfExists": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}",
+                "ec2:VpcID": "${awsVpcId}"
+              }
+            }
+          }
+        }
+      },
+      // A network management creates itself: its VPC carries the stack's tags from creation.
+      {
+        "label": "vpc-tagged-create-security-group-vpc",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-create-security-group",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"]
           }
         }
       },

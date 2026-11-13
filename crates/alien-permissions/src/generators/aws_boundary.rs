@@ -853,6 +853,13 @@ pub(super) fn include_role_statement(
         if label.starts_with(SIGNING_LABEL_PREFIX) {
             return Ok(context.signing_protected);
         }
+        let tagged = context.aws_network == Some(crate::AwsNetworkScope::StackTagged);
+        if label.starts_with(crate::VPC_PINNED_LABEL_PREFIX) {
+            return Ok(!tagged);
+        }
+        if label.starts_with(crate::VPC_TAGGED_LABEL_PREFIX) {
+            return Ok(tagged);
+        }
     }
     if permission_set.id != "container/provision" {
         return Ok(true);
