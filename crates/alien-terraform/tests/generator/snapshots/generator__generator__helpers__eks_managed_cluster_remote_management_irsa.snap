@@ -852,6 +852,7 @@ resource "aws_eks_cluster" "kubernetes" {
   count                         = var.kubernetes_cluster_mode == "create" ? 1 : 0
   name                          = "${local.resource_prefix}-k8s"
   role_arn                      = aws_iam_role.kubernetes_cluster[0].arn
+  version                       = "1.36"
   bootstrap_self_managed_addons = false
 
   vpc_config {
@@ -884,6 +885,12 @@ resource "aws_eks_cluster" "kubernetes" {
     block_storage {
       enabled = true
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      version
+    ]
   }
 
   depends_on = [
@@ -1190,6 +1197,11 @@ output "kubernetes_kube_context" {
 output "kubernetes_update_kubeconfig_command" {
   value       = "AWS_PROFILE=<target-profile> aws eks update-kubeconfig --region ${local.deployment_region} --name ${local.kubernetes_kube_context} --alias ${local.kubernetes_kube_context}"
   description = "AWS CLI command template for configuring kubectl access to the target EKS cluster."
+}
+
+output "chart_service_accounts_json" {
+  value       = jsonencode({ serviceAccountPrefix = local.resource_prefix, serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
+  description = "The Helm chart's `serviceAccountPrefix`, `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created, and the prefix their trust policies expect in service account names), as JSON. Merge it into the chart's values. Install into the namespace set in `kubernetes_namespace`."
 }
 
 === README.md ===

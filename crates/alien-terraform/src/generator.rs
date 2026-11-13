@@ -412,6 +412,10 @@ pub(crate) fn render_terraform_module(
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
     let mut deployer_secrets_vault_binding: Option<Expression> = None;
+    // The chart's `infrastructure` entries for resources this module creates.
+    let mut chart_infrastructure: Vec<(Option<String>, String, Expression)> = Vec::new();
+    // Resources this module doesn't create: the installer supplies their bindings.
+    let mut installer_bindings: Vec<(String, String)> = Vec::new();
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -434,6 +438,17 @@ pub(crate) fn render_terraform_module(
             && (resource_type == Sandbox::RESOURCE_TYPE
                 || resource_type == ComputeCluster::RESOURCE_TYPE)
         {
+            continue;
+        }
+
+        // A type with no emitter on this target that the installer can bind to existing
+        // infrastructure is left out of the module; the installer supplies its binding. An
+        // emitter registered for the type (an embedder may add one) always wins.
+        if target.is_kubernetes()
+            && options.registry.emitter(&resource_type, platform).is_none()
+            && alien_core::EXTERNAL_BINDING_TYPES.contains(&resource_type.as_ref())
+        {
+            installer_bindings.push((resource_id.clone(), resource_type.as_ref().to_string()));
             continue;
         }
 
@@ -499,6 +514,25 @@ pub(crate) fn render_terraform_module(
 
         if resource_id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID {
             deployer_secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        } else if target.is_kubernetes()
+            && CHART_BOUND_TYPES.contains(&resource.config.resource_type().as_ref())
+        {
+            // The chart takes the resources a Kubernetes install doesn't create
+            // as `infrastructure` bindings. Their payload names the service;
+            // the chart also wants the resource type.
+            if let Some(Expression::Object(mut binding)) = emitter.emit_binding_ref(&ctx)? {
+                binding.insert(
+                    hcl::expr::ObjectKey::Identifier(Identifier::sanitized("type")),
+                    // The binding's type is the snake_case form of the resource type
+                    // (`artifact-registry` is `artifact_registry`).
+                    Expression::String(resource.config.resource_type().as_ref().replace('-', "_")),
+                );
+                chart_infrastructure.push((
+                    resource.enabled_when.clone(),
+                    resource_id.clone(),
+                    Expression::Object(binding),
+                ));
+            }
         }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
@@ -521,6 +555,7 @@ pub(crate) fn render_terraform_module(
             &mut shared_locals,
         )?;
     }
+    let has_chart_service_accounts = shared_locals.contains_key("helm_service_accounts");
     if matches!(platform, alien_core::Platform::Gcp) {
         dedupe_gcp_support_resources(&mut per_resource)?;
     }
@@ -568,6 +603,9 @@ pub(crate) fn render_terraform_module(
             crate::gating::rewrite_expression(expression, &gated);
         }
         for (_gate, expression) in registration_resources.iter_mut() {
+            crate::gating::rewrite_expression(expression, &gated);
+        }
+        for (_gate, _id, expression) in chart_infrastructure.iter_mut() {
             crate::gating::rewrite_expression(expression, &gated);
         }
     }
@@ -905,7 +943,12 @@ pub(crate) fn render_terraform_module(
             setup_identity.as_ref(),
             protected_outputs(target, &stack_settings, management_label.as_deref()),
             &stack_inputs,
-            deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?,
+            deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?
+                .into_iter()
+                .chain(chart_infrastructure_output(chart_infrastructure))
+                .chain(installer_bindings_output(&installer_bindings))
+                .chain(chart_service_accounts_output(has_chart_service_accounts))
+                .collect(),
         ))?,
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
@@ -929,6 +972,12 @@ pub(crate) fn render_terraform_module(
             profile,
         ),
     );
+
+    if let Some(note) = installer_bindings_readme(&installer_bindings) {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(&note);
+        }
+    }
 
     if matches!(target, TerraformTarget::Azure | TerraformTarget::Aks)
         && stack.resources.values().any(|entry| {
@@ -2410,6 +2459,88 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 /// a Secret in the deployment's namespace whose name the operator derives, so
 /// the output carries the vault key and the deployment status shows the full
 /// name.
+/// Resource types the chart binds through its `infrastructure` values.
+const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registry", "vault"];
+
+/// `chart_infrastructure_json`: the chart's `infrastructure` values for the
+/// resources this module created, as JSON. Install the chart with it as the
+/// `infrastructure` value, or store it in the Secret named by
+/// `infrastructureExistingSecret` (key `external-bindings.json`) when a GitOps
+/// tool installs the chart. Absent when the module creates none of them.
+fn chart_infrastructure_output(
+    bindings: Vec<(Option<String>, String, Expression)>,
+) -> Option<(String, Expression, String)> {
+    if bindings.is_empty() {
+        return None;
+    }
+    // A resource gated on an input only has a binding while its gate is true: the
+    // entry is left out otherwise, so the output never reads a resource that wasn't created.
+    let value = if bindings.iter().all(|(gate, _, _)| gate.is_none()) {
+        expr::object(bindings.into_iter().map(|(_, id, binding)| (id, binding)))
+    } else {
+        crate::emitters::enabled::gated_object(bindings)
+    };
+    Some((
+        "chart_infrastructure_json".to_string(),
+        expr::jsonencode(value),
+        "The Helm chart's `infrastructure` values for the resources this module created, as JSON. Use it as the `infrastructure` value, or as the external-bindings.json key of the Secret named by `infrastructureExistingSecret`.".to_string(),
+    ))
+}
+
+/// `chart_service_accounts_json`: the chart's `serviceAccountPrefix`, `serviceAccounts` and
+/// `managerServiceAccount` values (the cloud identity annotations of the roles this module created), as JSON. Merge it
+/// into the chart's values.
+fn chart_service_accounts_output(present: bool) -> Option<(String, Expression, String)> {
+    if !present {
+        return None;
+    }
+    Some((
+        "chart_service_accounts_json".to_string(),
+        expr::jsonencode(expr::object([
+            // The cloud identities trust service accounts named from the resource prefix.
+            ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
+            ("serviceAccounts", expr::raw("local.helm_service_accounts")),
+            (
+                "managerServiceAccount",
+                expr::raw("local.helm_manager_service_account"),
+            ),
+        ])),
+        "The Helm chart's `serviceAccountPrefix`, `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created, and the prefix their trust policies expect in service account names), as JSON. Merge it into the chart's values. Install into the namespace set in `kubernetes_namespace`.".to_string(),
+    ))
+}
+
+/// `installer_supplied_bindings`: the resources this module leaves out because the installer
+/// binds them to existing infrastructure (id to type).
+fn installer_bindings_output(
+    bindings: &[(String, String)],
+) -> Option<(String, Expression, String)> {
+    if bindings.is_empty() {
+        return None;
+    }
+    Some((
+        "installer_supplied_bindings".to_string(),
+        expr::jsonencode(expr::object(
+            bindings
+                .iter()
+                .map(|(id, kind)| (id.clone(), Expression::String(kind.clone()))),
+        )),
+        "Resources this module does not create. Supply each one as an `infrastructure` binding when you install the chart; the install fails naming the value when one is missing.".to_string(),
+    ))
+}
+
+fn installer_bindings_readme(bindings: &[(String, String)]) -> Option<String> {
+    if bindings.is_empty() {
+        return None;
+    }
+    let mut note = String::from(
+        "\n## Bindings you supply\n\nThis module does not create the resources below. Bind each one to existing infrastructure in the chart's `infrastructure` values (or, for a database, enable the chart-managed one); the install fails naming the value when a binding is missing. The `installer_supplied_bindings` output lists them.\n\n",
+    );
+    for (id, kind) in bindings {
+        note.push_str(&format!("- `{id}` ({kind})\n"));
+    }
+    Some(note)
+}
+
 fn deployer_secret_outputs(
     stack: &Stack,
     target: TerraformTarget,

@@ -2533,6 +2533,52 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_key_on_plain_kubernetes_fails_at_deployment_start_before_setup() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.platform = Platform::Kubernetes;
+        state.protocol_version =
+            alien_core::deployment_protocol_version_for_platform(Platform::Kubernetes, None);
+        state.target_release.as_mut().unwrap().stack = Stack::new("keyed".to_string())
+            .add(
+                alien_core::Key::new("secrets-key".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 2,
+            ..RunnerPolicy::default()
+        };
+
+        let result = run_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_keyed",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("the refusal is checkpointed as a semantic failure");
+
+        assert_eq!(result.steps_executed, 1, "stops at the first step");
+        assert_eq!(state.status, DeploymentStatus::PreflightsFailed);
+        assert!(
+            state.runtime_metadata.is_none(),
+            "nothing was prepared or created"
+        );
+        let error = state.error.as_ref().expect("the refusal is recorded");
+        assert!(
+            error.to_string().contains("secrets-key")
+                || format!("{error:?}").contains("secrets-key"),
+            "{error:?}"
+        );
+    }
+
     #[tokio::test]
     async fn retry_requested_failed_status_runs_one_step() {
         let transport = FailFirstCheckpointTransport::default();

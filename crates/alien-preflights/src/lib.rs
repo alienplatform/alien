@@ -1,6 +1,7 @@
 pub mod azure;
 pub mod compatibility;
 pub mod compile_time;
+pub mod controller_available;
 pub mod deployment_prerequisites;
 pub mod error;
 pub mod mutations;
@@ -445,6 +446,9 @@ impl PreflightRegistry {
         ));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ExternalBindingsTypeCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::ControllerAvailableCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(remote_storage::ExternalBindingCheck));
         registry.add_deployment_prerequisite_check(Box::new(

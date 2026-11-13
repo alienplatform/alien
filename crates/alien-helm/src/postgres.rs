@@ -18,10 +18,18 @@ pub(crate) fn values(stack: &Stack) -> Value {
             "storageClassName": "",
             "highAvailability": database.high_availability,
             "encryptionKey": database.encryption_key,
-            "resources": {"requests": {
-                "cpu": database.cpu.as_deref().unwrap_or("250m"),
-                "memory": kubernetes_size(database.memory.as_deref().unwrap_or("256Mi"), true)
-            }}
+            // The memory limit equals the request, so the database can't use the
+            // node's memory beyond what it reserved. There is no CPU limit: it would
+            // throttle queries without protecting the node.
+            "resources": {
+                "requests": {
+                    "cpu": database.cpu.as_deref().unwrap_or("250m"),
+                    "memory": kubernetes_size(database.memory.as_deref().unwrap_or("256Mi"), true)
+                },
+                "limits": {
+                    "memory": kubernetes_size(database.memory.as_deref().unwrap_or("256Mi"), true)
+                }
+            }
         })))
     }).collect();
     Value::Object(databases)
@@ -172,6 +180,14 @@ spec:
         app.kubernetes.io/instance: {{ $.Release.Name }}
     spec:
       automountServiceAccountToken: false
+      # The official image's postgres user is 999. fsGroup makes the data volume writable by it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       {{- with $.Values.runtime.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -179,6 +195,10 @@ spec:
       containers:
         - name: postgres
           image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           ports:
             - name: postgres
               containerPort: 5432

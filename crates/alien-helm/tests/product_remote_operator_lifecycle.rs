@@ -872,6 +872,54 @@ rules:
             None,
         );
     }
+    // What a dynamic container leaves behind: a Deployment, Service and Secret that carry
+    // the owner label plus the release's cleanup labels (as the Operator stamps them).
+    let dynamic_owner = "alien.dev/dynamic-deployment=dep-lifecycle-uninstall";
+    for (kind, create) in [
+        (
+            "deployment",
+            vec![
+                "create",
+                "deployment",
+                "dc-uninstall",
+                "--image=registry.k8s.io/pause:3.10",
+                "--replicas=0",
+            ],
+        ),
+        (
+            "service",
+            vec![
+                "create",
+                "service",
+                "clusterip",
+                "dc-uninstall",
+                "--tcp=80:80",
+            ],
+        ),
+        (
+            "secret",
+            vec!["create", "secret", "generic", "dc-uninstall"],
+        ),
+    ] {
+        let mut args = create;
+        args.extend(["--namespace", &helm_namespace]);
+        run_ok("kubectl", args, None);
+        run_ok(
+            "kubectl",
+            [
+                "label",
+                kind,
+                "dc-uninstall",
+                "--namespace",
+                &helm_namespace,
+                "--overwrite",
+                "managed-by=runtime",
+                &format!("alien.dev/deployment={history_mismatch_release}"),
+                dynamic_owner,
+            ],
+            None,
+        );
+    }
     let stale_history_record = format!("sh.helm.release.v1.{history_mismatch_release}.v2");
     run_ok(
         "kubectl",
@@ -978,6 +1026,23 @@ rules:
         ],
         None,
         "uninstall cleanup must delete runtime resources owned by this deployment",
+    );
+    let leftover = run_ok(
+        "kubectl",
+        [
+            "get",
+            "deployments,services,secrets",
+            "--namespace",
+            &helm_namespace,
+            "--selector",
+            dynamic_owner,
+            "--output=name",
+        ],
+        None,
+    );
+    assert!(
+        leftover.stdout.trim().is_empty(),
+        "helm uninstall must leave nothing labelled for a dynamic container: {leftover:?}"
     );
     run_ok(
         "kubectl",

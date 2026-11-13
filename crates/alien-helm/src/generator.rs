@@ -439,6 +439,14 @@ fn generate_helm_chart_internal(
         "examples/bootstrap.yaml".to_string(),
         bootstrap_values_example(),
     );
+    files.insert(
+        "examples/gitops/flux.yaml".to_string(),
+        flux_example(&chart_name),
+    );
+    files.insert(
+        "examples/gitops/argocd.yaml".to_string(),
+        argocd_example(&chart_name),
+    );
     let mut readme = readme_md(&chart_name);
     if analysis
         .postgres
@@ -4255,6 +4263,8 @@ logCollector:
   maxStreams: 32
   # nodeAgent only. Generated on first install and retained on upgrade.
   token: ""
+  # nodeAgent only. Pull secrets for the collector image; defaults to runtime.imagePullSecrets.
+  imagePullSecrets: []
   image:
     repository: fluent/fluent-bit
     tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
@@ -4331,7 +4341,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n# Set true when Flux, Argo CD or another tool renders this chart without access to\n# the cluster (`helm template`). The render then fails unless existing Secrets supply\n# every credential the chart would otherwise generate: a generated value would change\n# on every render. Requires management.existingSecret.name,\n# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or\n# logCollector.token.\ngitops:\n  enabled: false\n\n# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health\n# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure\n# is disabled, so the Role doesn't carry them.\nrbac:\n  routing:\n    enabled: true\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -5196,6 +5206,16 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
         "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
+        "imagePullSecrets": {
+          "type": "array",
+          "description": "Pull secrets for the node collector image. Defaults to runtime.imagePullSecrets.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "minLength": 1 } }
+          }
+        },
         "image": {
           "type": "object",
           "description": "Node collector image; ignored in podApi mode.",
@@ -5282,13 +5302,88 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "deploymentModel": { "type": "string", "enum": ["pull", "Pull"] },
         "updates": { "type": "string" },
         "telemetry": { "type": "string" },
-        "heartbeats": { "type": "string" }
+        "heartbeats": { "type": "string" },
+        "quotaWarningOverrides": { "type": "array", "items": { "type": "string" } },
+        "network": { "type": ["object", "null"] },
+        "domains": { "type": ["object", "null"] },
+        "compute": { "type": ["object", "null"] },
+        "publicEndpoints": { "type": ["object", "null"] },
+        "kubernetes": {
+          "type": ["object", "null"],
+          "properties": {
+            "cluster": {
+              "type": ["object", "null"],
+              "properties": {
+                "ownership": { "type": "string" },
+                "namespace": { "type": ["string", "null"] },
+                "cloud": { "type": ["object", "null"] }
+              }
+            },
+            "exposure": {
+              "type": ["object", "null"],
+              "required": ["mode"],
+              "properties": {
+                "mode": { "type": "string", "enum": ["disabled", "generated", "custom", "customBaseDomain"] },
+                "domain": { "type": "string" },
+                "baseDomain": { "type": "string" },
+                "route": { "type": "object" },
+                "certificate": { "type": "object" }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": true
     },
-    "postgres": { "type": "object" },
+    "postgres": {
+      "type": "object",
+      "description": "One entry per Postgres resource in the stack, keyed by resource ID.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead." },
+          "existingPasswordSecret": { "type": "string", "description": "Secret with a `password` key. Required for GitOps and offline rendering." },
+          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering." },
+          "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "repository": { "type": "string", "minLength": 1 },
+              "tag": { "type": "string", "minLength": 1 }
+            }
+          },
+          "storage": { "type": "string", "minLength": 1 },
+          "storageClassName": { "type": "string" },
+          "highAvailability": { "type": "boolean" },
+          "encryptionKey": { "type": ["object", "string", "null"] },
+          "resources": { "type": "object" }
+        }
+      }
+    },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Grant the Operator Role the rules for Ingresses, Gateways, HTTPRoutes and load balancer health checks." }
+          }
+        }
+      }
+    },
+    "gitops": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Fail the render unless existing Secrets supply the management token and the encryption key, so a render never generates credentials." }
+      }
+    },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -6072,6 +6167,7 @@ const ROLE_RULES: &str = r#"  {{- if and .Values.logCollector.enabled (eq (defau
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -6084,6 +6180,7 @@ const ROLE_RULES: &str = r#"  {{- if and .Values.logCollector.enabled (eq (defau
   - apiGroups: ["alb.networking.azure.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
 "#;
 
 fn rolebinding_tpl() -> String {
@@ -6250,6 +6347,7 @@ fn secret_tpl() -> String {
 {{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
   {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
+{{- include "deployment.validateGitops" . -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
@@ -6431,13 +6529,20 @@ kind: Job
 metadata:
   name: {{ $pruneName }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": post-upgrade
     "helm.sh/hook-weight": "124"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # A failed prune Job stays for debugging, then Kubernetes removes it.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 0
   template:
+    metadata:
+      labels:
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -6452,6 +6557,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
         - name: current-history
           {{- if eq $backend "secret" }}
           secret:
@@ -6468,8 +6576,15 @@ spec:
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
           command:
             - /bin/sh
             - -ec
@@ -6624,6 +6739,8 @@ spec:
             - name: current-history
               mountPath: /history
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
 {{- end }}
 {{- end }}
 "#
@@ -6657,8 +6774,10 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # A failed cleanup Job stays for debugging, then Kubernetes removes it.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 1
   template:
     metadata:
@@ -6677,14 +6796,28 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       containers:
         - name: cleanup
           image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           command:
             - /bin/sh
             - -ec
@@ -6772,11 +6905,33 @@ spec:
               # scoped dependent after the Job has already listed it.
               manager_name={{ include "deployment.fullname" . | quote }}
               if resource_exists "deployment/$manager_name"; then
-                manager_contract="$(kubectl -n "$namespace" get deployment "$manager_name" -o go-template='{{ "{{" }} printf "%s\t%s\t%s\t%s" (index .metadata.annotations "meta.helm.sh/release-name") (index .metadata.annotations "meta.helm.sh/release-namespace") (index .metadata.labels "app.kubernetes.io/managed-by") (index .metadata.labels "app.kubernetes.io/instance") {{ "}}" }}')"
-                IFS="$(printf '\t')" read -r manager_release_name manager_release_namespace manager_release_service manager_release_instance <<EOF
+                # Helm stamps ownership annotations on the Deployment; a GitOps
+                # tool that renders the chart itself (Argo CD) does not, and its
+                # label tracking overwrites app.kubernetes.io/instance. The chart
+                # therefore also labels the manager Deployment with its release
+                # name. Accept either proof; anything else is refused.
+                manager_contract="$(kubectl -n "$namespace" get deployment "$manager_name" -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"\n"}{.metadata.labels.app\.kubernetes\.io/managed-by}{"\n"}{.metadata.labels.app\.kubernetes\.io/instance}{"\n"}{.metadata.labels.alien\.dev/helm-release}{"\n"}{.metadata.namespace}{"\n"}')" || {
+                  echo "Refusing cleanup: cannot read manager Deployment $namespace/$manager_name." >&2
+                  exit 1
+                }
+                # One field per line: BusyBox ash `read` collapses empty IFS fields.
+                {
+                  read -r manager_release_name
+                  read -r manager_release_namespace
+                  read -r manager_release_service
+                  read -r manager_release_instance
+                  read -r manager_chart_release
+                  read -r manager_namespace
+                } <<EOF
               $manager_contract
               EOF
-                if [ "$manager_release_name" != "$expected_release_name" ] || [ "$manager_release_namespace" != "$expected_release_namespace" ] || [ "$manager_release_service" != "$expected_release_service" ] || [ "$manager_release_instance" != "$expected_release_name" ]; then
+                manager_owned=false
+                if [ "$manager_release_name" = "$expected_release_name" ] && [ "$manager_release_namespace" = "$expected_release_namespace" ] && [ "$manager_release_service" = "$expected_release_service" ] && [ "$manager_release_instance" = "$expected_release_name" ]; then
+                  manager_owned=true
+                elif [ "$manager_chart_release" = "$expected_release_name" ] && [ "$manager_namespace" = "$expected_release_namespace" ]; then
+                  manager_owned=true
+                fi
+                if [ "$manager_owned" != true ]; then
                   echo "Manager Deployment $namespace/$manager_name is not owned by this exact Helm release; refusing cleanup." >&2
                   exit 1
                 fi
@@ -6869,10 +7024,13 @@ spec:
               done
 
               for cleanup_selector in $selectors; do
-              kubectl -n "$namespace" get deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,jobs.batch,pods,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
+              kubectl -n "$namespace" get deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,jobs.batch,pods,services,configmaps,secrets,networkpolicies.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
               kubectl -n "$namespace" delete deployments.apps,statefulsets.apps,daemonsets.apps -l "$cleanup_selector" --ignore-not-found=true --cascade=foreground --wait=false
               kubectl -n "$namespace" delete replicasets.apps,jobs.batch,pods -l "$cleanup_selector" --ignore-not-found=true --wait=false
-              kubectl -n "$namespace" delete services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
+              kubectl -n "$namespace" delete services,configmaps,secrets,networkpolicies.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
+              {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
+              kubectl -n "$namespace" get ingresses.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
+              kubectl -n "$namespace" delete ingresses.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
               if ! gateway_resources="$(kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>"$scratch/discovery-error")"; then
                 cat "$scratch/discovery-error" >&2
                 echo "Refusing cleanup: Gateway API discovery failed." >&2
@@ -6904,6 +7062,7 @@ spec:
                 kubectl -n "$namespace" get healthcheckpolicies.alb.networking.azure.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
                 kubectl -n "$namespace" delete healthcheckpolicies.alb.networking.azure.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
               fi
+              {{- end }}
               done
 
               sort -u "$scratch/env-secrets" -o "$scratch/env-secrets"
@@ -7036,6 +7195,9 @@ metadata:
   name: {{ include "deployment.fullname" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+    # The runtime cleanup hook accepts this as proof of ownership when the
+    # chart is rendered by a GitOps tool that adds no Helm annotations.
+    alien.dev/helm-release: {{ .Release.Name | quote }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
   # The operator holds an exclusive lock on its persistent state directory.
@@ -7440,6 +7602,10 @@ metadata:
     {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
+{{- with default $.Values.runtime.imagePullSecrets $.Values.logCollector.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -7593,7 +7759,7 @@ spec:
         checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
-      {{- with $.Values.runtime.imagePullSecrets }}
+      {{- with default $.Values.runtime.imagePullSecrets $.Values.logCollector.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -8192,6 +8358,137 @@ fn aks_values_example(analysis: &ChartAnalysis) -> String {
     )
 }
 
+/// Values a GitOps install sets, written as the `values` of a Flux
+/// HelmRelease or the `valuesObject` of an Argo CD Application. `indent` is
+/// the number of spaces the block starts at.
+fn gitops_values(indent: usize) -> String {
+    let block = r#"gitops:
+  enabled: true
+management:
+  url: https://manager.example.com
+  existingSecret:
+    name: alien-management
+    tokenKey: sync-token
+runtime:
+  image:
+    # The GitOps tool owns the Operator image: a new chart version carries a new
+    # Operator, and the Operator doesn't change its own image.
+    selfUpdate: false
+  encryption:
+    existingSecret:
+      name: alien-encryption
+      key: encryption-key
+  imagePullSecrets:
+    - name: alien-registry
+infrastructureExistingSecret: alien-infrastructure
+logCollector:
+  enabled: true
+  mode: podApi
+"#;
+    block
+        .lines()
+        .map(|line| format!("{}{line}\n", " ".repeat(indent)))
+        .collect()
+}
+
+/// Flux: an OCIRepository that follows the manager's chart versions, and a
+/// HelmRelease that installs them.
+fn flux_example(chart_name: &str) -> String {
+    format!(
+        r#"# Install this chart with Flux. Use one namespace per install.
+#
+# Create these Secrets in the namespace first (not in git, or sealed):
+#   alien-management      key sync-token: the deployment group token
+#   alien-encryption      key encryption-key: 64 hex characters, kept for the life of the install
+#   alien-infrastructure  key external-bindings.json: the `infrastructure` values as JSON
+#                         (the Terraform module's chart_infrastructure_json output)
+#   alien-registry        kubernetes.io/dockerconfigjson: pulls the Operator image and charts
+#                         through the manager
+#
+# `semver: "1.x"` takes every new chart version. A new Operator image is a new chart
+# version, so the Operator upgrades through Flux without a git change. Pin an exact
+# version here to hold it. Use `v1` instead of `v1beta2` on Flux 2.6 and newer.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: {chart_name}
+spec:
+  interval: 10m
+  url: oci://manager.example.com/charts/{chart_name}
+  ref:
+    semver: "1.x"
+  secretRef:
+    name: alien-registry
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {chart_name}
+spec:
+  interval: 10m
+  # Without retries Flux marks the release Stalled after one failed install or upgrade and
+  # stops until someone forces a reconcile.
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  chartRef:
+    kind: OCIRepository
+    name: {chart_name}
+  values:
+{values}"#,
+        values = gitops_values(4)
+    )
+}
+
+/// Argo CD: an Application that renders this chart from the manager's registry.
+fn argocd_example(chart_name: &str) -> String {
+    format!(
+        r#"# Install this chart with Argo CD. Use one namespace per install.
+#
+# Create the Secrets named below in the destination namespace first (not in git, or
+# sealed): alien-management (sync-token), alien-encryption (encryption-key),
+# alien-infrastructure (external-bindings.json) and alien-registry
+# (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
+# repository with the manager's install credentials.
+#
+# `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
+# chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check
+# yours. Where it doesn't, pin an exact version and let Renovate or Argo CD Image
+# Updater open the bump.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {chart_name}
+  namespace: argocd
+  # Without this finalizer, deleting the Application removes only the Application (and the
+  # chart's pre-delete cleanup), and the chart's own objects stay in the namespace.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: manager.example.com/charts
+    chart: {chart_name}
+    targetRevision: "1.*"
+    helm:
+      valuesObject:
+{values}  destination:
+    server: https://kubernetes.default.svc
+    namespace: {chart_name}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+"#,
+        values = gitops_values(8)
+    )
+}
+
 fn onprem_values_example(analysis: &ChartAnalysis) -> String {
     let mut yaml = external_bindings_initialize_example_values();
     append_service_accounts(&mut yaml, analysis);
@@ -8431,6 +8728,69 @@ log buffer and reads the selected log files from the beginning. When switching
 from nodeAgent to podApi, the Operator checks both collector names and waits for
 their Pods to stop, including when the chart is rendered without cluster access.
 Use an Operator image built with this chart version for that transition.
+
+## GitOps
+
+Flux and Argo CD render this chart without access to the cluster. Set
+`gitops.enabled: true` and the render fails unless existing Secrets supply the
+management token (`management.existingSecret`) and the encryption key
+(`runtime.encryption.existingSecret`), and unless the log collector is
+`podApi` or `logCollector.token` is set. Without it a render generates a
+different key every time. `examples/gitops/flux.yaml` and
+`examples/gitops/argocd.yaml` show the full setup. A GitOps tool owns the
+Operator image, so they set `runtime.image.selfUpdate: false` and take Operator
+upgrades through chart versions. Keep one release per namespace.
+
+## Permissions
+
+The Operator runs under one ServiceAccount with a Role in the release
+namespace and a ClusterRole for node health. The application's own
+ServiceAccounts get only the rules their permission profile needs.
+
+| Resource | Verbs | Why |
+| --- | --- | --- |
+| `configmaps`, `secrets`, `services`, `pods`, `persistentvolumeclaims` | all | Creates and updates what the application's containers, workers and daemons need |
+| `pods/log` | `get` | Reads Pod logs; only with `logCollector.mode: podApi` |
+| `serviceaccounts` | `get` | Reads the application ServiceAccounts the chart created |
+| `events` | `get`, `list`, `watch` | Reports why a workload can't start |
+| `deployments`, `statefulsets`, `daemonsets`, `replicasets` (`apps`) | all | Runs the application's workloads |
+| `pods` (`metrics.k8s.io`) | `get`, `list`, `watch` | Resource usage in health reports |
+| `jobs` (`batch`) | all | Build and one-off jobs |
+| `networkpolicies` | all | A container with network settings gets a NetworkPolicy |
+| `ingresses`; `gateways`, `httproutes` (Gateway API) | all | Public endpoints, for the exposure mode in `stackSettings.kubernetes.exposure` |
+| `healthcheckpolicies` (`networking.gke.io`, `alb.networking.azure.io`) | all | Load balancer health checks for public routes on GKE and AKS |
+| `nodes`; `nodes` (`metrics.k8s.io`) (ClusterRole) | `get`, `list`, `watch` | Node health; turn off with `heartbeat.collection.nodes.enabled: false` |
+
+Set `rbac.routing.enabled: false` to leave the Ingress, Gateway, HTTPRoute and
+health check rules out of the Role, for a stack whose
+`stackSettings.kubernetes.exposure` is disabled. It is on by default.
+
+## Upgrades and availability
+
+The Operator is one replica and its Deployment uses the `Recreate` strategy:
+during a chart upgrade the old Pod stops before the new one starts, so the
+Operator is unavailable for the time the new Pod takes to become ready. The
+application's own workloads keep running. Releases and health reports resume
+when the Operator is back.
+
+An upgrade that changes the Helm history can run a post-upgrade Job
+(`runtime-cleanup-history-prune`). It deletes Helm release revisions older
+than the first revision that is safe to roll back to, so a rollback can't
+restore a release without the runtime cleanup scope. It runs with a read-only
+root filesystem and a memory limit, and a failed run stays for a day for
+debugging. The pre-delete Job (`cleanup`) removes the Operator's runtime objects
+on `helm uninstall`, with the same limits.
+
+## Outbound connections
+
+The Operator connects to:
+
+- the management URL (`management.url`), for sync, deployment credentials and, when enabled, logs, metrics and telemetry;
+- the Kubernetes API server of its own cluster;
+- the registry of `runtime.image.repository` (the manager's registry when `runtime.image.pullWithManagementToken` is set), to pull the Operator image;
+- each service named in `infrastructure` (for example the object store, database or queue), and the cloud APIs the Pod's identity is allowed to call.
+
+The `nodeAgent` log collector reads logs on each node and sends them to the Operator in the cluster.
 "#
     )
 }

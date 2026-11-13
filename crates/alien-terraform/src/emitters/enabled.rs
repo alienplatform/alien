@@ -130,6 +130,24 @@ pub fn registration_list(entries: Vec<(Option<String>, Expression)>) -> Expressi
     Expression::FuncCall(Box::new(concat.build()))
 }
 
+/// An object of `id = value` entries where an entry gated on a boolean input is only present
+/// while its gate is true. Built as `merge(...)` so a false gate never reads the resource.
+pub fn gated_object(entries: Vec<(Option<String>, String, Expression)>) -> Expression {
+    let mut merged = FuncCall::builder(Identifier::sanitized("merge"));
+    for (gate, id, value) in entries {
+        let single = expr::object([(id, value)]);
+        merged = merged.arg(match gate {
+            Some(input_id) => Expression::Conditional(Box::new(Conditional::new(
+                expr::raw(gate_variable(&input_id)),
+                single,
+                expr::object(Vec::<(String, Expression)>::new()),
+            ))),
+            None => single,
+        });
+    }
+    Expression::FuncCall(Box::new(merged.build()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
