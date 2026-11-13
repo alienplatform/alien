@@ -568,3 +568,160 @@ print(json.dumps(out))
         &["delete", "pod", "-n", &baseline, &pod, "--wait=false"],
     );
 }
+
+/// The ENTRYPOINT must not start before the pod's egress restriction is proven, including under
+/// `none` egress. The cluster API address is given to the pod explicitly (service links are
+/// off, so the kubelet does not inject it), which makes the gate see a reachable blocked target
+/// until a NetworkPolicy that drops it is attached late.
+#[tokio::test]
+#[ignore = "needs a Kind cluster; with ALIEN_ROOT_BOOT_KIND_ENFORCES_POLICY set it also attaches a policy late"]
+async fn kubernetes_root_boot_kind_the_entrypoint_waits_for_a_late_network_policy() {
+    let context = env("ALIEN_ROOT_BOOT_KIND_CONTEXT");
+    let baseline = env("ALIEN_ROOT_BOOT_KIND_BASELINE_NAMESPACE");
+    let pods = client(&context).await;
+    let pair = ed25519_compact::KeyPair::generate();
+    let public_key = BASE64.encode(pair.pk.as_ref());
+
+    let api = kubectl(
+        &context,
+        &[
+            "get",
+            "service",
+            "kubernetes",
+            "-n",
+            "default",
+            "-o",
+            "jsonpath={.spec.clusterIP}",
+        ],
+    );
+    let api = String::from_utf8_lossy(&api.stdout).to_string();
+    assert!(!api.is_empty(), "the cluster API service address");
+
+    let sandbox = declared("gatewait", 0);
+    let mut pod = idle_pool_pod_with_labels(
+        &sandbox,
+        &baseline,
+        "alien-kind-runc",
+        None,
+        Some(&public_key),
+        BTreeMap::from([(
+            "alien.dev/deployment".to_string(),
+            "root-boot-kind".to_string(),
+        )]),
+    );
+    let name = format!("gatewait-{:x}", rand::random::<u32>());
+    pod.metadata.name = Some(name.clone());
+    pod.metadata
+        .labels
+        .get_or_insert_default()
+        .insert("a2657-gate-test".to_string(), name.clone());
+    let container = &mut pod.spec.as_mut().unwrap().containers[0];
+    for (key, value) in [
+        ("KUBERNETES_SERVICE_HOST", api.as_str()),
+        ("KUBERNETES_SERVICE_PORT", "443"),
+    ] {
+        container
+            .env
+            .get_or_insert_default()
+            .push(k8s_openapi::api::core::v1::EnvVar {
+                name: key.to_string(),
+                value: Some(value.to_string()),
+                value_from: None,
+            });
+    }
+    pods.create_pod(&baseline, &pod).await.expect("create pod");
+
+    // No policy yet: the gate must hold the ENTRYPOINT back. Look while it still waits.
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    let early = kubectl(
+        &context,
+        &[
+            "exec",
+            "-n",
+            &baseline,
+            &name,
+            "--",
+            "ls",
+            "/tmp/alien-contract/boots.jsonl",
+        ],
+    );
+    assert!(
+        !early.status.success(),
+        "the ENTRYPOINT ran before any NetworkPolicy was in force"
+    );
+
+    if std::env::var_os("ALIEN_ROOT_BOOT_KIND_ENFORCES_POLICY").is_none() {
+        // A CNI that does not enforce NetworkPolicy (Kind's default) never proves the drop. The
+        // gate must then refuse to start the workload at all, and say why.
+        let mut logs = String::new();
+        for _ in 0..30 {
+            let read = kubectl(&context, &["logs", "-n", &baseline, &name, "-c", "sandbox"]);
+            logs = String::from_utf8_lossy(&read.stdout).to_string();
+            if logs.contains("egress restriction not proven") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        assert!(
+            logs.contains("egress restriction not proven"),
+            "the gate refused to start the workload: {logs:?}"
+        );
+        let _ = kubectl(
+            &context,
+            &["delete", "pod", "-n", &baseline, &name, "--wait=false"],
+        );
+        return;
+    }
+
+    // Attach the policy late: no egress at all for this pod.
+    let policy = format!(
+        "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: {name}\n  namespace: {baseline}\nspec:\n  podSelector:\n    matchLabels:\n      a2657-gate-test: {name}\n  policyTypes: [Egress]\n"
+    );
+    let applied = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "printf '%b' '{policy}' | kubectl --context {context} apply -f -"
+        ))
+        .output()
+        .expect("kubectl apply");
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    // After the drops are proven in a row, the ENTRYPOINT starts, once.
+    let mut boots = String::new();
+    for _ in 0..30 {
+        let read = kubectl(
+            &context,
+            &[
+                "exec",
+                "-n",
+                &baseline,
+                &name,
+                "--",
+                "cat",
+                "/tmp/alien-contract/boots.jsonl",
+            ],
+        );
+        boots = String::from_utf8_lossy(&read.stdout).to_string();
+        if !boots.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    assert_eq!(
+        boots.lines().count(),
+        1,
+        "one boot after the gate passed: {boots:?}"
+    );
+    let _ = kubectl(
+        &context,
+        &["delete", "networkpolicy", "-n", &baseline, &name],
+    );
+    let _ = kubectl(
+        &context,
+        &["delete", "pod", "-n", &baseline, &name, "--wait=false"],
+    );
+}
