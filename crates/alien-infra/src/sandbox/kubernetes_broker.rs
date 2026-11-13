@@ -183,6 +183,7 @@ async fn claim_session_with_scope(
             continue;
         }
         crate::sandbox::annotate_claim(&mut candidate, now_unix, tenant_key, timeout_seconds)?;
+        mark_policy_verified(&mut candidate);
 
         // A conflict here is another caller winning the same pod, not an error to report: try
         // the next one rather than failing a create that a warm pool can still satisfy.
@@ -397,6 +398,13 @@ async fn cold_create(
             .into());
         }
         if let Some(address) = address {
+            // Record the proof so a retry after an Operator restart can tell this pod from one
+            // that became Ready against a dead address. Failing to write it is safe: reattach
+            // then falls back to the address comparison.
+            if let Some(mut verified) = current {
+                mark_policy_verified(&mut verified);
+                let _ = pods.update_pod(namespace, &name, &verified).await;
+            }
             let (capability, expires_at) = mint_capability(
                 signing_key,
                 &agent_session_id,
@@ -580,9 +588,16 @@ pub(crate) async fn reattach_session_for_deployment(
         })?;
     // A pod that is not Ready has not proven its NetworkPolicy is in force (see `cold_create`):
     // a retry for a session whose pod is still starting must not receive it early. Only the
-    // `Ready` condition counts here, not the Operator address: a session already handed out
-    // proved its policy before the claim, and an Operator restart (new address) must not strand it.
-    if !pod_condition_ready(&pod) {
+    // `Ready` condition counts, together with either the verified mark (set when the session was
+    // handed out against the then-current Operator, so a restart does not strand it) or a check
+    // that still points at this Operator. A claimed pod with neither (a cold pod that became
+    // Ready against a dead address) is not handed out.
+    if !reattachable_for(
+        &pod,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+            .ok()
+            .as_deref(),
+    ) {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!("session '{session_id}' is not ready yet"),
             resource_id: Some(sandbox_id.to_string()),
@@ -624,6 +639,26 @@ pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
             .ok()
             .as_deref(),
     )
+}
+
+fn mark_policy_verified(pod: &mut Pod) {
+    pod.metadata
+        .annotations
+        .get_or_insert_with(Default::default)
+        .insert(ANNOTATION_POLICY_VERIFIED.to_string(), "true".to_string());
+}
+
+fn policy_verified(pod: &Pod) -> bool {
+    pod.metadata
+        .annotations
+        .as_ref()
+        .is_some_and(|annotations| annotations.contains_key(ANNOTATION_POLICY_VERIFIED))
+}
+
+/// Whether a claimed pod may be handed to a retry: Ready, and either marked verified or checked
+/// against the current Operator address.
+fn reattachable_for(pod: &Pod, operator_address: Option<&str>) -> bool {
+    pod_condition_ready(pod) && (policy_verified(pod) || pod_is_ready_for(pod, operator_address))
 }
 
 fn pod_condition_ready(pod: &Pod) -> bool {
@@ -859,6 +894,10 @@ const ANNOTATION_SETUP_PENDING: &str = "alien.dev/setup-pending";
 /// creator that is still claiming, and a second pod for the id would follow if it were cleared.
 /// The value is the unix second of the claim, where the setup window starts.
 const ANNOTATION_CLAIMED: &str = "alien.dev/session-claimed";
+/// Set on a pod once it was Ready with its policy check pointing at the Operator that handed
+/// the session out. A retry or a later Operator (new address) trusts the pod only with this
+/// mark, or while the check still points at the current Operator.
+const ANNOTATION_POLICY_VERIFIED: &str = "alien.dev/policy-verified";
 /// How long a creator may take over a session's setup. Past it a session that is still marked is
 /// reported as ready: a creator that died mid-setup must not leave every caller waiting for a
 /// session that is only missing its egress policy, which each of them can set.
@@ -1612,8 +1651,13 @@ mod tests {
         assert!(pod_is_ready_for(&pod, Some("10.0.0.5:8080")));
         assert!(!pod_is_ready_for(&pod, Some("10.0.0.9:8080")));
         assert!(
-            pod_condition_ready(&pod),
-            "a session already handed out stays reachable after an Operator restart"
+            !reattachable_for(&pod, Some("10.0.0.9:8080")),
+            "a Ready pod whose check targeted a dead address and was never verified is not handed to a retry"
+        );
+        mark_policy_verified(&mut pod);
+        assert!(
+            reattachable_for(&pod, Some("10.0.0.9:8080")),
+            "a session verified when handed out stays reachable after an Operator restart"
         );
         assert!(
             pod_is_ready_for(&pod, None),
@@ -3046,6 +3090,13 @@ mod tests {
             created.metadata.uid = Some("uid-cold-0".to_string());
             Ok(created)
         });
+        pods.expect_update_pod().times(1).returning(|_, _, pod| {
+            assert!(
+                policy_verified(pod),
+                "a cold pod handed out is marked as verified"
+            );
+            Ok(pod.clone())
+        });
         let mut polls = 0;
         pods.expect_get_pod().returning(move |_, _| {
             polls += 1;
@@ -3198,6 +3249,8 @@ mod tests {
             created.metadata.uid = Some("uid-cold-0".to_string());
             Ok(created)
         });
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
         let polls = Arc::new(std::sync::Mutex::new(0));
         let seen = Arc::clone(&polls);
         pods.expect_get_pod().returning(move |_, _| {
