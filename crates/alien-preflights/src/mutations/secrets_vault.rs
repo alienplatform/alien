@@ -52,8 +52,7 @@ impl StackMutation for SecretsVaultMutation {
         // Only new installs opt in: adding the vault and read grants to an
         // installed stack would make ordinary releases require setup. Installed
         // stacks keep their current secret path until setup is re-run.
-        let machine_workloads = stack_state.platform == Platform::Aws
-            && stack_state.resources.is_empty()
+        let machine_workloads = machine_secrets_opted_in(stack_state)
             && !machine_workload_profiles(stack).is_empty();
         let worker_needs_vault = stack.resources.values().any(|entry| {
             entry.config.resource_type() == Worker::RESOURCE_TYPE
@@ -166,7 +165,7 @@ impl StackMutation for SecretsVaultMutation {
             )?;
         }
 
-        if stack_state.platform == Platform::Aws && stack_state.resources.is_empty() {
+        if machine_secrets_opted_in(stack_state) {
             add_machine_workload_secret_read(&mut stack, secrets_vault_id)?;
         }
 
@@ -786,6 +785,15 @@ fn deployer_secrets_read_permission_set(keys: &BTreeSet<String>) -> Result<Permi
         message: "Failed to build the deployer secrets read permission set".to_string(),
         resource_id: None,
     })
+}
+
+/// New AWS installs, and installs that already have the secrets vault, take
+/// the machine workload vault grants. An installed stack without the vault
+/// keeps its current secret path, so ordinary releases never need setup.
+fn machine_secrets_opted_in(stack_state: &StackState) -> bool {
+    stack_state.platform == Platform::Aws
+        && (stack_state.resources.is_empty()
+            || stack_state.resources.contains_key(SECRETS_VAULT_ID))
 }
 
 /// Permission profiles of the containers and daemons that run on machines.
