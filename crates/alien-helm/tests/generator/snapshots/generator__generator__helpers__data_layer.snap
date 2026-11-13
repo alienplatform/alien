@@ -25,7 +25,9 @@ management:
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
-  # Override the captured or installed endpoint when routing changes.
+  # Override the captured or installed endpoint when routing changes. The Operator sends its
+  # deployment token to this URL: use https. An http URL still works; the Operator and
+  # NOTES.txt warn about it.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -140,12 +142,31 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
+  # Off by default. When enabled, `mode: open` (the default) keeps the Operator Pod
+  # reachable and unrestricted; `mode: restricted` limits it. Restricted ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
+    mode: open
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
     ingress:
       enabled: true
+      extraRules: []
     egress:
       enabled: true
+      ports: [443, 6443]
+      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -486,15 +507,32 @@ postgres: {}
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "mode": { "type": "string", "enum": ["open", "restricted"] },
+            "dns": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "namespace": { "type": "string" },
+                "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+                "clusterIPs": { "type": "array", "items": { "type": "string" } }
+              }
+            },
             "ingress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             },
             "egress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "ports": { "type": "array", "items": { "type": "integer" } },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             }
           }
         },
@@ -3052,12 +3090,83 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Pods of this release namespace: log collectors and linked workloads.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.runtime.api.port }}
+    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
+    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
+        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+        - ipBlock:
+            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
+    # ports the bindings use (a database, a cache) and the manager's own port.
+    {{- $ports := .Values.runtime.networkPolicy.egress.ports | default list }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" (urlParse (default "" (include "deployment.managementUrl" .))).host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}{{- end }}
+    - ports:
+        {{- range $ports | uniq }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "gcp" }}
+    # GKE: the Operator's cloud credentials come from the metadata server
+    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
+    # with the Workload Identity metadata server on dataplane v1).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
+    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
+{{- end }}
+
+=== templates/NOTES.txt ===
+{{- $managementUrl := include "deployment.managementUrl" . }}
+{{- if and $managementUrl (not (hasPrefix "https://" (lower $managementUrl))) }}
+WARNING: the management URL {{ $managementUrl }} is not https. The Operator sends its deployment token to it in clear text. Set management.url (or management.defaultUrl) to the manager's https:// address.
 {{- end }}
 
 === templates/_infrastructure.tpl ===
