@@ -47,6 +47,13 @@ impl TfEmitter for GcpNetworkEmitter {
                         attr("region", expr::raw("var.gcp_region")),
                     ],
                 ));
+                emit_sandbox_network(
+                    ctx,
+                    label,
+                    expr::traversal(["data", "google_compute_network", label, "self_link"]),
+                    None,
+                    &mut fragment,
+                )?;
                 Ok(fragment)
             }
             NetworkSettings::ByoVpcGcp {
@@ -73,9 +80,24 @@ impl TfEmitter for GcpNetworkEmitter {
                         attr("region", Expression::String(region.clone())),
                     ],
                 ));
+                emit_sandbox_network(
+                    ctx,
+                    label,
+                    expr::traversal(["data", "google_compute_network", label, "self_link"]),
+                    None,
+                    &mut fragment,
+                )?;
                 Ok(fragment)
             }
-            NetworkSettings::Create { cidr, .. } => Ok(dynamic_topology(label, cidr.clone())),
+            NetworkSettings::Create { cidr, .. } => {
+                let mut fragment = dynamic_topology(label, cidr.clone());
+                let vpc = expr::raw(format!(
+                    "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : data.google_compute_network.{label}[0].self_link"
+                ));
+                let declared = cidr.clone().unwrap_or_else(|| "10.44.0.0/16".to_string());
+                emit_sandbox_network(ctx, label, vpc, Some(&declared), &mut fragment)?;
+                Ok(fragment)
+            }
             NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVnetAzure { .. } => {
                 Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_terraform_module".to_string(),
@@ -87,6 +109,24 @@ impl TfEmitter for GcpNetworkEmitter {
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
+        let label = required_label(ctx)?;
+        let mut import_ref = self.import_ref_without_sandbox_network(ctx)?;
+        // Only stacks whose sandboxes need PSC-I carry the attachment, so every other stack's
+        // import payload is unchanged.
+        if !ctx.targets_kubernetes && super::sandbox_network::stack_needs_psc(ctx.stack) {
+            if let Expression::Object(fields) = &mut import_ref {
+                fields.insert(
+                    hcl::expr::ObjectKey::Identifier("sandboxPscAttachmentSelfLink".into()),
+                    super::sandbox_network::attachment_self_link(label),
+                );
+            }
+        }
+        Ok(import_ref)
+    }
+}
+
+impl GcpNetworkEmitter {
+    fn import_ref_without_sandbox_network(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         Ok(match &network.settings {
@@ -350,6 +390,16 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
     ));
 
     fragment
+}
+
+fn emit_sandbox_network(
+    ctx: &EmitContext<'_>,
+    label: &str,
+    vpc: Expression,
+    declared: Option<&str>,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    super::sandbox_network::emit(ctx, label, vpc, declared, fragment)
 }
 
 fn gcp_network_name(label: &str, suffix: &str) -> Expression {

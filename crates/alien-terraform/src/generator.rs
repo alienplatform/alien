@@ -779,6 +779,8 @@ pub(crate) fn render_terraform_module(
             &stack_inputs,
             network_mode_names_subnets(stack, target),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
+            !target.is_kubernetes()
+                && crate::emitters::gcp::sandbox_network::stack_needs_psc(stack),
             profile,
         )?)?,
     );
@@ -2733,6 +2735,7 @@ fn variables_body(
     stack_inputs: &[StackInputDefinition],
     needs_named_subnets: bool,
     needs_gateway_subnets: bool,
+    needs_gcp_sandbox_psc: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
@@ -3027,6 +3030,14 @@ fn variables_body(
             blocks.push(nested(variable_block(
                 "network_region",
                 "Existing subnet region. Empty uses gcp_region.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+        }
+        if needs_gcp_sandbox_psc {
+            blocks.push(nested(variable_block(
+                "sandbox_psc_subnet_cidr",
+                "Range of the dedicated subnet that sandboxes use for Private Service Connect egress, /28 or larger. Empty picks the half of the network's parent block that the created network does not use. Required with an existing network.",
                 Some(Expression::String(String::new())),
                 false,
             )));
