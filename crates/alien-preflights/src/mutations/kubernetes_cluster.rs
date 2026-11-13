@@ -200,6 +200,8 @@ mod tests {
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: None,
             stack_settings,
             management_config: None,

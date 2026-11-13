@@ -3,6 +3,11 @@
 use crate::Stack;
 use serde::{Deserialize, Serialize};
 
+/// A signed statement as it is stored and forwarded: the exact bytes that were
+/// signed and the signatures over them. Carriers pass it through unchanged;
+/// only enforcers verify it (see `alien-signing`).
+pub use alien_signing::SignedStatement;
+
 /// Release metadata
 ///
 /// Identifies a specific release version and includes the stack definition.
@@ -24,4 +29,13 @@ pub struct ReleaseInfo {
     pub description: Option<String>,
     /// Stack definition for this release
     pub stack: Stack,
+    /// The developer's signed `release/v2` statement for this platform, when
+    /// the release was signed. A protected deployment deploys only the stack
+    /// inside it and ignores `stack`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed: Option<SignedStatement>,
+    /// The project's signer list chain, oldest first, carried with a signed
+    /// release so the deployment can verify it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signer_lists: Vec<SignedStatement>,
 }

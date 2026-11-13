@@ -458,6 +458,7 @@ impl ResolvedRemoteBinding {
                 // Checked rather than assumed, so a future manager change in what it refuses
                 // still gets caught here. Checked before the binding is consumed so the refusal
                 // can still name the group.
+                let create_via_manager = binding.create_via_manager.unwrap_or(false);
                 if !binding.allow_egress {
                     return Err(AlienError::new(ErrorData::RemoteAccessFailed {
                         operation: format!(
@@ -489,6 +490,7 @@ impl ResolvedRemoteBinding {
                         memory: binding.memory.map(alien_core::BindingValue::Value),
                         disk: binding.disk.map(alien_core::BindingValue::Value),
                     }),
+                    create_via_manager,
                     client_config: Box::new(alien_core::AzureClientConfig {
                         subscription_id: client_config.subscription_id,
                         tenant_id: client_config.tenant_id,

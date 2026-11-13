@@ -12,7 +12,7 @@ const IAM_MANAGED_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::ManagedPolicy";
 /// AWS's default "Managed policies per role" quota (L-0DA4ABF3). An account can raise it to
 /// 25, but a generated template must fit an account that never asked.
 /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html>
-const IAM_MANAGED_POLICIES_PER_ROLE: usize = 20;
+pub(crate) const IAM_MANAGED_POLICIES_PER_ROLE: usize = 20;
 
 #[derive(PartialEq)]
 struct PolicyGroupKey {
@@ -869,6 +869,7 @@ mod tests {
             let result = generate_cloudformation_template(
                 &stack,
                 CloudFormationOptions {
+                    pins: alien_core::SetupPins::compiled_in(),
                     registry: &registry,
                     source_stack: &stack,
                     target: CloudFormationTarget::Aws,

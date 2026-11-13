@@ -21,7 +21,7 @@ impl SqliteReleaseStore {
 
     /// SELECT column order. Indexes in `parse_release` MUST line up with
     /// this array — keep the two in sync.
-    const RELEASE_COLUMNS: [Releases; 8] = [
+    const RELEASE_COLUMNS: [Releases; 10] = [
         Releases::Id,               // 0
         Releases::Stack,            // 1
         Releases::GitCommitSha,     // 2
@@ -30,6 +30,8 @@ impl SqliteReleaseStore {
         Releases::CreatedAt,        // 5
         Releases::WorkspaceId,      // 6
         Releases::ProjectId,        // 7
+        Releases::SignedStacks,     // 8
+        Releases::SetupTemplates,   // 9
     ];
 
     fn parse_release(row: &turso::Row) -> Result<ReleaseRecord, AlienError> {
@@ -43,6 +45,8 @@ impl SqliteReleaseStore {
             created_at: p.datetime(5, "created_at")?,
             workspace_id: p.string(6, "workspace_id")?,
             project_id: p.string(7, "project_id")?,
+            signed_stacks: p.optional_json(8, "signed_stacks")?.unwrap_or_default(),
+            setup_templates: p.optional_json(9, "setup_templates")?.unwrap_or_default(),
         })
     }
 }
@@ -65,6 +69,29 @@ impl ReleaseStore for SqliteReleaseStore {
             .context(GenericError {
                 message: "Failed to serialize stacks".to_string(),
             })?;
+        let signed_stacks_json = if params.signed_stacks.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&params.signed_stacks)
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to serialize signed stacks".to_string(),
+                    })?,
+            )
+        };
+
+        let setup_templates_json = if params.setup_templates.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&params.setup_templates)
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to serialize setup templates".to_string(),
+                    })?,
+            )
+        };
 
         // The caller's `workspace_id` is always `"default"` for this
         // single-tenant store; we still propagate it from the subject
@@ -84,6 +111,8 @@ impl ReleaseStore for SqliteReleaseStore {
                 Releases::CreatedAt,
                 Releases::WorkspaceId,
                 Releases::ProjectId,
+                Releases::SignedStacks,
+                Releases::SetupTemplates,
             ])
             .values_panic([
                 id.clone().into(),
@@ -94,6 +123,8 @@ impl ReleaseStore for SqliteReleaseStore {
                 now.to_rfc3339().into(),
                 workspace_id.clone().into(),
                 project_id.clone().into(),
+                signed_stacks_json.into(),
+                setup_templates_json.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -104,6 +135,8 @@ impl ReleaseStore for SqliteReleaseStore {
             workspace_id,
             project_id,
             stacks: params.stacks,
+            signed_stacks: params.signed_stacks,
+            setup_templates: params.setup_templates,
             git_commit_sha: params.git_commit_sha,
             git_commit_ref: params.git_commit_ref,
             git_commit_message: params.git_commit_message,
@@ -311,9 +344,7 @@ impl ReleaseStore for SqliteReleaseStore {
 mod tests {
     use std::collections::HashMap;
 
-    use alien_core::{
-        Container, ContainerCode, Platform, ResourceLifecycle, ResourceSpec, Stack,
-    };
+    use alien_core::{Container, ContainerCode, Platform, ResourceLifecycle, ResourceSpec, Stack};
 
     use super::*;
     use crate::auth::Subject;
@@ -370,6 +401,8 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    setup_templates: Default::default(),
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -378,7 +411,10 @@ mod tests {
         // Rewrite the saved row into what an older manager wrote.
         let conn = db.conn().lock().await;
         let mut rows = conn
-            .query("SELECT stack FROM releases WHERE id = ?1", (record.id.as_str(),))
+            .query(
+                "SELECT stack FROM releases WHERE id = ?1",
+                (record.id.as_str(),),
+            )
             .await
             .unwrap();
         let saved: String = rows.next().await.unwrap().unwrap().get(0).unwrap();

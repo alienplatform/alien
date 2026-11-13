@@ -553,6 +553,11 @@ pub struct SyncResponse {
     /// manage their own workload update to it; None means no opinion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// This deployment's newest signed `config/v1`, on every sync. A
+    /// protected Operator applies its installed release again when it is
+    /// newer than the config it last applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -570,6 +575,11 @@ pub struct TargetDeployment {
     pub release_info: ReleaseInfo,
     /// Full deployment configuration (settings, env vars, etc.).
     pub config: DeploymentConfig,
+    /// This deployment's newest signed `config/v1`: the developer's input
+    /// values and env, for a protected deployment that takes them only from
+    /// a signed statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
 }
 
 #[cfg(test)]
@@ -624,6 +634,7 @@ mod tests {
     #[test]
     fn test_sync_response_empty() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -642,6 +653,7 @@ mod tests {
     #[test]
     fn test_sync_response_roundtrip_no_target() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -737,6 +749,7 @@ mod tests {
         assert!(!state.has_desired());
 
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: Some(state),
             target: None,
@@ -962,6 +975,7 @@ mod tests {
     #[test]
     fn test_sync_response_target_operations_bundle_set_roundtrip() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -1009,6 +1023,7 @@ mod tests {
         assert!(old_manager_response.target_dynamic_containers.is_none());
 
         let empty_target = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,

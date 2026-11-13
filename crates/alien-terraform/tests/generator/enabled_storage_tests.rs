@@ -555,3 +555,28 @@ fn platform_scoped_storage_matches_aws_module_target() {
         );
     }
 }
+
+/// Object ACLs are never in play on a bucket setup creates: ownership is `BucketOwnerEnforced`,
+/// so `PutObjectAcl` can't grant anyone access to an object, even on a storage declared public
+/// (whose public access block is open). Pins that for a private and a public storage.
+#[test]
+fn aws_buckets_refuse_object_acls_whether_or_not_they_are_public() {
+    for public_read in [false, true] {
+        let public = Storage::new("files".to_string())
+            .public_read(public_read)
+            .build();
+        let stack = stack_base().add(public, ResourceLifecycle::Frozen).build();
+        let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+        let main = normalized(&module);
+        assert_eq!(
+            main.matches("aws_s3_bucket_ownership_controls\" \"files\"")
+                .count(),
+            1,
+            "public_read={public_read}:\n{main}"
+        );
+        assert!(
+            main.contains("object_ownership = \"BucketOwnerEnforced\""),
+            "public_read={public_read}:\n{main}"
+        );
+    }
+}

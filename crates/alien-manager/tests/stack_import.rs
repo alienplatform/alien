@@ -46,7 +46,7 @@ use alien_manager::routes::registry_proxy::{
 };
 use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
-    SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
+    SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteSigningStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams,
@@ -63,6 +63,7 @@ use alien_manager::traits::{
 /// inspect the database without going through HTTP again.
 struct Fixture {
     state: AppState,
+    db: Arc<SqliteDatabase>,
     deployment_store: Arc<dyn DeploymentStore>,
     token_store: Arc<dyn TokenStore>,
     deployment_group_id: String,
@@ -144,6 +145,8 @@ async fn make_fixture_with_group_inputs(
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        signed_stacks: Default::default(),
+                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -211,6 +214,7 @@ async fn make_fixture_with_group_inputs(
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),
@@ -221,6 +225,7 @@ async fn make_fixture_with_group_inputs(
 
     Fixture {
         state,
+        db,
         deployment_store,
         token_store,
         deployment_group_id: dg.id,
@@ -1220,6 +1225,8 @@ async fn re_import_replaces_stack_state() {
                         version: None,
                         description: None,
                         stack: stack_with_storage("assets"),
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: imported.stack_state,
@@ -1314,6 +1321,8 @@ async fn re_import_repairs_terminal_initial_failures() {
                             version: None,
                             description: None,
                             stack: stack_with_storage("assets"),
+                            signed: None,
+                            signer_lists: Vec::new(),
                         }),
                         target_release: None,
                         stack_state: deployment.stack_state,
@@ -1409,6 +1418,8 @@ async fn re_import_advances_setup_registration_replay_baseline() {
                         version: None,
                         description: None,
                         stack: stack_with_storage("assets"),
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: deployment.stack_state,
@@ -1844,6 +1855,8 @@ async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
                         version: None,
                         description: None,
                         stack: stack_with_gated_storage("assets", "extras"),
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: persisted.stack_state.clone(),
@@ -1905,6 +1918,8 @@ async fn mark_imported_deployment_running(fixture: &Fixture, deployment_id: &str
                         version: None,
                         description: None,
                         stack,
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: imported.stack_state,
@@ -2089,6 +2104,8 @@ async fn import_create_new_network_and_discover(fixture: &Fixture) -> String {
                         version: None,
                         description: None,
                         stack: stack_with_storage("assets"),
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: Some(stack_state),
@@ -2248,6 +2265,8 @@ async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_reimpo
                         version: None,
                         description: None,
                         stack: old_stack,
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: persisted.stack_state.clone(),
@@ -2284,6 +2303,8 @@ async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_reimpo
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -2458,6 +2479,8 @@ async fn a_write_back_without_the_answer_map_keeps_the_record_and_import_can_tur
             version: None,
             description: None,
             stack: stack_with_gated_storage("assets", "extras"),
+            signed: None,
+            signer_lists: Vec::new(),
         }),
         target_release: None,
         stack_state: persisted.stack_state.clone(),
@@ -2716,6 +2739,8 @@ impl DeclinedGateDeployment {
                 version: None,
                 description: None,
                 stack: self.stack.clone(),
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             target_release: None,
             stack_state,
@@ -3011,6 +3036,8 @@ async fn a_generated_secret_is_created_once_and_kept_across_reimport() {
                         version: None,
                         description: None,
                         stack,
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: imported.stack_state,
@@ -3260,6 +3287,122 @@ async fn initialize_refuses_a_deployer_value_for_a_generated_secret() {
     assert!(existing.is_none(), "nothing is created");
 }
 
+fn protected_registration(name: &str, release_name: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "name": name, "platform": "kubernetes", "initialDesiredRelease": "none",
+        "stackSettings": { "signing": {
+            "fingerprint": format!("SHA256:{}", "9f".repeat(32)),
+            "channel": "production",
+        } },
+    });
+    if let Some(release_name) = release_name {
+        body["helmRelease"] = serde_json::json!({ "name": release_name, "namespace": "shop" });
+    }
+    body
+}
+
+fn with_signing_store(fixture: &mut Fixture) {
+    fixture.state.signing = Some(Arc::new(SqliteSigningStore::new(fixture.db.clone())));
+}
+
+async fn stored_signing(fixture: &Fixture, name: &str) -> Option<alien_core::StackSigning> {
+    fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            name,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist")
+        .stack_settings
+        .and_then(|settings| settings.signing)
+}
+
+#[tokio::test]
+async fn a_protected_install_registers_with_the_signing_it_pinned() {
+    let mut fixture = make_fixture(None).await;
+    with_signing_store(&mut fixture);
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body:#}");
+    let signing = stored_signing(&fixture, "shop-operator")
+        .await
+        .expect("the manager records the protection the install reported");
+    assert_eq!(signing.channel, "production");
+    assert_eq!(signing.fingerprint, format!("SHA256:{}", "9f".repeat(32)));
+
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "same settings again: {body:#}");
+}
+
+#[tokio::test]
+async fn a_manager_without_signer_lists_refuses_a_protected_registration() {
+    let fixture = make_fixture(None).await;
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert!(body.to_string().contains("signer lists"), "{body:#}");
+}
+
+#[tokio::test]
+async fn a_protected_registration_must_name_its_helm_release() {
+    let mut fixture = make_fixture(None).await;
+    with_signing_store(&mut fixture);
+    let (status, body) =
+        post_initialize(&fixture, protected_registration("shop-operator", None)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert!(body.to_string().contains("Helm release"), "{body:#}");
+
+    let mut malformed = protected_registration("shop-operator", Some("shop-operator"));
+    malformed["stackSettings"]["signing"]["fingerprint"] = serde_json::json!("not a fingerprint");
+    let (status, body) = post_initialize(&fixture, malformed).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+}
+
+#[tokio::test]
+async fn a_registration_cannot_change_the_protection_of_an_existing_deployment() {
+    let mut fixture = make_fixture(None).await;
+    with_signing_store(&mut fixture);
+    let plain = serde_json::json!({
+        "name": "plain-operator", "platform": "kubernetes", "initialDesiredRelease": "none",
+    });
+    let (status, body) = post_initialize(&fixture, plain).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body:#}");
+
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("plain-operator", Some("plain-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert_eq!(stored_signing(&fixture, "plain-operator").await, None);
+
+    let (status, _) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let unprotected_again = serde_json::json!({
+        "name": "shop-operator", "platform": "kubernetes", "initialDesiredRelease": "none",
+    });
+    let (status, body) = post_initialize(&fixture, unprotected_again).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert!(stored_signing(&fixture, "shop-operator").await.is_some());
+}
+
 #[tokio::test]
 async fn initialize_cannot_supply_trusted_stored_secret_presence() {
     let fixture = make_fixture(None).await;
@@ -3315,6 +3458,8 @@ async fn runtime_reports_cannot_grant_automatic_setup_to_an_imported_installatio
             version: None,
             description: None,
             stack,
+            signed: None,
+            signer_lists: Vec::new(),
         }),
         target_release: None,
         stack_state: stored.stack_state,
@@ -3467,6 +3612,8 @@ async fn assert_reserved_setup_management(
                                 version: None,
                                 description: None,
                                 stack: stack_with_storage("assets"),
+                                signed: None,
+                                signer_lists: Vec::new(),
                             }),
                             target_release: None,
                             stack_state: imported.stack_state,
@@ -3776,6 +3923,8 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
                             version: None,
                             description: None,
                             stack: source_stack.clone(),
+                            signed: None,
+                            signer_lists: Vec::new(),
                         }),
                         target_release: None,
                         stack_state: Some(running_state),
@@ -3857,6 +4006,8 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        signed_stacks: Default::default(),
+                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -4149,6 +4300,8 @@ async fn import_requires_only_deployer_answers_and_allows_deployment_token_repla
                             version: None,
                             description: None,
                             stack,
+                            signed: None,
+                            signer_lists: Vec::new(),
                         }),
                         target_release: None,
                         stack_state: imported.stack_state,
@@ -4275,6 +4428,8 @@ async fn older_template_reregistration_allows_new_required_inputs_but_validates_
                         version: None,
                         description: None,
                         stack: stack.clone(),
+                        signed: None,
+                        signer_lists: Vec::new(),
                     }),
                     target_release: None,
                     stack_state: imported.stack_state,
@@ -4312,6 +4467,8 @@ async fn older_template_reregistration_allows_new_required_inputs_but_validates_
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -4405,4 +4562,227 @@ async fn create_requires_deployer_answers_and_validates_present_developer_answer
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert_eq!(status, expected, "{}", String::from_utf8_lossy(&bytes));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Protected setups registering without a release id
+// ---------------------------------------------------------------------------
+
+/// A release for `stack` on AWS, signed for `channel` when given.
+async fn seed_release(fixture: &Fixture, stack: &Stack, channel: Option<&str>) -> String {
+    let signed_stacks = match channel {
+        None => HashMap::new(),
+        Some(channel) => {
+            let key = alien_signing::SecretKey::from_secret_bytes(&[5; 32]).unwrap();
+            let body = alien_core::release_statement::release_body(
+                Platform::Aws,
+                stack,
+                &alien_core::release_statement::ReleaseOptions {
+                    channel: channel.to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let envelope = alien_signing::Envelope {
+                kind: alien_signing::Kind::Release.as_str().to_string(),
+                project: "default".to_string(),
+                install: None,
+                sequence: 1,
+                not_after: None,
+                signer_list_version: 1,
+                body,
+            };
+            let signed = alien_signing::SignedStatement::new(&envelope.to_payload().unwrap())
+                .sign_with("ci", &key)
+                .unwrap();
+            HashMap::from([(Platform::Aws, signed)])
+        }
+    };
+    let id = fixture
+        .state
+        .release_store
+        .create_release(
+            &alien_manager::auth::Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Aws, stack.clone())]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+                signed_stacks,
+                setup_templates: Default::default(),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    // Releases order by creation time.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    id
+}
+
+/// An import of the protected setup rendered from `stack`, for `channel`, naming no release.
+fn protected_import_request(stack: &Stack, channel: &str) -> StackImportRequest {
+    let (setup_fingerprint, setup_fingerprint_version) =
+        alien_cli_common::setup_fingerprint::setup_fingerprint(
+            &serde_json::to_value(stack).unwrap(),
+            "aws",
+        );
+    let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    body.source_kind = Some(ImportSourceKind::Terraform);
+    body.setup_fingerprint = setup_fingerprint;
+    body.setup_fingerprint_version = setup_fingerprint_version;
+    body.stack_settings.signing = Some(alien_core::StackSigning {
+        fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+        channel: channel.to_string(),
+    });
+    body
+}
+
+async fn desired_release(fixture: &Fixture, json: serde_json::Value) -> Option<String> {
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist")
+        .desired_release_id
+}
+
+/// Newest first: an unsigned release, one signed for another channel, one for another stack;
+/// the oldest is the one signed for `production` from this stack.
+async fn releases_around_the_protected_one(fixture: &Fixture, stack: &Stack) -> String {
+    let protected = seed_release(fixture, stack, Some("production")).await;
+    seed_release(fixture, &stack_with_storage("uploads"), Some("production")).await;
+    seed_release(fixture, stack, Some("beta")).await;
+    seed_release(fixture, stack, None).await;
+    protected
+}
+
+#[tokio::test]
+async fn a_protected_setup_without_a_release_installs_the_release_signed_for_it() {
+    let fixture = make_fixture(None).await;
+    let stack = stack_with_storage("assets");
+    let protected = releases_around_the_protected_one(&fixture, &stack).await;
+
+    let (status, json) = post_import(
+        &fixture,
+        Some(&fixture.dg_token),
+        &protected_import_request(&stack, "production"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    assert_eq!(desired_release(&fixture, json).await, Some(protected));
+}
+
+#[tokio::test]
+async fn a_protected_setup_no_release_was_signed_for_is_refused() {
+    let fixture = make_fixture(None).await;
+    let stack = stack_with_storage("assets");
+    releases_around_the_protected_one(&fixture, &stack).await;
+
+    let (status, json) = post_import(
+        &fixture,
+        Some(&fixture.dg_token),
+        &protected_import_request(&stack, "staging"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "body = {json:#}");
+    assert_eq!(json["code"], "PROTECTED_SETUP_RELEASE_NOT_FOUND");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("aws") && message.contains("'staging'"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn an_unprotected_setup_without_a_release_still_installs_the_latest() {
+    let fixture = make_fixture(None).await;
+    let stack = stack_with_storage("assets");
+    releases_around_the_protected_one(&fixture, &stack).await;
+    let latest = seed_release(&fixture, &stack, None).await;
+
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    assert_eq!(desired_release(&fixture, json).await, Some(latest));
+}
+
+async fn post_config_statement(
+    fixture: &Fixture,
+    token: &str,
+    deployment_id: &str,
+    statement: &alien_signing::SignedStatement,
+) -> StatusCode {
+    let router = alien_manager::routes::signing::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/deployments/{deployment_id}/config-statements"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({ "statement": statement })).unwrap(),
+        ))
+        .unwrap();
+    router.oneshot(request).await.unwrap().status()
+}
+
+/// Config decides what runs in the install, so only a caller who can publish
+/// releases for the project may store it. The deployment's own token and its
+/// group token must not.
+#[tokio::test]
+async fn only_a_project_publisher_stores_a_config_statement() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    with_signing_store(&mut fixture);
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    let statement = alien_signing::SignedStatement::new(
+        &alien_signing::Envelope {
+            kind: alien_signing::Kind::Config.as_str().to_string(),
+            project: deployment.project_id.clone(),
+            install: Some("inst_0123456789abcdef".to_string()),
+            sequence: 1,
+            not_after: None,
+            signer_list_version: 1,
+            body: alien_signing::ConfigBody::default(),
+        }
+        .to_payload()
+        .unwrap(),
+    );
+
+    let deployment_token = deployment
+        .deployment_token
+        .clone()
+        .expect("deployment token");
+    for (who, token) in [
+        ("deployment token", deployment_token.as_str()),
+        ("group token", fixture.dg_token.as_str()),
+    ] {
+        assert_eq!(
+            post_config_statement(&fixture, token, &deployment.id, &statement).await,
+            StatusCode::FORBIDDEN,
+            "{who}"
+        );
+    }
+    assert_eq!(
+        post_config_statement(&fixture, &fixture.admin_token, &deployment.id, &statement).await,
+        StatusCode::CREATED
+    );
 }

@@ -3,7 +3,9 @@
 pub mod airgap;
 pub mod kept_keys;
 pub mod network;
+pub mod setup_fingerprint;
 pub mod setup_item;
+pub mod setup_templates;
 pub mod tui;
 
 pub use setup_item::SetupItem;

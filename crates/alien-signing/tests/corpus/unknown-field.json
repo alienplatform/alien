@@ -1,0 +1,13 @@
+{
+  "description": "a release that adds a field the enforcer does not know",
+  "expect": "SIGNING_BODY_REFUSED",
+  "statement": {
+    "payload": "eyJib2R5Ijp7ImNoYW5uZWwiOiJwcm9kdWN0aW9uIiwiY29uZmlndXJhYmxlIjp7ImVudiI6WyJGRUFUVVJFX0ZMQUdTIl0sImlucHV0cyI6WyJyZWdpb24tbGFiZWwiXX0sInBsYXRmb3JtIjoiYXdzIiwid29ya2xvYWRzIjpbeyJiaW5kaW5ncyI6eyJ1cGxvYWRzIjoic3RvcmFnZSJ9LCJib3VuZHMiOnsibWF4Q3B1IjoiMiIsIm1heE1lbW9yeSI6IjFHaSIsIm1heFJlcGxpY2FzIjo0fSwiY29tbWFuZCI6WyIvYXBwL3NlcnZlciIsIi0tcG9ydCIsIjgwODAiXSwiY29uZmlndXJhYmxlRW52IjpbIkZFQVRVUkVfRkxBR1MiXSwiZGVwbG95ZXJFbnYiOnsiREFUQUJBU0VfVVJMIjoiZGF0YWJhc2VVcmwifSwiZW52Ijp7IkxPR19MRVZFTCI6ImluZm8ifSwiaWRlbnRpdHkiOiJleGVjdXRpb24iLCJpbWFnZSI6InJlZ2lzdHJ5LmV4YW1wbGUuY29tL2FwcEBzaGEyNTY6MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSIsImtpbmQiOiJjb250YWluZXIiLCJuYW1lIjoid2ViIiwicHJpdmlsZWdlZCI6dHJ1ZSwicHJvdmlkZWRFbnYiOlsiUE9SVCJdLCJydW50aW1lIjp7fSwic2VjcmV0cyI6W3siZW52TmFtZSI6IkRCX1BBU1NXT1JEIiwibmFtZSI6ImRiLXBhc3N3b3JkIn1dfV19LCJub3RBZnRlciI6bnVsbCwicHJvamVjdCI6InByal90ZXN0Iiwic2VxdWVuY2UiOjIwLCJzaWduZXJMaXN0VmVyc2lvbiI6MSwidHlwZSI6InJlbGVhc2UvdjIifQ==",
+    "signatures": [
+      {
+        "signer": "ci",
+        "sig": "MEUCIHE5eKKbhrGIXE3JaY1eSyy5hiL8s834dbdar0XGMsVvAiEAjk5gk7ofgyZshGxv0jY1KzwpfvrJnPccGqeytzVhkug="
+      }
+    ]
+  }
+}

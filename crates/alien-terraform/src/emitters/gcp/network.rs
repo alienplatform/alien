@@ -104,12 +104,7 @@ impl TfEmitter for GcpNetworkEmitter {
                     ),
                     (
                         "subnetSelfLinks",
-                        Expression::Array(vec![expr::traversal([
-                            "data",
-                            "google_compute_subnetwork",
-                            &subnet_label,
-                            "self_link",
-                        ])]),
+                        subnet_self_links(label, &network.settings),
                     ),
                     (
                         "cidrBlock",
@@ -144,12 +139,7 @@ impl TfEmitter for GcpNetworkEmitter {
                             "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].name : data.google_compute_network.{label}[0].name"
                         )),
                     ),
-                    (
-                        "subnetSelfLinks",
-                        expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{subnet_label}[0].self_link] : [data.google_compute_subnetwork.{existing_subnet_label}[0].self_link]"
-                        )),
-                    ),
+                    ("subnetSelfLinks", subnet_self_links(label, &network.settings)),
                     (
                         "cidrBlock",
                         expr::raw(format!(
@@ -173,6 +163,36 @@ impl TfEmitter for GcpNetworkEmitter {
             }
             _ => Expression::Null,
         })
+    }
+}
+
+/// The self links of the subnets the network `label` with `settings` gives workloads: what
+/// setup reports to the worker controller, which puts unprotected functions there, and what
+/// it gives a protected install's verifier for the same.
+pub fn subnet_self_links(label: &str, settings: &NetworkSettings) -> Expression {
+    match settings {
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{label}_workload[0].self_link] : [data.google_compute_subnetwork.{label}_existing_subnet[0].self_link]"
+        )),
+        _ => Expression::Array(vec![expr::traversal([
+            "data",
+            "google_compute_subnetwork",
+            &format!("{label}_subnet"),
+            "self_link",
+        ])]),
+    }
+}
+
+/// The Direct VPC egress Cloud Run functions in the network `label` with `settings` use, as
+/// the worker controller gives unprotected ones: all traffic, or private ranges only on the
+/// project's default network.
+pub fn function_egress(settings: &NetworkSettings) -> Expression {
+    match settings {
+        NetworkSettings::Create { .. } => expr::raw(
+            "var.network_mode == \"use-default\" ? \"PRIVATE_RANGES_ONLY\" : \"ALL_TRAFFIC\"",
+        ),
+        NetworkSettings::UseDefault => Expression::String("PRIVATE_RANGES_ONLY".to_string()),
+        _ => Expression::String("ALL_TRAFFIC".to_string()),
     }
 }
 

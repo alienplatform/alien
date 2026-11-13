@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const OWNER_LABEL: &str = "alien.dev/dynamic-deployment";
 const NAME_LABEL: &str = "alien.dev/dynamic-container";
+const MANAGED_BY_LABEL: &str = "managed-by";
 
 fn backend_name(deployment_id: &str, name: &str) -> String {
     let digest = Sha256::digest(format!("{deployment_id}:{name}").as_bytes());
@@ -33,6 +34,39 @@ fn labels(deployment_id: &str, name: &str) -> BTreeMap<String, String> {
         (OWNER_LABEL.to_string(), deployment_id.to_string()),
         (NAME_LABEL.to_string(), name.to_string()),
     ])
+}
+
+/// The runtime scope label (`ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY` and `..._VALUE`, the
+/// same pair every other object of the release carries), when the Operator runs under
+/// a chart that sets one. The chart's pre-delete cleanup selects on it.
+fn runtime_scope() -> Option<(String, String)> {
+    crate::runtime_deployment_scope_from_env().ok().flatten()
+}
+
+/// Labels for the metadata of everything a dynamic container creates: its own
+/// labels, plus the release's runtime scope label so `helm uninstall` removes it. Pod
+/// selectors keep using [`labels`]: a Deployment's selector can't change.
+fn object_labels(deployment_id: &str, name: &str) -> BTreeMap<String, String> {
+    let mut object_labels = labels(deployment_id, name);
+    if let Some((key, value)) = runtime_scope() {
+        object_labels.insert(key, value);
+        object_labels.insert(MANAGED_BY_LABEL.to_string(), "runtime".to_string());
+    }
+    object_labels
+}
+
+/// Whether `meta` carries the runtime scope label and `managed-by=runtime` (the pair the
+/// chart's cleanup selects on), or there is no scope to carry.
+fn has_runtime_scope(meta: &ObjectMeta) -> bool {
+    runtime_scope().is_none_or(|(key, value)| {
+        let labels = meta.labels.as_ref();
+        labels
+            .and_then(|labels| labels.get(&key))
+            .is_some_and(|stored| *stored == value)
+            && labels
+                .and_then(|labels| labels.get(MANAGED_BY_LABEL))
+                .is_some_and(|stored| stored == "runtime")
+    })
 }
 
 fn owned(meta: &ObjectMeta, deployment_id: &str, name: &str) -> bool {
@@ -385,15 +419,7 @@ fn mirror_targets(
         .collect()
 }
 
-/// The target is read from encrypted SQLite, so a restart resumes convergence
-/// even if it missed the response that last changed the target.
-pub async fn reconcile_saved(
-    state: &OperatorState,
-    deployment_id: &str,
-) -> Result<Option<Vec<DynamicContainerReport>>> {
-    let Some(target) = state.db.get_target_dynamic_containers().await? else {
-        return Ok(None);
-    };
+async fn in_cluster_client(state: &OperatorState) -> Result<(KubernetesClient, &str)> {
     let namespace = state
         .config
         .namespace
@@ -407,6 +433,47 @@ pub async fn reconcile_saved(
     .context(ErrorData::DeploymentFailed {
         message: "Failed to initialize Kubernetes client for dynamic containers".to_string(),
     })?;
+    Ok((client, namespace))
+}
+
+/// Protected mode runs no dynamic container: no signed release names one. So
+/// the deployment's existing ones, started before its owner pinned release
+/// keys, are removed like the stale objects of an emptied target.
+pub async fn remove_all(state: &OperatorState, deployment_id: &str) -> Result<()> {
+    let (client, namespace) = in_cluster_client(state).await?;
+    remove_all_in(&client, namespace, deployment_id).await
+}
+
+async fn remove_all_in(
+    client: &KubernetesClient,
+    namespace: &str,
+    deployment_id: &str,
+) -> Result<()> {
+    let empty = alien_core::Stack::new("cleanup".to_string()).build();
+    reconcile_with_admission(
+        client,
+        namespace,
+        deployment_id,
+        &[],
+        None,
+        &[],
+        &empty,
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// The target is read from encrypted SQLite, so a restart resumes convergence
+/// even if it missed the response that last changed the target.
+pub async fn reconcile_saved(
+    state: &OperatorState,
+    deployment_id: &str,
+) -> Result<Option<Vec<DynamicContainerReport>>> {
+    let Some(target) = state.db.get_target_dynamic_containers().await? else {
+        return Ok(None);
+    };
+    let (client, namespace) = in_cluster_client(state).await?;
     let pull_token = if state.config.sync.is_some() {
         Some(
             crate::daily_identity::request_token(state, serde_json::json!({"type":"registryPull"}))
@@ -514,6 +581,8 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!installed_compute_ready(&state, &stack));
         let mut resource = StackResourceState::new_pending(
@@ -580,5 +649,73 @@ mod tests {
         assert!(both[0].ends_with("-registry"));
         assert_eq!(both[1], "site-pull");
         assert!(pod_pull_secrets(&target, "dep", false, &[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod runtime_scope_tests {
+    use super::{has_runtime_scope, labels, object_labels};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    // temp_env serializes the tests that touch the process environment.
+    #[test]
+    fn dynamic_container_objects_carry_the_release_runtime_scope_label() {
+        temp_env::with_vars(
+            [
+                (
+                    "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY",
+                    Some("alien.dev/deployment"),
+                ),
+                ("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE", Some("release-a")),
+                ("OPERATOR_RESOURCE_PREFIX", None),
+                ("OPERATOR_HELM_RELEASE", None),
+            ],
+            || {
+                let object = object_labels("dep_1", "web");
+                assert_eq!(
+                    object.get("alien.dev/deployment").map(String::as_str),
+                    Some("release-a")
+                );
+                assert_eq!(
+                    object
+                        .get("alien.dev/dynamic-deployment")
+                        .map(String::as_str),
+                    Some("dep_1")
+                );
+                assert_eq!(
+                    object.get("managed-by").map(String::as_str),
+                    Some("runtime"),
+                    "the chart's cleanup selects on managed-by=runtime and the scope label"
+                );
+                // Selectors and ownership checks stay what they were: a Deployment's
+                // selector can't change, and objects created before this label existed
+                // still match.
+                assert!(!labels("dep_1", "web").contains_key("alien.dev/deployment"));
+
+                // An object made before the label existed is rewritten to gain it.
+                let old = ObjectMeta {
+                    labels: Some(labels("dep_1", "web")),
+                    ..Default::default()
+                };
+                assert!(!has_runtime_scope(&old));
+                let new = ObjectMeta {
+                    labels: Some(object),
+                    ..Default::default()
+                };
+                assert!(has_runtime_scope(&new));
+            },
+        );
+
+        // No chart scope (a standalone Operator): nothing to add or to require.
+        temp_env::with_vars(
+            [
+                ("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY", None::<&str>),
+                ("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE", None),
+            ],
+            || {
+                assert_eq!(object_labels("dep_1", "web"), labels("dep_1", "web"));
+                assert!(has_runtime_scope(&ObjectMeta::default()));
+            },
+        );
     }
 }

@@ -72,6 +72,8 @@ async fn failed_first_install(installed: Stack, target: Stack) -> DeploymentStat
             version: None,
             description: None,
             stack: target,
+            signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: Some(StackState::new(Platform::Kubernetes)),
         runtime_metadata: Some(RuntimeMetadata {

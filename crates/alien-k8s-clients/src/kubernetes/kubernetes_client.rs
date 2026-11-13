@@ -29,7 +29,12 @@ impl KubernetesClient {
         let resolved_config = config.resolve().await?;
 
         // Build a reqwest client with proper TLS configuration
-        let mut client_builder = reqwest::Client::builder();
+        // The API server names the field manager of every write after the
+        // User-Agent's product name when the request sets no `fieldManager`.
+        // Without one it is recorded as `unknown`, which `kubectl` and GitOps
+        // diff tools then show as the owner of Alien's objects.
+        let mut client_builder = reqwest::Client::builder()
+            .user_agent(concat!("alien-operator/", env!("CARGO_PKG_VERSION")));
 
         // Configure TLS verification
         if resolved_config.insecure_skip_tls_verify {

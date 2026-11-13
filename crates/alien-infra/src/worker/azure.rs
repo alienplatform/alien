@@ -31,6 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::linked_bindings;
+use crate::core::verifier;
 use crate::core::EnvironmentVariableBuilder;
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
@@ -487,6 +488,10 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct AzureWorkerController {
+    /// On a protected install, the digest of the signed release and config the verifier last applied to
+    /// this worker; a step carrying other ones updates the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_config: Option<String>,
     /// Imported image references only; no source credential persists here.
     pub(crate) registry_image: Option<super::azure_registry::ImportedImage>,
     // ─────────── Persisted fields ───────────
@@ -663,13 +668,28 @@ impl AzureWorkerController {
                 .await?;
             Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id.clone());
 
-            container_apps_client
-                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to bind renewed certificate to custom domain".to_string(),
-                    resource_id: Some(func_cfg.id.clone()),
-                })?;
+            if let Some(statements) = verifier::protected_statements(ctx, &func_cfg.id)? {
+                let write = verifier::CloudWrite::CreateContainerApp {
+                    name: container_app_name.clone(),
+                    app: verifier::CloudWrite::body(&app)?,
+                };
+                self.write_through_verifier(
+                    ctx,
+                    statements,
+                    &func_cfg.id,
+                    container_app_name,
+                    vec![write],
+                )
+                .await?;
+            } else {
+                container_apps_client
+                    .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to bind renewed certificate to custom domain".to_string(),
+                        resource_id: Some(func_cfg.id.clone()),
+                    })?;
+            }
         }
 
         self.container_apps_certificate_id = Some(container_apps_certificate_id);
@@ -1051,6 +1071,28 @@ impl AzureWorkerController {
                 ctx,
             )
             .await?;
+
+        // On a protected install management may not create the app: the verifier checks this
+        // very request against the signed release, sends it and waits for it to settle.
+        if let Some(statements) = verifier::protected_statements(ctx, &func_cfg.id)? {
+            let write = verifier::CloudWrite::CreateContainerApp {
+                name: container_app_name.clone(),
+                app: verifier::CloudWrite::body(&container_app)?,
+            };
+            self.write_through_verifier(
+                ctx,
+                statements,
+                &func_cfg.id,
+                &container_app_name,
+                vec![write],
+            )
+            .await?;
+            self.applied_config = verifier::statements_digest(ctx)?;
+            return Ok(HandlerAction::Continue {
+                state: CreatingContainerApp,
+                suggested_delay: None,
+            });
+        }
 
         // Fire the CREATE/UPDATE call.
         let op_result = client
@@ -1521,14 +1563,30 @@ impl AzureWorkerController {
             container_apps_certificate_id.clone(),
         );
 
-        // Update the container app with custom domain
-        let _operation = client
-            .create_or_update_container_app(&resource_group_name, container_app_name, &app)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to configure custom domain for container app".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        // Update the container app with custom domain; on a protected install through the
+        // verifier, which alone may write it.
+        if let Some(statements) = verifier::protected_statements(ctx, &worker_config.id)? {
+            let write = verifier::CloudWrite::CreateContainerApp {
+                name: container_app_name.clone(),
+                app: verifier::CloudWrite::body(&app)?,
+            };
+            self.write_through_verifier(
+                ctx,
+                statements,
+                &worker_config.id,
+                container_app_name,
+                vec![write],
+            )
+            .await?;
+        } else {
+            client
+                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to configure custom domain for container app".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+        }
 
         info!(
             worker=%worker_config.id,
@@ -2395,7 +2453,11 @@ impl AzureWorkerController {
         // updated: an Azure sandbox promoting a rebuilt disk image, or rewriting its egress, from
         // its own Ready. Compare the bindings rendered now with the ones the Container App runs,
         // from the read the heartbeat already made, and refresh only when they differ.
-        if let Some(live) = live_main_container_env(&container_app) {
+        // On a protected install the verifier renders the bindings; what it wrote is checked
+        // against the signed release, not against management's rendering.
+        let live = live_main_container_env(&container_app)
+            .filter(|_| ctx.deployment_config.stack_settings.signing.is_none());
+        if let Some(live) = live {
             let drifted = linked_bindings::linked_binding_drift(
                 ctx,
                 &func_cfg.runtime_binding_links(),
@@ -2619,6 +2681,8 @@ impl AzureWorkerController {
         self.ready_rbac_wait_until_epoch_secs = None;
         self.update_dapr_components_deleted = false;
 
+        let protected = verifier::protected_statements(ctx, &func_cfg.id)?;
+
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
@@ -2635,7 +2699,9 @@ impl AzureWorkerController {
         // An update whose own configuration is unchanged was planned because a linked resource
         // was. It still re-renders the linked bindings: the resource it links may publish a new
         // binding, such as a sandbox's rebuilt disk image.
-        if func_cfg == previous_cfg && !registry_migration {
+        // On a protected install the update always goes to the verifier, which checks it against
+        // the signed release and config the step carries.
+        if func_cfg == previous_cfg && protected.is_none() && !registry_migration {
             self.update_rbac_wait_required = false;
             let links = func_cfg.runtime_binding_links();
             if !linked_bindings::links_settled(ctx, &links) {
@@ -2678,12 +2744,52 @@ impl AzureWorkerController {
                 "Re-rendering the worker's linked bindings during its update"
             );
         } else {
-            self.update_rbac_wait_required = true;
+            self.update_rbac_wait_required = func_cfg != previous_cfg;
+        }
+
+        // The worker's own binding names the address Azure reports for the app, which a
+        // worker recorded without it (imported, or deployed before it was kept) would otherwise
+        // replace with its public URL, possibly a custom domain, and an update can come before
+        // any heartbeat records it. Take it from the app read for this update.
+        let live = client
+            .get_container_app(&resource_group_name, &container_app_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the Container App for an update".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+        if let Some(address) = self.extract_url_from_container_app(&live) {
+            if protected.is_some() {
+                self.url = Some(address.clone());
+            }
+            self.container_app_url = Some(address);
         }
 
         let desired_app = self
             .desired_container_app(func_cfg, &container_app_name, azure_cfg, ctx)
             .await?;
+
+        // On a protected install management may not write the app: the verifier checks this very
+        // request against the signed release, sends it and waits for it to settle.
+        if let Some(statements) = protected {
+            let write = verifier::CloudWrite::UpdateContainerApp {
+                name: container_app_name.clone(),
+                app: verifier::CloudWrite::body(&desired_app)?,
+            };
+            self.write_through_verifier(
+                ctx,
+                statements,
+                &func_cfg.id,
+                &container_app_name,
+                vec![write],
+            )
+            .await?;
+            self.applied_config = verifier::statements_digest(ctx)?;
+            return Ok(HandlerAction::Continue {
+                state: UpdatingContainerApp,
+                suggested_delay: None,
+            });
+        }
         let container_app_name = &container_app_name;
 
         // Issue UPDATE
@@ -2812,11 +2918,15 @@ impl AzureWorkerController {
                     self.container_app_url = container_app_url.clone();
 
                     // Check for URL override in deployment config, otherwise use Container App URL
-                    self.url = func_cfg
-                        .configured_primary_public_url(
-                            ctx.deployment_config.public_endpoints.as_ref(),
-                        )
-                        .or(container_app_url);
+                    self.url = if verifier::is_protected(ctx) {
+                        container_app_url
+                    } else {
+                        func_cfg
+                            .configured_primary_public_url(
+                                ctx.deployment_config.public_endpoints.as_ref(),
+                            )
+                            .or(container_app_url)
+                    };
 
                     Ok(HandlerAction::Continue {
                         state: UpdateDaprComponents,
@@ -3401,6 +3511,20 @@ impl AzureWorkerController {
             })
         })?;
 
+        // A protected install's apps change only through its verifier; the next state reads
+        // the app until it is gone.
+        if verifier::is_protected(ctx) {
+            let verifier = verifier::azure_verifier(ctx).await?;
+            let worker = ctx.desired_config.id().to_string();
+            let deleted =
+                verifier::delete_workload(&verifier, &worker, &container_app_name).await?;
+            info!(name=%container_app_name, existed=deleted.existed, "The verifier deleted the container app");
+            return Ok(HandlerAction::Continue {
+                state: DeletingContainerApp,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
@@ -3716,6 +3840,10 @@ impl AzureWorkerController {
     }
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        verifier::statements_changed(ctx, self.applied_config.as_deref())
+    }
+
     // Implementation of get_outputs trait method
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.resource_id.as_ref().map(|id| {
@@ -3803,10 +3931,10 @@ impl AzureWorkerController {
                 })?
                 .to_string();
 
-            // Private URL is the internal FQDN (same as public URL for Container Apps
-            // with external ingress; for internal ingress it would differ).
+            // Private URL is the address Azure gives the app, never a custom domain: a
+            // protected install's verifier checks it against what Azure reports for the app.
             let private_url = self
-                .url
+                .container_app_url
                 .clone()
                 .unwrap_or_else(|| format!("https://{}", container_app_name));
 
@@ -4202,7 +4330,7 @@ impl AzureWorkerController {
                 self.keyvault_cert_id = domain_info.keyvault_cert_id;
                 self.container_apps_certificate_id = domain_info.container_apps_certificate_id;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
+                if self.url.is_none() && !verifier::is_protected(ctx) {
                     self.url = config
                         .configured_primary_public_url(
                             ctx.deployment_config.public_endpoints.as_ref(),
@@ -4240,13 +4368,12 @@ impl AzureWorkerController {
         self.container_app_url = container_app_url.clone();
 
         // Check for URL override in deployment config, otherwise use Container App URL
-        if let Ok(config) = ctx.desired_resource_config::<Worker>() {
-            self.url = config
+        self.url = match ctx.desired_resource_config::<Worker>() {
+            Ok(config) if !verifier::is_protected(ctx) => config
                 .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
-                .or(container_app_url);
-        } else {
-            self.url = container_app_url;
-        }
+                .or(container_app_url),
+            _ => container_app_url,
+        };
 
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
@@ -4318,6 +4445,35 @@ impl AzureWorkerController {
         }
     }
 
+    /// Hands `writes`, the requests this controller built for `container_app_name` for one
+    /// release, to the install's verifier, which checks them all against the signed release
+    /// before it sends any, and sends them unchanged, in order.
+    async fn write_through_verifier(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        statements: &alien_core::ReleaseStatements,
+        worker: &str,
+        container_app_name: &str,
+        writes: Vec<verifier::CloudWrite>,
+    ) -> Result<verifier::Written> {
+        let verifier = verifier::azure_verifier(ctx).await?;
+        let written = verifier::apply_write(
+            &verifier,
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            worker,
+            writes,
+            container_app_name,
+        )
+        .await?;
+        info!(
+            worker = %worker,
+            release = written.release,
+            "The verifier applied the controller's write"
+        );
+        Ok(written)
+    }
+
     /// Prepare environment variables using the shared logic, then convert to Azure's EnvironmentVar format
     async fn prepare_environment_variables_azure(
         &self,
@@ -4334,6 +4490,8 @@ impl AzureWorkerController {
             .add_linked_resources(&func.runtime_binding_links(), ctx, &func.id)
             .await?
             .add_self_worker_binding(&func.id, self_binding_params.as_ref())?
+            .add_signed_values(ctx, &func.id)
+            .await?
             .build();
 
         // Add managed identity environment variable from ServiceAccount
@@ -5540,6 +5698,7 @@ impl AzureWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(function_name: &str) -> Self {
         Self {
+            applied_config: None,
             registry_image: None,
             state: AzureWorkerState::Ready,
             container_app_name: Some(function_name.to_string()),
@@ -5630,7 +5789,12 @@ mod tests {
         dns_name_from_url, get_azure_container_app_name, get_azure_storage_event_subscription_name,
         AZURE_RBAC_WAIT_POLL_SECS, CONTAINER_APP_NAME_MAX_LEN, DAPR_COMPONENT_NAME_MAX_LEN,
     };
-    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::core::verifier_test_support::{
+        http_verifier_stub, run_write_over, signed_release, CHANNEL,
+    };
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
+    };
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
@@ -5638,6 +5802,12 @@ mod tests {
         AzureWorkerController,
     };
     use crate::AzureWorkerState;
+    use alien_azure_clients::AzureClientConfigExt as _;
+    use alien_core::{
+        AzureClientConfig, AzureServiceOverrides, ClientConfig, ResourceLifecycle, Stack,
+        StackSettings, StackSigning, WorkerCode,
+    };
+    use alien_verifier::plan::OwnResource;
 
     #[test]
     fn azure_storage_trigger_maps_only_supported_event_types() {
@@ -5894,6 +6064,32 @@ mod tests {
             Some("test-worker.kindsky.eastus2.azurecontainerapps.io")
         );
         assert_ne!(dns_name, Some("test-worker.abc123.dev.vpc.direct"));
+    }
+
+    /// A worker behind a custom domain reaches itself at the address Azure gave the app,
+    /// which a protected install's verifier can check against Azure; the custom domain is
+    /// only what the worker displays.
+    #[test]
+    fn the_own_binding_reaches_the_app_not_the_custom_domain() {
+        let mut worker = AzureWorkerController::mock_ready("test-worker");
+        worker.url = Some("https://api.acme.example".to_string());
+        worker.container_app_url =
+            Some("https://test-worker.kindsky.eastus2.azurecontainerapps.io".to_string());
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"],
+            "https://test-worker.kindsky.eastus2.azurecontainerapps.io"
+        );
+        assert_eq!(binding["publicUrl"], "https://api.acme.example");
+
+        worker.container_app_url = None;
+        worker.url = None;
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"], "https://test-worker",
+            "an app without ingress is named by its bare name"
+        );
+        assert_eq!(binding.get("publicUrl"), None);
     }
 
     #[tokio::test]
@@ -7285,6 +7481,8 @@ mod tests {
                 image: "registry.example.com/worker:new".into(),
             };
             let mut apps = MockContainerAppsApi::new();
+            apps.expect_get_container_app()
+                .returning(|_, name| Ok(create_successful_container_app_response(name, true)));
             apps.expect_update_container_app()
                 .times(1)
                 .returning(move |_, name, app| {
@@ -7915,6 +8113,7 @@ mod tests {
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
             update_dapr_components_deleted: false,
+            applied_config: None,
             _internal_stay_count: None,
         };
 
@@ -8080,6 +8279,8 @@ mod tests {
             let captured = Arc::new(Mutex::new(None));
             let sink = captured.clone();
             let mut apps = MockContainerAppsApi::new();
+            apps.expect_get_container_app()
+                .returning(|_, name| Ok(create_successful_container_app_response(name, false)));
             apps.expect_update_container_app()
                 .returning(move |_, name, app| {
                     *sink.lock().unwrap() = Some(app.clone());
@@ -8174,6 +8375,66 @@ mod tests {
                 controller.get_binding_params().unwrap(),
                 own_binding,
                 "a refresh must not change the worker's own binding, or its dependents would follow"
+            );
+        }
+
+        /// A worker recorded without its Container Apps address, behind a custom domain, is
+        /// updated before any heartbeat records the address. The update must still name the
+        /// address Azure reports as the own binding's private URL, not the custom domain, since
+        /// a protected install's verifier accepts only the former.
+        #[tokio::test]
+        async fn an_update_names_the_address_container_apps_reports_without_a_heartbeat() {
+            const ADDRESS: &str = "https://basic-func.azurecontainerapps.io";
+            let own = format!(
+                "ALIEN_{}_BINDING",
+                basic_function().id.replace('-', "_").to_uppercase()
+            );
+            let mut live = rendered_app(OLD_IMAGE).await;
+            let reported = create_successful_container_app_response("basic-func", true)
+                .properties
+                .and_then(|properties| properties.configuration)
+                .and_then(|configuration| configuration.ingress);
+            live.properties
+                .as_mut()
+                .and_then(|properties| properties.configuration.as_mut())
+                .expect("the rendered app has configuration")
+                .ingress = reported;
+            let mut apps = MockContainerAppsApi::new();
+            serving(live, &mut apps);
+            apps.expect_update_container_app()
+                .times(1)
+                .withf(move |_, _, app| {
+                    let binding: serde_json::Value = serde_json::from_str(&main_env(app)[&own])
+                        .expect("the own binding is JSON");
+                    binding["privateUrl"] == ADDRESS
+                        && binding["publicUrl"] == "https://api.acme.example"
+                })
+                .returning(|_, name, _| {
+                    Ok(OperationResult::Completed(
+                        create_successful_container_app_response(name, true),
+                    ))
+                });
+            let mut worker = AzureWorkerController {
+                state: AzureWorkerState::UpdateStart,
+                ..AzureWorkerController::mock_ready("basic-func")
+            };
+            worker.url = Some("https://api.acme.example".to_string());
+            worker.container_app_url = None;
+            let mut executor = executor(
+                apps,
+                worker,
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .container_app_url
+                    .as_deref(),
+                Some(ADDRESS)
             );
         }
 
@@ -8404,5 +8665,492 @@ mod tests {
                 AzureWorkerState::UpdateRunningReadinessProbe
             );
         }
+    }
+
+    // ─────────────── PROTECTED INSTALL TESTS ───────────────────────
+
+    const PROTECTED_WORKER: &str = "api";
+    const PROTECTED_APP: &str = "test-api";
+
+    fn pinned_image(digest_byte: char) -> String {
+        format!(
+            "acmeprod.azurecr.io/api@sha256:{}",
+            digest_byte.to_string().repeat(64)
+        )
+    }
+
+    fn pinned_worker(digest_byte: char, memory_mb: u32) -> Worker {
+        Worker::new(PROTECTED_WORKER.to_string())
+            .code(WorkerCode::Image {
+                image: pinned_image(digest_byte),
+            })
+            .permissions("default-profile".to_string())
+            .memory_mb(memory_mb)
+            .build()
+    }
+
+    fn protected_settings() -> StackSettings {
+        StackSettings {
+            signing: Some(StackSigning {
+                fingerprint: crate::core::verifier_test_support::settings("test").fingerprint,
+                channel: CHANNEL.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A worker whose update just settled, with a custom domain the manager chose for it: the
+    /// unprotected install shows the domain, a protected install shows the address Container
+    /// Apps reports, which its verifier reads back.
+    #[tokio::test]
+    async fn a_protected_worker_shows_the_container_apps_address_not_the_managers_domain() {
+        let custom = "https://api.example.test";
+        let worker = function_public_ingress();
+        let app_name = "test-public-func";
+        let mut shown = Vec::new();
+        for protected in [false, true] {
+            let mut apps = MockContainerAppsApi::new();
+            apps.expect_get_container_app().returning(move |_, _| {
+                Ok(create_successful_container_app_response(app_name, true))
+            });
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(AzureWorkerController {
+                    state: AzureWorkerState::UpdatingContainerApp,
+                    ..AzureWorkerController::mock_ready(app_name)
+                })
+                .platform(Platform::Azure)
+                .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+                .public_endpoints(HashMap::from([(
+                    worker.id.clone(),
+                    HashMap::from([("api".to_string(), custom.to_string())]),
+                )]))
+                .stack_settings(if protected {
+                    protected_settings()
+                } else {
+                    StackSettings::default()
+                })
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.expect("the update settled");
+            shown.push(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .url
+                    .clone(),
+            );
+        }
+        assert_eq!(
+            shown,
+            [
+                Some(custom.to_string()),
+                Some(format!("https://{app_name}.azurecontainerapps.io"))
+            ]
+        );
+    }
+
+    /// Container Apps on a protected install: reads succeed and nothing may update the app.
+    fn protected_provider() -> Arc<MockPlatformServiceProvider> {
+        let mut apps = MockContainerAppsApi::new();
+        apps.expect_get_container_app().returning(|_, _| {
+            Ok(create_successful_container_app_response(
+                PROTECTED_APP,
+                true,
+            ))
+        });
+        apps.expect_update_container_app().never();
+        apps.expect_create_or_update_container_app().never();
+        setup_mock_service_provider(Arc::new(apps), None)
+    }
+
+    /// Uninstall on a protected install: the app goes through the verifier in one call, with
+    /// no delete of its own (management's roles leave out Container Apps writes), and the
+    /// controller waits until Azure answers that it is gone.
+    #[tokio::test]
+    async fn a_protected_delete_goes_through_the_verifier_alone() {
+        let (url, requests) = http_verifier_stub(
+            axum::http::StatusCode::OK,
+            serde_json::json!({"deleted": PROTECTED_APP, "existed": true}),
+        )
+        .await;
+        let mut apps = MockContainerAppsApi::new();
+        let seen = requests.clone();
+        apps.expect_get_container_app().returning(move |_, _| {
+            if seen.lock().unwrap().is_empty() {
+                Ok(create_successful_container_app_response(
+                    PROTECTED_APP,
+                    false,
+                ))
+            } else {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "ContainerApp".to_string(),
+                        resource_name: PROTECTED_APP.to_string(),
+                    },
+                ))
+            }
+        });
+        apps.expect_delete_container_app().never();
+        let mut config = AzureClientConfig::mock();
+        config.service_overrides = Some(AzureServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), url)]),
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 512))
+            .controller(AzureWorkerController::mock_ready(PROTECTED_APP))
+            .platform(Platform::Azure)
+            .client_config(ClientConfig::Azure(Box::new(config)))
+            .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+            .with_test_dependencies()
+            .with_dependency(setup_identity(), setup_identity_controller())
+            .stack_settings(protected_settings())
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete completes through the verifier");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[0].1).unwrap(),
+            serde_json::json!({"deleteWorkload": {"workload": PROTECTED_WORKER}})
+        );
+    }
+
+    async fn protected_update(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+    ) -> (
+        Result<(), AlienError<ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        protected_update_injecting(status, answer, &[]).await
+    }
+
+    /// [`protected_update`], with `injected` env the deployment adds to the worker beside what
+    /// the vendor signed (dashboard variables set before the install was protected).
+    async fn protected_update_injecting(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        protected_update_from(
+            AzureWorkerController::mock_ready(PROTECTED_APP),
+            status,
+            answer,
+            injected,
+        )
+        .await
+    }
+
+    async fn protected_update_from(
+        controller: AzureWorkerController,
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let signed = pinned_worker('2', 1024);
+        let release = signed_release(
+            Platform::Azure,
+            &Stack::new("test".to_string())
+                .add(signed.clone(), ResourceLifecycle::Live)
+                .build(),
+            2,
+        );
+        let mut to = signed;
+        to.environment.extend(
+            injected
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+        let (url, requests) = http_verifier_stub(status, answer).await;
+        let mut config = AzureClientConfig::mock();
+        config.service_overrides = Some(AzureServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), url)]),
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 512))
+            .controller(controller)
+            .platform(Platform::Azure)
+            .client_config(ClientConfig::Azure(Box::new(config)))
+            .service_provider(protected_provider())
+            .with_test_dependencies()
+            .with_dependency(setup_identity(), setup_identity_controller())
+            .stack_settings(protected_settings())
+            .signed_release(release.clone(), None)
+            .build()
+            .await
+            .unwrap();
+        executor.update(to).unwrap();
+        let result = executor.run_until_terminal().await;
+        if result.is_ok() {
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+        let requests = requests.lock().unwrap().clone();
+        (result, requests, release)
+    }
+
+    /// The install's Azure identity in these tests.
+    fn azure_install() -> alien_signing::InstallId {
+        alien_signing::InstallId::Azure {
+            subscription: "12345678-1234-1234-1234-123456789012".to_string(),
+            resource_group: "test-rg".to_string(),
+        }
+    }
+
+    /// What Container Apps reports about the protected app.
+    fn protected_app() -> OwnResource {
+        OwnResource {
+            urls: vec![format!("https://{PROTECTED_APP}.azurecontainerapps.io")],
+            location: None,
+        }
+    }
+
+    /// The verifier's answer to an `applyWrite` of release `release` for the protected worker.
+    fn written(release: u64) -> serde_json::Value {
+        serde_json::json!({
+            "release": release,
+            "function": PROTECTED_APP,
+            "operations": ["write"],
+            "answers": [{"fqdn": null}],
+        })
+    }
+
+    /// The worker's managed identity as setup creates it: `<prefix>-<profile>-sa`.
+    fn setup_identity() -> alien_core::ServiceAccount {
+        alien_core::ServiceAccount::new("default-profile-sa".to_string()).build()
+    }
+
+    fn setup_identity_controller() -> crate::service_account::AzureServiceAccountController {
+        crate::service_account::AzureServiceAccountController::mock_ready("test-default-profile-sa")
+    }
+
+    /// The Container Apps environment setup made, as the test dependencies name it.
+    const SETUP_ENVIRONMENT: &str = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.App/managedEnvironments/default-container-env";
+
+    /// The `applyWrite` writes the verifier got, each accepted by the verifier's own tables.
+    async fn checked_writes(requests: &[(Option<String>, Vec<u8>)]) -> Vec<serde_json::Value> {
+        let mut writes = Vec::new();
+        for (bearer, payload) in requests {
+            assert_eq!(
+                bearer.as_deref(),
+                Some("Bearer mock_access_token_for_testing"),
+                "the verifier is called with the management identity's token"
+            );
+            let (answer, forwarded) = run_write_over(
+                azure_install(),
+                "test",
+                Some(SETUP_ENVIRONMENT),
+                protected_app(),
+                payload,
+            )
+            .await;
+            answer.expect("the verifier's tables accept the controller's request");
+            assert_eq!(forwarded.len(), 1);
+            let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+            let sent = request["applyWrite"]["writes"].as_array().unwrap();
+            assert_eq!(sent.len(), 1, "each of these requests carries one write");
+            writes.push(sent[0].clone());
+        }
+        writes
+    }
+
+    /// A worker recorded with a domain the manager chose, from before the install was protected,
+    /// is updated with the address Container Apps reports for its own binding, which the
+    /// verifier accepts; the stale domain would be refused every time.
+    #[tokio::test]
+    async fn a_protected_update_replaces_a_recorded_custom_domain_with_the_app_address() {
+        let controller = AzureWorkerController {
+            url: Some("https://api.acme.example".to_string()),
+            container_app_url: None,
+            ..AzureWorkerController::mock_ready(PROTECTED_APP)
+        };
+        let (result, requests, _) =
+            protected_update_from(controller, axum::http::StatusCode::OK, written(2), &[]).await;
+        result.expect("the update completes through the verifier");
+        assert_eq!(checked_writes(&requests).await.len(), 1);
+    }
+
+    /// Env the deployment holds beside the signed release (set in the dashboard before the
+    /// install was protected) never reaches a protected worker: the controller builds its env
+    /// from what the release signs, and the verifier's tables accept the request.
+    #[tokio::test]
+    async fn a_protected_app_gets_no_env_the_release_doesnt_sign() {
+        let (result, requests, _) = protected_update_injecting(
+            axum::http::StatusCode::OK,
+            written(2),
+            &[("V8_PROBE", "1")],
+        )
+        .await;
+
+        result.expect("the update completes through the verifier");
+        let writes = checked_writes(&requests).await;
+        let env: Vec<&str> = writes[0]["updateContainerApp"]["app"]["properties"]["template"]
+            ["containers"][0]["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert!(!env.contains(&"V8_PROBE"), "{env:?}");
+        assert!(
+            env.contains(&"ALIEN_TRANSPORT"),
+            "the runtime's own env is still there: {env:?}"
+        );
+    }
+
+    /// On a protected install management may not write the Container App, so an update hands
+    /// the install's verifier the update it built, with the signed release, and the verifier's
+    /// tables accept it.
+    #[tokio::test]
+    async fn a_protected_update_goes_through_the_verifier_and_never_writes_the_app() {
+        let (result, requests, release) =
+            protected_update(axum::http::StatusCode::OK, written(2)).await;
+
+        result.expect("the update completes through the verifier");
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
+        assert_eq!(
+            request["applyWrite"]["release"],
+            serde_json::json!(release.release)
+        );
+        assert_eq!(
+            request["applyWrite"]["workload"],
+            serde_json::json!(PROTECTED_WORKER)
+        );
+        let writes = checked_writes(&requests).await;
+        assert_eq!(writes.len(), 1, "one verifier call for the update");
+        let update = &writes[0]["updateContainerApp"];
+        assert_eq!(update["name"], serde_json::json!(PROTECTED_APP));
+        let container = &update["app"]["properties"]["template"]["containers"][0];
+        assert_eq!(container["image"], serde_json::json!(pinned_image('2')));
+        assert!(
+            container["env"].as_array().unwrap().contains(
+                &serde_json::json!({"name": "ALIEN_WORKER_TIMEOUT_SECONDS", "value": "180"})
+            ),
+            "{}",
+            container["env"]
+        );
+    }
+
+    /// On a protected install no setup creates the app and management may not: the worker's
+    /// first deployment hands the verifier the very request an unprotected install sends Azure,
+    /// registry proxy credentials included.
+    #[tokio::test]
+    async fn a_protected_create_hands_the_verifier_the_unprotected_request() {
+        let worker = pinned_worker('2', 1024);
+        let release = signed_release(
+            Platform::Azure,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+
+        // Unprotected: the request goes to Azure.
+        let sent = Arc::new(std::sync::Mutex::new(None));
+        let mut apps = MockContainerAppsApi::new();
+        let recorded = sent.clone();
+        apps.expect_create_or_update_container_app()
+            .times(1)
+            .returning(move |_, name, app| {
+                *recorded.lock().unwrap() =
+                    Some((name.to_string(), serde_json::to_value(app).unwrap()));
+                Ok(OperationResult::Completed(
+                    create_successful_container_app_response(name, false),
+                ))
+            });
+        apps.expect_get_container_app().returning(|_, _| {
+            Ok(create_successful_container_app_response(
+                PROTECTED_APP,
+                false,
+            ))
+        });
+        let mut unprotected = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(AzureWorkerController::default())
+            .platform(Platform::Azure)
+            .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+            .with_test_dependencies()
+            .with_dependency(setup_identity(), setup_identity_controller())
+            .build()
+            .await
+            .unwrap();
+        unprotected.run_until_terminal().await.unwrap();
+        let (name, unprotected_app) = sent.lock().unwrap().clone().expect("Azure got the create");
+
+        // Protected: the same request goes to the verifier, which alone may send it.
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(1)).await;
+        let mut config = AzureClientConfig::mock();
+        config.service_overrides = Some(AzureServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), url)]),
+        });
+        let mut protected = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AzureWorkerController::default())
+            .platform(Platform::Azure)
+            .client_config(ClientConfig::Azure(Box::new(config)))
+            .service_provider(protected_provider())
+            .with_test_dependencies()
+            .with_dependency(setup_identity(), setup_identity_controller())
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        protected.run_until_terminal().await.unwrap();
+
+        assert_eq!(protected.status(), ResourceStatus::Running);
+        let requests = requests.lock().unwrap().clone();
+        let writes = checked_writes(&requests).await;
+        assert_eq!(
+            writes,
+            [serde_json::json!({"createContainerApp": {
+                "name": name,
+                "app": unprotected_app,
+            }})],
+            "the verifier gets the unprotected request, and nothing else"
+        );
+        assert_eq!(
+            writes[0]["createContainerApp"]["app"]["properties"]["configuration"]["registries"][0]
+                ["server"],
+            serde_json::json!("acmeprod.azurecr.io")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
+        let (result, requests, _) = protected_update(
+            axum::http::StatusCode::FORBIDDEN,
+            serde_json::json!({"errorType": "VERIFIER_REFUSED", "errorMessage": "Refused: the release was refused: SIGNING_SIGNATURE_INVALID: no valid signature"}),
+        )
+        .await;
+
+        let error = result.expect_err("the verifier refused");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(error.code, "RELEASE_REFUSED_BY_VERIFIER", "{error:?}");
+        assert!(!error.retryable);
+        assert!(
+            error.message.contains("no valid signature"),
+            "{}",
+            error.message
+        );
     }
 }

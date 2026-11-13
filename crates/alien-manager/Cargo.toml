@@ -33,6 +33,9 @@ openapi = [
 bon = { workspace = true }
 # Core Alien crates
 alien-core = { workspace = true, features = ["bundle-signature"] }
+alien-signing = { workspace = true }
+alien-cli-common = { workspace = true }
+alien-cloudformation = { workspace = true }
 alien-client-core = { workspace = true }
 alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server"] }

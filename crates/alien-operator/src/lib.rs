@@ -29,6 +29,7 @@ pub mod lock;
 pub mod loops;
 pub mod otlp_server;
 pub mod pod_logs;
+pub mod protected;
 pub mod readiness_server;
 pub mod self_update;
 mod workload_observation;
@@ -70,7 +71,7 @@ impl OperatorRuntimeOptions {
     }
 }
 
-fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>> {
+pub(crate) fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>> {
     let key = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY");
     let value = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE");
     match (key, value) {
@@ -267,6 +268,33 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         "Starting operator"
     );
 
+    // Protected mode runs only signed releases. The loops below that run
+    // anything else, or hand the manager the cluster, don't start.
+    let (debug_session_loop, access_request_loop, operations_exec_loop, operations_sync_handler) =
+        if let Some(signing) = &config.release_signing {
+            if config.reports_application_release() {
+                return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                    message:
+                        "Protected mode deploys signed releases; it can't run as a Remote Operator"
+                            .to_string(),
+                }));
+            }
+            info!(
+                install = %signing.install,
+                channel = %signing.settings.channel,
+                fingerprint = %signing.settings.fingerprint,
+                "Protected mode: running only releases the pinned signer list signed. Debug sessions, access requests, operations plugins, dynamic containers and manager-set environment variables are off"
+            );
+            (None, None, None, None)
+        } else {
+            (
+                debug_session_loop,
+                access_request_loop,
+                operations_exec_loop,
+                operations_sync_handler,
+            )
+        };
+
     if runtime_options.pod_log_collection.is_some() {
         if !matches!(config.platform, Platform::Kubernetes) || config.namespace.is_none() {
             return Err(AlienError::new(error::ErrorData::ConfigurationError {
@@ -318,6 +346,19 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         runtime_options.runtime_deployment_scope.as_ref(),
     )
     .await?;
+
+    if config.is_protected() {
+        if let Some(release) = db
+            .get_deployment_state()
+            .await?
+            .and_then(|state| state.target_release.or(state.current_release))
+        {
+            info!(
+                developer_inputs = ?protected::developer_inputs(&release.stack),
+                "Protected mode: values for these developer inputs of the installed release come only from the deployment's signed config"
+            );
+        }
+    }
 
     let readiness_port = runtime_options.readiness_server_port;
     let readiness_cancel = cancel.clone();
@@ -536,6 +577,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     // forwarding. Local only starts it when the service was installed with an
     // explicit runtime debug opt-in flag.
     let debug_session_handle = if !config.is_airgapped()
+        && !config.is_protected()
         && (matches!(config.platform, Platform::Kubernetes)
             || (matches!(config.platform, Platform::Local) && config.local_debug_enabled))
     {
@@ -560,21 +602,23 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     // approved commands happens separately via the commands queue. OSS builds
     // inject no loop and fall through to the no-op stub, which parks until
     // shutdown.
-    let access_request_handle =
-        if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes) {
-            let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> =
-                access_request_loop.unwrap_or_else(|| {
-                    Arc::new(loops::access_requests::UnimplementedAccessRequestSyncLoop)
-                });
-            Some(tokio::spawn({
-                let state = state.clone();
-                async move {
-                    loop_impl.run(state).await;
-                }
-            }))
-        } else {
-            None
-        };
+    let access_request_handle = if !config.is_airgapped()
+        && !config.is_protected()
+        && matches!(config.platform, Platform::Kubernetes)
+    {
+        let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> = access_request_loop
+            .unwrap_or_else(|| {
+                Arc::new(loops::access_requests::UnimplementedAccessRequestSyncLoop)
+            });
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop_impl.run(state).await;
+            }
+        }))
+    } else {
+        None
+    };
 
     // Operations-execution loop (pull mode). Runs authorized `<plugin>/<operation>`
     // commands the customer already approved. Only spawned when a binary injects
@@ -992,6 +1036,94 @@ mod tests {
         routing::patch,
         Json, Router,
     };
+
+    /// Records whether the Operator started it.
+    struct RecordingLoop(Arc<std::sync::atomic::AtomicBool>);
+
+    #[async_trait::async_trait]
+    impl loops::debug_session::DebugSessionLoop for RecordingLoop {
+        async fn run(self: Arc<Self>, state: Arc<OperatorState>) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            state.cancel.cancelled().await;
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl loops::operations_exec::OperationsExecLoop for RecordingLoop {
+        async fn run(self: Arc<Self>, state: Arc<OperatorState>) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            state.cancel.cancelled().await;
+        }
+    }
+
+    /// Which injected loops start, with and without pinned release keys.
+    async fn injected_loops_started(protected: bool) -> (bool, bool) {
+        let temp = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        // A connected Operator (air-gapped ones start neither loop) whose
+        // manager is unreachable: syncs fail and are retried.
+        db::OperatorDb::new(&temp.path().to_string_lossy(), encryption_key)
+            .await
+            .unwrap()
+            .set_deployment_id("dep_loops")
+            .await
+            .unwrap();
+        let mut config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .data_dir(temp.path().to_string_lossy().to_string())
+            .encryption_key(encryption_key)
+            .otlp_server_port(0)
+            .local_debug_enabled(true)
+            .sync(SyncConfig {
+                url: "http://127.0.0.1:9/".parse().unwrap(),
+                token: "ax_deploy_test".to_string(),
+            })
+            .build();
+        if protected {
+            config.release_signing = Some(protected::test_signing("shop"));
+        }
+        let debug = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let operations = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(run_operator_with_cancel_and_loops_and_runtime(
+            config,
+            None,
+            None,
+            Some(Arc::new(RecordingLoop(debug.clone()))),
+            None,
+            Some(Arc::new(RecordingLoop(operations.clone()))),
+            None,
+            cancel.clone(),
+            OperatorRuntimeOptions {
+                readiness_server_port: None,
+                identity_initialized_config_map: None,
+                runtime_deployment_scope: None,
+                pod_log_collection: None,
+            },
+        ));
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(
+            !task.is_finished(),
+            "the Operator stopped early: {:?}",
+            task.await
+        );
+        cancel.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+        (
+            debug.load(std::sync::atomic::Ordering::SeqCst),
+            operations.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    #[tokio::test]
+    async fn protected_mode_starts_no_injected_debug_or_operations_loop() {
+        assert_eq!(
+            injected_loops_started(false).await,
+            (true, true),
+            "without pinned keys both injected loops run"
+        );
+        assert_eq!(injected_loops_started(true).await, (false, false));
+    }
 
     #[tokio::test]
     async fn local_queue_listener_bind_failure_stops_operator() {

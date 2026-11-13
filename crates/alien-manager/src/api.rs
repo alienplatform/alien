@@ -50,6 +50,15 @@ impl Modify for BearerSecurity {
         crate::routes::airgap::target,
         crate::routes::airgap::bundle_sources,
         crate::routes::channels::list_channels,
+        crate::routes::signing::project_signing,
+        crate::routes::signing::list_signer_lists,
+        crate::routes::signing::add_signer_list,
+        crate::routes::signing::list_pending_changes,
+        crate::routes::signing::create_pending_change,
+        crate::routes::signing::get_pending_change,
+        crate::routes::signing::resolve_pending_change,
+        crate::routes::signing::list_config_statements,
+        crate::routes::signing::add_config_statement,
         crate::routes::channels::create_channel,
         crate::routes::channels::delete_channel,
         crate::routes::channels::promote_release,
@@ -91,12 +100,27 @@ impl Modify for BearerSecurity {
         // Credentials
         // Remote bindings
         crate::routes::bindings::resolve_binding,
+        crate::routes::sandbox_create::create_sandbox,
         // Vault secrets
         crate::routes::vault::set_secret,
         crate::routes::vault::get_secret,
         crate::routes::vault::delete_secret,
     ),
     components(schemas(
+        // Signing
+        crate::routes::signing::SignerListsResponse,
+        crate::routes::signing::ProjectSigningResponse,
+        crate::routes::signing::ConfigStatementsResponse,
+        crate::routes::signing::StatementRequest,
+        crate::routes::signing::CreatePendingChangeRequest,
+        crate::routes::signing::ResolvePendingChangeRequest,
+        crate::routes::signing::ResolutionStatus,
+        crate::routes::signing::SignerListStored,
+        crate::routes::signing::PendingChangeResponse,
+        crate::routes::signing::PendingChangesResponse,
+        crate::traits::PendingChangeStatus,
+        alien_core::SignedStatement,
+        alien_signing::Signature,
         crate::auth::identity_exchange::IdentityExchangeRequest,
         crate::auth::identity_exchange::RuntimeIdentityProof,
         crate::auth::identity_exchange::IdentityEnrollmentRequest,
@@ -160,6 +184,7 @@ impl Modify for BearerSecurity {
         // Credentials types
         // Remote binding types
         crate::routes::bindings::ResolveBindingRequest,
+        crate::routes::sandbox_create::CreateRemoteSandboxRequest,
         crate::routes::bindings::ResolveBindingResponse,
         // Vault types
         crate::routes::vault::SetSecretRequest,

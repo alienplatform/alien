@@ -228,13 +228,31 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
     }
 }
 
+/// The last deployment result logged at info. The deployment loop is the only
+/// writer, so one value for the process is enough.
+static LAST_LOGGED_OUTCOME: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Whether `outcome` differs from the last one reported, and records it.
+fn outcome_changed(outcome: &str) -> bool {
+    let mut last = LAST_LOGGED_OUTCOME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if last.as_deref() == Some(outcome) {
+        return false;
+    }
+    *last = Some(outcome.to_string());
+    true
+}
+
 /// One pass of the deployment loop. Returns how long the loop waits before the
 /// next pass: the step's requested delay, never less than `interval`.
 async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Duration {
     match run_deployment_continuously(state).await {
         Ok((steps, suggested_delay)) => {
             if steps > 0 {
-                info!(steps = steps, "Deployment completed");
+                // A running deployment takes a health step every pass; the
+                // terminal-state log reports when its outcome changes.
+                debug!(steps = steps, "Deployment pass completed");
             }
             interval.max(suggested_delay)
         }
@@ -314,6 +332,26 @@ pub(crate) async fn run_deployment_continuously(
     } else {
         LoopOperation::Deploy
     };
+
+    // Protected: whatever wrote the stored target, deploy it only if it is
+    // still exactly the signed release. Deleting needs no signature.
+    if let Some(signing) = &state.config.release_signing {
+        if operation == LoopOperation::Deploy {
+            let stored =
+                state.db.get_signing_trust().await?.unwrap_or_else(|| {
+                    crate::protected::OperatorTrust::new(&signing.settings.prefix)
+                });
+            if let Err(refusal) = signing.verify_release(current.platform, target_release, &stored)
+            {
+                error!(
+                    release_id = %target_release_id,
+                    reason = %refusal,
+                    "Protected mode: refused to deploy the stored target; nothing was changed"
+                );
+                return Ok((0, Duration::ZERO));
+            }
+        }
+    }
 
     // Get deployment ID (used for logging in runner)
     let deployment_id = state
@@ -514,13 +552,33 @@ pub(crate) async fn run_deployment_continuously(
         }
 
         if steps_executed > 0 {
-            info!(
-                status = ?loop_result.final_status,
-                stop_reason = ?loop_result.stop_reason,
-                outcome = ?loop_result.outcome,
-                steps = steps_executed,
-                "Deployment reached terminal state"
-            );
+            // Every pass of a healthy deployment ends here, once per interval:
+            // report at info only when the result differs from the last one. The target
+            // is part of the result: a new release that ends the same way is new work.
+            let level_is_info = outcome_changed(&format!(
+                "{:?}/{:?}/{:?}/{}",
+                loop_result.final_status,
+                loop_result.stop_reason,
+                loop_result.outcome,
+                applying_target_hash
+            ));
+            if level_is_info {
+                info!(
+                    status = ?loop_result.final_status,
+                    stop_reason = ?loop_result.stop_reason,
+                    outcome = ?loop_result.outcome,
+                    steps = steps_executed,
+                    "Deployment reached terminal state"
+                );
+            } else {
+                debug!(
+                    status = ?loop_result.final_status,
+                    stop_reason = ?loop_result.stop_reason,
+                    outcome = ?loop_result.outcome,
+                    steps = steps_executed,
+                    "Deployment reached terminal state"
+                );
+            }
         }
     }
 
@@ -1084,6 +1142,20 @@ pub(super) async fn resolve_client_config(
 }
 
 #[cfg(test)]
+mod outcome_log_tests {
+    use super::outcome_changed;
+
+    #[test]
+    fn a_repeated_outcome_is_reported_once() {
+        assert!(outcome_changed("Running/Synced/Success"));
+        assert!(!outcome_changed("Running/Synced/Success"));
+        assert!(!outcome_changed("Running/Synced/Success"));
+        assert!(outcome_changed("Failed/Synced/Failure"));
+        assert!(outcome_changed("Running/Synced/Success"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{OperatorConfig, SyncConfig};
@@ -1128,6 +1200,8 @@ mod tests {
             volume_restores: Vec::new(),
             value_slots: Vec::new(),
             deletion_policy: Default::default(),
+            release_statements: None,
+            signed_config: None,
         }
     }
 
@@ -1211,6 +1285,8 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("observe".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let state = |status, target: &str| DeploymentState {
             platform: Platform::Test,
@@ -1334,6 +1410,8 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let current = DeploymentState {
             platform: Platform::Local,
@@ -2109,6 +2187,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -2310,6 +2390,8 @@ mod tests {
             version: Some("1.0.0".into()),
             description: None,
             stack,
+            signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::Pending,
@@ -2493,6 +2575,8 @@ mod tests {
                 version: Some("1.0.0".into()),
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: None,
             error: None,

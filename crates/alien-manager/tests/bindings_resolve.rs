@@ -132,6 +132,8 @@ async fn build_for_platform(
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -210,6 +212,7 @@ async fn build_for_platform(
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),

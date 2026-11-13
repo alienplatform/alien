@@ -2,8 +2,9 @@ use indexmap::IndexMap;
 use std::{
     ffi::{OsStr, OsString},
     fs,
+    io::Write,
     path::Path,
-    process::Command,
+    process::{Command, Stdio},
 };
 
 /// Files written for linters that operate on a directory.
@@ -261,4 +262,40 @@ where
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
+}
+
+/// What `terraform console` evaluates `expression` to, with
+/// `local.resource_prefix` set to `resource_prefix`. Ties a name setup
+/// computes in HCL to the Rust function that derives the same name.
+pub fn evaluate_with_prefix(resource_prefix: &str, expression: &hcl::Expression) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let expression = hcl::format::to_string(expression).unwrap();
+    fs::write(
+        dir.path().join("main.tf"),
+        format!(
+            "locals {{\n  resource_prefix = \"{resource_prefix}\"\n  value = {expression}\n}}\n"
+        ),
+    )
+    .unwrap();
+    let mut console = Command::new("terraform")
+        .arg("console")
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("terraform should be on PATH");
+    console
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"local.value\n")
+        .unwrap();
+    let output = console.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
 }

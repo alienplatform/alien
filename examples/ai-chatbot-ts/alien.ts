@@ -28,7 +28,7 @@ const app = new alien.Container("app")
 export default new alien.Stack("ai-chatbot")
   .platforms(["aws", "gcp", "azure"])
   .add(llm, "live")
-  .add(db, "live")
+  .add(db, "frozen")
   .add(app, "live")
   .permissions({
     profiles: {

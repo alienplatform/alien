@@ -175,6 +175,18 @@ async fn owner_key(ctx: &ResourceControllerContext<'_>) -> Result<egress::Gatewa
     }
 }
 
+/// The cluster DNS domain this process runs under, when it can be determined:
+/// configured through [`CLUSTER_DOMAIN_ENV`], or listed in the pod's resolver
+/// search path. `None` outside a cluster without configuration; callers then
+/// leave the domain out instead of guessing one.
+pub(crate) fn detected_cluster_domain() -> Option<String> {
+    cluster_domain(
+        std::env::var(CLUSTER_DOMAIN_ENV).ok().as_deref(),
+        std::fs::read_to_string("/etc/resolv.conf").ok().as_deref(),
+    )
+    .ok()
+}
+
 /// How gateway replicas find each other. The gateway resolves the name as an absolute name,
 /// without search domains. A running gateway cannot take a change to it, so its pods restart
 /// when it changes.

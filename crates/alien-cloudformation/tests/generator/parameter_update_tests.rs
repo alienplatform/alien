@@ -184,6 +184,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
         let template = generate_cloudformation_template(
             &stack,
             CloudFormationOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 source_stack: &stack,
                 target: CloudFormationTarget::Aws,

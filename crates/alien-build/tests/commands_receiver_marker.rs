@@ -142,6 +142,7 @@ async fn build_marks_only_receivers_that_read_the_capability_file() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
     let built = build_stack(stack, &settings)
         .await
