@@ -49,6 +49,9 @@ pub struct Suite {
     /// Seconds a WebSocket stays idle before it is used again.
     #[serde(default = "default_idle")]
     idle_seconds: u64,
+    /// Exact effective capability mask the backend promises for the ENTRYPOINT. Omit to check
+    /// only the floor that every backend promises (no NET_ADMIN, SYS_ADMIN or NET_RAW).
+    boot_cap_eff: Option<u64>,
     /// Ports to prove. Defaults to the contract's 8080, 8081 and 8090.
     #[serde(default = "default_ports")]
     ports: Vec<u16>,
@@ -215,9 +218,13 @@ async fn run_checks(suite: &Suite, sandbox: Arc<dyn Sandbox>, id: &str, checks: 
     check!(
         checks,
         "censusJob",
-        census_job(&*sandbox, id, suite.boot_uid)
+        census_job(&*sandbox, id, suite.boot_uid, suite.boot_cap_eff)
     );
-    check!(checks, "bootOnce", boot_once(&*sandbox, id, suite.boot_uid));
+    check!(
+        checks,
+        "bootOnce",
+        boot_once(&*sandbox, id, suite.boot_uid, suite.boot_cap_eff)
+    );
     for port in &suite.ports {
         check!(
             checks,
@@ -533,7 +540,7 @@ async fn run_python<'a>(
     String::from_utf8(stdout).map_err(failed)
 }
 
-fn assert_census(census: &serde_json::Value, boot_uid: u64) -> Outcome {
+fn assert_census(census: &serde_json::Value, boot_uid: u64, boot_cap_eff: Option<u64>) -> Outcome {
     let processes = census["processes"]
         .as_array()
         .ok_or("census has no process list")?;
@@ -559,15 +566,32 @@ fn assert_census(census: &serde_json::Value, boot_uid: u64) -> Outcome {
             server["uid"], server["capEff"]
         ));
     }
-    let census_job = find("census.py").ok_or("the census command is not in its own census")?;
-    if census_job["uid"] == 0 || census_job["capEff"] != 0 {
+    // CAP_NET_RAW is bit 13, CAP_NET_ADMIN bit 12, CAP_SYS_ADMIN bit 21.
+    const FORBIDDEN_AT_BOOT: u64 = (1 << 12) | (1 << 13) | (1 << 21);
+    let boot_caps = boot["capEff"]
+        .as_u64()
+        .ok_or("ENTRYPOINT has no capability mask")?;
+    if boot_caps & FORBIDDEN_AT_BOOT != 0 {
         return Err(format!(
-            "a command runs as uid {} CapEff {}",
-            census_job["uid"], census_job["capEff"]
+            "ENTRYPOINT holds NET_ADMIN, NET_RAW or SYS_ADMIN: CapEff {boot_caps:#x}"
+        ));
+    }
+    if let Some(promised) = boot_cap_eff {
+        if boot_caps != promised {
+            return Err(format!(
+                "ENTRYPOINT CapEff {boot_caps:#x}, the backend promises {promised:#x}"
+            ));
+        }
+    }
+    let census_job = find("census.py").ok_or("the census command is not in its own census")?;
+    if census_job["uid"] == 0 || census_job["capEff"] != 0 || census_job["noNewPrivs"] != 1 {
+        return Err(format!(
+            "a command runs as uid {} CapEff {} NoNewPrivs {}",
+            census_job["uid"], census_job["capEff"], census_job["noNewPrivs"]
         ));
     }
     Ok(format!(
-        "ENTRYPOINT uid {} CapEff {:#x}; workload uid {} CapEff 0; command uid {} CapEff 0",
+        "ENTRYPOINT uid {} CapEff {:#x}; workload uid {} CapEff 0; command uid {} CapEff 0 NoNewPrivs 1",
         boot["uid"],
         boot["capEff"].as_u64().unwrap_or(0),
         server["uid"],
@@ -575,7 +599,12 @@ fn assert_census(census: &serde_json::Value, boot_uid: u64) -> Outcome {
     ))
 }
 
-async fn census_job(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
+async fn census_job(
+    sandbox: &dyn Sandbox,
+    id: &str,
+    boot_uid: u64,
+    boot_cap_eff: Option<u64>,
+) -> Outcome {
     let request = RunCommandRequest {
         command: "python3".into(),
         args: vec![format!("{FIXTURE_DIR}/census.py")],
@@ -617,13 +646,18 @@ async fn census_job(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     let census = serde_json::from_slice(&stdout).map_err(failed)?;
-    assert_census(&census, boot_uid)
+    assert_census(&census, boot_uid, boot_cap_eff)
 }
 
-async fn boot_once(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
+async fn boot_once(
+    sandbox: &dyn Sandbox,
+    id: &str,
+    boot_uid: u64,
+    boot_cap_eff: Option<u64>,
+) -> Outcome {
     let output = run_guest(sandbox, id, "census.py", &[]).await?;
     let census: serde_json::Value = serde_json::from_str(&output).map_err(failed)?;
-    let detail = assert_census(&census, boot_uid)?;
+    let detail = assert_census(&census, boot_uid, boot_cap_eff)?;
     // Read it from inside the guest: a backend's file API may not see the guest's /tmp.
     let boots = run_python(
         sandbox,

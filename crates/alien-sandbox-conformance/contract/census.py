@@ -15,6 +15,7 @@ def main():
                 "pid": int(entry.name),
                 "uid": int(fields["Uid"].split()[0]),
                 "capEff": int(fields["CapEff"].strip(), 16),
+                "noNewPrivs": int(fields.get("NoNewPrivs", "0").strip()),
                 "argv": [part.decode(errors="replace") for part in argv if part][:4],
             })
         except (FileNotFoundError, ProcessLookupError):
