@@ -95,7 +95,7 @@ pub async fn run_airgap_status_loop(
                     .map_or(0, |stack| stack.resources.len());
                 tokio::select! {
                     _ = state.cancel.cancelled() => break,
-                    result = poll_health_refresh(&mut pending_refresh, resource_count, || super::deployment::refresh_airgap_deployment(&state)) => result,
+                    result = poll_health_refresh(&mut pending_refresh, resource_count, || super::deployment::refresh_installed_deployment(&state)) => result,
                 }
             }
             Err(error) => Err(error),
@@ -554,7 +554,7 @@ mod tests {
                 .await
                 .unwrap();
             if !failed {
-                super::super::deployment::refresh_airgap_deployment(&state)
+                super::super::deployment::refresh_installed_deployment(&state)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -585,9 +585,11 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                assert!(super::super::deployment::refresh_airgap_deployment(&state)
-                    .await
-                    .is_err());
+                assert!(
+                    super::super::deployment::refresh_installed_deployment(&state)
+                        .await
+                        .is_err()
+                );
             }
         }
     }

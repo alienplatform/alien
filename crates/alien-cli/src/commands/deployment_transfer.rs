@@ -239,7 +239,7 @@ pub async fn run(
         call(client, workspace, method, &path, body.as_ref()).await?
     };
     if cmd.json() {
-        return print_json(&answer);
+        return print_json(&with_links(answer, links.as_ref()));
     }
     println!(
         "{}",
@@ -254,6 +254,29 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+/// The JSON result includes freshly issued links, which are shown only once.
+fn with_links(mut answer: Value, links: Option<&Value>) -> Value {
+    if let (Some(issued), Some(object)) =
+        (links.and_then(|l| l.get("links")), answer.as_object_mut())
+    {
+        object.insert("links".to_string(), issued.clone());
+    }
+    answer
+}
+
+/// Cancellation stops being possible once values are copied at cutover.
+fn cancel_warning(step: Option<&str>) -> Option<&'static str> {
+    match step {
+        Some("target-trusted") => Some(
+            "Warning: the next step copies values to the new manager. After that, the transfer cannot be cancelled.",
+        ),
+        Some("cut-over") | Some("completed") => Some(
+            "The transfer can no longer be cancelled: values were copied to the new manager.",
+        ),
+        _ => None,
+    }
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -325,6 +348,9 @@ fn describe(answer: &Value) -> Vec<String> {
         if let Some(until) = text(move_state, "frozenUntil") {
             lines.push(format!("{} {until}", dim_label("Frozen until")));
         }
+        if let Some(warning) = cancel_warning(text(move_state, "status")) {
+            lines.push(warning.to_string());
+        }
         if text(move_state, "status") == Some("restoring") {
             lines.push(
                 "The account admin must open the restore link to put the old setup back."
@@ -365,6 +391,20 @@ mod tests {
             dry_run,
             json: false,
         }
+    }
+
+    #[test]
+    fn json_output_keeps_issued_links_and_cancel_limit_is_shown() {
+        let answer = json!({"move": {"status": "awaiting-account-admin"}});
+        let issued = json!({"links": [{"kind": "restore", "token": "t"}]});
+        let merged = with_links(answer.clone(), Some(&issued));
+        assert_eq!(merged["links"][0]["token"], "t");
+        assert_eq!(with_links(answer, None).get("links"), None);
+        assert!(cancel_warning(Some("target-trusted")).is_some());
+        assert!(cancel_warning(Some("cut-over")).is_some());
+        assert!(cancel_warning(Some("draining")).is_none());
+        let lines = describe(&json!({"move": {"status": "target-trusted"}}));
+        assert!(lines.iter().any(|l| l.contains("cannot be cancelled")));
     }
 
     #[test]

@@ -2276,7 +2276,7 @@ mod setup_update_authorization_tests {
             registry
         });
         let config = deployment_config();
-        let state = StackState::new(Platform::Local);
+        let state = StackState::new(Platform::Aws);
         let client = ClientConfig::Local {
             state_directory: "/unused".to_string(),
         };
@@ -2353,6 +2353,77 @@ mod setup_update_authorization_tests {
                 .expect("the setup rerun applies the blocked update");
             assert!(authorized, "{input}");
         }
+    }
+
+    /// The AWS sandbox setup inputs (build role, network, grant) do not exist on Kubernetes: a
+    /// Live sandbox there rolls its image, limits and lifecycle without setup, and only its
+    /// egress mode (the chart's NetworkPolicy) waits for it.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_live_kubernetes_sandbox_rolls_image_limits_and_lifecycle_without_setup() {
+        use alien_core::{SandboxCode, SandboxLifecyclePolicy, SandboxLimits};
+        let stack = |image: &str, memory: &str, max_lifetime: Option<u32>, egress| {
+            let sandbox = alien_core::Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                    bundled_from: None,
+                })
+                .limits(SandboxLimits {
+                    cpu: "1".to_string(),
+                    memory: memory.to_string(),
+                    disk: "10Gi".to_string(),
+                    max_processes: None,
+                })
+                .egress(egress)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: max_lifetime,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            Stack::new("stack".to_string())
+                .add(sandbox, alien_core::ResourceLifecycle::Live)
+                .build()
+        };
+        let runner = PreflightRunner::with_registry({
+            let mut registry = crate::PreflightRegistry::new();
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::SandboxSetupInputsUnchangedCheck,
+            ));
+            registry
+        });
+        let config = deployment_config();
+        let state = StackState::new(Platform::Kubernetes);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        let old = stack("app:1", "2Gi", None, alien_core::SandboxEgress::None);
+
+        runner
+            .run_deployment_time_preflights(
+                stack("app:2", "4Gi", Some(3600), alien_core::SandboxEgress::None),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect("image, limits and lifetime roll at runtime");
+
+        let error = runner
+            .run_deployment_time_preflights(
+                stack("app:1", "2Gi", None, alien_core::SandboxEgress::Internet),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("the egress mode is the chart's NetworkPolicy");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 
     /// The Frozen check is built from the installed stack's platform, so only an Azure or GCP

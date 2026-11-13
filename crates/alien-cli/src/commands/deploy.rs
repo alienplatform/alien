@@ -2126,6 +2126,7 @@ async fn deploy_task_with_environment(
                                 deployment_group_external_id: None,
                                 installation: None,
         base_platform: None,
+                                setup_capabilities: Vec::new(),
                                 setup_item: parsed_setup_item,
                                 name: resolved_args
                                     .name

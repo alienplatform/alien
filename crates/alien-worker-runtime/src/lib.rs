@@ -28,3 +28,5 @@ pub use otlp::{flush_otlp_logs, init_otlp_logging, shutdown_otlp_logs, OwnedOtlp
 pub use tracing_init::init_tracing;
 
 pub use otlp::emit_log;
+
+mod identity;

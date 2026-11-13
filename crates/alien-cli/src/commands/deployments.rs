@@ -156,6 +156,7 @@ pub enum DeploymentsCmd {
     SetDomains {
         /// Deployment ID or reference
         id: String,
+        /// Resource that serves the endpoints (its ID in the stack)
         #[arg(long)]
         resource: String,
         /// Endpoint name and hostname (repeat for each endpoint)
@@ -4017,6 +4018,7 @@ async fn create_deployment_task(
         deployment_group_external_id: None,
         installation: None,
         base_platform: None,
+        setup_capabilities: Vec::new(),
         setup_item: None,
         name: alien_platform_api::types::NewDeploymentRequestName::try_from(name.to_string())
             .into_alien_error()

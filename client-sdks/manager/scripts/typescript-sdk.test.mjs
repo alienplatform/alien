@@ -8,6 +8,7 @@ import { computeSettingsFromJSON, computeSettingsToJSON } from "../typescript/es
 import { agentSyncRequestToJSON } from "../typescript/esm/models/agentsyncrequest.js"
 import { createCommandResponseFromJSON } from "../typescript/esm/models/createcommandresponse.js"
 import { healthResponseFromJSON } from "../typescript/esm/models/healthresponse.js"
+import { runtimeIdentityProofToJSON } from "../typescript/esm/models/runtimeidentityproof.js"
 import { stackImportRequestToJSON } from "../typescript/esm/models/stackimportrequest.js"
 import { stackSettingsFromJSON } from "../typescript/esm/models/stacksettings.js"
 
@@ -177,4 +178,16 @@ test("stack import responses retain resource metadata and accept older managers"
       assert.equal(resource.config.id, "documents")
     }
   }
+})
+
+test("manager SDK sends cloud identity proofs with the names the manager reads", () => {
+  const aws = JSON.parse(runtimeIdentityProofToJSON({ type: "aws", presignedUrl: "synthetic-url" }))
+  assert.deepEqual(aws, { type: "aws", presignedUrl: "synthetic-url" })
+
+  const gcp = JSON.parse(runtimeIdentityProofToJSON({ type: "gcp", idToken: "synthetic-token" }))
+  assert.deepEqual(gcp, { type: "gcp", idToken: "synthetic-token" })
+})
+
+test("manager SDK has no Azure access-token proof, which the manager does not accept", () => {
+  assert.throws(() => runtimeIdentityProofToJSON({ type: "azure", accessToken: "synthetic-token" }))
 })

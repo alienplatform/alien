@@ -10,7 +10,9 @@ import * as z from "zod";
  */
 export const AzureArtifactRegistryImportDataSchema = z.object({
     "loginServer": z.string().describe("Login server URL (`<name>.azurecr.io`)."),
+"pullIdentityResourceId": z.string().describe("Setup-owned pull identity ARM ID; absent in older setup payloads.").nullish(),
 "pullPrincipalId": z.string().describe("UAMI principal id with `AcrPull` access."),
+"pullRoleAssignmentId": z.string().describe("Setup-owned registry-scoped AcrPull assignment ARM ID.").nullish(),
 "pushPrincipalId": z.string().describe("UAMI principal id with `AcrPush` access."),
 "registryName": z.string().describe("ACR name (must be globally unique, alphanumeric)."),
 "resourceGroup": z.string().describe("Resource group hosting the registry."),

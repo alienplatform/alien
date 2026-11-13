@@ -21,6 +21,9 @@ pub enum SandboxOperationClass {
     Execute,
     /// Creating and terminating sandboxes
     Manage,
+    /// Reaching one declared port of the sandbox over HTTP. Neither Execute nor Manage permits
+    /// it, and it permits neither: a capability for a web server is not a shell.
+    Preview,
 }
 
 /// The claims an agent checks before doing anything.
@@ -38,6 +41,10 @@ pub struct SandboxCapabilityClaims {
     pub expires_at: i64,
     /// Key that signed it, so rotation can retain an overlapping ring
     pub key_id: String,
+    /// The one port a `preview` capability admits. Absent on every other class, where a port
+    /// would mean nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 /// What the agent knows about itself, established at sandbox start.
@@ -89,6 +96,12 @@ impl SandboxCapabilityClaims {
 
         Ok(())
     }
+
+    /// Whether this capability admits `port`. A preview capability admits only the port it was
+    /// minted for; any other class admits none, so a shell capability cannot reach a web port.
+    pub fn admits_port(&self, port: u16) -> bool {
+        self.operation == SandboxOperationClass::Preview && self.port == Some(port)
+    }
 }
 
 fn refused(reason: &str) -> AlienError<ErrorData> {
@@ -117,7 +130,26 @@ mod tests {
             generation: 2,
             expires_at: NOW + 300,
             key_id: "k1".to_string(),
+            port: None,
         }
+    }
+
+    #[test]
+    fn a_preview_capability_admits_only_its_port_and_no_other_class() {
+        let mut preview = claims();
+        preview.operation = SandboxOperationClass::Preview;
+        preview.port = Some(8080);
+        assert!(preview.admits_port(8080));
+        assert!(!preview.admits_port(8971));
+        preview
+            .verify(&identity(), SandboxOperationClass::Execute, NOW)
+            .expect_err("a preview capability does not run commands");
+        let mut execute = claims();
+        execute.port = Some(8080);
+        assert!(
+            !execute.admits_port(8080),
+            "only a preview capability admits a port"
+        );
     }
 
     #[test]

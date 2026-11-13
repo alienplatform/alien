@@ -114,39 +114,22 @@ fn source_sandbox() -> Sandbox {
         .build()
 }
 
-/// `alien build` turns a sandbox's source into an image on AWS, never on Kubernetes. Driven through
-/// the runner rather than the method, because the runtime's empty-image fallback on Kubernetes
-/// rests on this gate being registered, not merely on the method refusing when called.
+/// `alien build` turns a sandbox's source into an image on AWS and on Kubernetes. Driven through
+/// the runner rather than the method, because the runtime's empty-image fallback rests on this
+/// gate being registered, not merely on the method refusing when called.
 ///
 /// Live, because the release pushes a source build to a private repository and a Frozen one is
 /// built before the registry can open it.
 #[tokio::test]
-async fn source_reaches_aws_but_not_kubernetes_through_the_runner() {
+async fn source_reaches_aws_and_kubernetes_through_the_runner() {
     let live = alien_core::ResourceLifecycle::Live;
-    let summary = PreflightRunner::new()
-        .run_compile_time_checks(
-            &stack_with_lifecycle(source_sandbox(), live),
-            Platform::Kubernetes,
-        )
-        .await
-        .expect("compile-time checks run");
-
-    assert!(
-        !summary.success,
-        "source has no builder on Kubernetes: {summary:?}"
-    );
-    let rendered = format!("{summary:?}");
-    assert!(
-        rendered.contains("agent"),
-        "the failure must name the sandbox: {rendered}"
-    );
-
-    let on_aws = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with_lifecycle(source_sandbox(), live), Platform::Aws)
-        .await
-        .expect("compile-time checks run");
-
-    assert!(on_aws.success, "AWS builds it: {on_aws:?}");
+    for platform in [Platform::Kubernetes, Platform::Aws] {
+        let summary = PreflightRunner::new()
+            .run_compile_time_checks(&stack_with_lifecycle(source_sandbox(), live), platform)
+            .await
+            .expect("compile-time checks run");
+        assert!(summary.success, "{platform} builds it: {summary:?}");
+    }
 }
 
 /// Azure and GCP build a source sandbox too, and Frozen: Azure's controller pulls the pushed image

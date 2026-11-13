@@ -354,6 +354,7 @@ pub struct SingleControllerExecutor {
     deletion_policy: alien_core::DeletionPolicy,
     // Public endpoint URL overrides for testing.
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
+    runtime_identity_audience: Option<String>,
     // Stack and state
     desired_stack: Stack,
     stack_state: StackState,
@@ -423,6 +424,7 @@ impl SingleControllerExecutor {
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
                 .maybe_public_endpoints(self.public_endpoints.clone())
+                .maybe_runtime_identity_audience(self.runtime_identity_audience.clone())
                 .volume_restores(self.volume_restores.clone())
                 .deletion_policy(self.deletion_policy)
                 .manager_url("https://test-manager.alien.dev".to_string())
@@ -687,6 +689,7 @@ impl SingleControllerExecutor {
             .allow_frozen_changes(false)
             .maybe_domain_metadata(self.domain_metadata.clone())
             .maybe_public_endpoints(self.public_endpoints.clone())
+            .maybe_runtime_identity_audience(self.runtime_identity_audience.clone())
             .volume_restores(self.volume_restores.clone())
             .deletion_policy(self.deletion_policy)
             .manager_url("https://test-manager.alien.dev".to_string())
@@ -791,6 +794,7 @@ pub struct SingleControllerExecutorBuilder {
     volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     deletion_policy: alien_core::DeletionPolicy,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
+    runtime_identity_audience: Option<String>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     dependency_lifecycles: HashMap<String, ResourceLifecycle>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
@@ -829,6 +833,7 @@ impl SingleControllerExecutorBuilder {
             volume_restores: Vec::new(),
             deletion_policy: alien_core::DeletionPolicy::Retain,
             public_endpoints: None,
+            runtime_identity_audience: None,
             dependencies: Vec::new(),
             dependency_lifecycles: HashMap::new(),
             stack_resources: Vec::new(),
@@ -946,6 +951,12 @@ impl SingleControllerExecutorBuilder {
     /// readiness probes at mock HTTP servers during tests.
     pub fn public_endpoints(mut self, urls: alien_core::PublicEndpointUrls) -> Self {
         self.public_endpoints = Some(urls);
+        self
+    }
+
+    /// Enables bounded runtime identity in the actual controller context.
+    pub fn runtime_identity_audience(mut self, audience: String) -> Self {
+        self.runtime_identity_audience = Some(audience);
         self
     }
 
@@ -1200,7 +1211,7 @@ impl SingleControllerExecutorBuilder {
                                 .to_string(),
                             resource_id: None,
                         },
-                    ))
+                    ));
                 }
                 _ => panic!("Unsupported platform for testing: {:?}", platform),
             },
@@ -1539,6 +1550,7 @@ impl SingleControllerExecutorBuilder {
             volume_restores: self.volume_restores,
             deletion_policy: self.deletion_policy,
             public_endpoints: self.public_endpoints,
+            runtime_identity_audience: self.runtime_identity_audience,
             desired_stack: stack,
             stack_state,
             registry: Arc::new(ResourceRegistry::with_built_ins()),

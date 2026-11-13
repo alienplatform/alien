@@ -335,6 +335,7 @@ mod tests {
             record: record(),
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            target_operator_image: None,
         }
     }
 

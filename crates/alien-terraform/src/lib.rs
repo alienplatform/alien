@@ -28,6 +28,7 @@ mod registry;
 mod target;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
+mod verified_setup;
 
 pub use emitter::{TfEmitter, TfFragment};
 pub use generator::{

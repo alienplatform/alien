@@ -1,4 +1,5 @@
 mod core;
+mod registry_digest;
 pub use core::*;
 
 mod error;
@@ -63,6 +64,10 @@ mod kubernetes_priority_events;
 mod kubernetes_public_endpoint;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_registry;
+#[cfg(feature = "kubernetes")]
+mod kubernetes_runtime_credentials;
+#[cfg(feature = "kubernetes")]
+pub use kubernetes_runtime_credentials::refresh_installed_credentials;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_workload_heartbeat;
 

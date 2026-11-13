@@ -142,7 +142,7 @@ const MICROVM_TIERS: &[MicrovmTier] = &[
     },
 ];
 
-pub use super::sandbox_policy::{is_public_ipv4, EgressPolicy};
+pub use super::sandbox_policy::{is_public_ipv4, non_public_ipv4_ranges, EgressPolicy};
 
 /// Outbound policy. Only the new Internet value opts into gateway enforcement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,33 +370,47 @@ impl SandboxCapabilities {
             }),
             Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
-            // Preview needs a gateway that validates a sandbox-and-port capability, which this
-            // backend has none of.
             Platform::Kubernetes => Ok(Self {
                 files: true,
                 reconnect: true,
                 jobs: true,
-                // The pod runs the same agent, but this client does not drive its interactive
-                // routes yet, so the capability is not claimed until it is proven here.
-                interactive_commands: false,
-                preview: false,
+                // The pod runs the same agent and the client drives its `/v1/interactive` stream
+                // through the shared agent-protocol module. The client asks the broker for a new
+                // capability before the one it holds expires, so a command outlives any single
+                // capability.
+                interactive_commands: true,
+                // In-cluster callers (workloads that link the sandbox) only; external preview is
+                // not yet supported. `preview` returns the sandbox agent's in-cluster URL and a
+                // bearer capability for one declared port of one session. The agent checks the
+                // capability against its own pod and forwards to 127.0.0.1 on that port, so the
+                // port is reachable by nothing else, and the agent's own port never is.
+                preview: true,
+                // Nitro Sandboxes, gVisor and Kata pods cannot checkpoint a running pod, so a
+                // paused session would lose its state. `resume` on a running sandbox is a no-op.
                 pause_resume: false,
+                // The same reason: there is no way to capture a pod's filesystem and memory.
                 snapshot: false,
                 domain_egress_rules: false,
                 egress_deny: true,
                 enforced_limits: true,
-                // A pid ceiling is a kubelet setting per node, not a pod field.
+                // A pid ceiling is a kubelet setting per node (`podPidsLimit`), not a pod field,
+                // and the agent does not apply `RLIMIT_NPROC` because that counts every process
+                // of the uid, the agent's own threads included. `maxProcesses` is refused with
+                // `SANDBOX_CAPABILITY_UNSUPPORTED` rather than accepted and ignored.
                 process_limit: false,
-                // `activeDeadlineSeconds` on the pod, which the kubelet enforces.
+                // A create may name `timeoutMs` up to the declared `maxLifetimeSeconds`. The broker
+                // records the deadline on the pod at the claim and the Operator ends the session
+                // at it. The kubelet's `activeDeadlineSeconds` is not used: it counts from the
+                // pod's start, so an idle pool pod would spend a session's time before it was
+                // claimed.
                 sandbox_lifetime: true,
                 // The pod drops every capability, including the `CAP_SYS_ADMIN` the agent would
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
                 supervisor_pid_namespace: false,
-                // The pod pins one uid (`run_as_user: 65534` on both pod and container) with
-                // `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no
-                // process can setuid to split the command off from a supervisor. No uid split is
-                // possible, so none exists.
+                // The pod runs as the image's one non-root user with `capabilities.drop: [ALL]`
+                // and `allow_privilege_escalation: false`, so no process can setuid to split the
+                // command off from a supervisor. No uid split is possible, so none exists.
                 supervisor_isolation: false,
             }),
             Platform::Local => Ok(Self {
@@ -809,12 +823,15 @@ impl Sandbox {
             capabilities.domain_egress_rules = true;
         }
 
-        // `alien build` builds an AWS, Azure or GCP sandbox's base image, so source is a
+        // `alien build` builds an AWS, Azure, GCP or Kubernetes sandbox's base image, so source is a
         // declaration there and the emitters refuse it only if it reaches them unbuilt. Everywhere
         // else the image is pulled as declared, and an empty image string would schedule a pod
         // that can never run.
         if matches!(&self.code, SandboxCode::Source { .. })
-            && !matches!(platform, Platform::Aws | Platform::Azure | Platform::Gcp)
+            && !matches!(
+                platform,
+                Platform::Aws | Platform::Azure | Platform::Gcp | Platform::Kubernetes
+            )
         {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -1706,7 +1723,7 @@ mod tests {
     /// near-misses the cases separate: the key's first segment grants objects a rebuild never
     /// reads, and the object's own directory pins the version segment that moves.
     #[test]
-    fn a_grantable_prefix_stops_above_the_segment_that_moves() {
+    fn a_grantable_prefix_ends_above_the_segment_that_moves() {
         assert_eq!(
             stable_bundle_key_prefix("sandbox-bundle/f00dcafe/bundle.zip"),
             Some("sandbox-bundle")
@@ -1834,8 +1851,8 @@ mod tests {
         let k8s =
             SandboxCapabilities::for_platform(Platform::Kubernetes).expect("k8s is supported");
         assert!(
-            !k8s.preview,
-            "the sandbox-scoped ingress gateway does not exist yet"
+            k8s.preview,
+            "an in-cluster caller previews through the agent route"
         );
     }
 
@@ -2119,10 +2136,16 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("AWS mints a port-scoped JWE");
 
-        let error = sandbox
+        sandbox
             .validate_for_platform(Platform::Kubernetes)
-            .expect_err("Kubernetes preview is deferred");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            .expect("Kubernetes serves preview to in-cluster callers through the agent");
+
+        for platform in [Platform::Azure, Platform::Gcp] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("these backends have no port-scoped credential");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        }
     }
 
     /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and
@@ -2594,8 +2617,11 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Gcp)
             .expect("a GCP sandbox base image is built by `alien build`");
+        sandbox
+            .validate_for_platform(Platform::Kubernetes)
+            .expect("a Kubernetes sandbox base image is built by `alien build`");
 
-        for platform in [Platform::Kubernetes, Platform::Local] {
+        for platform in [Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no backend builds a sandbox image from source here");
