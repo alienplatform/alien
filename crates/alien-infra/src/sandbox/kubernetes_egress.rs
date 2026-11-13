@@ -688,6 +688,98 @@ mod tests {
             .json_body(json!({"apiVersion":"v1","kind":"Secret","metadata":{"name":"created"}}));
     }
 
+    /// The policy canary is the Operator Service's ClusterIP, not the Operator pod's address,
+    /// and a Service that cannot be read is an error rather than a pod without the proof.
+    #[tokio::test]
+    async fn the_policy_canary_is_the_operator_service_cluster_ip() {
+        use crate::sandbox::{kubernetes::resolve_operator_address, kubernetes_spec};
+        let sandbox = internet_sandbox("subject");
+        let stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(sandbox.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let path = "/api/v1/namespaces/test-ns/services/acme";
+        unsafe { std::env::set_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE, "acme:8080") };
+        kubernetes_spec::forget_operator_address();
+
+        let mut missing = server
+            .mock_async(|when, then| {
+                when.method(GET).path(path);
+                then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+            })
+            .await;
+        assert!(resolve_operator_address(&ctx, &sandbox, "test-ns")
+            .await
+            .is_err());
+        missing.delete_async().await;
+        let mut headless = server
+            .mock_async(|when, then| {
+                when.method(GET).path(path);
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"None"}}));
+            })
+            .await;
+        assert!(resolve_operator_address(&ctx, &sandbox, "test-ns")
+            .await
+            .is_err());
+        headless.delete_async().await;
+
+        // A publicly numbered Service address cannot be blocked by the direct-egress policy.
+        let mut public = server
+            .mock_async(|when, then| {
+                when.method(GET).path(path);
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"34.118.0.9"}}));
+            })
+            .await;
+        let mut direct = sandbox.clone();
+        direct.egress = alien_core::SandboxEgress::Allow;
+        let refused = resolve_operator_address(&ctx, &direct, "test-ns")
+            .await
+            .unwrap_err();
+        assert!(refused.message.contains("publicly numbered"), "{}", refused.message);
+        assert!(kubernetes_spec::operator_address().is_none());
+        // The gateway policy admits only the gateway, so the same address is a valid canary.
+        resolve_operator_address(&ctx, &sandbox, "test-ns")
+            .await
+            .unwrap();
+        kubernetes_spec::forget_operator_address();
+        public.delete_async().await;
+
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(path);
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"10.96.0.9"}}));
+            })
+            .await;
+        resolve_operator_address(&ctx, &sandbox, "test-ns")
+            .await
+            .unwrap();
+        assert_eq!(
+            kubernetes_spec::operator_address().as_deref(),
+            Some("10.96.0.9:8080")
+        );
+        let mut pod = kubernetes_spec::idle_pool_pod(&sandbox, "test-ns", "gvisor", None, None);
+        kubernetes_spec::require_enforced_policy(
+            &mut pod,
+            kubernetes_spec::operator_address().as_deref(),
+        );
+        let canary = pod.spec.unwrap().containers[0]
+            .env
+            .clone()
+            .unwrap()
+            .into_iter()
+            .find(|var| var.name == "ALIEN_SANDBOX_POLICY_CANARY")
+            .and_then(|var| var.value);
+        assert_eq!(canary.as_deref(), Some("10.96.0.9:8080"));
+        unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
+        kubernetes_spec::forget_operator_address();
+    }
+
     /// The owner writes the signing key once, create-only, and publishes a configuration that
     /// names the mounted replica secret, all without reading a Secret. An unchanged
     /// configuration makes no request; a changed one is written again, still without a read.
