@@ -305,15 +305,6 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
-    /// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
-    /// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
-    fn pause_resume_unsupported(&self) -> AlienError<ErrorData> {
-        self.unsupported(
-            alien_core::SandboxCapability::PauseResume.as_str(),
-            "Agent Platform sandboxes cannot be paused and resumed with their state kept",
-        )
-    }
-
     /// A sandbox id that stays a single path segment.
     ///
     /// The id is interpolated into the proxy URL, so one carrying `/`, `..`, `?` or `#` would
@@ -1122,13 +1113,48 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
-        Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
-        Err(self.pause_resume_unsupported())
+        const PAUSE: &str = "sandbox.pause";
+        Self::checked_sandbox_id(PAUSE, sandbox_id)?;
+        let started = self.client.pause(&self.engine, sandbox_id).await.context(
+            ErrorData::SandboxCommandFailed {
+                failure: "pauseFailed".to_string(),
+                reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
+            },
+        )?;
+        self.await_operation(PAUSE, started).await?;
+        Ok(())
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
-        Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
-        Err(self.pause_resume_unsupported())
+        const RESUME: &str = "sandbox.resume";
+        Self::checked_sandbox_id(RESUME, sandbox_id)?;
+        let sandbox = self
+            .read_sandbox(RESUME, sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: RESUME.to_string(),
+                    reason: format!("sandbox '{sandbox_id}' does not exist"),
+                })
+            })?;
+        // Safe on a running sandbox: nothing to resume, so the platform is not asked.
+        if sandbox.state.as_deref() != Some("STATE_PAUSED") {
+            return Ok(());
+        }
+        let started = self.client.resume(&self.engine, sandbox_id).await.context(
+            ErrorData::SandboxCommandFailed {
+                failure: "resumeFailed".to_string(),
+                reason: format!("{RESUME}: sandbox '{sandbox_id}' could not be resumed"),
+            },
+        )?;
+        self.await_operation(RESUME, started).await?;
+        // The routing token changed, and a replaced container would not know a cached grant.
+        // Grants are cheap to mint again, and preview reads the token fresh on every call.
+        self.grants
+            .lock()
+            .expect("grant cache lock")
+            .retain(|(id, _), _| id != sandbox_id);
+        Ok(())
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {

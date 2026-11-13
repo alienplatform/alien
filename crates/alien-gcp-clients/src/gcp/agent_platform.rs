@@ -496,6 +496,14 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     /// Snapshot a sandbox. Single-attempt state transition; returns the operation to poll.
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation>;
 
+    /// Pause a sandbox, keeping its process and memory. Single-attempt state transition; returns
+    /// the operation to poll.
+    async fn pause(&self, engine: &str, sandbox: &str) -> Result<Operation>;
+
+    /// Resume a paused sandbox. Single-attempt state transition; returns the operation to poll.
+    /// The routing token in `connectionInfo` changes, so read the sandbox again afterwards.
+    async fn resume(&self, engine: &str, sandbox: &str) -> Result<Operation>;
+
     /// Read a long-running operation by resource name. Retries.
     async fn get_operation(&self, name: &str) -> Result<Operation>;
 }
@@ -507,6 +515,30 @@ pub struct AgentPlatformClient {
 }
 
 impl AgentPlatformClient {
+    /// One `:pause` / `:resume` call with an empty body, sent once: a repeat of a transition the
+    /// server already accepted is not known to be harmless.
+    async fn sandbox_transition(
+        &self,
+        verb: &str,
+        engine: &str,
+        sandbox: &str,
+    ) -> Result<Operation> {
+        let path = format!("{}:{verb}", self.sandbox_path(engine, sandbox));
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({})),
+                sandbox,
+            )
+            .await
+            .context(AgentPlatformErrorData::RequestFailed {
+                operation: format!("{verb} sandbox"),
+                message: sandbox.to_string(),
+            })
+    }
+
     /// Build a client against the region's `aiplatform` host. The regional endpoint is injected as a
     /// service override only when the config does not already carry one, so a test override wins.
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
@@ -908,6 +940,14 @@ impl AgentPlatformApi for AgentPlatformClient {
             })
     }
 
+    async fn pause(&self, engine: &str, sandbox: &str) -> Result<Operation> {
+        self.sandbox_transition("pause", engine, sandbox).await
+    }
+
+    async fn resume(&self, engine: &str, sandbox: &str) -> Result<Operation> {
+        self.sandbox_transition("resume", engine, sandbox).await
+    }
+
     async fn get_operation(&self, name: &str) -> Result<Operation> {
         self.base
             .execute_request(Method::GET, name, None, Option::<()>::None, name)
@@ -1052,6 +1092,27 @@ mod tests {
             .await
             .expect_err("execute should surface the failure");
         assert_eq!(exec.hits_async().await, 1, "execute must be sent once");
+    }
+
+    /// `:pause` and `:resume` are state transitions: sent once, never retried on a 5xx.
+    #[tokio::test]
+    async fn pause_and_resume_are_sent_once() {
+        for verb in ["pause", "resume"] {
+            let server = MockServer::start_async().await;
+            let call = server
+                .mock_async(|when, then| {
+                    when.method(POST).path_contains(format!(":{verb}").as_str());
+                    then.status(503);
+                })
+                .await;
+            let api = client(&server);
+            if verb == "pause" {
+                api.pause(ENGINE, SANDBOX).await.expect_err("surfaces 503");
+            } else {
+                api.resume(ENGINE, SANDBOX).await.expect_err("surfaces 503");
+            }
+            assert_eq!(call.hits_async().await, 1, "{verb} must be sent once");
+        }
     }
 
     /// An empty agent reply arrives as an output with no `data`, which is an empty body, not a

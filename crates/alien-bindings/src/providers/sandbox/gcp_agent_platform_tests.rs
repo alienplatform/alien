@@ -652,6 +652,12 @@ impl AgentPlatformApi for WedgedAgent {
     ) -> ClientResult<Operation> {
         unimplemented!()
     }
+    async fn pause(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn resume(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
     async fn get_operation(&self, _name: &str) -> ClientResult<Operation> {
         unimplemented!()
     }
@@ -1519,18 +1525,65 @@ async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
 
 // ---- pause / resume / snapshot ----------------------------------------------------------------
 
-/// The capability row says no pause, and the provider agrees without calling the API: a resume
-/// that reports success on a fresh container must never reach a caller as a kept sandbox.
+/// The capability row and the provider agree: Agent Platform keeps the process and its memory
+/// across `:pause` / `:resume` (measured live, three runs), so both verbs are forwarded.
 #[tokio::test]
-async fn pause_and_resume_are_refused_as_unsupported() {
-    assert!(!SandboxCapabilities::gcp_agent_platform().pause_resume);
-    let provider = provider(MockAgentPlatformApi::new());
-    for error in [
-        provider.pause("s1").await.expect_err("pause is refused"),
-        provider.resume("s1").await.expect_err("resume is refused"),
-    ] {
-        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
-    }
+async fn pause_sends_one_pause_call_and_waits_for_the_operation() {
+    assert!(SandboxCapabilities::gcp_agent_platform().pause_resume);
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_pause()
+        .withf(|engine, sandbox| engine == "eng1" && sandbox == "s1")
+        .times(1)
+        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
+    provider(client).pause("s1").await.expect("pause completes");
+}
+
+/// A resume of a sandbox that is not paused is a no-op: the workload may call it on a running
+/// sandbox, and the platform call is not known to leave a running one untouched.
+/// Mutation check: always call `resume` and this test fails on the unexpected call.
+#[tokio::test]
+async fn resume_of_a_running_sandbox_makes_no_platform_call() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_resume().never();
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("resume of a running sandbox succeeds");
+}
+
+#[tokio::test]
+async fn resume_of_a_paused_sandbox_resumes_it() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
+    client
+        .expect_resume()
+        .withf(|engine, sandbox| engine == "eng1" && sandbox == "s1")
+        .times(1)
+        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("resume completes");
+}
+
+#[tokio::test]
+async fn resume_of_a_missing_sandbox_is_an_error_not_a_success() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, _| Err(not_found()));
+    client.expect_resume().never();
+    let error = provider(client)
+        .resume("s1")
+        .await
+        .expect_err("nothing to resume");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
 }
 
 #[tokio::test]

@@ -505,9 +505,10 @@ impl SandboxCapabilities {
             interactive_commands: false,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
-            // `:resume` can return a fresh container while reporting success, so a pause does not
-            // keep the sandbox's state.
-            pause_resume: false,
+            // `:pause` / `:resume` keep the process and its memory: measured live over three
+            // cycles on one sandbox, with the same boot id, pid and a counter that continued.
+            // The routing token changes on every resume, which the binding re-reads.
+            pause_resume: true,
             // The create path never sends `sandbox_environment_snapshot`, so no sandbox state is
             // reachable through the trait; declared false until the client carries it.
             snapshot: false,
@@ -1968,8 +1969,8 @@ mod tests {
             "the only ingress is :execute; no port-scoped capability"
         );
         assert!(
-            !row.pause_resume,
-            ":resume can return a fresh container, so a pause keeps no state"
+            row.pause_resume,
+            "a pause keeps the process and memory (three live cycles, same boot id and pid)"
         );
         assert!(
             !row.snapshot,
@@ -2225,7 +2226,11 @@ mod tests {
     fn gcp_refuses_a_disk_above_its_cap_and_accepts_the_cap() {
         let with_disk = |disk: &str| {
             let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
-            sandbox.limits.as_mut().expect("the fixture declares limits").disk = disk.to_string();
+            sandbox
+                .limits
+                .as_mut()
+                .expect("the fixture declares limits")
+                .disk = disk.to_string();
             sandbox
         };
 
@@ -2251,7 +2256,11 @@ mod tests {
     #[test]
     fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
         let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
-        sandbox.limits.as_mut().expect("the fixture declares limits").disk = "10Gi".to_string();
+        sandbox
+            .limits
+            .as_mut()
+            .expect("the fixture declares limits")
+            .disk = "10Gi".to_string();
         sandbox
             .validate_for_platform(Platform::Gcp)
             .expect("Agent Platform enforces declared ceilings, by terminating on breach");
