@@ -16,9 +16,14 @@ pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
 pub const ENV_ALIEN_SANDBOX_CLUSTER_DNS: &str = "ALIEN_SANDBOX_CLUSTER_DNS";
 /// RuntimeClass the chart chose for sandbox pods (`sandbox.runtimeClassName`, or the cluster's
 /// vendor class when unset). The Operator only checks it; it never picks one.
-/// `ip:port` of the Operator pod itself, set by the chart from the downward API. A sandbox pod's
-/// NetworkPolicy must refuse it, which is how a pod proves its policy is in force.
+/// `ip:port` the policy must refuse, which is how a pod proves its policy is in force. Set by a
+/// chart that predates [`ENV_ALIEN_SANDBOX_OPERATOR_SERVICE`] (it held the Operator pod's address);
+/// used only when the Service variable is absent.
 pub const ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS: &str = "ALIEN_SANDBOX_OPERATOR_ADDRESS";
+/// `name:port` of the Operator's own Service, set by the chart. The Operator resolves it to the
+/// Service's `ClusterIP:port` and uses that as the policy canary: a ClusterIP stays fixed while
+/// the Service exists, where the Operator's pod address changes whenever the pod is rescheduled.
+pub const ENV_ALIEN_SANDBOX_OPERATOR_SERVICE: &str = "ALIEN_SANDBOX_OPERATOR_SERVICE";
 pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";
 /// Idle sandbox pods the Operator keeps ready (`sandbox.warmPoolSize`).
 pub const ENV_ALIEN_SANDBOX_WARM_POOL_SIZE: &str = "ALIEN_SANDBOX_WARM_POOL_SIZE";

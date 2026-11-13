@@ -539,7 +539,9 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             .contains("mirror.site.internal:5000/alien/library/python@sha256:aaaa"),
         "the probe runs the bundled digest from the mirror"
     );
-    assert!(!bundled.stdout.contains("70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"));
+    assert!(!bundled
+        .stdout
+        .contains("70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"));
     // A pinned Operator digest is the install's choice; self-update to the manager's tag would undo it.
     let self_update_env = |values: &str| -> bool {
         let rendered = super::test_utils::helm_template(&chart.files, Some(values));
@@ -1398,10 +1400,10 @@ fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<
         })
 }
 
-/// The Operator learns its own pod address from the downward API, so a sandbox pod can prove its
-/// NetworkPolicy refuses it before the pod takes a session.
+/// The Operator learns its own Service (name and port), not its pod address: a pod address moves
+/// whenever the Operator is rescheduled, a Service's ClusterIP does not.
 #[test]
-fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
+fn the_operator_gets_its_own_service_for_the_policy_proof() {
     let chart = render(&sandbox_with_linked_app(), StackSettings::default());
     let rendered = super::test_utils::helm_template_for_kube_version(
         &chart.files,
@@ -1409,24 +1411,38 @@ fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
         "acme",
         None,
     );
-    let operator = rendered_documents(&rendered)
-        .into_iter()
+    let documents = rendered_documents(&rendered);
+    let operator = documents
+        .iter()
         .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
         .expect("the operator Deployment");
     let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
         .as_sequence()
         .unwrap();
-    let find = |name: &str| env.iter().find(|variable| variable["name"] == name).cloned();
-    let pod_ip = find("ALIEN_OPERATOR_POD_IP").expect("the pod address variable");
-    assert_eq!(pod_ip["valueFrom"]["fieldRef"]["fieldPath"], "status.podIP");
-    let address = find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).expect("the address");
-    let value = address["value"].as_str().unwrap();
-    assert!(value.starts_with("$(ALIEN_OPERATOR_POD_IP):"), "{value}");
-    // The variable must be defined before the one that expands it.
-    let position = |name: &str| env.iter().position(|variable| variable["name"] == name);
+    let find = |name: &str| {
+        env.iter()
+            .find(|variable| variable["name"] == name)
+            .cloned()
+    };
     assert!(
-        position("ALIEN_OPERATOR_POD_IP")
-            < position(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+        find("ALIEN_OPERATOR_POD_IP").is_none()
+            && find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).is_none(),
+        "no pod address is handed to the Operator"
+    );
+    let service =
+        find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE).expect("the Service variable");
+    let value = service["value"].as_str().unwrap();
+    // The named Service exists in the chart, on that port.
+    let (name, port) = value.rsplit_once(':').unwrap();
+    let chart_service = documents
+        .iter()
+        .find(|document| document["kind"] == "Service" && document["metadata"]["name"] == name)
+        .expect("the Service the Operator reads is in the chart");
+    assert_eq!(
+        chart_service["spec"]["ports"][0]["port"]
+            .as_u64()
+            .map(|p| p.to_string()),
+        Some(port.to_string())
     );
 }
 
@@ -1613,6 +1629,10 @@ fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
         Some("sandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
     );
     bundled.assert_ok("probe image on a chart without a sandbox");
-    assert!(bundled.stdout.contains("python:3.13-slim@sha256:aaaa"), "{}", bundled.stdout);
+    assert!(
+        bundled.stdout.contains("python:3.13-slim@sha256:aaaa"),
+        "{}",
+        bundled.stdout
+    );
     assert_helm_valid(&chart, "container_egress_no_sandbox");
 }

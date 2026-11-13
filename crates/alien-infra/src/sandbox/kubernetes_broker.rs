@@ -596,12 +596,7 @@ pub(crate) async fn reattach_session_for_deployment(
     // handed out against the then-current Operator, so a restart does not strand it) or a check
     // that still points at this Operator. A claimed pod with neither (a cold pod that became
     // Ready against a dead address) is not handed out.
-    if !reattachable_for(
-        &pod,
-        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
-            .ok()
-            .as_deref(),
-    ) {
+    if !reattachable_for(&pod, super::kubernetes_spec::operator_address().as_deref()) {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!("session '{session_id}' is not ready yet"),
             resource_id: Some(sandbox_id.to_string()),
@@ -637,12 +632,7 @@ pub(crate) async fn reattach_session_for_deployment(
 /// dead address says nothing about the policy. Such a pod is not handed out and the controller
 /// replaces it. One built without the gate is Ready when its container runs.
 pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
-    pod_is_ready_for(
-        pod,
-        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
-            .ok()
-            .as_deref(),
-    )
+    pod_is_ready_for(pod, super::kubernetes_spec::operator_address().as_deref())
 }
 
 /// Why a running pod is still not Ready, when the cause is the policy gate: its container runs

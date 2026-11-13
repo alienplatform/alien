@@ -298,6 +298,31 @@ pub fn idle_pool_pod(
     )
 }
 
+static RESOLVED_OPERATOR_ADDRESS: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// The address sandbox pods must find unreachable: the Operator Service's `ClusterIP:port` once
+/// resolved, else the literal address the chart provided (an older chart's pod address).
+pub(crate) fn operator_address() -> Option<String> {
+    RESOLVED_OPERATOR_ADDRESS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .or_else(|| std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).ok())
+}
+
+#[cfg(test)]
+pub(crate) fn forget_operator_address() {
+    *RESOLVED_OPERATOR_ADDRESS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+pub(crate) fn remember_operator_address(address: String) {
+    *RESOLVED_OPERATOR_ADDRESS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(address);
+}
+
 /// Name of the agent's readiness path: 200 once the pod's NetworkPolicy is proven in force.
 const NETWORK_READY_PATH: &str = "/v1/network-ready";
 
@@ -441,7 +466,10 @@ mod tests {
         let mut gated = build();
         require_enforced_policy(&mut gated, Some("10.1.2.3:8080"));
         let container = &gated.spec.as_ref().unwrap().containers[0];
-        let probe = container.readiness_probe.as_ref().expect("a readiness probe");
+        let probe = container
+            .readiness_probe
+            .as_ref()
+            .expect("a readiness probe");
         assert_eq!(
             probe.http_get.as_ref().unwrap().path.as_deref(),
             Some("/v1/network-ready")
