@@ -390,6 +390,9 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::StorageNotificationsCheck));
         registry.add_compile_time_check(Box::new(compile_time::VolumeBackupsCheck));
         registry.add_compile_time_check(Box::new(
+            compile_time::HealthCheckStartupTimeoutCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
             compile_time::kubernetes_compute::KubernetesComputeCheck,
         ));
 
