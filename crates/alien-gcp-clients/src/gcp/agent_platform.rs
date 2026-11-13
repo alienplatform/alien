@@ -337,6 +337,10 @@ pub struct ConnectionInfo {
     /// Short-lived proxy bearer token; never log it
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_token: Option<String>,
+    /// Producer service attachment a PSC-E endpoint in the deployment VPC connects to. Reported
+    /// only once a sandbox exists; identical for every sandbox of the engine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_attachment: Option<String>,
 }
 
 impl Debug for ConnectionInfo {
@@ -965,6 +969,19 @@ mod tests {
     use crate::gcp::GcpCredentials;
     use httpmock::prelude::*;
 
+    #[test]
+    fn connection_info_reads_the_service_attachment_without_a_hostname() {
+        let info: ConnectionInfo = serde_json::from_str(
+            r#"{"routingToken":"t","serviceAttachment":"projects/tp/regions/r/serviceAttachments/sa"}"#,
+        )
+        .unwrap();
+        assert_eq!(info.load_balancer_hostname, None);
+        assert_eq!(
+            info.service_attachment.as_deref(),
+            Some("projects/tp/regions/r/serviceAttachments/sa")
+        );
+    }
+
     const ENGINE: &str = "eng1";
     const SANDBOX: &str = "sbx1";
 
@@ -1542,6 +1559,7 @@ mod tests {
         let info = ConnectionInfo {
             load_balancer_hostname: Some("host".to_string()),
             routing_token: Some("super-secret-token".to_string()),
+            service_attachment: None,
         };
         let rendered = format!("{info:?}");
         assert!(!rendered.contains("super-secret-token"), "{rendered}");
