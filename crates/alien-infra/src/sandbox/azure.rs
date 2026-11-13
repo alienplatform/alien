@@ -542,8 +542,9 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Option<String> {
-        // Every Azure sandbox carries its deadline as a label, so the reaper runs for all of
-        // them. Without a gateway and a declared ceiling, an unlabelled sandbox has no deadline.
+        // The reaper runs only where a ceiling applies: a gateway's 24-hour identities or a
+        // declared `max_lifetime_seconds`. Other groups are never listed on a tick (they lived
+        // until deleted before, and the binding refuses a sandbox past its own deadline label).
         let ceiling = [
             uses_gateway(ctx, config).then_some(AZURE_GATEWAY_MAX_LIFETIME_SECONDS),
             config.lifecycle.max_lifetime_seconds,
@@ -551,12 +552,15 @@ impl AzureSandboxController {
         .into_iter()
         .flatten()
         .min();
+        let Some(ceiling) = ceiling else {
+            return None;
+        };
         let result = async {
             let (group, client) = self.data_plane(ctx, &config.id)?;
             super::azure_lifetime::reap_expired_azure_sandboxes(
                 client.as_ref(),
                 &group,
-                ceiling,
+                Some(ceiling),
             )
             .await
         }
@@ -1663,9 +1667,8 @@ mod tests {
 
         #[tokio::test]
         async fn only_gateway_groups_reap_unlabelled_sessions_on_ready_ticks() {
-            // Every group is listed on a tick so a labelled deadline is honoured, but without a
-            // gateway in the stack nothing issues 24-hour identities, so an unlabelled session
-            // in an Internet group must not be reaped.
+            // Without a gateway or a declared ceiling nothing bounds a session, so such a group
+            // is not even listed; a gateway group reaps sessions past 24 hours.
             for (egress, with_gateway) in [
                 (SandboxEgress::Internet, true),
                 (SandboxEgress::Internet, false),
@@ -1676,7 +1679,7 @@ mod tests {
                 let mut client = MockSandboxDataPlaneApi::new();
                 client
                     .expect_list_sandboxes()
-                    .times(1)
+                    .times(usize::from(gateway))
                     .returning(|_| {
                         Ok(vec![ListedSandbox {
                             id: "expired".into(),
