@@ -372,10 +372,9 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 // A Live sandbox's image is built from a bundle the verifier renders from the
                 // signed image, so the bundle prefix of the install's bundle bucket has no other
                 // writer (its bucket policy denies the rest).
-                // It reads a bundle back before a build, to check it is the one it rendered.
                 "Sid": "WriteThisInstallsSandboxBundles",
                 "Effect": "Allow",
-                "Action": ["s3:PutObject", "s3:GetObject"],
+                "Action": "s3:PutObject",
                 "Resource": format!("arn:aws:s3:::{prefix}-sandbox-bundles/sandbox-bundle/*")
             },
             {
