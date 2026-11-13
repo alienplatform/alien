@@ -4,16 +4,27 @@
 //! second on EKS Auto Mode). Anything the workload connects to in that window is unrestricted.
 //! So on Kubernetes the agent, before it starts the ENTRYPOINT, tries to connect to destinations
 //! the policy refuses in every egress mode (the cluster API and the instance metadata address).
-//! It starts the workload only after several consecutive rounds in which every attempt was
-//! dropped. If a destination stays reachable past a bound, it refuses to start at all.
+//! A drop looks like a timeout, and so does a pod network that is not ready yet, so a round only
+//! counts when it also proves the network works:
+//! - `internet`: the gateway connects in the same round (a positive control);
+//! - `none`: nothing may be used as a control, so the pod must have an address and a default
+//!   route, and every blocked attempt must end in a timeout (not ENETUNREACH and the like).
+//!
+//! It starts the workload only after several such rounds in a row. If they do not come within a
+//! bound, it refuses to start at all. After launch the same check re-runs periodically for the
+//! sandbox's lifetime; a blocked destination that connects ends the sandbox.
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 
 /// Set by the Kubernetes backend on every sandbox pod. Unset elsewhere: nothing to prove.
 pub const ENV_STARTUP_GATE: &str = "ALIEN_SANDBOX_STARTUP_EGRESS_GATE";
 
 const METADATA_ADDRESS: &str = "169.254.169.254:80";
+/// A public address every egress mode must refuse to reach directly.
+const PUBLIC_ADDRESS: &str = "1.1.1.1:443";
+/// How often the check re-runs after launch.
+const RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 const ATTEMPT_TIMEOUT: Duration = Duration::from_millis(300);
 const ROUND_INTERVAL: Duration = Duration::from_millis(200);
 /// Consecutive all-dropped rounds required.
@@ -24,46 +35,103 @@ const BOUND: Duration = Duration::from_secs(30);
 /// Result of one connection attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempt {
-    /// The packet was dropped (the connect timed out): the policy is in force.
+    /// The connection was established.
+    Connected,
+    /// The connect timed out: a policy drop, or a network that is not up yet.
     Dropped,
-    /// Anything else: accepted, reset, or an error that says nothing about the policy.
-    NotDropped,
+    /// Anything else (refused, unreachable, resolution failure): says nothing about the policy.
+    Failed,
 }
 
-/// Runs the gate until `REQUIRED_ROUNDS` rounds in a row are fully dropped, or `bound` passes.
-/// Returns the destinations still not proven dropped on failure.
-pub fn wait_until_blocked<F, S>(
-    targets: &[String],
+/// What a round checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    /// Must be refused in every egress mode.
+    pub blocked: Vec<String>,
+    /// `internet`: the gateway, which must connect in the same round.
+    pub control: Option<String>,
+}
+
+/// Outcome of one round: `Ok` or the reasons it does not count.
+fn round<F, N>(probe: &Probe, attempt: &mut F, network_up: &mut N) -> Result<(), Vec<String>>
+where
+    F: FnMut(&str) -> Attempt,
+    N: FnMut() -> bool,
+{
+    let mut problems = Vec::new();
+    match &probe.control {
+        Some(control) => {
+            if attempt(control) != Attempt::Connected {
+                problems.push(format!("{control} (the gateway) is not reachable"));
+            }
+        }
+        None => {
+            if !network_up() {
+                problems.push("the pod network has no address or default route".to_string());
+            }
+        }
+    }
+    for target in &probe.blocked {
+        match attempt(target) {
+            Attempt::Dropped => {}
+            Attempt::Connected => problems.push(format!("{target} is reachable")),
+            Attempt::Failed => problems.push(format!("{target} failed without a timeout")),
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// Runs rounds until `REQUIRED_ROUNDS` in a row are fully proven, or `bound` passes.
+/// Returns the problems of the last round on failure.
+pub fn wait_until_blocked<F, N, S>(
+    probe: &Probe,
     bound: Duration,
     interval: Duration,
     mut attempt: F,
+    mut network_up: N,
     mut sleep: S,
 ) -> Result<(), Vec<String>>
 where
     F: FnMut(&str) -> Attempt,
+    N: FnMut() -> bool,
     S: FnMut(Duration),
 {
     let start = Instant::now();
     let mut clean = 0;
     loop {
-        let open: Vec<String> = targets
-            .iter()
-            .filter(|target| attempt(target) != Attempt::Dropped)
-            .cloned()
-            .collect();
-        if open.is_empty() {
-            clean += 1;
-            if clean >= REQUIRED_ROUNDS {
-                return Ok(());
+        match round(probe, &mut attempt, &mut network_up) {
+            Ok(()) => {
+                clean += 1;
+                if clean >= REQUIRED_ROUNDS {
+                    return Ok(());
+                }
             }
-        } else {
-            clean = 0;
-            if start.elapsed() >= bound {
-                return Err(open);
+            Err(problems) => {
+                clean = 0;
+                if start.elapsed() >= bound {
+                    return Err(problems);
+                }
             }
         }
         sleep(interval);
     }
+}
+
+/// After launch: the destinations among `probe.blocked` that now connect.
+pub fn breaches<F>(probe: &Probe, mut attempt: F) -> Vec<String>
+where
+    F: FnMut(&str) -> Attempt,
+{
+    probe
+        .blocked
+        .iter()
+        .filter(|target| attempt(target) == Attempt::Connected)
+        .cloned()
+        .collect()
 }
 
 fn connect(target: &str) -> Attempt {
@@ -72,20 +140,27 @@ fn connect(target: &str) -> Attempt {
         .ok()
         .and_then(|mut addresses| addresses.next())
     else {
-        return Attempt::NotDropped;
+        return Attempt::Failed;
     };
-    connect_address(address)
-}
-
-fn connect_address(address: SocketAddr) -> Attempt {
     match std::net::TcpStream::connect_timeout(&address, ATTEMPT_TIMEOUT) {
+        Ok(_) => Attempt::Connected,
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Attempt::Dropped,
-        _ => Attempt::NotDropped,
+        Err(_) => Attempt::Failed,
     }
 }
 
-fn targets_from_env() -> Vec<String> {
-    let mut targets = vec![METADATA_ADDRESS.to_string()];
+/// The pod has a source address and a route out. A connected UDP socket sends nothing.
+fn network_up() -> bool {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.connect("1.1.1.1:53")?;
+            socket.local_addr()
+        })
+        .is_ok_and(|address| !address.ip().is_unspecified())
+}
+
+fn probe_from_env() -> Probe {
+    let mut blocked = vec![METADATA_ADDRESS.to_string(), PUBLIC_ADDRESS.to_string()];
     if let (Ok(host), Ok(port)) = (
         std::env::var("KUBERNETES_SERVICE_HOST"),
         std::env::var("KUBERNETES_SERVICE_PORT"),
@@ -95,31 +170,62 @@ fn targets_from_env() -> Vec<String> {
         } else {
             host
         };
-        targets.push(format!("{host}:{port}"));
+        blocked.push(format!("{host}:{port}"));
     }
-    targets
+    Probe {
+        blocked,
+        control: std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY").ok(),
+    }
 }
 
 /// The gate for a pod that asked for it. Returns an error message when the restriction is not
-/// in force within the bound.
+/// proven within the bound.
 pub fn enforce_from_env() -> Result<(), String> {
     if std::env::var_os(ENV_STARTUP_GATE).is_none() {
         return Ok(());
     }
-    let targets = targets_from_env();
-    wait_until_blocked(&targets, BOUND, ROUND_INTERVAL, connect, std::thread::sleep).map_err(
-        |open| {
-            format!(
-                "egress is not restricted: {} still reachable after {}s. The cluster is not \
-                 enforcing this pod's NetworkPolicy, so the workload was not started. Enable \
-                 NetworkPolicy enforcement (EKS Auto Mode: ConfigMap amazon-vpc-cni in kube-system \
-                 with enable-network-policy-controller \"true\"; GKE: dataplane v2 or network \
-                 policy; AKS: Azure/Calico network policy)",
-                open.join(", "),
-                BOUND.as_secs()
-            )
-        },
+    let probe = probe_from_env();
+    wait_until_blocked(
+        &probe,
+        BOUND,
+        ROUND_INTERVAL,
+        connect,
+        network_up,
+        std::thread::sleep,
     )
+    .map_err(|problems| {
+        format!(
+            "egress restriction not proven after {}s: {}. The cluster is not enforcing this \
+                 pod's NetworkPolicy (or the pod network is not ready), so the workload was not \
+                 started. Enable NetworkPolicy enforcement (EKS Auto Mode: ConfigMap \
+                 amazon-vpc-cni in kube-system with enable-network-policy-controller \"true\"; \
+                 GKE: dataplane v2 or network policy; AKS: Azure CNI powered by Cilium, or Calico)",
+            BOUND.as_secs(),
+            problems.join(", ")
+        )
+    })
+}
+
+/// Re-runs the blocked check every 30 s for the sandbox's lifetime. If a blocked destination
+/// connects, it reports why and ends the process, which as PID 1 ends the workload.
+pub fn spawn_recheck() {
+    if std::env::var_os(ENV_STARTUP_GATE).is_none() {
+        return;
+    }
+    let probe = probe_from_env();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(RECHECK_INTERVAL);
+        let open = breaches(&probe, connect);
+        if !open.is_empty() {
+            let message = format!(
+                "egress restriction lost: {} now reachable; ending the sandbox",
+                open.join(", ")
+            );
+            eprintln!("{message}");
+            let _ = std::fs::write("/dev/termination-log", &message);
+            std::process::exit(1);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -127,65 +233,103 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    fn t(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
+    fn none(blocked: &[&str]) -> Probe {
+        Probe {
+            blocked: blocked.iter().map(|s| s.to_string()).collect(),
+            control: None,
+        }
+    }
+
+    fn internet(blocked: &[&str]) -> Probe {
+        Probe {
+            control: Some("gw".to_string()),
+            ..none(blocked)
+        }
+    }
+
+    fn run(
+        probe: &Probe,
+        bound_ms: u64,
+        attempt: impl FnMut(&str) -> Attempt,
+        up: bool,
+    ) -> Result<(), Vec<String>> {
+        wait_until_blocked(
+            probe,
+            Duration::from_millis(bound_ms),
+            Duration::ZERO,
+            attempt,
+            || up,
+            |_| {},
+        )
     }
 
     #[test]
-    fn starts_after_three_clean_rounds() {
-        let rounds = Cell::new(0);
-        let result = wait_until_blocked(
-            &t(&["a", "b"]),
-            Duration::from_secs(5),
-            Duration::ZERO,
+    fn none_starts_after_three_clean_rounds() {
+        let calls = Cell::new(0);
+        let result = run(
+            &none(&["a", "b"]),
+            5000,
             |_| {
-                rounds.set(rounds.get() + 1);
+                calls.set(calls.get() + 1);
                 Attempt::Dropped
             },
-            |_| {},
+            true,
         );
         assert!(result.is_ok());
-        assert_eq!(rounds.get(), 6, "3 rounds x 2 targets");
+        assert_eq!(calls.get(), 6, "3 rounds x 2 targets");
+    }
+
+    #[test]
+    fn none_does_not_count_rounds_before_the_network_is_up() {
+        let result = run(&none(&["a"]), 20, |_| Attempt::Dropped, false);
+        assert!(result.unwrap_err()[0].contains("no address or default route"));
+    }
+
+    #[test]
+    fn an_unreachable_error_is_not_a_drop() {
+        let result = run(&none(&["a"]), 20, |_| Attempt::Failed, true);
+        assert_eq!(result, Err(vec!["a failed without a timeout".to_string()]));
+    }
+
+    #[test]
+    fn internet_needs_the_gateway_to_connect_in_the_same_round() {
+        // Everything times out, including the gateway: a network that is not ready, not a policy.
+        let result = run(&internet(&["a"]), 20, |_| Attempt::Dropped, true);
+        assert!(result.unwrap_err()[0].contains("gateway"));
+    }
+
+    #[test]
+    fn internet_starts_when_gateway_connects_and_the_rest_drop() {
+        let result = run(
+            &internet(&["a", "b"]),
+            5000,
+            |target| {
+                if target == "gw" {
+                    Attempt::Connected
+                } else {
+                    Attempt::Dropped
+                }
+            },
+            true,
+        );
+        assert!(result.is_ok());
     }
 
     #[test]
     fn a_reachable_target_resets_the_count() {
         let calls = Cell::new(0);
-        // Round 1 open, then everything blocked: needs 3 clean rounds after the open one.
-        let result = wait_until_blocked(
-            &t(&["a"]),
-            Duration::from_secs(5),
-            Duration::ZERO,
-            |_| {
-                calls.set(calls.get() + 1);
-                if calls.get() == 1 {
-                    Attempt::NotDropped
-                } else {
-                    Attempt::Dropped
-                }
-            },
-            |_| {},
-        );
-        assert!(result.is_ok());
-        assert_eq!(calls.get(), 4);
-    }
-
-    #[test]
-    fn a_clean_streak_broken_by_one_open_round_restarts() {
-        let calls = Cell::new(0);
-        let result = wait_until_blocked(
-            &t(&["a"]),
-            Duration::from_secs(5),
-            Duration::ZERO,
+        let result = run(
+            &none(&["a"]),
+            5000,
             |_| {
                 calls.set(calls.get() + 1);
                 if calls.get() == 3 {
-                    Attempt::NotDropped
+                    Attempt::Connected
                 } else {
                     Attempt::Dropped
                 }
             },
-            |_| {},
+            true,
         );
         assert!(result.is_ok());
         assert_eq!(calls.get(), 6, "2 clean, 1 open, then 3 clean");
@@ -194,27 +338,39 @@ mod tests {
     #[test]
     fn refuses_when_a_target_stays_reachable_past_the_bound() {
         let result = wait_until_blocked(
-            &t(&["a", "b"]),
+            &none(&["a", "b"]),
             Duration::from_millis(30),
             Duration::from_millis(5),
             |target| {
                 if target == "b" {
-                    Attempt::NotDropped
+                    Attempt::Connected
                 } else {
                     Attempt::Dropped
                 }
             },
+            || true,
             std::thread::sleep,
         );
-        assert_eq!(result, Err(t(&["b"])));
+        assert_eq!(result, Err(vec!["b is reachable".to_string()]));
     }
 
     #[test]
-    fn an_accepting_or_refusing_listener_is_not_a_drop() {
+    fn recheck_reports_only_a_clean_connect() {
+        let probe = none(&["a", "b", "c"]);
+        let open = breaches(&probe, |target| match target {
+            "a" => Attempt::Connected,
+            "b" => Attempt::Failed,
+            _ => Attempt::Dropped,
+        });
+        assert_eq!(open, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn a_listener_is_connected_and_a_closed_port_is_failed_not_dropped() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap().to_string();
-        assert_eq!(connect(&address), Attempt::NotDropped);
+        assert_eq!(connect(&address), Attempt::Connected);
         drop(listener);
-        assert_eq!(connect(&address), Attempt::NotDropped);
+        assert_eq!(connect(&address), Attempt::Failed);
     }
 }

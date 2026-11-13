@@ -95,6 +95,7 @@ fn main() -> Result<()> {
         eprintln!("{message}");
         std::process::exit(1);
     }
+    alien_sandbox_agent::startup_gate::spawn_recheck();
 
     let aws_image_transport =
         image_command_enabled()? && alien_sandbox_agent::image_command::defer_to_run_hook()?;

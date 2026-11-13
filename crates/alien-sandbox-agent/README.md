@@ -331,10 +331,19 @@ probe checks it with live traffic). On EKS Auto Mode, enforcement is off until y
 ConfigMap `amazon-vpc-cni` in `kube-system` with `enable-network-policy-controller: "true"`; the
 NodeClass `networkPolicy` field only sets the default. The probe's failure message names this step.
 A policy can still load about one second after a pod's container starts, so the agent, before it
-starts the ENTRYPOINT (root or non-root image), connects to the cluster API and `169.254.169.254:80`
-and starts the workload only after three consecutive rounds in which both are dropped. If they stay
-reachable for 30 s it exits with an error naming NetworkPolicy enforcement. Optional hardening:
-a dedicated sandbox NodePool with NodeClass `networkPolicy: DefaultDeny`; it is not required.
+starts the ENTRYPOINT (root or non-root image), proves the restriction. Each round tries the
+cluster API, `169.254.169.254:80` and `1.1.1.1:443`, which must time out. A timeout also looks like a
+network that is not ready, so a round counts only with a control: in `internet` mode the gateway must
+connect in the same round; in `none` mode nothing may be used as a control, so the pod must have an
+address and a route and every blocked attempt must time out (ENETUNREACH and the like fail closed),
+which still relies on the CNI's own ordering. It starts the workload after three such rounds; if they
+do not come within 30 s it exits with an error naming NetworkPolicy enforcement. For the sandbox's
+lifetime PID 1 repeats the blocked check every 30 s; if a blocked destination connects it reports why
+(stderr, termination log) and exits, which ends the workload. Sandbox pods never mount a service
+account token. On AKS use Azure CNI powered by Cilium, or Calico: Azure NPM programs its rules after
+the pod starts. Optional hardening: a dedicated sandbox NodePool with NodeClass
+`networkPolicy: DefaultDeny`, and security groups or a host firewall that block node IPs; neither is
+required.
 
 Preview serves ports 8080, 8081 and 8090 over HTTP and WebSocket. The capability travels in
 `X-Alien-Preview-Capability` (optionally with `X-Alien-Preview-Port`); the caller's own
