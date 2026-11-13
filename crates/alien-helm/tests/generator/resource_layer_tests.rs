@@ -1290,6 +1290,38 @@ fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<
         })
 }
 
+/// The Operator learns its own pod address from the downward API, so a sandbox pod can prove its
+/// NetworkPolicy refuses it before the pod takes a session.
+#[test]
+fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
+        "acme",
+        None,
+    );
+    let operator = rendered_documents(&rendered)
+        .into_iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let find = |name: &str| env.iter().find(|variable| variable["name"] == name).cloned();
+    let pod_ip = find("ALIEN_OPERATOR_POD_IP").expect("the pod address variable");
+    assert_eq!(pod_ip["valueFrom"]["fieldRef"]["fieldPath"], "status.podIP");
+    let address = find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).expect("the address");
+    let value = address["value"].as_str().unwrap();
+    assert!(value.starts_with("$(ALIEN_OPERATOR_POD_IP):"), "{value}");
+    // The variable must be defined before the one that expands it.
+    let position = |name: &str| env.iter().position(|variable| variable["name"] == name);
+    assert!(
+        position("ALIEN_OPERATOR_POD_IP")
+            < position(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+    );
+}
+
 /// The chart, not the Operator, chooses the sandbox RuntimeClass: the value wins, and without
 /// one the cluster's own version string picks the vendor class.
 #[test]

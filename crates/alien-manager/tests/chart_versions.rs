@@ -145,16 +145,17 @@ async fn manager(stores: &Stores, operator_image: &str) -> AppState {
 }
 
 async fn create_release(stores: &Stores, stack_id: &str) {
+    create_release_of(stores, Stack::new(stack_id.to_string()).build()).await;
+}
+
+async fn create_release_of(stores: &Stores, stack: Stack) {
     stores
         .release_store
         .create_release(
             &Subject::system(),
             CreateReleaseParams {
                 project_id: "default".to_string(),
-                stacks: HashMap::from([(
-                    Platform::Kubernetes,
-                    Stack::new(stack_id.to_string()).build(),
-                )]),
+                stacks: HashMap::from([(Platform::Kubernetes, stack)]),
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
@@ -239,6 +240,18 @@ async fn manifest_digest(state: &AppState, version: &str) -> String {
 
 /// `Chart.yaml` and `values.yaml` of the chart archive a version resolves to.
 async fn chart_files(state: &AppState, version: &str) -> (String, String) {
+    let files = chart_archive(state, version).await;
+    let file = |name: &str| {
+        files
+            .get(&format!("{CHART}/{name}"))
+            .unwrap_or_else(|| panic!("the chart has no {name}"))
+            .clone()
+    };
+    (file("Chart.yaml"), file("values.yaml"))
+}
+
+/// Every file of the chart archive a version resolves to, by path.
+async fn chart_archive(state: &AppState, version: &str) -> HashMap<String, String> {
     let manifest = pull(state, &format!("charts/{CHART}/manifests/{version}")).await;
     assert_eq!(manifest.status, StatusCode::OK, "{}", manifest.text());
     let layer = manifest.json()["layers"][0]["digest"]
@@ -257,13 +270,7 @@ async fn chart_files(state: &AppState, version: &str) -> (String, String) {
         entry.read_to_string(&mut contents).unwrap();
         files.insert(path, contents);
     }
-    let file = |name: &str| {
-        files
-            .get(&format!("{CHART}/{name}"))
-            .unwrap_or_else(|| panic!("the chart has no {name}"))
-            .clone()
-    };
-    (file("Chart.yaml"), file("values.yaml"))
+    files
 }
 
 fn semver(version: &str) -> Version {
@@ -411,4 +418,88 @@ async fn the_first_stored_copy_of_a_version_wins() {
         .await
         .unwrap();
     assert_eq!(kept, [chart(1)]);
+}
+
+/// The chart carries the service account of the egress gateway Alien adds for an internet
+/// sandbox: the Operator cannot create it, so a chart generated before that addition leaves the
+/// gateway pods unable to start.
+#[tokio::test]
+async fn the_chart_of_an_internet_sandbox_carries_the_gateway_service_account() {
+    use alien_core::{
+        ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    };
+    let stack = Stack::new(CHART.to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "example.invalid/agent:1".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(300),
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let stores = stores().await;
+    create_release_of(&stores, stack).await;
+    let state = manager(&stores, OLD_OPERATOR).await;
+    let version = tags(&state).await.remove(0);
+    let files = chart_archive(&state, &version).await;
+    let gateway = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+    let values: serde_yaml::Value =
+        serde_yaml::from_str(&files[&format!("{CHART}/values.yaml")]).expect("values.yaml is YAML");
+    assert!(
+        values["serviceAccounts"].get(gateway).is_some(),
+        "the chart's serviceAccounts lack the gateway '{gateway}': {:?}",
+        values["serviceAccounts"]
+    );
+}
+
+/// A stack the preparation refuses is the caller's input, not a server fault: the route answers
+/// with a client error that carries the preparation's own code and message.
+#[tokio::test]
+async fn a_stack_the_preparation_refuses_is_a_client_error_with_its_message() {
+    use alien_core::{Container, ContainerCode, ContainerEgress, ResourceLifecycle, ResourceSpec};
+    let api = Container::new("api".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/api:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.5".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .port(8080)
+        .permissions("execution".to_string())
+        .egress(ContainerEgress::Internet)
+        .build();
+    let stack = Stack::new(CHART.to_string())
+        .add(api, ResourceLifecycle::Live)
+        .build();
+    let stores = stores().await;
+    create_release_of(&stores, stack).await;
+    let state = manager(&stores, OLD_OPERATOR).await;
+    let version = tags(&state).await.remove(0);
+    let pulled = pull(&state, &format!("charts/{CHART}/manifests/{version}")).await;
+    assert_eq!(
+        pulled.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&pulled.body)
+    );
+    let body: Value = serde_json::from_slice(&pulled.body).unwrap();
+    let error = &body["errors"][0];
+    assert_eq!(error["code"], "VALIDATION_FAILED");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.to_lowercase().contains("egress"),
+        "the preparation's reason must reach the caller: {message}"
+    );
 }

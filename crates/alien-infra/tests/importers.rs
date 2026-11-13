@@ -1123,6 +1123,7 @@ fn key_handoff_preserves_provider_identity_and_remote_binding() {
                 key_name: "customer".to_string(),
                 lineage_version_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
                 key_id: "https://example.vault.azure.net/keys/customer/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                disk_encryption_set_id: None,
             })
             .unwrap(),
             KeyFingerprint::Azure {

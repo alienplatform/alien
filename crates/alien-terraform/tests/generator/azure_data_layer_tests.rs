@@ -209,6 +209,82 @@ fn azure_key_package_is_valid_and_retained() {
 }
 
 #[test]
+fn azure_key_used_by_a_volume_gets_a_disk_encryption_set_and_exports_its_id() {
+    let container = alien_core::Container::new("db".to_string())
+        .code(alien_core::ContainerCode::Image {
+            image: "postgres:17".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "1".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "1Gi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .stateful(true)
+        .replicas(1)
+        .persistent_storage(alien_core::PersistentStorage {
+            encryption_key: Some(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key")),
+            size: "10Gi".to_string(),
+            mount_path: "/data".to_string(),
+            backups: alien_core::VolumeBackups::default(),
+        })
+        .permissions("execution".to_string())
+        .build();
+    let stack = Stack::new("enterprise-key".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(container, ResourceLifecycle::Live)
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    assert!(rendered.contains("auto_key_rotation_enabled = true"), "versionless key id needs auto rotation");
+    assert!(
+        rendered.contains("resource \"azurerm_disk_encryption_set\" \"customer_key_disks\""),
+        "{rendered}"
+    );
+    assert!(rendered
+        .contains("key_vault_key_id = azurerm_key_vault_key.customer_key.versionless_id"));
+    assert!(rendered.contains("role_definition_name = \"Key Vault Crypto Service Encryption User\""));
+    assert!(rendered.contains(
+        "principal_id = azurerm_disk_encryption_set.customer_key_disks.identity[0].principal_id"
+    ));
+    // The runtime reads the set's id from the key's import data; it never creates one.
+    assert!(rendered.contains("diskEncryptionSetId = azurerm_disk_encryption_set.customer_key_disks.id"));
+    assert_terraform_valid(&module, "azure_key_with_disk_encryption_set");
+
+    // A key no volume uses stays as it was.
+    let plain = Stack::new("enterprise-key".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let plain = render(&plain, TerraformTarget::Azure, StackSettings::default())
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!plain.contains("azurerm_disk_encryption_set"));
+}
+
+#[test]
 fn azure_resource_dependencies_emit_depends_on() {
     let stack = Stack::new("acme-deps".to_string())
         .add(resource_group(), ResourceLifecycle::Frozen)

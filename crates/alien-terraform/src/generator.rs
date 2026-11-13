@@ -650,10 +650,12 @@ pub(crate) fn render_terraform_module(
     );
     // The reasoning engine is a google-beta-only type. Keyed off the emitted block so a stack
     // without a Frozen sandbox declares nothing extra.
+    // Service agents (`google_project_service_identity`) are google-beta-only too: a data store
+    // with a customer key needs its agent to exist before the key can name it.
     let include_google_beta_provider = has_resource_type(
         &per_resource,
         crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
-    );
+    ) || has_resource_type(&per_resource, "google_project_service_identity");
     // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
     // of its own, and a missing declaration fails at init rather than at plan.
     let include_time_provider = gcp_iam_propagation_barrier.is_some()

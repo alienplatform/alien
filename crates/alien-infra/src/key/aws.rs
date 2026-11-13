@@ -410,6 +410,7 @@ impl AwsKeyController {
                 key_arn: key_arn.clone(),
             },
             wrapping_key_id: key_arn,
+            disk_encryption_set_id: None,
         }))
     }
 

@@ -2072,6 +2072,7 @@ mod tests {
                     key_arn: arn.clone(),
                 },
                 wrapping_key_id: arn,
+                disk_encryption_set_id: None,
             }));
             executor.insert_saved_resource(id, saved);
         }

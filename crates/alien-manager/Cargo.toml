@@ -126,6 +126,7 @@ fs2 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+serde_yaml = { workspace = true }
 alien-bindings = { workspace = true, features = ["kubernetes"] }
 alien-manager-api = { workspace = true }
 alien-tunnel = { workspace = true, features = ["manager", "operator"] }
