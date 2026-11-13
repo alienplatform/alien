@@ -416,6 +416,7 @@ fn load_state() -> Result<AgentState> {
         interactive: Default::default(),
         #[cfg(target_os = "linux")]
         gateway_egress,
+        preview: Default::default(),
         agent_binary,
     })
 }

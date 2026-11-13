@@ -65,13 +65,28 @@ const HOP_BY_HOP: [&str; 8] = [
     "upgrade",
 ];
 
+/// Headers that belong to the agent or the cloud edge, never to the code inside.
+const STRIPPED: [&str; 4] = [
+    alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER,
+    alien_core::sandbox_image::PREVIEW_PORT_HEADER,
+    "x-sandbox-routing-token",
+    "x-sandbox-port",
+];
+
 /// Forwards `request` to `127.0.0.1:{port}` with `path_and_query` as its target. `close_at` is
 /// the unix time an upgraded stream is closed at.
+///
+/// `pass_authorization` is the one header contract difference left between backends: where the
+/// capability travels in `Authorization` (the Kubernetes route) it is the agent's, so it is
+/// dropped; where the capability has its own header the caller's `Authorization` belongs to the
+/// code inside and is forwarded untouched. The preview capability and port headers and the cloud
+/// edge's routing headers are never forwarded.
 pub async fn forward(
     mut request: Request<Body>,
     port: u16,
     path_and_query: String,
     close_at: i64,
+    pass_authorization: bool,
 ) -> Response<Body> {
     let upgrading = request
         .headers()
@@ -112,7 +127,13 @@ pub async fn forward(
     .into_bytes();
     for (name, value) in &parts.headers {
         let lower = name.as_str();
-        if lower == "host" || lower == header::AUTHORIZATION.as_str() || lower == "content-length" {
+        if lower == "host" || lower == "content-length" {
+            continue;
+        }
+        if lower == header::AUTHORIZATION.as_str() && !pass_authorization {
+            continue;
+        }
+        if STRIPPED.contains(&lower) {
             continue;
         }
         if HOP_BY_HOP.contains(&lower)
@@ -373,7 +394,7 @@ mod tests {
         )
         .await;
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let response = forward(request, port, "/".to_string(), i64::MAX).await;
+        let response = forward(request, port, "/".to_string(), i64::MAX, false).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await

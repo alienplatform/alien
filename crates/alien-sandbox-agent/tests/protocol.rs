@@ -82,6 +82,7 @@ impl Agent {
             output_cap: OUTPUT_CAP,
             jobs: JobRegistry::new(),
             interactive: Default::default(),
+            preview: Default::default(),
             agent_binary: agent_binary(),
         });
 
@@ -468,6 +469,7 @@ async fn transport_authorization_needs_no_capability() {
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -517,6 +519,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -612,6 +615,7 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     })
     .await
@@ -641,6 +645,7 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     }))
     .await;
@@ -690,6 +695,7 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         // A check that ran would answer 500 on this, so a 401 is the refusal and not a failed check.
+        preview: Default::default(),
         agent_binary: root.join("no-such-agent"),
     }))
     .await;
@@ -736,6 +742,7 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     })
     .await;
@@ -777,6 +784,7 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     }))
     .await;
@@ -1021,6 +1029,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -1275,6 +1284,7 @@ async fn root_image_cannot_call_control_routes() {
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
         interactive: Default::default(),
+        preview: Default::default(),
         agent_binary: agent_binary(),
     });
     let base = serve(state).await;
@@ -1943,4 +1953,179 @@ async fn preview_passes_an_upgrade_through_as_a_byte_stream() {
     .expect("an echo")
     .unwrap();
     assert_eq!(&echoed, b"ping");
+}
+
+/// An agent in transport mode, the way a GCP sandbox runs: the cloud authorizes the control path
+/// and the agent issues and verifies its own preview capabilities.
+#[cfg(target_os = "linux")]
+async fn transport_agent() -> (String, TempDir) {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+    let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
+        gateway_egress: None,
+        session_root: root,
+        authorization: AgentAuthorization::Transport,
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        interactive: Default::default(),
+        preview: Default::default(),
+        agent_binary: agent_binary(),
+    });
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind loopback");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("serve");
+    });
+    (format!("http://{address}"), dir)
+}
+
+#[cfg(target_os = "linux")]
+async fn grant(base: &str, sandbox: &str, port: u16) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{base}/"))
+        .json(&json!({"v": 1, "op": "previewGrant", "sandbox": sandbox, "port": port}))
+        .send()
+        .await
+        .expect("responds")
+}
+
+/// The daemon behind a preview checks its own bearer token, so the caller's `Authorization` must
+/// arrive unchanged, and the capability the agent verified must not.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_forwards_the_callers_authorization_and_hides_the_capability() {
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    let (port, seen) = upstream_server().await;
+    let (other, _) = upstream_server().await;
+    std::env::set_var(
+        "ALIEN_SANDBOX_PREVIEW_PORTS",
+        format!("{port},{other},8971"),
+    );
+
+    let granted: serde_json::Value = grant(&base, "sandbox-a", port).await.json().await.unwrap();
+    let capability = granted["capability"].as_str().expect("a capability");
+    assert!(granted["expiresAt"].as_i64().unwrap() > chrono::Utc::now().timestamp());
+
+    let call = |port: u16, capability: Option<&str>, named: u16| {
+        let mut request = reqwest::Client::new()
+            .get(format!("{base}/v1/preview/{port}/a/b?x=1"))
+            .header("authorization", "Bearer daemon-secret")
+            .header("x-alien-preview-port", named.to_string())
+            .header("x-sandbox-routing-token", "edge-token");
+        if let Some(capability) = capability {
+            request = request.header("x-alien-preview-capability", capability);
+        }
+        async move { request.send().await.expect("responds") }
+    };
+
+    let ok = call(port, Some(capability), port).await;
+    assert_eq!(ok.status(), 200);
+    assert_eq!(ok.text().await.unwrap(), "hello");
+    let head = seen.lock().unwrap()[0].to_ascii_lowercase();
+    assert!(head.contains("authorization: bearer daemon-secret"));
+    assert!(head.starts_with("get /a/b?x=1 "));
+    assert!(!head.contains("x-alien-preview"));
+    assert!(!head.contains(&capability.to_ascii_lowercase()));
+    assert!(!head.contains("x-sandbox-routing-token"));
+
+    let forged = format!("v1.{}.{}", i64::MAX / 2, "00".repeat(32));
+    for (what, response) in [
+        ("no capability", call(port, None, port).await),
+        ("a forged capability", call(port, Some(&forged), port).await),
+        (
+            "a capability for another port",
+            call(other, Some(capability), other).await,
+        ),
+        (
+            "a header naming another port",
+            call(port, Some(capability), other).await,
+        ),
+        (
+            "the agent's own port",
+            call(8971, Some(capability), 8971).await,
+        ),
+    ] {
+        assert!(
+            matches!(response.status().as_u16(), 401 | 403),
+            "{what}: {}",
+            response.status()
+        );
+    }
+
+    // One boot serves one sandbox, and the agent's own port is never granted.
+    assert_eq!(grant(&base, "sandbox-b", port).await.status(), 403);
+    assert_eq!(grant(&base, "sandbox-a", 8971).await.status(), 403);
+    assert_eq!(seen.lock().unwrap().len(), 1, "refused calls reach nothing");
+}
+
+/// An upgrade carries the caller's `Authorization` to the daemon too.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_upgrade_reaches_the_daemon_with_the_callers_authorization() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind upstream");
+    let port = listener.local_addr().unwrap().port();
+    let (head_tx, head_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buffer = vec![0u8; 4096];
+        let read = stream.read(&mut buffer).await.unwrap();
+        let _ = head_tx.send(String::from_utf8_lossy(&buffer[..read]).to_string());
+        stream
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+            .await
+            .unwrap();
+        let read = stream.read(&mut buffer).await.unwrap();
+        let _ = stream.write_all(&buffer[..read]).await;
+    });
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", port.to_string());
+    let granted: serde_json::Value = grant(&base, "sandbox-a", port).await.json().await.unwrap();
+    let capability = granted["capability"].as_str().unwrap();
+    let address = base.trim_start_matches("http://").to_string();
+    let mut client = tokio::net::TcpStream::connect(&address).await.unwrap();
+    client
+        .write_all(
+            format!(
+                "GET /v1/preview/{port}/socket HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer daemon-secret\r\nX-Alien-Preview-Capability: {capability}\r\nX-Alien-Preview-Port: {port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut head = vec![0u8; 512];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut head))
+        .await
+        .expect("a response")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&head[..read]).starts_with("HTTP/1.1 101"));
+    client.write_all(b"ping").await.unwrap();
+    let mut echoed = [0u8; 4];
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.read_exact(&mut echoed),
+    )
+    .await
+    .expect("an echo")
+    .unwrap();
+    assert_eq!(&echoed, b"ping");
+    let seen = head_rx.await.unwrap().to_ascii_lowercase();
+    assert!(seen.contains("authorization: bearer daemon-secret"));
+    assert!(!seen.contains("x-alien-preview"));
 }
