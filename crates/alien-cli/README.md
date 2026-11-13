@@ -18,7 +18,7 @@ connects to your own.
 - **`alien onboard`** — Create a deployment group and print what the customer runs (a setup link that opens for the emails or domains passed with `--allow`, a `helm install` command for Kubernetes, `--airgapped` for sites without a connection)
 - **`alien deployments`** — List and inspect deployments
 - **`alien logs`** — Search recent deployment logs
-- **`alien tokens`** — Create and revoke scoped tokens, such as tunnel tokens (`alien tokens create --tunnel`)
+- **`alien tokens`** — List and revoke tokens
 - **`alien deploy`** / **`alien destroy`** — Deploy to or destroy from a cloud platform
 - **`alien vault`** — Manage vault secrets for a deployment
 - **`alien commands`** — Invoke remote commands on deployments

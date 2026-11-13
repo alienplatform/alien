@@ -1076,14 +1076,17 @@ mod tests {
     // Bun's own default idle timeout (10 s) closes this connection at about 12 s,
     // before the handler responds, and a load balancer in front reports a 502.
     #[tokio::test]
-    async fn a_container_answers_a_request_that_is_silent_for_longer_than_bun_default_idle_timeout(
-    ) {
+    async fn a_container_answers_a_request_that_is_silent_for_longer_than_bun_default_idle_timeout()
+    {
         let response = request_through_direct_entry(SLEEPING_APP, 13_000).await;
         assert!(
             response.starts_with("HTTP/1.1 200"),
             "expected a 200 after a 13 s handler, got {response:?}"
         );
-        assert!(response.ends_with("slept 13000"), "unexpected body: {response:?}");
+        assert!(
+            response.ends_with("slept 13000"),
+            "unexpected body: {response:?}"
+        );
     }
 
     // Bun reads options such as `port` through getters; a getter that reads a

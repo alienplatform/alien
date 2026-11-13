@@ -38,11 +38,9 @@ fn frozen_compute_and_referenced_container_keep_helm_install_requirements() {
         })
         .dynamic_container_pool("apps".to_string())
         .build();
-    let referenced = Container {
-        cluster: Some("compute".to_string()),
-        pool: Some("apps".to_string()),
-        ..container
-    };
+    let mut referenced = container;
+    referenced.cluster = Some("compute".to_string());
+    referenced.pool = Some("apps".to_string());
     let portable = Stack::new("existing-cluster".to_string())
         .add(compute, ResourceLifecycle::Frozen)
         .add(referenced, ResourceLifecycle::Live)

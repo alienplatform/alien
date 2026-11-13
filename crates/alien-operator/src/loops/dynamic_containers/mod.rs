@@ -139,6 +139,7 @@ pub async fn reconcile(
     deployment_id: &str,
     targets: &[TargetDynamicContainer],
     registry_auth: Option<(&str, &str)>,
+    installation_pull_secrets: &[String],
     stack: &alien_core::Stack,
 ) -> Result<Vec<DynamicContainerReport>> {
     reconcile_with_admission(
@@ -147,6 +148,7 @@ pub async fn reconcile(
         deployment_id,
         targets,
         registry_auth,
+        installation_pull_secrets,
         stack,
         None,
     )
@@ -159,6 +161,7 @@ async fn reconcile_with_admission(
     deployment_id: &str,
     targets: &[TargetDynamicContainer],
     registry_auth: Option<(&str, &str)>,
+    installation_pull_secrets: &[String],
     stack: &alien_core::Stack,
     blocked: Option<(DynamicContainerStatus, String)>,
 ) -> Result<Vec<DynamicContainerReport>> {
@@ -235,12 +238,18 @@ async fn reconcile_with_admission(
                     put_registry_secret(client, namespace, deployment_id, &desired, registry_auth)
                         .await?;
                 put_service(client, namespace, deployment_id, &desired).await?;
+                let pull_secrets = pod_pull_secrets(
+                    &desired,
+                    deployment_id,
+                    pull_secret,
+                    installation_pull_secrets,
+                );
                 let deployment = put_deployment(
                     client,
                     namespace,
                     deployment_id,
                     &desired,
-                    pull_secret,
+                    &pull_secrets,
                     node_selector.clone(),
                 )
                 .await?;
@@ -357,6 +366,25 @@ async fn reconcile_with_admission(
     Ok(reports)
 }
 
+/// The targets with every image moved to the site registry on a mirrored install, as for the
+/// release's own workloads.
+fn mirror_targets(
+    targets: &[TargetDynamicContainer],
+    image_registry: Option<&str>,
+) -> Vec<TargetDynamicContainer> {
+    targets
+        .iter()
+        .map(|target| {
+            let mut target = target.clone();
+            if let Some(registry) = image_registry {
+                target.image =
+                    alien_core::image_rewrite::rewrite_to_site_registry(&target.image, registry);
+            }
+            target
+        })
+        .collect()
+}
+
 /// The target is read from encrypted SQLite, so a restart resumes convergence
 /// even if it missed the response that last changed the target.
 pub async fn reconcile_saved(
@@ -413,14 +441,20 @@ pub async fn reconcile_saved(
     });
     let cleanup_stack = alien_core::Stack::new("cleanup".to_string()).build();
     let stack = installed_stack.unwrap_or(&cleanup_stack);
+    let image_registry = state.config.image_registry.as_deref();
+    let target = mirror_targets(&target, image_registry);
+    // A mirrored install pulls from the site registry, which the manager's token cannot open.
+    let registry_auth = registry_auth
+        .as_ref()
+        .filter(|_| image_registry.is_none())
+        .map(|(host, token)| (host.as_str(), *token));
     reconcile_with_admission(
         &client,
         namespace,
         deployment_id,
         &target,
-        registry_auth
-            .as_ref()
-            .map(|(host, token)| (host.as_str(), *token)),
+        registry_auth,
+        &state.config.image_pull_secrets,
         stack,
         blocked,
     )
@@ -428,9 +462,29 @@ pub async fn reconcile_saved(
     .map(Some)
 }
 
+/// Pull Secrets for a dynamic container's pod: the manager credential written for this
+/// container (when it pulls from the manager), then the installation's own pull Secrets, which
+/// carry the site registry's credentials on a mirrored install.
+fn pod_pull_secrets(
+    target: &TargetDynamicContainer,
+    deployment_id: &str,
+    manager_pull_secret: bool,
+    installation_pull_secrets: &[String],
+) -> Vec<String> {
+    let mut names = Vec::new();
+    if manager_pull_secret {
+        names.push(format!(
+            "{}-registry",
+            backend_name(deployment_id, &target.name)
+        ));
+    }
+    names.extend(installation_pull_secrets.iter().cloned());
+    names
+}
+
 #[cfg(test)]
 mod tests {
-    use super::installed_compute_ready;
+    use super::{installed_compute_ready, mirror_targets, pod_pull_secrets};
     use alien_core::{
         ComputeCluster, DeploymentState, DeploymentStatus, Platform, ReleaseInfo, Resource,
         ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackState,
@@ -488,5 +542,43 @@ mod tests {
             .unwrap()
             .status = ResourceStatus::RefreshFailed;
         assert!(!installed_compute_ready(&state, &stack));
+    }
+
+    #[test]
+    fn dynamic_container_images_follow_the_mirror() {
+        let target = alien_core::sync::TargetDynamicContainer {
+            name: "web".to_string(),
+            generation: 1,
+            image: "registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            cpu: "1".to_string(),
+            memory: "1Gi".to_string(),
+            replicas: 1,
+            ports: vec![],
+            deleted: false,
+            env: Default::default(),
+            secret_env: Default::default(),
+            value_slots: None,
+            health_check: None,
+            suspended_reason: None,
+        };
+        let unmirrored = mirror_targets(std::slice::from_ref(&target), None);
+        assert_eq!(unmirrored[0].image, target.image);
+        let mirrored = mirror_targets(std::slice::from_ref(&target), Some("mirror.internal/acme"));
+        assert!(
+            mirrored[0].image.starts_with("mirror.internal/acme/"),
+            "{}",
+            mirrored[0].image
+        );
+        assert!(mirrored[0]
+            .image
+            .ends_with("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        // A mirrored install keeps the installation's pull Secrets and drops the manager one.
+        let site = vec!["site-pull".to_string()];
+        assert_eq!(pod_pull_secrets(&target, "dep", false, &site), site);
+        let both = pod_pull_secrets(&target, "dep", true, &site);
+        assert_eq!(both.len(), 2);
+        assert!(both[0].ends_with("-registry"));
+        assert_eq!(both[1], "site-pull");
+        assert!(pod_pull_secrets(&target, "dep", false, &[]).is_empty());
     }
 }

@@ -21,6 +21,21 @@ fn schema_accepts_new_deployment_default_values() {
     test_utils::helm_template_and_validate(&files, None).assert_ok("new deployment");
 }
 
+/// Installs from before container tunnels were removed saved `tunnel.enabled`, and an
+/// upgrade reuses saved values. The schema must keep accepting (and ignoring) the key.
+#[test]
+fn schema_accepts_retired_tunnel_value_from_saved_values() {
+    let stack = Stack::new("boot-mgr".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    test_utils::helm_template_and_validate(&chart.files, Some("tunnel:\n  enabled: false\n"))
+        .assert_ok("upgrade with saved tunnel.enabled");
+}
+
 #[test]
 fn schema_accepts_external_bindings_initialize_onprem_values() {
     let stack = Stack::new("boot-local".to_string())

@@ -961,7 +961,7 @@ async fn list_deployments(
     };
 
     // The store narrows by scope; authz decides per item, as for deployment
-    // groups, so capability tokens (e.g. tunnel callers) see nothing.
+    // groups, so capability tokens see nothing.
     let deployments: Vec<_> = match state
         .deployment_store
         .list_deployments(&subject, &filter)
@@ -1902,7 +1902,6 @@ mod tests {
                     .expect("empty registry routing table should initialize"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-            tunnels: None,
             charts: None,
             release_channels: None,
             bundle_signing_key: None,

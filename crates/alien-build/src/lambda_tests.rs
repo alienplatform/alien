@@ -288,6 +288,7 @@ async fn aws_worker_source_image_uses_gzip() {
         &BinaryTarget::LinuxArm64,
         &archive,
         toolchain::WorkloadKind::Worker,
+        None,
     )
     .await
     .unwrap();

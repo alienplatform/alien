@@ -1,9 +1,9 @@
 //! A files service that runs in a customer's Kubernetes cluster.
 //!
 //! Stores files in the customer's own S3-compatible bucket (the `bucket`
-//! binding) and serves them over HTTP. Your control plane calls it through the
-//! manager's tunnel with the customer's access token; nothing on the
-//! customer's network is exposed to you.
+//! binding) and serves them over HTTP. Callers present the customer's access
+//! token; the service is reachable only inside the cluster unless the customer
+//! exposes it.
 //!
 //! - `PUT /files/{key}` streams the body into the bucket. `If-None-Match: *`
 //!   only creates; `If-Match: <etag>` only replaces that exact version.

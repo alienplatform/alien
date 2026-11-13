@@ -340,8 +340,6 @@ pub enum Role {
     OperatorSync,
     /// Pull images without push or generic project access.
     RegistryPull,
-    /// Maintain the enrolled deployment tunnel connection.
-    OperatorTunnel,
     DeploymentViewer,
     DeploymentGroupDeployer,
     /// Local verified setup import only; never generic deployment or sync authority.
@@ -365,12 +363,6 @@ pub enum Role {
     /// from another repository, provision, or any other project access. Paired with
     /// [`Scope::Project`]; covers every repository of the project unless `Authz` narrows by it.
     SandboxImagePusher,
-    /// Exact capability for sending requests through deployment tunnels.
-    ///
-    /// Paired with [`Scope::Project`] (every deployment) or
-    /// [`Scope::DeploymentGroup`] (one customer's deployments). Grants no
-    /// other read or write access.
-    TunnelCaller,
     /// Lease commands and answer them for one deployment, and nothing else.
     ///
     /// Paired with [`Scope::Deployment`]. It is the long-lived credential of a

@@ -1296,9 +1296,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_standalone() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "This manager issues each deployment's token when it registers. \
-                              For a backend that calls deployments, create a scoped token with \
-                              `alien tokens create --tunnel`."
+                    message: "This manager issues each deployment's token when it registers."
                         .to_string(),
                 }));
             }

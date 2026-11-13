@@ -317,7 +317,10 @@ impl Cluster {
             .await
             .is_err()
         {
-            assert!(start.elapsed() < Duration::from_secs(10), "replica {index} never listened");
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "replica {index} never listened"
+            );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -412,7 +415,11 @@ async fn replicas_move_to_a_sourced_secret_without_restarts_or_lost_replication(
         traffic.spawn(async move {
             let mut allowed = 0u64;
             while !*stopped.borrow() {
-                assert_eq!(connect(proxy, &token, ALLOWED).await, 200, "listed host refused");
+                assert_eq!(
+                    connect(proxy, &token, ALLOWED).await,
+                    200,
+                    "listed host refused"
+                );
                 allowed += 1;
                 if connect(proxy, &token, UNLISTED).await != 403 {
                     unlisted_allowed.fetch_add(1, Ordering::Relaxed);
@@ -460,15 +467,28 @@ async fn replicas_move_to_a_sourced_secret_without_restarts_or_lost_replication(
     for index in [2, 1, 0] {
         assert_eq!(cluster.write(index, &record(millis())).await, 204);
     }
-    assert_eq!(connect(cluster.replicas[2].proxy, &token, ALLOWED).await, 200);
-    assert_eq!(connect(cluster.replicas[2].proxy, &token, UNLISTED).await, 403);
+    assert_eq!(
+        connect(cluster.replicas[2].proxy, &token, ALLOWED).await,
+        200
+    );
+    assert_eq!(
+        connect(cluster.replicas[2].proxy, &token, UNLISTED).await,
+        403
+    );
 
     stop.send(true).unwrap();
     while let Some(allowed) = traffic.join_next().await {
         assert!(allowed.unwrap() > 0);
     }
-    assert_eq!(unlisted_allowed.load(Ordering::Relaxed), 0, "unlisted host allowed");
-    assert!(cluster.still_running(0) && cluster.still_running(1), "a refresh restarted a replica");
+    assert_eq!(
+        unlisted_allowed.load(Ordering::Relaxed),
+        0,
+        "unlisted host allowed"
+    );
+    assert!(
+        cluster.still_running(0) && cluster.still_running(1),
+        "a refresh restarted a replica"
+    );
 }
 
 /// A source whose value changes under a running replica is a second rotation; the replica

@@ -924,3 +924,12 @@ env = "TOKEN"
         "'TOKEN' is already set from input 'token' as a secret value; this reference asks for a plain one"
     );
 }
+
+#[test]
+fn container_tunnels_were_removed() {
+    let error = reject(
+        "name = \"acme\"\n\n[container.api]\nimage = \"ghcr.io/acme/api:1\"\ncpu = 1\nmemory = \"1Gi\"\nports = [8080]\ntunnel = 8080\n",
+    );
+    assert!(error.message.contains("removed"), "{}", error.message);
+    assert_eq!(error.line, 8, "{}", error.message);
+}

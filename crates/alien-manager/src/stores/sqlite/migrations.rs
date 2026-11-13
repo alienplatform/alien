@@ -374,6 +374,12 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         }
     }
 
+    // Container tunnels were removed with their token type; a stored tunnel
+    // token would no longer parse.
+    conn.execute("DELETE FROM tokens WHERE type = 'tunnel'", ())
+        .await
+        .map_err(|e| db_error(&format!("Removing tunnel tokens failed: {e}")))?;
+
     // DEPLOYMENT_FAILED with resource counts is a derived headline. Older
     // versions could retain it after the deployment returned to a healthy
     // status, even though the resource errors had already cleared.

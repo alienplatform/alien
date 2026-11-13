@@ -30,6 +30,18 @@ pub struct DeploymentConfig {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub setup_run_id: Option<String>,
+    /// Site registry (`host[/path]`) every Kubernetes workload image is pulled from.
+    /// Set by the Operator from the installation's `global.imageRegistry`; never part of a
+    /// release, so a release cannot redirect where an installation pulls from.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub image_registry: Option<String>,
+    /// Names of the installation's image pull Secrets (the chart's `runtime.imagePullSecrets`).
+    /// Set by the Operator; listed on every workload pod so a private mirror can be pulled from.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(default)]
+    pub image_pull_secrets: Vec<String>,
     /// Human-readable deployment name for cloud console metadata.
     ///
     /// This is separate from the physical resource prefix in StackState. It is
@@ -506,5 +518,16 @@ mod input_values_tests {
                 .map(|image| image.machine_image_version.as_str()),
             Some("1")
         );
+    }
+}
+
+impl DeploymentConfig {
+    /// The reference a workload image is pulled from: the release's reference, moved to the
+    /// installation's site registry when one is configured.
+    pub fn workload_image(&self, image: &str) -> String {
+        match self.image_registry.as_deref().filter(|r| !r.is_empty()) {
+            Some(registry) => crate::image_rewrite::rewrite_to_site_registry(image, registry),
+            None => image.to_string(),
+        }
     }
 }

@@ -186,6 +186,8 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
@@ -785,6 +787,8 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    image_registry: None,
+                    image_pull_secrets: Vec::new(),
                     runtime_identity_audience: None,
                     // Rendering precedes installation reservation; setup supplies the scope.
                     gcp_federation_scope: None,

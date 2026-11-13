@@ -173,6 +173,15 @@ pub struct Args {
     #[arg(long, env = "CHART_DEFAULT_BINDINGS")]
     pub chart_default_bindings: Option<String>,
 
+    /// Site registry every workload image is pulled from (`host[/path]`).
+    #[arg(long, env = "IMAGE_REGISTRY")]
+    pub image_registry: Option<String>,
+
+    /// Names of the image pull Secrets the chart's `runtime.imagePullSecrets` lists
+    /// (comma separated). Dynamic containers use them to pull from a private mirror.
+    #[arg(long, env = "IMAGE_PULL_SECRETS", value_delimiter = ',')]
+    pub image_pull_secrets: Vec<String>,
+
     #[arg(long, env = "PUBLIC_ENDPOINTS")]
     pub public_endpoints: Option<String>,
 
@@ -195,11 +204,6 @@ pub struct Args {
     /// JSON map of setup-time stack inputs. Keep this file on a Secret volume.
     #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
     pub stack_input_values_file: Option<PathBuf>,
-
-    /// Serve tunnel requests from the manager for the stack's declared tunnel
-    /// endpoints (`--tunnel-enabled=false` turns the tunnel off).
-    #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
-    pub tunnel_enabled: bool,
 
     /// Whether `DATA_DIR` survives a Pod replacement. The chart sets it from
     /// `runtime.data.persistence.enabled`. Unset, as an older chart leaves it,
@@ -875,12 +879,19 @@ async fn run_operator_cli(
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
         .maybe_chart_default_bindings(chart_default_bindings)
+        .maybe_image_registry(args.image_registry.clone().filter(|r| !r.trim().is_empty()))
+        .image_pull_secrets(
+            args.image_pull_secrets
+                .iter()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+                .collect(),
+        )
         .maybe_operations(operations)
         .maybe_installed_setup(installed_setup)
         .maybe_setup_release_file(args.setup_release_file.clone())
         .maybe_setup_fingerprint_file(args.setup_fingerprint_file.clone())
         .local_debug_enabled(args.enable_local_debug)
-        .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
         .maybe_registry_secret(args.registry_secret)
         .maybe_resource_prefix(args.operator_resource_prefix.clone())

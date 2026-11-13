@@ -16,31 +16,11 @@ const multiple = new alien.Container("multiple")
   .permissions("multiple")
   .build()
 
-const tunnelListed = new alien.Container("tunnel-listed")
-  .code({ type: "image", image: "ghcr.io/acme/tunnel:1.0.0" })
-  .cpu(1)
-  .memory("1Gi")
-  .ports([7000, 8080])
-  .tunnel(7000)
-  .permissions("tunnel-listed")
-  .build()
-
-const tunnelAdded = new alien.Container("tunnel-added")
-  .code({ type: "image", image: "ghcr.io/acme/tunnel:1.0.0" })
-  .cpu(1)
-  .memory("1Gi")
-  .port(8080)
-  .tunnel(7001)
-  .permissions("tunnel-added")
-  .build()
-
 export default new alien.Stack("acme-ports")
   .platforms(["aws"])
   .add(single, "live")
   .add(multiple, "live")
-  .add(tunnelListed, "live")
-  .add(tunnelAdded, "live")
   .permissions({
-    profiles: { single: {}, multiple: {}, "tunnel-listed": {}, "tunnel-added": {} },
+    profiles: { single: {}, multiple: {} },
   })
   .build()

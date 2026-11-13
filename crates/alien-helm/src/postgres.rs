@@ -178,7 +178,7 @@ spec:
       {{- end }}
       containers:
         - name: postgres
-          image: {{ printf "%s:%s" $database.image.repository $database.image.tag | quote }}
+          image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
           ports:
             - name: postgres
               containerPort: 5432

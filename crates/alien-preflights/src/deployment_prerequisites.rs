@@ -981,6 +981,8 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
             deployment_name: Some("test deployment".to_string()),
@@ -1908,7 +1910,7 @@ mod tests {
     /// Alien cannot update or adopt such a resource once the binding is gone, so the release
     /// is refused rather than left resolving a target nobody declared.
     #[tokio::test]
-    async fn a_release_that_drops_an_adopted_binding_is_refused() {
+    async fn a_release_without_an_adopted_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
@@ -1955,7 +1957,7 @@ mod tests {
     /// A store bound without remote access carries neither params nor outputs, so the
     /// binding is the only record that it was adopted.
     #[tokio::test]
-    async fn a_release_that_drops_a_binding_carrying_no_state_is_refused() {
+    async fn a_release_without_a_stateless_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
