@@ -11,7 +11,10 @@
 //!   pod-security.kubernetes.io/enforce=baseline
 //! kubectl create namespace sbx-restricted && kubectl label namespace sbx-restricted \
 //!   pod-security.kubernetes.io/enforce=restricted
+//! # The non-root test needs the same image layered with a non-root exec uid:
+//! #   layer-agent.sh <agent> <contract-image> <tag> 1001
 //! ALIEN_ROOT_BOOT_KIND_CONTEXT=kind-<name> ALIEN_ROOT_BOOT_KIND_IMAGE=<image> \
+//!   ALIEN_ROOT_BOOT_KIND_NONROOT_IMAGE=<non-root image> \
 //!   ALIEN_ROOT_BOOT_KIND_BASELINE_NAMESPACE=sbx-baseline \
 //!   ALIEN_ROOT_BOOT_KIND_RESTRICTED_NAMESPACE=sbx-restricted \
 //!   cargo test -p alien-infra --features all-platforms --lib -- --ignored kubernetes_root_boot_kind
@@ -117,6 +120,10 @@ for line in urllib.request.urlopen(request, timeout=20).read().splitlines():
     frame = json.loads(line)
     if frame.get("t") == "stdout":
         out += base64.b64decode(frame["data"])
+    elif frame.get("t") == "stderr":
+        out += b"stderr: " + base64.b64decode(frame["data"])
+    elif frame.get("t") in ("error", "exit") and frame.get("code"):
+        out += ("frame: %s\n" % json.dumps(frame)).encode()
 sys.stdout.write(out.decode())
 "#;
     let output = kubectl(
@@ -266,7 +273,7 @@ async fn kubernetes_root_boot_kind_a_restricted_namespace_refuses_with_the_fix()
         .await
         .expect_err("a restricted namespace refuses a root-boot pod");
     let message = super::kubernetes::pod_security_rejection("rootrefused", &restricted, &refusal)
-        .expect("the refusal is recognised as Pod Security");
+        .unwrap_or_else(|| panic!("not recognised as Pod Security: {refusal:?}"));
     assert!(message.contains("sandbox.namespace"), "{message}");
     assert!(message.contains(&restricted), "{message}");
 }
@@ -279,7 +286,11 @@ async fn kubernetes_root_boot_kind_a_non_root_image_still_runs_restricted() {
     let pods = client(&context).await;
     let pair = ed25519_compact::KeyPair::generate();
     let public_key = BASE64.encode(pair.pk.as_ref());
-    let sandbox = declared("nonroot", 1001);
+    let mut sandbox = declared("nonroot", 1001);
+    sandbox.code = SandboxCode::Image {
+        image: env("ALIEN_ROOT_BOOT_KIND_NONROOT_IMAGE"),
+        bundled_from: None,
+    };
     let (pod, uid) = start(&pods, &context, &restricted, &sandbox, &public_key)
         .await
         .expect("a non-root image is admitted where Pod Security is restricted");

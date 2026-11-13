@@ -27,6 +27,9 @@ def identity():
 
 def main():
     report = identity()
+    # A backend may mount a fresh volume over /tmp, so the image's own directory can be hidden.
+    STATE.mkdir(exist_ok=True)
+    STATE.chmod(0o1777)
     with (STATE / "boots.jsonl").open("a") as output:
         output.write(json.dumps(report) + "\n")
         output.flush()
