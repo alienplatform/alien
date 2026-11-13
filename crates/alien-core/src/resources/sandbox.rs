@@ -463,7 +463,7 @@ impl SandboxCapabilities {
             // takes no stdin) reports false from `session_capabilities`.
             interactive_commands: true,
             // The in-sandbox agent issues a capability for one declared port and verifies it on
-            // its own route. The platform's port auth cannot be that gate: it is anonymous, or
+            // its own route. Azure's port auth cannot be that gate: it is anonymous, or
             // Entra ID with an object-id allowlist (a person or a service principal), and the
             // edge removes the caller's `Authorization`, which the workload needs. So the agent
             // port stays anonymous and the capability is its only gate. A catalog image runs
@@ -481,7 +481,7 @@ impl SandboxCapabilities {
             // sizing rule at plan time instead of matching a tier.
             enforced_limits: true,
             process_limit: false,
-            // The platform has no wall-clock ceiling, so the binding stamps a deadline label on
+            // Azure has no wall-clock ceiling, so the binding stamps a deadline label on
             // each sandbox and the controller's reaper deletes by it; every verb on the binding
             // also refuses a sandbox past its label, so the ceiling does not wait for a reaper
             // tick.
