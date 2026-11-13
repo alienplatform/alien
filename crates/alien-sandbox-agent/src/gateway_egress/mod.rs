@@ -74,6 +74,8 @@ pub struct GatewayEgress {
     ca_file: Option<std::sync::Mutex<std::fs::File>>,
     identity: RwLock<Option<(String, String)>>,
     update_lock: tokio::sync::Mutex<()>,
+    /// The step and cause of the latest failed check, so a refusal can name them.
+    last_unverified: std::sync::Mutex<Option<(String, String)>>,
     unanswered_since: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
@@ -188,7 +190,45 @@ impl GatewayEgress {
             identity: RwLock::new(identity),
             update_lock: tokio::sync::Mutex::new(()),
             unanswered_since: std::sync::Mutex::new(None),
+            last_unverified: std::sync::Mutex::new(None),
         })))
+    }
+
+    fn record_unverified(&self, step: &str, cause: &str) {
+        *self
+            .last_unverified
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((step.into(), cause.into()));
+    }
+
+    /// An error saying which step of the path check failed; also kept for `/v1/health`.
+    fn unverified(&self, step: &str, cause: impl Into<String>) -> AlienError<ErrorData> {
+        let cause = cause.into();
+        self.record_unverified(step, &cause);
+        AlienError::new(ErrorData::egress_unverified(step, cause))
+    }
+
+    fn remember_unverified(&self, error: &AlienError<ErrorData>) {
+        if let Some(ErrorData::EgressPathUnexpected { step, cause }) = &error.error {
+            self.record_unverified(step, cause);
+        } else {
+            self.record_unverified("egress-check", &error.message);
+        }
+    }
+
+    /// The failure most recently recorded by a check.
+    fn recorded_unverified(&self) -> AlienError<ErrorData> {
+        self.recorded_or("path-check", "no check has completed yet")
+    }
+
+    fn recorded_or(&self, step: &str, cause: &str) -> AlienError<ErrorData> {
+        let recorded = self
+            .last_unverified
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let (step, cause) = recorded.unwrap_or_else(|| (step.into(), cause.into()));
+        AlienError::new(ErrorData::egress_unverified(&step, cause))
     }
 
     /// Health remains available while create is waiting to deliver the policy.
@@ -204,7 +244,7 @@ impl GatewayEgress {
         }
         if !self.declared_none && self.awaiting_delivery.load(Ordering::Acquire) {
             if !self.path_verified.load(Ordering::Acquire) {
-                return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+                return Err(self.recorded_unverified());
             }
             return Ok("awaiting-egress-policy");
         }
@@ -237,7 +277,7 @@ impl GatewayEgress {
         let _update = self.update_lock.lock().await;
         self.ready.store(false, Ordering::Release);
         if !self.routing_ready.load(Ordering::Acquire) {
-            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            return Err(self.unverified("resume", "routing not installed: awaiting the run hook"));
         }
         // Delivery and the platform hook can arrive in either order. The token identifies
         // this sandbox; the gateway's current policy remains the authorization authority.
@@ -283,7 +323,7 @@ impl GatewayEgress {
                 "awaiting-run-hook"
             };
             tracing::warn!(cause, "egress readiness wait expired");
-            AlienError::new(ErrorData::EgressPathUnexpected)
+            self.unverified("readiness-wait", cause)
         })
     }
 
@@ -306,7 +346,8 @@ impl GatewayEgress {
                 "check-failed"
             };
             tracing::warn!(cause, "egress session refused");
-            Err(AlienError::new(ErrorData::EgressPathUnexpected))
+            // A failed check already recorded the precise step; keep it over the generic cause.
+            Err(self.recorded_or("readiness", cause))
         }
     }
 
@@ -481,8 +522,12 @@ impl GatewayEgress {
         if !full_delivery {
             // The gateway verifies the installed identity, including expiry. Refreshing
             // only the recovery copy must neither rotate its token nor release Resume.
-            if !matches!(self.policy_request(None).await?, 200 | 404) {
-                return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            let status = self.policy_request(None).await?;
+            if !matches!(status, 200 | 404) {
+                return Err(self.unverified(
+                    "gateway-policy-check",
+                    format!("the gateway answered {status} to the policy refresh"),
+                ));
             }
             return self.retain_record(policy, &aud, &sub);
         }
@@ -609,7 +654,10 @@ impl GatewayEgress {
         let canary: SocketAddr = SocketAddr::from(([1, 1, 1, 1], 443));
         let direct = timeout(Duration::from_secs(3), self.connect(canary)).await;
         if matches!(direct, Ok(Ok(_))) {
-            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            return Err(self.unverified(
+                "direct-connect",
+                "1.1.1.1:443 is reachable without the gateway",
+            ));
         }
         probe::supervisor_udp(self.privileged).await?;
         probe::command(self.command_identity).await?;
@@ -619,10 +667,12 @@ impl GatewayEgress {
 
     async fn self_check(&self) -> Result<()> {
         self.check_path().await.inspect_err(|error| {
+            self.remember_unverified(error);
             tracing::warn!(cause = "check-failed", code = %error.code, "physical egress check failed");
         })?;
         if !self.declared_none {
             self.check_policy().await.inspect_err(|error| {
+                self.remember_unverified(error);
                 let cause = if self.awaiting_delivery.load(Ordering::Acquire) {
                     "token-rejected"
                 } else {

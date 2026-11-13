@@ -30,7 +30,10 @@ pub(super) async fn supervisor_udp(privileged: bool) -> Result<()> {
     })
     .await;
     if matches!(reply, Ok(Ok(n)) if n > 0) {
-        return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        return Err(AlienError::new(ErrorData::egress_unverified(
+            "udp-dns",
+            "8.8.8.8:53 answered without the gateway",
+        )));
     }
     Ok(())
 }
@@ -58,7 +61,10 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
         .into_alien_error()
         .context(failed("run command path check"))?;
     if !status.success() {
-        return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        return Err(AlienError::new(ErrorData::egress_unverified(
+            "command-identity",
+            format!("the command-identity path check reached an address it must not ({status})"),
+        )));
     }
     Ok(())
 }

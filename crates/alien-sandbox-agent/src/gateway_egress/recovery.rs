@@ -203,7 +203,10 @@ enum PolicyCheck {
 
 impl PolicyCheck {
     fn answer(status: u16) -> Self {
-        let error = AlienError::new(ErrorData::EgressPathUnexpected);
+        let error = AlienError::new(ErrorData::egress_unverified(
+            "gateway-policy-check",
+            format!("the gateway answered {status}"),
+        ));
         if (500..600).contains(&status) {
             Self::Unanswered(error)
         } else {
@@ -266,7 +269,38 @@ mod tests {
             identity: RwLock::new(Some(("p/r".into(), "box".into()))),
             update_lock: tokio::sync::Mutex::new(()),
             unanswered_since: std::sync::Mutex::new(None),
+            last_unverified: std::sync::Mutex::new(None),
         }
+    }
+    #[test]
+    fn a_refusal_names_the_failed_step_and_cause() {
+        let egress = agent("127.0.0.1:9".parse().unwrap());
+        egress.awaiting_delivery.store(true, Ordering::Release);
+        egress.path_verified.store(false, Ordering::Release);
+        egress.remember_unverified(&AlienError::new(ErrorData::egress_unverified(
+            "direct-connect",
+            "1.1.1.1:443 is reachable without the gateway",
+        )));
+        let health = egress.status().unwrap_err();
+        assert!(
+            health.message.contains("direct-connect")
+                && health.message.contains("1.1.1.1:443 is reachable"),
+            "health names step and cause: {}",
+            health.message
+        );
+        assert!(health.message.starts_with("EGRESS_PATH_UNEXPECTED:"));
+        // A session refused later keeps the precise step instead of a generic cause.
+        let refused = egress.ensure_ready().unwrap_err();
+        assert!(
+            refused.message.contains("direct-connect"),
+            "{}",
+            refused.message
+        );
+        // Nothing recorded yet: still names a step.
+        let fresh = agent("127.0.0.1:9".parse().unwrap());
+        fresh.awaiting_delivery.store(true, Ordering::Release);
+        fresh.path_verified.store(false, Ordering::Release);
+        assert!(fresh.status().unwrap_err().message.contains("path-check"));
     }
     #[tokio::test]
     async fn only_missing_state_triggers_reregistration_with_the_retained_record() {
