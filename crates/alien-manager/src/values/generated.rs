@@ -19,6 +19,7 @@ use alien_error::AlienError;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
+use tracing::warn;
 
 use super::{ValueKind, ValueMeta, ValueScope, ValueSlot, ValueStore};
 use crate::error::{ErrorData, Result};
@@ -65,6 +66,38 @@ fn delivered_by_sender(deployment: &DeploymentRecord) -> HashSet<&str> {
         .collect()
 }
 
+/// The secret inputs the sender stores but delivers in none of the variables
+/// they map to. The manager doesn't generate them (the sender holds the
+/// answer), so the workload runs without them until the sender delivers them.
+fn undelivered_secrets<'a>(stack: &'a Stack, deployment: &DeploymentRecord) -> Vec<&'a str> {
+    let delivered = delivered_by_sender(deployment);
+    let supplied = deployment
+        .deployment_config
+        .as_ref()
+        .map(|config| &config.input_values);
+    let variables = deployment
+        .user_environment_variables
+        .as_deref()
+        .unwrap_or_default();
+    stack
+        .inputs
+        .iter()
+        .filter(|input| {
+            !input.env.is_empty()
+                && delivered.contains(input.id.as_str())
+                && input.applies(&stack.inputs, &deployment.input_values, deployment.platform)
+                && !deployment.input_values.contains_key(&input.id)
+                && !supplied.is_some_and(|values| values.contains_key(&input.id))
+                && input.env.iter().all(|mapping| {
+                    !variables
+                        .iter()
+                        .any(|variable| variable.name == mapping.name)
+                })
+        })
+        .map(|input| input.id.as_str())
+        .collect()
+}
+
 /// The inputs of `stack` this manager generates for `deployment`: generated,
 /// applicable, and without a value already on the record or with the sender.
 fn inputs_to_generate<'a>(
@@ -106,6 +139,16 @@ pub async fn with_generated_inputs<'a>(
     stack: Option<&Stack>,
     deployment: Cow<'a, DeploymentRecord>,
 ) -> Result<(Cow<'a, DeploymentRecord>, GeneratedInputs)> {
+    for input_id in stack
+        .map(|stack| undelivered_secrets(stack, &deployment))
+        .unwrap_or_default()
+    {
+        warn!(
+            deployment_id = %deployment.id,
+            input_id,
+            "The sender stores this secret input but delivers none of its variables"
+        );
+    }
     let (Some(store), Some(stack)) = (store, stack) else {
         return Ok((deployment, GeneratedInputs::default()));
     };
@@ -161,8 +204,9 @@ mod tests {
     use std::sync::Arc;
 
     use alien_core::{
-        DeploymentConfig, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
-        StackInputKind, StackInputProvider, ValueSlotRef,
+        DeploymentConfig, EnvironmentVariable, EnvironmentVariableType,
+        EnvironmentVariablesSnapshot, Platform, StackInputEnvironmentMapping, StackInputKind,
+        StackInputProvider, ValueSlotRef,
     };
     use chrono::Utc;
 
@@ -523,6 +567,75 @@ mod tests {
 
         let slots: Vec<_> = generated.slots.iter().map(|m| m.slot.to_string()).collect();
         assert_eq!(slots, ["input:signingKey"]);
+    }
+
+    /// A generated secret the sender stores, mapped to `DB_PASSWORD`.
+    fn delivered_database_password() -> (Stack, DeploymentRecord) {
+        let mut password = input("dbPassword", Some(32), None);
+        password.env = vec![StackInputEnvironmentMapping {
+            name: "DB_PASSWORD".to_string(),
+            target_resources: None,
+            var_type: None,
+        }];
+        let mut record = record();
+        record
+            .deployment_config
+            .as_mut()
+            .unwrap()
+            .stored_secret_input_ids = Some(vec!["dbPassword".to_string()]);
+        (stack(vec![password]), record)
+    }
+
+    fn delivered_variable(value: &str) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: "DB_PASSWORD".to_string(),
+            value: value.to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: None,
+        }
+    }
+
+    /// The workload gets the sender's answer: no value is generated for it,
+    /// and the deployment's variables resolve to that one answer.
+    #[tokio::test]
+    async fn a_delivered_secret_reaches_the_workload_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::values::fixtures::kv_store(dir.path()).await;
+        let (stack, mut record) = delivered_database_password();
+        record.user_environment_variables = Some(vec![delivered_variable("sender-answer")]);
+
+        let (filled, generated) = generate(&store, &stack, &record).await;
+        let variables =
+            crate::loops::deployment::resolve_input_environment(&stack, &filled).unwrap();
+
+        assert!(generated.slots.is_empty());
+        assert!(store.list(&scope()).await.unwrap().is_empty());
+        assert_eq!(variables, vec![delivered_variable("sender-answer")]);
+        assert!(undelivered_secrets(&stack, &filled).is_empty());
+    }
+
+    /// A stored secret whose variable the sender left out is reported, since
+    /// the workload would otherwise start without it and nothing would say why.
+    #[test]
+    fn a_stored_secret_without_its_variable_is_reported() {
+        let (stack, mut record) = delivered_database_password();
+        assert_eq!(undelivered_secrets(&stack, &record), ["dbPassword"]);
+
+        record.user_environment_variables = Some(vec![EnvironmentVariable {
+            name: "OTHER".to_string(),
+            ..delivered_variable("x")
+        }]);
+        assert_eq!(undelivered_secrets(&stack, &record), ["dbPassword"]);
+
+        // Held by this manager: it has a slot, so the manager supplies it.
+        record.deployment_config.as_mut().unwrap().value_slots = vec![ValueSlotRef {
+            slot: "input:dbPassword".to_string(),
+            kind: EnvironmentVariableType::Secret,
+            digest: String::new(),
+            env_name: None,
+            targets: None,
+        }];
+        assert!(undelivered_secrets(&stack, &record).is_empty());
     }
 
     #[tokio::test]
