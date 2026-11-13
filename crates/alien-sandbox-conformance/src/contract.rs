@@ -22,9 +22,7 @@ use alien_sandbox_conformance::{evaluate, Expectation, Observation, Probe, Verdi
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio_tungstenite::tungstenite::{
-    client::IntoClientRequest, http::HeaderValue, Message,
-};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
 
 use super::{cleanup, invalid, operation, probe, Result, Session};
 
@@ -184,7 +182,11 @@ macro_rules! check {
         let outcome: Outcome = $body.await;
         $checks.push(Check {
             name: $name.to_string(),
-            verdict: if outcome.is_ok() { Verdict::Pass } else { Verdict::Fail },
+            verdict: if outcome.is_ok() {
+                Verdict::Pass
+            } else {
+                Verdict::Fail
+            },
             detail: outcome.unwrap_or_else(|error| error),
             elapsed_ms: started.elapsed().as_millis(),
         });
@@ -193,7 +195,11 @@ macro_rules! check {
 
 async fn run_checks(suite: &Suite, sandbox: Arc<dyn Sandbox>, id: &str, checks: &mut Vec<Check>) {
     let token = suite.token.clone().unwrap_or_else(|| DEFAULT_TOKEN.into());
-    check!(checks, "censusJob", census_job(&*sandbox, id, suite.boot_uid));
+    check!(
+        checks,
+        "censusJob",
+        census_job(&*sandbox, id, suite.boot_uid)
+    );
     check!(checks, "bootOnce", boot_once(&*sandbox, id, suite.boot_uid));
     for port in &suite.ports {
         check!(
@@ -212,13 +218,7 @@ async fn run_checks(suite: &Suite, sandbox: Arc<dyn Sandbox>, id: &str, checks: 
     check!(
         checks,
         format!("websocketIdle{}s", suite.idle_seconds),
-        websocket_port(
-            &*sandbox,
-            id,
-            suite.ports[0],
-            &token,
-            suite.idle_seconds
-        )
+        websocket_port(&*sandbox, id, suite.ports[0], &token, suite.idle_seconds)
     );
     check!(
         checks,
@@ -228,15 +228,28 @@ async fn run_checks(suite: &Suite, sandbox: Arc<dyn Sandbox>, id: &str, checks: 
     check!(
         checks,
         "metadataAsWorkloadUid",
-        metadata(&*sandbox, id, suite.ports[0], &token, &suite.metadata_backend)
+        metadata(
+            &*sandbox,
+            id,
+            suite.ports[0],
+            &token,
+            &suite.metadata_backend
+        )
     );
 }
 
 /// The caller's own Authorization replaces anything the capability carried.
-async fn capability(sandbox: &dyn Sandbox, id: &str, port: u16) -> std::result::Result<PreviewCapability, String> {
+async fn capability(
+    sandbox: &dyn Sandbox,
+    id: &str,
+    port: u16,
+) -> std::result::Result<PreviewCapability, String> {
     let capability = sandbox.preview(id, port).await.map_err(failed)?;
     if !capability.allowed_ports.contains(&port) {
-        return Err(format!("capability admits {:?}, not {port}", capability.allowed_ports));
+        return Err(format!(
+            "capability admits {:?}, not {port}",
+            capability.allowed_ports
+        ));
     }
     Ok(capability)
 }
@@ -279,7 +292,10 @@ async fn get_json(
     let response = request.send().await.map_err(failed)?;
     let status = response.status().as_u16();
     let body = response.bytes().await.map_err(failed)?;
-    Ok((status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)))
+    Ok((
+        status,
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+    ))
 }
 
 async fn http_port(sandbox: &dyn Sandbox, id: &str, port: u16, token: &str) -> Outcome {
@@ -287,7 +303,9 @@ async fn http_port(sandbox: &dyn Sandbox, id: &str, port: u16, token: &str) -> O
     let client = http_client()?;
     let (status, body) = get_json(&client, &capability, Some(token), "/whoami").await?;
     if status != 200 {
-        return Err(format!("expected 200 with the caller's bearer, got {status}"));
+        return Err(format!(
+            "expected 200 with the caller's bearer, got {status}"
+        ));
     }
     let expected = sha256(format!("Bearer {token}").as_bytes());
     if body["authorizationSha256"] != expected {
@@ -299,9 +317,13 @@ async fn http_port(sandbox: &dyn Sandbox, id: &str, port: u16, token: &str) -> O
     // The daemon, not the broker, must be the one checking the bearer.
     let (denied, _) = get_json(&client, &capability, Some("wrong-token"), "/whoami").await?;
     if denied != 401 {
-        return Err(format!("a wrong bearer got {denied}, expected the daemon's 401"));
+        return Err(format!(
+            "a wrong bearer got {denied}, expected the daemon's 401"
+        ));
     }
-    Ok(format!("200 as uid {WORKLOAD_UID}, Authorization unchanged, wrong bearer 401"))
+    Ok(format!(
+        "200 as uid {WORKLOAD_UID}, Authorization unchanged, wrong bearer 401"
+    ))
 }
 
 async fn websocket_port(
@@ -316,20 +338,28 @@ async fn websocket_port(
     let socket_url = match endpoint.split_once("://") {
         Some(("https", rest)) => format!("wss://{rest}/ws"),
         Some(("http", rest)) => format!("ws://{rest}/ws"),
-        _ => return Err(format!("preview endpoint is not an http(s) URL: {endpoint}")),
+        _ => {
+            return Err(format!(
+                "preview endpoint is not an http(s) URL: {endpoint}"
+            ))
+        }
     };
     let connect = |token: &str| {
         let mut request = socket_url.as_str().into_client_request().map_err(failed)?;
         for (name, value) in merged_headers(&capability, Some(token)) {
-            let name = tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_bytes())
-                .map_err(failed)?;
+            let name =
+                tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(failed)?;
             request
                 .headers_mut()
                 .insert(name, HeaderValue::from_str(&value).map_err(failed)?);
         }
         Ok::<_, String>(request)
     };
-    if tokio_tungstenite::connect_async(connect("wrong-token")?).await.is_ok() {
+    if tokio_tungstenite::connect_async(connect("wrong-token")?)
+        .await
+        .is_ok()
+    {
         return Err("a WebSocket upgrade with a wrong bearer was accepted".into());
     }
     let (mut socket, _) = tokio_tungstenite::connect_async(connect(token)?)
@@ -358,7 +388,11 @@ async fn websocket_port(
     .await
     .map_err(|_| "no echo within 60 seconds".to_string())??;
     if sha256(&reply) != sha256(&outbound) {
-        return Err(format!("echo differs: {} bytes back for {} sent", reply.len(), outbound.len()));
+        return Err(format!(
+            "echo differs: {} bytes back for {} sent",
+            reply.len(),
+            outbound.len()
+        ));
     }
     let _ = socket.close(None).await;
     Ok(format!(
@@ -394,11 +428,20 @@ async fn concurrent(sandbox: &dyn Sandbox, id: &str, ports: &[u16], token: &str)
         }
     });
     let results = futures::future::join_all(requests).await;
-    let failures: Vec<String> = results.into_iter().filter_map(std::result::Result::err).collect();
+    let failures: Vec<String> = results
+        .into_iter()
+        .filter_map(std::result::Result::err)
+        .collect();
     if failures.is_empty() {
-        Ok(format!("{CONCURRENT_REQUESTS} concurrent requests answered with intact bodies"))
+        Ok(format!(
+            "{CONCURRENT_REQUESTS} concurrent requests answered with intact bodies"
+        ))
     } else {
-        Err(format!("{} of {CONCURRENT_REQUESTS} failed: {}", failures.len(), failures[0]))
+        Err(format!(
+            "{} of {CONCURRENT_REQUESTS} failed: {}",
+            failures.len(),
+            failures[0]
+        ))
     }
 }
 
@@ -421,13 +464,23 @@ async fn metadata(
         return Err(format!("metadata probe endpoint answered {status}"));
     }
     if body["uid"] != WORKLOAD_UID || body["exitCode"] != 0 {
-        return Err(format!("credential exclusion unproven: {}", body["failure"]));
+        return Err(format!(
+            "credential exclusion unproven: {}",
+            body["failure"]
+        ));
     }
-    Ok(format!("uid {WORKLOAD_UID} obtained no {backend} credential or credential endpoint"))
+    Ok(format!(
+        "uid {WORKLOAD_UID} obtained no {backend} credential or credential endpoint"
+    ))
 }
 
 /// Runs a guest command and returns stdout when it exits 0.
-async fn run_guest(sandbox: &dyn Sandbox, id: &str, script: &str, args: &[&str]) -> std::result::Result<String, String> {
+async fn run_guest(
+    sandbox: &dyn Sandbox,
+    id: &str,
+    script: &str,
+    args: &[&str],
+) -> std::result::Result<String, String> {
     let request = RunCommandRequest {
         command: "python3".into(),
         args: std::iter::once(format!("{FIXTURE_DIR}/{script}"))
@@ -453,29 +506,44 @@ async fn run_guest(sandbox: &dyn Sandbox, id: &str, script: &str, args: &[&str])
 }
 
 fn assert_census(census: &serde_json::Value, boot_uid: u64) -> Outcome {
-    let processes = census["processes"].as_array().ok_or("census has no process list")?;
+    let processes = census["processes"]
+        .as_array()
+        .ok_or("census has no process list")?;
     let find = |script: &str| {
         processes.iter().find(|process| {
-            process["argv"]
-                .as_array()
-                .is_some_and(|argv| argv.iter().any(|part| part.as_str().is_some_and(|p| p.ends_with(script))))
+            process["argv"].as_array().is_some_and(|argv| {
+                argv.iter()
+                    .any(|part| part.as_str().is_some_and(|p| p.ends_with(script)))
+            })
         })
     };
     let boot = find("boot.py").ok_or("the image ENTRYPOINT is not running")?;
     let server = find("server.py").ok_or("the workload server is not running")?;
     if boot["uid"] != boot_uid {
-        return Err(format!("ENTRYPOINT runs as uid {}, expected {boot_uid}", boot["uid"]));
+        return Err(format!(
+            "ENTRYPOINT runs as uid {}, expected {boot_uid}",
+            boot["uid"]
+        ));
     }
     if server["uid"] != WORKLOAD_UID || server["capEff"] != 0 {
-        return Err(format!("workload server is uid {} CapEff {}", server["uid"], server["capEff"]));
+        return Err(format!(
+            "workload server is uid {} CapEff {}",
+            server["uid"], server["capEff"]
+        ));
     }
     let census_job = find("census.py").ok_or("the census command is not in its own census")?;
     if census_job["uid"] == 0 || census_job["capEff"] != 0 {
-        return Err(format!("a command runs as uid {} CapEff {}", census_job["uid"], census_job["capEff"]));
+        return Err(format!(
+            "a command runs as uid {} CapEff {}",
+            census_job["uid"], census_job["capEff"]
+        ));
     }
     Ok(format!(
         "ENTRYPOINT uid {} CapEff {:#x}; workload uid {} CapEff 0; command uid {} CapEff 0",
-        boot["uid"], boot["capEff"].as_u64().unwrap_or(0), server["uid"], census_job["uid"]
+        boot["uid"],
+        boot["capEff"].as_u64().unwrap_or(0),
+        server["uid"],
+        census_job["uid"]
     ))
 }
 
@@ -492,7 +560,10 @@ async fn census_job(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
     let mut stdout = Vec::new();
     let mut sequence = None;
     loop {
-        let poll = sandbox.poll_job(id, &job.job_id, sequence).await.map_err(failed)?;
+        let poll = sandbox
+            .poll_job(id, &job.job_id, sequence)
+            .await
+            .map_err(failed)?;
         for frame in poll.frames {
             match frame {
                 CommandOutput::Stdout { seq, data } => {
@@ -535,12 +606,22 @@ async fn boot_once(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
         .collect::<std::result::Result<_, _>>()
         .map_err(failed)?;
     if boots.len() != 1 {
-        return Err(format!("ENTRYPOINT started {} times, expected once", boots.len()));
+        return Err(format!(
+            "ENTRYPOINT started {} times, expected once",
+            boots.len()
+        ));
     }
-    Ok(format!("one boot; {detail}; boot capabilities {}", boots[0]["capabilities"]))
+    Ok(format!(
+        "one boot; {detail}; boot capabilities {}",
+        boots[0]["capabilities"]
+    ))
 }
 
-async fn observe(sandbox: &dyn Sandbox, id: &str, egress: &EgressSuite) -> std::result::Result<Observation, String> {
+async fn observe(
+    sandbox: &dyn Sandbox,
+    id: &str,
+    egress: &EgressSuite,
+) -> std::result::Result<Observation, String> {
     probe(
         sandbox,
         id,
@@ -555,7 +636,12 @@ async fn observe(sandbox: &dyn Sandbox, id: &str, egress: &EgressSuite) -> std::
     .map_err(failed)
 }
 
-fn verdict_check(name: &str, expected: &Expectation, control: &Observation, subject: &Observation) -> Check {
+fn verdict_check(
+    name: &str,
+    expected: &Expectation,
+    control: &Observation,
+    subject: &Observation,
+) -> Check {
     let verdict = evaluate(expected, control, subject);
     Check {
         name: name.into(),
@@ -581,7 +667,10 @@ async fn egress_checks(
         &suite.binding,
         journal,
         sessions,
-        CreateSandboxRequest { egress: Some(EgressPolicy::Internet), ..Default::default() },
+        CreateSandboxRequest {
+            egress: Some(EgressPolicy::Internet),
+            ..Default::default()
+        },
     )
     .await?;
     let subject = super::create_with(
@@ -589,12 +678,17 @@ async fn egress_checks(
         &suite.binding,
         journal,
         sessions,
-        CreateSandboxRequest { egress: Some(EgressPolicy::Allow { allow: vec![] }), ..Default::default() },
+        CreateSandboxRequest {
+            egress: Some(EgressPolicy::Allow { allow: vec![] }),
+            ..Default::default()
+        },
     )
     .await?;
     let control_id = sessions[control].sandbox_id.clone();
     let subject_id = sessions[subject].sandbox_id.clone();
-    let reached = Expectation::Response { body_sha256: egress.body_sha256.clone() };
+    let reached = Expectation::Response {
+        body_sha256: egress.body_sha256.clone(),
+    };
     let control_seen = match observe(provider.as_ref(), &control_id, egress).await {
         Ok(observation) => observation,
         Err(error) => {
@@ -608,10 +702,16 @@ async fn egress_checks(
         }
     };
     let steps: [(&str, Option<EgressPolicy>, Expectation); 4] = [
-        ("egressEmptyAllowlistDenied", None, Expectation::NetworkDenied),
+        (
+            "egressEmptyAllowlistDenied",
+            None,
+            Expectation::NetworkDenied,
+        ),
         (
             "egressLiveHostPortAdded",
-            Some(EgressPolicy::Allow { allow: vec![format!("{}:{}", egress.host, egress.port)] }),
+            Some(EgressPolicy::Allow {
+                allow: vec![format!("{}:{}", egress.host, egress.port)],
+            }),
             reached.clone(),
         ),
         (
@@ -619,7 +719,11 @@ async fn egress_checks(
             Some(EgressPolicy::Allow { allow: vec![] }),
             Expectation::NetworkDenied,
         ),
-        ("egressInternetReaches", Some(EgressPolicy::Internet), reached),
+        (
+            "egressInternetReaches",
+            Some(EgressPolicy::Internet),
+            reached,
+        ),
     ];
     for (name, update, expected) in steps {
         if let Some(policy) = update {
@@ -634,7 +738,9 @@ async fn egress_checks(
             }
         }
         match observe(provider.as_ref(), &subject_id, egress).await {
-            Ok(subject_seen) => checks.push(verdict_check(name, &expected, &control_seen, &subject_seen)),
+            Ok(subject_seen) => {
+                checks.push(verdict_check(name, &expected, &control_seen, &subject_seen))
+            }
             Err(error) => checks.push(Check {
                 name: name.into(),
                 verdict: Verdict::Unproven,

@@ -719,7 +719,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             && match &updated_daemon.code {
                                 DaemonCode::Source { src, toolchain } => {
                                     commands_receiver::receiver_reads_capability_file(
-                                        src, toolchain, &settings.get_targets(),
+                                        src,
+                                        toolchain,
+                                        &settings.get_targets(),
                                     )
                                     .await
                                 }
@@ -1134,7 +1136,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             let reads_capability_file = match &containers_group[0].1.code {
                                 ContainerCode::Source { src, toolchain } => {
                                     commands_receiver::receiver_reads_capability_file(
-                                        src, toolchain, &settings.get_targets(),
+                                        src,
+                                        toolchain,
+                                        &settings.get_targets(),
                                     )
                                     .await
                                 }
@@ -8273,9 +8277,9 @@ mod sandbox_push_tests {
         // The agent refuses this setting unless it runs as root with uid-split isolation, which
         // a pod (non-root, platform isolation) never does: the pool pods would exit at start.
         assert!(
-            !environment
-                .iter()
-                .any(|entry| entry.as_str().is_some_and(|e| e.starts_with("ALIEN_SANDBOX_IMAGE_COMMAND"))),
+            !environment.iter().any(|entry| entry
+                .as_str()
+                .is_some_and(|e| e.starts_with("ALIEN_SANDBOX_IMAGE_COMMAND"))),
             "{environment:?}"
         );
     }

@@ -51,7 +51,15 @@ pub async fn setup_target(
     let target_config = build_initial_setup_target_config(config, platform, &deployment.name)
         .await
         .context("Failed to build initial setup target config")?;
-    run_initial_setup(config, platform, deployment, manager, management_config, target_config).await
+    run_initial_setup(
+        config,
+        platform,
+        deployment,
+        manager,
+        management_config,
+        target_config,
+    )
+    .await
 }
 
 /// Like [`setup_target`], but runs setup with the target account's admin credentials instead of
@@ -64,7 +72,10 @@ pub async fn setup_target_as_admin(
     manager: &Arc<TestManager>,
     management_config: Option<ManagementConfig>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(platform == Platform::Aws, "setup_target_as_admin supports AWS only");
+    anyhow::ensure!(
+        platform == Platform::Aws,
+        "setup_target_as_admin supports AWS only"
+    );
     let target = config
         .aws_target
         .as_ref()
@@ -79,7 +90,15 @@ pub async fn setup_target_as_admin(
         },
         service_overrides: None,
     }));
-    run_initial_setup(config, platform, deployment, manager, management_config, target_config).await
+    run_initial_setup(
+        config,
+        platform,
+        deployment,
+        manager,
+        management_config,
+        target_config,
+    )
+    .await
 }
 
 async fn run_initial_setup(

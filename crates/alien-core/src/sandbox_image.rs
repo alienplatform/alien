@@ -55,6 +55,39 @@ pub const SESSION_ROOT_MODE: u32 = 0o700;
 /// `RUST_LOG` for a GCP image, which the agent needs set before it logs anything.
 pub const GCP_AGENT_LOG_FILTER: &str = "info";
 
+/// Linux capabilities a root image process keeps: Docker's default set without `NET_RAW`.
+///
+/// `(name, number)` pairs, one list for both sides of the contract. The agent keeps exactly
+/// this set for the image's command and a Kubernetes pod grants exactly this set to the agent
+/// (`drop: [ALL]`, then these), so the agent can start the command with what it is entitled to
+/// and nothing more. Never `NET_ADMIN`, `SYS_ADMIN` or `NET_RAW`.
+pub const IMAGE_ROOT_CAPABILITY_SET: &[(&str, u8)] = &[
+    ("CHOWN", 0),
+    ("DAC_OVERRIDE", 1),
+    ("FOWNER", 3),
+    ("FSETID", 4),
+    ("KILL", 5),
+    ("SETGID", 6),
+    ("SETUID", 7),
+    ("SETPCAP", 8),
+    ("NET_BIND_SERVICE", 10),
+    ("SYS_CHROOT", 18),
+    ("MKNOD", 27),
+    ("AUDIT_WRITE", 29),
+    ("SETFCAP", 31),
+];
+
+/// [`IMAGE_ROOT_CAPABILITY_SET`] as the 32-bit `CapEff` mask the agent applies.
+pub const IMAGE_ROOT_CAPABILITY_MASK: u32 = {
+    let mut mask = 0u32;
+    let mut index = 0;
+    while index < IMAGE_ROOT_CAPABILITY_SET.len() {
+        mask |= 1 << IMAGE_ROOT_CAPABILITY_SET[index].1;
+        index += 1;
+    }
+    mask
+};
+
 /// How an image ends, and the isolation that ending permits.
 ///
 /// One value rather than two, because `ALIEN_SANDBOX_ISOLATION` and the trailing `USER` describe
@@ -560,6 +593,18 @@ mod tests {
     fn the_gcp_agent_leaves_port_8080_to_the_workload() {
         assert_ne!(GCP_AGENT_PLATFORM.port, 8080);
         assert_eq!(GCP_AGENT_PLATFORM.port, AGENT_PORT);
+    }
+
+    /// The published contract value (Docker's default set without `NET_RAW`); the name list the
+    /// pod grants must equal the mask the agent applies.
+    #[test]
+    fn root_capability_set_is_dockers_default_without_net_raw() {
+        assert_eq!(IMAGE_ROOT_CAPABILITY_MASK, 0xa80405fb);
+        for forbidden in ["NET_ADMIN", "SYS_ADMIN", "NET_RAW"] {
+            assert!(IMAGE_ROOT_CAPABILITY_SET
+                .iter()
+                .all(|(name, _)| *name != forbidden));
+        }
     }
 
     fn committed_path(relative: &str) -> std::path::PathBuf {

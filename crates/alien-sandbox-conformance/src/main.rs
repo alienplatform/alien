@@ -131,7 +131,14 @@ async fn create(
     journal: &mut File,
     sessions: &mut Vec<Session>,
 ) -> Result<usize> {
-    create_with(sandbox, binding, journal, sessions, CreateSandboxRequest::default()).await
+    create_with(
+        sandbox,
+        binding,
+        journal,
+        sessions,
+        CreateSandboxRequest::default(),
+    )
+    .await
 }
 
 async fn create_with(
@@ -342,7 +349,13 @@ async fn interactive(
     let providers = BTreeMap::from([(suite.binding.clone(), provider.clone())]);
     let mut sessions = Vec::new();
     let result = async {
-        let index = create(provider.as_ref(), &suite.binding, &mut journal, &mut sessions).await?;
+        let index = create(
+            provider.as_ref(),
+            &suite.binding,
+            &mut journal,
+            &mut sessions,
+        )
+        .await?;
         let sandbox_id = sessions[index].sandbox_id.clone();
         let cases =
             alien_sandbox_conformance::interactive::run_cases(provider.clone(), &sandbox_id).await;

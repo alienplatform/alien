@@ -150,6 +150,7 @@ pub(crate) fn sandbox_pod_with_labels(
     labels.extend(deployment_labels);
 
     let declared = sandbox.resolved_limits();
+    let root_boot = sandbox.image_user == Some(0);
     let image_uid = sandbox.image_user.filter(|uid| *uid != 0).map(i64::from);
     let limits = BTreeMap::from([
         ("cpu".to_string(), Quantity(declared.cpu.clone())),
@@ -190,9 +191,13 @@ pub(crate) fn sandbox_pod_with_labels(
             // The image's own USER runs the sandbox. `runAsNonRoot` makes the kubelet refuse an
             // image that would start as root, so root stays refused without choosing a uid for
             // the image. A uid is pinned only when the build recorded one.
+            //
+            // A declaration whose image USER is root is the one exception: the agent starts as
+            // root so it can run the image's own startup command with a bounded capability set and
+            // drop every session command to a fixed non-root uid (see `container_security_context`).
             security_context: Some(PodSecurityContext {
-                run_as_non_root: Some(true),
-                run_as_user: image_uid,
+                run_as_non_root: Some(!root_boot),
+                run_as_user: if root_boot { Some(0) } else { image_uid },
                 seccomp_profile: Some(SeccompProfile {
                     type_: "RuntimeDefault".to_string(),
                     localhost_profile: None,
@@ -217,26 +222,7 @@ pub(crate) fn sandbox_pod_with_labels(
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image),
-                env: capability_public_key.map(|key| {
-                    let mut env = capability_environment(key);
-                    // The ports the agent may forward to, from the declaration. The agent checks
-                    // a request's port against this, so what a caller names is never the source.
-                    if !sandbox.preview_ports.is_empty() {
-                        env.push(EnvVar {
-                            name: "ALIEN_SANDBOX_PREVIEW_PORTS".to_string(),
-                            value: Some(
-                                sandbox
-                                    .preview_ports
-                                    .iter()
-                                    .map(u16::to_string)
-                                    .collect::<Vec<_>>()
-                                    .join(","),
-                            ),
-                            value_from: None,
-                        });
-                    }
-                    env
-                }),
+                env: container_env(sandbox, capability_public_key, root_boot),
                 volume_mounts: Some(vec![
                     VolumeMount {
                         name: SCRATCH_VOLUME.to_string(),
@@ -249,17 +235,7 @@ pub(crate) fn sandbox_pod_with_labels(
                         ..Default::default()
                     },
                 ]),
-                security_context: Some(SecurityContext {
-                    allow_privilege_escalation: Some(false),
-                    privileged: Some(false),
-                    read_only_root_filesystem: Some(true),
-                    run_as_non_root: Some(true),
-                    capabilities: Some(Capabilities {
-                        drop: Some(vec!["ALL".to_string()]),
-                        add: None,
-                    }),
-                    ..Default::default()
-                }),
+                security_context: Some(container_security_context(root_boot)),
                 resources: Some(ResourceRequirements {
                     limits: Some(limits),
                     ..Default::default()
@@ -267,6 +243,83 @@ pub(crate) fn sandbox_pod_with_labels(
                 ..Default::default()
             }],
             ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// The container's environment: capability authorization, the declared preview ports and, for a
+/// root image, the two settings that switch the agent to bounded root boot.
+fn container_env(
+    sandbox: &Sandbox,
+    capability_public_key: Option<&str>,
+    root_boot: bool,
+) -> Option<Vec<EnvVar>> {
+    let mut env = capability_public_key.map(|key| {
+        let mut env = capability_environment(key);
+        // The ports the agent may forward to, from the declaration. The agent checks
+        // a request's port against this, so what a caller names is never the source.
+        if !sandbox.preview_ports.is_empty() {
+            env.push(plain_env(
+                "ALIEN_SANDBOX_PREVIEW_PORTS",
+                sandbox
+                    .preview_ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ));
+        }
+        env
+    });
+    if root_boot {
+        // Set here rather than in the image: the layered image serves both modes, and a root-only
+        // setting baked into it would stop a non-root pod from booting. The pod env wins over the
+        // image's own `ALIEN_SANDBOX_ISOLATION=platform`.
+        let env = env.get_or_insert_default();
+        env.push(plain_env("ALIEN_SANDBOX_IMAGE_COMMAND", "true".to_string()));
+        env.push(plain_env(
+            "ALIEN_SANDBOX_ISOLATION",
+            alien_core::sandbox_image::Isolation::UidSplit
+                .env_value()
+                .to_string(),
+        ));
+    }
+    env
+}
+
+fn plain_env(name: &str, value: String) -> EnvVar {
+    EnvVar {
+        name: name.to_string(),
+        value: Some(value),
+        value_from: None,
+    }
+}
+
+/// The container's security context.
+///
+/// A non-root image drops every capability and keeps a read-only root. A root image's agent
+/// needs exactly [`alien_core::sandbox_image::IMAGE_ROOT_CAPABILITY_SET`], which it passes to the
+/// image's startup command and withdraws from every session command. Never `NET_ADMIN`,
+/// `SYS_ADMIN` or `NET_RAW`. Privilege escalation stays off: the agent changes uid with
+/// `setuid`, which `no_new_privs` does not restrict. The root filesystem is writable because the
+/// agent records the command identity in `/etc` and the image's own startup writes to it; the
+/// writable layer is bounded by `limits.disk` through the ephemeral-storage limit.
+fn container_security_context(root_boot: bool) -> SecurityContext {
+    let add = root_boot.then(|| {
+        alien_core::sandbox_image::IMAGE_ROOT_CAPABILITY_SET
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect()
+    });
+    SecurityContext {
+        allow_privilege_escalation: Some(false),
+        privileged: Some(false),
+        read_only_root_filesystem: Some(!root_boot),
+        run_as_non_root: Some(!root_boot),
+        capabilities: Some(Capabilities {
+            drop: Some(vec!["ALL".to_string()]),
+            add,
         }),
         ..Default::default()
     }
@@ -664,6 +717,77 @@ mod tests {
             Some(true),
             "an image that would start as root is refused by the kubelet"
         );
+    }
+
+    /// A root image boots the agent as root with exactly the boot capabilities and a writable
+    /// root (the agent writes the command identity and protects its own files), while the pod
+    /// stays unprivileged, seccomp-confined and denied every other capability.
+    #[test]
+    fn a_root_image_pod_boots_with_exactly_the_boot_capabilities() {
+        let mut declared = sandbox(SandboxEgress::Internet);
+        declared.image_user = Some(0);
+        let pod = sandbox_pod(&declared, "s1", "sbx", "gvisor", None, Some("a2V5"));
+        let spec = pod.spec.expect("a spec");
+        let pod_security = spec.security_context.expect("pod security context");
+        assert_eq!(pod_security.run_as_user, Some(0));
+        assert_ne!(pod_security.run_as_non_root, Some(true));
+        assert_eq!(
+            pod_security.seccomp_profile.expect("seccomp").type_,
+            "RuntimeDefault"
+        );
+        let container = &spec.containers[0];
+        let security = container.security_context.as_ref().expect("security");
+        assert_eq!(security.privileged, Some(false));
+        assert_eq!(security.allow_privilege_escalation, Some(false));
+        assert_eq!(security.read_only_root_filesystem, Some(false));
+        let capabilities = security.capabilities.as_ref().expect("capabilities");
+        assert_eq!(capabilities.drop, Some(vec!["ALL".to_string()]));
+        let mut added = capabilities.add.clone().expect("the boot capabilities");
+        added.sort();
+        let mut expected: Vec<String> = alien_core::sandbox_image::IMAGE_ROOT_CAPABILITY_SET
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+        expected.sort();
+        assert_eq!(added, expected);
+        for forbidden in ["NET_ADMIN", "SYS_ADMIN", "NET_RAW", "ALL"] {
+            assert!(!added.iter().any(|name| name == forbidden));
+        }
+        let env = container.env.as_ref().expect("env");
+        let value = |name: &str| {
+            env.iter()
+                .find(|variable| variable.name == name)
+                .and_then(|variable| variable.value.clone())
+        };
+        assert_eq!(
+            value("ALIEN_SANDBOX_IMAGE_COMMAND").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            value("ALIEN_SANDBOX_ISOLATION").as_deref(),
+            Some("uid-split")
+        );
+    }
+
+    /// Root mode is chosen by the declaration, never by the image: a non-root declaration's pod
+    /// carries none of it, so an image that works today boots the way it always did.
+    #[test]
+    fn a_non_root_pod_carries_no_root_boot_settings() {
+        for user in [None, Some(1001)] {
+            let mut declared = sandbox(SandboxEgress::Internet);
+            declared.image_user = user;
+            let pod = sandbox_pod(&declared, "s1", "sbx", "gvisor", None, Some("a2V5"));
+            let spec = pod.spec.expect("a spec");
+            let container = &spec.containers[0];
+            let security = container.security_context.as_ref().expect("security");
+            assert_eq!(security.read_only_root_filesystem, Some(true));
+            assert_eq!(security.run_as_non_root, Some(true));
+            assert_eq!(security.capabilities.as_ref().unwrap().add, None);
+            for variable in container.env.as_ref().expect("env") {
+                assert_ne!(variable.name, "ALIEN_SANDBOX_IMAGE_COMMAND");
+                assert_ne!(variable.name, "ALIEN_SANDBOX_ISOLATION");
+            }
+        }
     }
 
     #[test]
