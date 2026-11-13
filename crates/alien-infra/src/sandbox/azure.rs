@@ -123,6 +123,9 @@ pub struct AzureSandboxController {
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
+    /// Ports the declaration allows a preview capability for.
+    #[serde(default)]
+    pub(crate) preview_ports: Vec<u16>,
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
@@ -484,6 +487,7 @@ impl AzureSandboxController {
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
         azure.agent = self.agent;
+        azure.preview_ports = self.preview_ports.clone();
         azure.egress = egress.clone();
         azure.default_policy = self
             .default_policy
@@ -594,6 +598,7 @@ impl AzureSandboxController {
         }
         self.default_policy = config.default_policy.clone();
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.preview_ports = config.preview_ports.clone();
         self.limits = config.limits.clone();
         Ok(())
     }
@@ -1077,6 +1082,7 @@ mod tests {
     fn the_binding_carries_the_regional_data_plane_endpoint() {
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1132,6 +1138,7 @@ mod tests {
             .build();
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1297,6 +1304,7 @@ mod tests {
     fn a_failed_capture_leaves_the_declaration_whole() {
         let mut controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1348,6 +1356,7 @@ mod tests {
     fn a_failed_capture_does_not_apply_a_tightened_egress_either() {
         let mut controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1402,6 +1411,7 @@ mod tests {
     fn the_binding_carries_the_declared_ceilings() {
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1443,6 +1453,7 @@ mod tests {
     fn a_sandbox_without_declared_ceilings_publishes_none() {
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1553,6 +1564,7 @@ mod tests {
         ) -> AzureSandboxController {
             AzureSandboxController {
                 agent: false,
+            preview_ports: vec![],
                 state: AzureSandboxState::Ready,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),

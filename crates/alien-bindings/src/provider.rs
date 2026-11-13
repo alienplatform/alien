@@ -2229,7 +2229,8 @@ impl BindingsProviderApi for BindingsProvider {
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
                 )
-                .with_agent(azure_binding.agent);
+                .with_agent(azure_binding.agent)
+                .with_preview_ports(azure_binding.preview_ports.clone());
                 if let Some(route) = &self.sandbox_create_route {
                     sandbox = sandbox.with_create_route(route.clone());
                 }

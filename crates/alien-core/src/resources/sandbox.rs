@@ -461,11 +461,13 @@ impl SandboxCapabilities {
             // sandbox's authenticated port. A session without the agent (the platform's own exec
             // takes no stdin) reports false from `session_capabilities`.
             interactive_commands: true,
-            // A sandbox port carries a URL and an auth config, and the auth config offers two
-            // things: anonymous, or Entra ID with an allowlist of human email addresses.
-            // Neither is a credential scoped to a port for a fixed time, which is what a
-            // preview capability is. Returning the anonymous URL would publish the port.
-            preview: false,
+            // The in-sandbox agent issues a capability for one declared port and verifies it on
+            // its own route. The platform's port auth cannot be that gate: it is anonymous, or
+            // Entra ID with an object-id allowlist (a person or a service principal), and the
+            // edge removes the caller's `Authorization`, which the workload needs. So the agent
+            // port stays anonymous and the capability is its only gate. A catalog image runs
+            // without the agent, which `validate_capabilities` refuses.
+            preview: true,
             pause_resume: true,
             // False for a client reason, not a cloud one: this client has no snapshot call, and
             // `CreateSandboxRequest` has no field to consume the id it would return. Also
@@ -1213,6 +1215,16 @@ impl Sandbox {
 
         if !self.preview_ports.is_empty() {
             capabilities.require(SandboxCapability::Preview, platform)?;
+            if platform == Platform::Azure
+                && matches!(self.azure_image(), Ok(AzureSandboxImage::Catalog(_)))
+            {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "preview (a catalog image runs without the Alien agent that issues \
+                                 the capability; build the sandbox from source)"
+                        .to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
         }
 
         if self.lifecycle.idle_pause_seconds.is_some() {
@@ -1991,11 +2003,9 @@ mod tests {
         // outside `n×250m`, with the rule in the message.
         assert!(azure.enforced_limits);
         assert!(azure.pause_resume);
-        // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
-        // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
-        // neither of which is a port-scoped credential.
+        // A snapshot id has nothing to consume it on any backend.
         assert!(!azure.snapshot);
-        assert!(!azure.preview);
+        assert!(azure.preview, "the in-sandbox agent issues a port-scoped capability");
 
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
         assert!(!aws.snapshot, "AWS has no user-callable sandbox snapshot");
@@ -2293,12 +2303,29 @@ mod tests {
             .validate_for_platform(Platform::Kubernetes)
             .expect("Kubernetes serves preview to in-cluster callers through the agent");
 
-        for platform in [Platform::Azure, Platform::Gcp] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("these backends have no port-scoped credential");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        }
+        let error = sandbox
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("GCP has no port-scoped credential yet");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+    }
+
+    /// On Azure the Alien agent issues the capability, and a catalog image runs without it.
+    #[test]
+    fn azure_preview_needs_an_image_that_carries_the_agent() {
+        let catalog = sandbox_with(SandboxEgress::None, vec![8080]);
+        let error = catalog
+            .validate_for_platform(Platform::Azure)
+            .expect_err("a catalog image has no agent to issue a capability");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+
+        let mut registry = sandbox_with(SandboxEgress::None, vec![8080]);
+        registry.code = SandboxCode::Image {
+            image: "registry.example.com/workload/sandbox:1".to_string(),
+            bundled_from: None,
+        };
+        registry
+            .validate_for_platform(Platform::Azure)
+            .expect("a registry image is built with the agent");
     }
 
     /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and

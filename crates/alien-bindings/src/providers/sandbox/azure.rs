@@ -50,6 +50,10 @@ pub struct AzureSandbox {
     default_policy: Option<alien_core::EgressPolicy>,
     /// Idle seconds after which a sandbox suspends itself, if the declaration asked for one.
     idle_pause_seconds: Option<u32>,
+    /// Ports a preview capability may be granted for, from the declaration.
+    preview_ports: Vec<u16>,
+    /// Capabilities already granted, per sandbox and port, reused until shortly before they expire.
+    preview_grants: std::sync::Mutex<std::collections::HashMap<(String, u16), agent::CachedGrant>>,
     /// Sandbox ceilings, in the data plane's own units. Disk is optional because the data plane
     /// derives one from the cpu when it is not sent, and that default is better than a guess.
     cpu: String,
@@ -93,6 +97,8 @@ impl AzureSandbox {
             egress_manager: None,
             default_policy: None,
             idle_pause_seconds,
+            preview_ports: Vec::new(),
+            preview_grants: Default::default(),
             cpu,
             memory,
             disk,
@@ -145,6 +151,13 @@ impl AzureSandbox {
             self.disk_image.clone(),
             alien_azure_clients::azure::sandbox_data_plane::create_body(&request),
         ))
+    }
+
+
+    /// Declares the ports a preview capability may be granted for.
+    pub fn with_preview_ports(mut self, ports: Vec<u16>) -> Self {
+        self.preview_ports = ports;
+        self
     }
 
     /// The built disk image a sandbox starts from, or `None` to send the value as a catalog name,
@@ -388,6 +401,7 @@ impl Sandbox for AzureSandbox {
         capabilities.jobs = self.agent;
         capabilities.interactive_commands = self.agent;
         capabilities.supervisor_isolation = self.agent;
+        capabilities.preview = self.agent && !self.preview_ports.is_empty();
         capabilities
     }
 
@@ -418,6 +432,16 @@ impl Sandbox for AzureSandbox {
             }));
         }
         refuse_unsupported_create_fields(&request, CREATE)?;
+        if self.agent && !self.preview_ports.is_empty() {
+            request.env.insert(
+                "ALIEN_SANDBOX_PREVIEW_PORTS".to_string(),
+                self.preview_ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
 
         let mut labels = BTreeMap::new();
         if self.agent {
@@ -776,12 +800,11 @@ impl Sandbox for AzureSandbox {
         Ok(())
     }
 
-    async fn preview(&self, _sandbox_id: &str, _port: u16) -> Result<PreviewCapability> {
-        Err(self.unsupported(
-            "sandbox.preview",
-            "an Azure sandbox port is either published to the internet or gated on an interactive \
-             Entra login; neither is a port-scoped credential with an expiry",
-        ))
+    /// A capability the in-sandbox agent issues for one declared port, sent with the sandbox's
+    /// agent port URL. The port itself is anonymous, so the capability is its only gate; the
+    /// caller's own `Authorization` is the daemon's and passes through untouched.
+    async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability> {
+        self.preview_through_agent(sandbox_id, port).await
     }
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
@@ -3344,6 +3367,35 @@ mod tests {
         assert_eq!(sandbox.state, SandboxState::Running);
     }
 
+    /// The agent forwards only to ports it was told about, and a sandbox inherits no environment
+    /// but what the create body carries, so the declared preview ports travel in it.
+    #[tokio::test]
+    async fn the_declared_preview_ports_reach_the_agent_through_the_create_call() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| {
+                request.environment.get("ALIEN_SANDBOX_PREVIEW_PORTS").map(String::as_str)
+                    == Some("8080,8081")
+                    && request.environment.get("TOKEN").map(String::as_str) == Some("t")
+            })
+            .times(1)
+            .returning(|_, _| Ok(running("s1", None)));
+        client
+            .expect_get_sandbox()
+            .returning(|_, _| Ok(running("s1", None)));
+        client.expect_delete_sandbox().returning(|_, _| Ok(()));
+        // The create then waits for an agent that this mock never starts; only the body matters.
+        let _ = sandbox_with(client)
+            .with_agent(true)
+            .with_preview_ports(vec![8080, 8081])
+            .create(CreateSandboxRequest {
+                env: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
+                ..Default::default()
+            })
+            .await;
+    }
+
     fn running(
         id: &str,
         egress: Option<EgressPolicy>,
@@ -5080,6 +5132,7 @@ mod tests {
         // the agent transport reports the interactive commands it cannot serve as false.
         let without_agent = SandboxCapabilities {
             interactive_commands: false,
+            preview: false,
             ..platform
         };
         assert_eq!(
