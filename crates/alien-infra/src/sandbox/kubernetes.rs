@@ -215,7 +215,42 @@ impl KubernetesSandboxController {
         self.broker_url = Some(broker_url(&config.id)?);
         let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
         // Follows the chart's current `sandbox.namespace`, so the binding points where new pods go.
-        self.namespace = Some(sandbox_namespace(ctx.get_kubernetes_config()?)?);
+        let new_namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
+        if let Some(old_namespace) = self
+            .namespace
+            .as_deref()
+            .filter(|old| *old != new_namespace)
+        {
+            // Sessions and warm-pool pods are found by namespace only. Moving over live ones would
+            // orphan them: nothing would list, reap or delete them again.
+            let client = ctx
+                .service_provider
+                .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+                .await?;
+            let (key, value) = kubernetes_deployment_scope_label(ctx);
+            let remaining = client
+                .list_pods(
+                    old_namespace,
+                    Some(format!("{LABEL_SANDBOX}={},{key}={value}", config.id)),
+                    None,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to list sandbox pods in the previous namespace".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?
+                .items
+                .len();
+            if let Some(message) =
+                namespace_change_refusal(old_namespace, &new_namespace, remaining)
+            {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message,
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
+        self.namespace = Some(new_namespace);
         self.egress = Some(
             super::kubernetes_egress::configure(
                 ctx,
@@ -2003,4 +2038,35 @@ fn broker_url_from(sandbox_id: &str, value: Option<String>) -> Result<String> {
                 ),
             })
         })
+}
+
+/// Why `sandbox.namespace` may not move now: sandbox pods (sessions or the warm pool) still
+/// run in the old namespace, and nothing would manage them from the new one.
+fn namespace_change_refusal(old: &str, new: &str, remaining_pods: usize) -> Option<String> {
+    (old != new && remaining_pods > 0).then(|| {
+        format!(
+            "sandbox.namespace cannot change from '{old}' to '{new}' while {remaining_pods} \
+             sandbox pod(s) (sessions or warm-pool pods) remain in '{old}'. End the sessions \
+             (terminate them) and wait for the warm pool to drain there, then apply the new value"
+        )
+    })
+}
+
+#[cfg(test)]
+mod namespace_change_tests {
+    use super::namespace_change_refusal;
+
+    #[test]
+    fn a_move_with_pods_left_behind_is_refused_and_says_what_to_drain() {
+        let message = namespace_change_refusal("sbx-a", "sbx-b", 2).expect("refused");
+        assert!(message.contains("sbx-a") && message.contains("sbx-b"));
+        assert!(message.contains("2 sandbox pod(s)"));
+        assert!(message.contains("terminate"));
+    }
+
+    #[test]
+    fn a_drained_namespace_or_no_move_is_allowed() {
+        assert!(namespace_change_refusal("sbx-a", "sbx-b", 0).is_none());
+        assert!(namespace_change_refusal("sbx-a", "sbx-a", 3).is_none());
+    }
 }
