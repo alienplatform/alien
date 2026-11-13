@@ -167,8 +167,23 @@ pub fn aws_verifier_name(prefix: &str) -> String {
     format!("{prefix}-verifier")
 }
 
-/// The `<prefix>-management-limits` policy document.
-pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value {
+/// The `<prefix>-management-limits` policy document. `application_vaults` are the ids of the
+/// stack's own vaults: management may write their values when the stack grants it, and no
+/// others' but the runtime's.
+pub fn aws_management_limits(
+    prefix: &str,
+    account: &str,
+    region: &str,
+    application_vaults: &[String],
+) -> Value {
+    let writable: Vec<String> =
+        SECRETS_VAULT_KEYS
+            .iter()
+            .map(|key| format!("arn:aws:ssm:{region}:{account}:parameter/{prefix}-secrets-{key}"))
+            .chain(application_vaults.iter().map(|vault| {
+                format!("arn:aws:ssm:{region}:{account}:parameter/{prefix}-{vault}-*")
+            }))
+            .collect();
     let verifier = aws_verifier_name(prefix);
     json!({
         "Version": "2012-10-17",
@@ -217,14 +232,13 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
                 "Resource": "*"
             },
             {
-                // Apps read their vault values, so management writes only the keys above.
+                // Management writes the keys above and the values of the stack's own vaults, which
+                // the application saves (OAuth tokens, say); the deployer's secrets, the rest of
+                // the install's secrets and the signing state stay out of its reach.
                 "Sid": "OnlyTheDeploymentSyncWritesVaultValues",
                 "Effect": "Deny",
                 "Action": AWS_PARAMETER_WRITES,
-                "NotResource": SECRETS_VAULT_KEYS
-                    .iter()
-                    .map(|key| format!("arn:aws:ssm:{region}:{account}:parameter/{prefix}-secrets-{key}"))
-                    .collect::<Vec<_>>()
+                "NotResource": writable
             },
             {
                 "Sid": "OnlySetupChangesWhatRolesMayDo",
@@ -687,7 +701,7 @@ mod tests {
 
     #[test]
     fn management_can_neither_change_nor_strip_nor_delete_an_install_role() {
-        let limits = aws_management_limits("orders", "111122223333", "us-east-1");
+        let limits = aws_management_limits("orders", "111122223333", "us-east-1", &[]);
         for role in ["orders-machine", "orders-execution-sa"] {
             let arn = format!("arn:aws:iam::111122223333:role/{role}");
             for action in [
@@ -713,7 +727,7 @@ mod tests {
     /// them away: each opens a bucket, a topic or a queue to another account.
     #[test]
     fn management_cannot_open_the_installs_data_to_outsiders() {
-        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1", &[]);
         for (action, resource) in [
             ("s3:PutBucketAcl", "arn:aws:s3:::acme-uploads"),
             ("s3:PutBucketOwnershipControls", "arn:aws:s3:::acme-uploads"),
@@ -742,7 +756,7 @@ mod tests {
     /// verifier, so management holds none of them.
     #[test]
     fn management_cannot_write_what_the_verifier_writes_for_live_resources() {
-        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1", &[]);
         for (action, resource) in [
             ("s3:PutBucketPolicy", "arn:aws:s3:::acme-uploads"),
             ("s3:PutBucketPublicAccessBlock", "arn:aws:s3:::acme-uploads"),
@@ -766,7 +780,7 @@ mod tests {
 
     #[test]
     fn management_cannot_overwrite_what_an_app_reads_from_its_vaults() {
-        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1", &[]);
         let parameter = |name: &str| format!("arn:aws:ssm:us-east-1:111122223333:parameter/{name}");
         for action in [
             "ssm:PutParameter",
@@ -789,7 +803,7 @@ mod tests {
     /// command token it removes.
     #[test]
     fn management_still_syncs_the_runtime_credentials_to_the_secrets_vault() {
-        let limits = aws_management_limits("acme", "111122223333", "us-east-1");
+        let limits = aws_management_limits("acme", "111122223333", "us-east-1", &[]);
         for name in [
             "acme-secrets-__alien_runtime_otlp_logs_auth_header",
             "acme-secrets-__alien_runtime_otlp_metrics_auth_header",
@@ -802,9 +816,32 @@ mod tests {
         }
     }
 
+    /// The application saves values in its own vaults (OAuth tokens, say) with the management
+    /// credentials when the stack grants `vault/data-write`; the install's own secrets stay out.
+    #[test]
+    fn management_still_writes_the_stacks_own_vaults_but_not_the_installs_secrets() {
+        let limits =
+            aws_management_limits("acme", "111122223333", "us-east-1", &["oauth".to_string()]);
+        let arn = |name: &str| format!("arn:aws:ssm:us-east-1:111122223333:parameter/{name}");
+        for action in ["ssm:PutParameter", "ssm:DeleteParameter"] {
+            assert!(
+                !denies(&limits, action, &arn("acme-oauth-github_token")),
+                "{action} on the stack's own vault"
+            );
+            for name in [
+                "acme-deployer-secrets-DB_PASSWORD",
+                "acme-secrets-DB_PASSWORD",
+                "acme-other-vault-x",
+                "signed/acme/state",
+            ] {
+                assert!(denies(&limits, action, &arn(name)), "{action} {name}");
+            }
+        }
+    }
+
     #[test]
     fn limits_deny_everything_the_verifier_owns() {
-        let limits = aws_management_limits("orders", "111122223333", "us-east-1");
+        let limits = aws_management_limits("orders", "111122223333", "us-east-1", &[]);
         let denied: Vec<String> = limits["Statement"]
             .as_array()
             .expect("statements")
@@ -837,7 +874,7 @@ mod tests {
     #[test]
     fn every_run_or_reach_deny_is_in_a_family() {
         use super::super::families::aws_family;
-        let limits = aws_management_limits("orders", "111122223333", "us-east-1");
+        let limits = aws_management_limits("orders", "111122223333", "us-east-1", &[]);
         for statement in limits["Statement"].as_array().expect("statements") {
             let sid = statement["Sid"].as_str().expect("sid");
             if !matches!(

@@ -594,7 +594,12 @@ pub(crate) fn render_terraform_module(
         .resources()
         .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
         .map(|(id, _)| resource_label_for_file(&labels, id).to_string());
-    let mut signing = signing_blocks(&stack_settings, target, management_label.as_deref())?;
+    let mut signing = signing_blocks(
+        &stack_settings,
+        target,
+        management_label.as_deref(),
+        &stack.application_vault_ids(),
+    )?;
     // The signing parameters and the verifier need their APIs (Parameter Manager, Cloud Run)
     // enabled first.
     let service_activations: Vec<Expression> = per_resource
@@ -652,10 +657,11 @@ pub(crate) fn render_terraform_module(
     // without a Frozen sandbox declares nothing extra.
     // Service agents (`google_project_service_identity`) are google-beta-only too: a data store
     // with a customer key needs its agent to exist before the key can name it.
-    let include_google_beta_provider = has_resource_type(
-        &per_resource,
-        crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
-    ) || has_resource_type(&per_resource, "google_project_service_identity");
+    let include_google_beta_provider =
+        has_resource_type(
+            &per_resource,
+            crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
+        ) || has_resource_type(&per_resource, "google_project_service_identity");
     // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
     // of its own, and a missing declaration fails at init rather than at plan.
     let include_time_provider = gcp_iam_propagation_barrier.is_some()
@@ -1929,6 +1935,7 @@ fn signing_blocks(
     settings: &StackSettings,
     target: TerraformTarget,
     management_label: Option<&str>,
+    application_vaults: &[String],
 ) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
@@ -1956,7 +1963,7 @@ fn signing_blocks(
     match target {
         TerraformTarget::Aws => Ok([
             vec![fingerprint_variable],
-            aws_management_limits_blocks(management_label),
+            aws_management_limits_blocks(management_label, application_vaults),
             vec![
                 resource_block(
                     "aws_ssm_parameter",
@@ -2077,7 +2084,10 @@ fn signing_blocks(
 
 /// The limits on a protected AWS install's management role, `<prefix>-management-limits`; the
 /// same as the CloudFormation template's.
-fn aws_management_limits_blocks(management_label: Option<&str>) -> Vec<Block> {
+fn aws_management_limits_blocks(
+    management_label: Option<&str>,
+    application_vaults: &[String],
+) -> Vec<Block> {
     let prefix = "${local.resource_prefix}";
     let account = "${data.aws_caller_identity.current.account_id}";
     let region = "${data.aws_region.current.region}";
@@ -2101,7 +2111,12 @@ fn aws_management_limits_blocks(management_label: Option<&str>) -> Vec<Block> {
                 attr(
                     "policy",
                     crate::emitters::aws::helpers::jsonencode_policy_value(
-                        signing_limits::aws_management_limits(prefix, account, region),
+                        signing_limits::aws_management_limits(
+                            prefix,
+                            account,
+                            region,
+                            application_vaults,
+                        ),
                     ),
                 ),
             ],

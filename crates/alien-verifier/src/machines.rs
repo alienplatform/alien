@@ -1758,7 +1758,10 @@ mod tests {
         let policies = [
             serde_json::to_value(&management).unwrap(),
             alien_permissions::generators::signing_limits::aws_management_limits(
-                PREFIX, ACCOUNT, REGION,
+                PREFIX,
+                ACCOUNT,
+                REGION,
+                &[],
             ),
         ];
         for action in [

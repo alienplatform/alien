@@ -701,7 +701,7 @@ pub fn generate_cloudformation_template_with_profile(
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
-    add_management_limits(&mut template, &stack_settings_value)?;
+    add_management_limits(&mut template, &stack_settings_value, stack)?;
     if stack_settings_value.signing.is_some() {
         refuse_unverifiable_code(&template)?;
     }
@@ -2128,7 +2128,11 @@ const MANAGEMENT_LIMITS_ID: &str = "ManagementLimits";
 /// Adds the limits on a protected install's management role, `<prefix>-management-limits`:
 /// only the stack changes what the install trusts, only its verifier changes what runs, and
 /// machines boot only the publisher's images.
-fn add_management_limits(template: &mut CfTemplate, settings: &StackSettings) -> Result<()> {
+fn add_management_limits(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    stack: &Stack,
+) -> Result<()> {
     if settings.signing.is_none() {
         return Ok(());
     }
@@ -2179,7 +2183,10 @@ fn add_management_limits(template: &mut CfTemplate, settings: &StackSettings) ->
         "PolicyDocument".to_string(),
         crate::emitters::aws::helpers::sub_json(
             alien_permissions::generators::signing_limits::aws_management_limits(
-                prefix, account, region,
+                prefix,
+                account,
+                region,
+                &stack.application_vault_ids(),
             ),
         ),
     );

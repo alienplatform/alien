@@ -624,7 +624,7 @@ async fn main() -> Result<(), Error> {
             println!(
                 "{}",
                 serde_json::json!({
-                    "managementLimits": signing_limits::aws_management_limits(&prefix, &account, &region),
+                    "managementLimits": signing_limits::aws_management_limits(&prefix, &account, &region, &[]),
                     // This install launches no machines; the publisher only scopes RunInstances.
                     "verifier": signing_limits::aws_verifier_policy(&prefix, &account, &region, &account),
                 })
