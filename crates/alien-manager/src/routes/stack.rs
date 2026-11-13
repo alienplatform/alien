@@ -1750,7 +1750,18 @@ pub(super) async fn prepare_setup_stack(
         })?;
 
     let mut stack_state = StackState::new(mutation_platform);
-    if req.imported_management_identity {
+    // Only a Kubernetes existing cluster reads the delivered identity from the state (see
+    // `operator_without_setup_identity`). Seeding it anywhere else would change unrelated
+    // checks that read an empty state as a new install.
+    let existing_kubernetes_cluster = mutation_platform == Platform::Kubernetes
+        && stack_settings
+            .kubernetes
+            .as_ref()
+            .and_then(|settings| settings.cluster.as_ref())
+            .is_some_and(|cluster| {
+                cluster.ownership == alien_core::KubernetesClusterOwnership::Existing
+            });
+    if req.imported_management_identity && existing_kubernetes_cluster {
         // Mutations read an installed management identity from the state, which a registration
         // does not have yet: the setup delivering it is what installs it.
         let identity = alien_core::Resource::new(
@@ -2491,6 +2502,101 @@ mod setup_update_authorization_tests {
         register_kubernetes_pull(alien_core::KubernetesClusterOwnership::Existing, false)
             .await
             .unwrap();
+    }
+
+    /// A delivered management identity changes how the stack is prepared only for a Kubernetes
+    /// existing cluster. Everywhere else the preparation is what it was without it: here a GCP
+    /// setup delivering the identity and the quota activation, and an AWS setup whose new install
+    /// adds the machine-secrets vault.
+    #[tokio::test]
+    async fn a_delivered_management_identity_leaves_other_platforms_preparation_unchanged() {
+        let source = Stack::new("app".into())
+            .permission("execution", alien_core::PermissionProfile::new())
+            .add(
+                Worker::new("api".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "example.com/api:latest".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        for (platform, delivered, resource_type) in [
+            (
+                Platform::Gcp,
+                "enable-cloud-quotas",
+                alien_core::ServiceActivation::RESOURCE_TYPE,
+            ),
+            (Platform::Aws, "secrets", alien_core::Vault::RESOURCE_TYPE),
+        ] {
+            let mut req = request();
+            req.platform = platform;
+            req.resources = vec![ImportedResource {
+                id: delivered.to_string(),
+                resource_type,
+                import_data: serde_json::json!({}),
+            }];
+            let without = prepare_import_stack(source.clone(), &req, &req.stack_settings)
+                .await
+                .unwrap();
+            req.resources.push(ImportedResource {
+                id: "management".to_string(),
+                resource_type: alien_core::RemoteStackManagement::RESOURCE_TYPE,
+                import_data: serde_json::json!({}),
+            });
+            let with = prepare_import_stack(source.clone(), &req, &req.stack_settings)
+                .await
+                .unwrap();
+            assert_eq!(
+                without.resources.keys().collect::<Vec<_>>(),
+                with.resources.keys().collect::<Vec<_>>(),
+                "{platform:?}"
+            );
+        }
+    }
+
+    /// An empty state reads as a new install: an AWS sandbox released as an image gets its
+    /// bundle bucket then. A delivered management identity must not hide that.
+    #[tokio::test]
+    async fn a_delivered_management_identity_keeps_the_aws_new_install_bundle_bucket() {
+        let source = Stack::new("app".into())
+            .add(
+                alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "example.com/agents:latest".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(alien_core::SandboxEgress::Allow)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut req = request();
+        req.management_config = Some(alien_core::ManagementConfig::Aws(
+            alien_core::AwsManagementConfig {
+                managing_role_arn: "arn:aws:iam::210987654321:role/manager".to_string(),
+            },
+        ));
+        let without = prepare_import_stack(source.clone(), &req, &req.stack_settings)
+            .await
+            .unwrap();
+        req.resources = vec![ImportedResource {
+            id: "management".to_string(),
+            resource_type: alien_core::RemoteStackManagement::RESOURCE_TYPE,
+            import_data: serde_json::json!({}),
+        }];
+        let with = prepare_import_stack(source, &req, &req.stack_settings)
+            .await
+            .unwrap();
+        assert_eq!(
+            without.resources.keys().collect::<Vec<_>>(),
+            with.resources.keys().collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
