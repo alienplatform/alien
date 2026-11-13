@@ -289,6 +289,9 @@ impl KubernetesSandboxController {
             }));
         }
 
+        super::kubernetes_egress::delete_gateway_service_policy(ctx, &config.id, &namespace)
+            .await?;
+
         // The capability key outlives its pods otherwise, and a signing key nobody can use is
         // still a signing key sitting in the cluster. Best effort: one already gone is the
         // desired end state, and it must not strand the rest of the teardown.
@@ -675,6 +678,20 @@ async fn replenish_warm_pool(
             created,
         });
     };
+    // A session's only route to the internet is the gateway Service's ClusterIP, which the
+    // chart's policy cannot name (see `gateway_service_policy`), so the Operator admits it.
+    if let Some(gateway) = egress_environment
+        .iter()
+        .find(|variable| variable.name == "ALIEN_SANDBOX_EGRESS_GATEWAY")
+        .and_then(|variable| variable.value.as_deref())
+        .and_then(|value| value.rsplit_once(':'))
+        .and_then(|(address, _)| address.parse::<std::net::Ipv4Addr>().ok())
+    {
+        super::kubernetes_egress::reconcile_gateway_service_policy(
+            ctx, sandbox, namespace, gateway,
+        )
+        .await?;
+    }
 
     let mut pod = idle_pool_pod_with_labels(
         sandbox,
