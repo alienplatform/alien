@@ -33,7 +33,7 @@ builder cannot represent that repeated layer correctly.
 New builds inspect prebuilt OCI references as well as Dockerfile outputs. GCP and
 Azure bases then use the normal agent assembler; Local keeps an immutable Docker
 image ID. The resolved original USER drives planning, including explicit root refusal on
-Local/Kubernetes and root refusal on AWS modes without a connector. Images without
+Local, root refusal on Kubernetes with `allow` egress, and root refusal on AWS modes without a connector. Images without
 USER retain the released Local/Kubernetes behavior: non-root uid 65534 and no new
 image boot contract. AWS images without USER also retain their released non-root
 contract when no connector is present (including unrestricted egress). With an AWS
@@ -300,6 +300,40 @@ Remove calls to the former TypeScript `privilegedSupervisor()` method or Rust
 `privileged_supervisor` builder field. Use OCI USER to choose the boot identity.
 Saved declarations retain their serialized compatibility field and existing
 command-identity/egress behavior; rebuilding adopts the new image contract.
+
+## Kubernetes root boot
+
+A root image (`USER 0`) runs on Kubernetes when egress is `internet` or `none` and the
+RuntimeClass is a verified sandboxed one. `allow` and `allowDomains` are refused at plan time:
+nothing outside the pod enforces them. Non-root images behave exactly as before.
+
+The pod runs the agent as uid 0 with `drop: [ALL]` plus the boot set that AWS uses
+(`IMAGE_ROOT_CAPABILITY_SET` in `alien-core`; never NET_ADMIN, SYS_ADMIN or NET_RAW), seccomp
+`RuntimeDefault` and `allowPrivilegeEscalation: false`. The agent starts the image ENTRYPOINT with
+that set; commands and jobs run as a fixed non-root uid with no capabilities and no_new_privs.
+
+`RuntimeDefault` seccomp blocks `unshare` without SYS_ADMIN, so the private mount namespace used
+elsewhere is unavailable. An init container (same image digest as the sandbox container, uid 0, no
+capabilities, read-only root filesystem) copies the agent and `/opt/alien` into volumes, and the
+sandbox container mounts them read-only with `subPath`. The agent checks `/proc/self/mountinfo` at
+startup and fails closed when a mount is missing or writable. Image code running as root cannot
+write, rename, remount or ptrace them (the agent is non-dumpable).
+
+Pod Security: set `sandbox.namespace` in the chart. That namespace needs the `baseline` level
+(root plus these capabilities is not `restricted`); every other Operator pod stays `restricted`.
+Create and label it first, because Helm fails with `namespaces "<name>" not found` otherwise:
+`kubectl create namespace <name> && kubectl label namespace <name> pod-security.kubernetes.io/enforce=baseline`.
+A pre-install hook creates a probe pod and fails the install with the namespace and fix when the
+namespace rejects root boot.
+
+Preview serves ports 8080, 8081 and 8090 over HTTP and WebSocket. The capability travels in
+`X-Alien-Preview-Capability` (optionally with `X-Alien-Preview-Port`); the caller's own
+`Authorization` header reaches the workload unchanged.
+
+Limits: the layered agent is amd64 only, so a node selector for another architecture is refused
+at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernetes are not
+supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
+it is terminated or reaches its deadline.
 
 ## Bootstrap file protection
 
