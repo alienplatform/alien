@@ -24,6 +24,25 @@ pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
+/// Header carrying a preview capability. Never `Authorization`: the caller's own bearer token
+/// belongs to the code inside the sandbox and reaches it untouched.
+pub const PREVIEW_CAPABILITY_HEADER: &str = "x-alien-preview-capability";
+
+/// Header naming the sandbox port a preview request is for.
+pub const PREVIEW_PORT_HEADER: &str = "x-alien-preview-port";
+
+/// Header a caller puts its own bearer in when the backend's edge consumes `Authorization` for
+/// its own credential (GCP). The agent, after the capability verifies, re-emits it as
+/// `Authorization` towards `127.0.0.1` only.
+pub const CALLER_AUTHORIZATION_HEADER: &str = "x-alien-caller-authorization";
+
+/// Environment variable naming the header a backend's callers use for their own bearer
+/// (`authorization` when unset). Set on backends whose edge replaces `Authorization`.
+pub const ENV_CALLER_AUTHORIZATION_HEADER: &str = "ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER";
+
+/// Longest a preview capability lives, in seconds. A grant never outlives the session either.
+pub const PREVIEW_CAPABILITY_MAX_SECONDS: i64 = 15 * 60;
+
 /// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
 pub const AGENT_MODE: u32 = 0o755;
 
