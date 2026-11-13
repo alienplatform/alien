@@ -307,6 +307,7 @@ fn import_key(platform: Platform, stack: &Stack) -> StackResourceState {
                 key_name: "key".to_string(),
                 lineage_version_id: "v1".to_string(),
                 key_id: format!("{AZURE_KEY}/v1"),
+                disk_encryption_set_id: None,
             },
             &ctx,
         ),
