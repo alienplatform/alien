@@ -77,6 +77,9 @@ pub struct EgressSuite {
     /// the paired checks must use the gateway path there.
     #[serde(default)]
     use_proxy: bool,
+    /// Address of the same listener for the direct-connect check (a literal IP avoids relying on
+    /// guest DNS, which a NetworkPolicy-confined pod may not have). Defaults to `host`.
+    direct_host: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -656,11 +659,15 @@ async fn observe(
     egress: &EgressSuite,
     use_proxy: bool,
 ) -> std::result::Result<Observation, String> {
+    let host = match (&egress.direct_host, use_proxy) {
+        (Some(direct), false) => direct,
+        _ => &egress.host,
+    };
     probe(
         sandbox,
         id,
         &Probe::Http {
-            url: format!("http://{}:{}/", egress.host, egress.port),
+            url: format!("http://{host}:{}/", egress.port),
             use_proxy,
             server_name: None,
             host_header: None,
