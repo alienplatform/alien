@@ -625,7 +625,11 @@ async fn boot_once(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
     let boots = run_python(
         sandbox,
         id,
-        ["-c", "print(open('/tmp/alien-contract/boots.jsonl').read(), end='')"].into_iter(),
+        [
+            "-c",
+            "print(open('/tmp/alien-contract/boots.jsonl').read(), end='')",
+        ]
+        .into_iter(),
         "boots.jsonl",
     )
     .await?;
@@ -650,13 +654,14 @@ async fn observe(
     sandbox: &dyn Sandbox,
     id: &str,
     egress: &EgressSuite,
+    use_proxy: bool,
 ) -> std::result::Result<Observation, String> {
     probe(
         sandbox,
         id,
         &Probe::Http {
             url: format!("http://{}:{}/", egress.host, egress.port),
-            use_proxy: egress.use_proxy,
+            use_proxy,
             server_name: None,
             host_header: None,
         },
@@ -715,10 +720,16 @@ async fn egress_checks(
     .await?;
     let control_id = sessions[control].sandbox_id.clone();
     let subject_id = sessions[subject].sandbox_id.clone();
+    let denied = if egress.use_proxy {
+        Expectation::GatewayRefused
+    } else {
+        Expectation::NetworkDenied
+    };
     let reached = Expectation::Response {
         body_sha256: egress.body_sha256.clone(),
     };
-    let control_seen = match observe(provider.as_ref(), &control_id, egress).await {
+    let control_seen = match observe(provider.as_ref(), &control_id, egress, egress.use_proxy).await
+    {
         Ok(observation) => observation,
         Err(error) => {
             checks.push(Check {
@@ -731,11 +742,7 @@ async fn egress_checks(
         }
     };
     let steps: [(&str, Option<EgressPolicy>, Expectation); 4] = [
-        (
-            "egressEmptyAllowlistDenied",
-            None,
-            Expectation::NetworkDenied,
-        ),
+        ("egressEmptyAllowlistDenied", None, denied.clone()),
         (
             "egressLiveHostPortAdded",
             Some(EgressPolicy::Allow {
@@ -746,7 +753,7 @@ async fn egress_checks(
         (
             "egressRuleRemovedDenied",
             Some(EgressPolicy::Allow { allow: vec![] }),
-            Expectation::NetworkDenied,
+            denied,
         ),
         (
             "egressInternetReaches",
@@ -766,12 +773,30 @@ async fn egress_checks(
                 continue;
             }
         }
-        match observe(provider.as_ref(), &subject_id, egress).await {
+        match observe(provider.as_ref(), &subject_id, egress, egress.use_proxy).await {
             Ok(subject_seen) => {
                 checks.push(verdict_check(name, &expected, &control_seen, &subject_seen))
             }
             Err(error) => checks.push(Check {
                 name: name.into(),
+                verdict: Verdict::Unproven,
+                detail: error,
+                elapsed_ms: 0,
+            }),
+        }
+    }
+    if egress.use_proxy {
+        // The control may use the internet, yet ignoring the proxy environment gets nowhere:
+        // the pod's NetworkPolicy drops a direct connect. The proxied control proves the listener.
+        match observe(provider.as_ref(), &control_id, egress, false).await {
+            Ok(direct) => checks.push(verdict_check(
+                "egressDirectConnectRefused",
+                &Expectation::NetworkDenied,
+                &control_seen,
+                &direct,
+            )),
+            Err(error) => checks.push(Check {
+                name: "egressDirectConnectRefused".into(),
                 verdict: Verdict::Unproven,
                 detail: error,
                 elapsed_ms: 0,

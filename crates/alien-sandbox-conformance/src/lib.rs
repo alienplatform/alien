@@ -100,6 +100,8 @@ pub enum Expectation {
     NetworkDenied,
     /// CONNECT must be explicitly rejected by the gateway.
     ProxyDenied,
+    /// A plain HTTP request through the proxy must be refused by the gateway with an empty 403.
+    GatewayRefused,
 }
 
 /// Conformance verdict; missing or broken controls never pass.
@@ -142,6 +144,15 @@ pub fn evaluate(expected: &Expectation, control: &Observation, subject: &Observa
         }
         Expectation::NetworkDenied => match subject {
             Observation::Timeout | Observation::Refused | Observation::Unreachable => Verdict::Pass,
+            Observation::Connected | Observation::Response { .. } => Verdict::Fail,
+            _ => Verdict::Unproven,
+        },
+        Expectation::GatewayRefused => match subject {
+            Observation::Response {
+                status: 403,
+                bytes: 0,
+                ..
+            } => Verdict::Pass,
             Observation::Connected | Observation::Response { .. } => Verdict::Fail,
             _ => Verdict::Unproven,
         },
