@@ -29,6 +29,7 @@ impl SqliteTokenStore {
             "deployment" => TokenType::Deployment,
             "tunnel" => TokenType::Tunnel,
             "commands-receiver" => TokenType::CommandsReceiver,
+            "setup" => TokenType::Setup,
             other => return Err(db_error(&format!("Unknown token type: {}", other))),
         };
         Ok(TokenRecord {
@@ -39,6 +40,14 @@ impl SqliteTokenStore {
             deployment_group_id: p.optional_string(4, "deployment_group_id")?,
             deployment_id: p.optional_string(5, "deployment_id")?,
             created_at: p.datetime(6, "created_at")?,
+            expires_at: match p.optional_string(7, "expires_at")? {
+                Some(value) => Some(
+                    chrono::DateTime::parse_from_rfc3339(&value)
+                        .map_err(|_| db_error("Token has an unreadable expiry"))?
+                        .with_timezone(&Utc),
+                ),
+                None => None,
+            },
         })
     }
 }
@@ -86,6 +95,7 @@ impl TokenStore for SqliteTokenStore {
             deployment_group_id: params.deployment_group_id,
             deployment_id: params.deployment_id,
             created_at: now,
+            expires_at: None,
         })
     }
 
@@ -99,6 +109,7 @@ impl TokenStore for SqliteTokenStore {
                 Tokens::DeploymentGroupId,
                 Tokens::DeploymentId,
                 Tokens::CreatedAt,
+                Tokens::ExpiresAt,
             ])
             .from(Tokens::Table)
             .and_where(Expr::col(Tokens::KeyHash).eq(key_hash))
@@ -116,7 +127,14 @@ impl TokenStore for SqliteTokenStore {
         match rows.next().await.into_alien_error().context(GenericError {
             message: format!("Failed to fetch token row (sql: {sql})"),
         })? {
-            Some(row) => Ok(Some(Self::parse_token(&row)?)),
+            Some(row) => {
+                let token = Self::parse_token(&row)?;
+                // A token past its expiry is as good as deleted.
+                Ok(token
+                    .expires_at
+                    .is_none_or(|expires_at| expires_at > Utc::now())
+                    .then_some(token))
+            }
             None => Ok(None),
         }
     }
@@ -178,6 +196,7 @@ impl TokenStore for SqliteTokenStore {
                 Tokens::DeploymentGroupId,
                 Tokens::DeploymentId,
                 Tokens::CreatedAt,
+                Tokens::ExpiresAt,
             ])
             .from(Tokens::Table)
             .order_by(Tokens::CreatedAt, sea_query::Order::Desc)
@@ -267,6 +286,7 @@ impl TokenStore for SqliteTokenStore {
             deployment_group_id: None,
             deployment_id: Some(deployment_id.to_owned()),
             created_at: now,
+            expires_at: None,
         }))
     }
 
@@ -298,5 +318,60 @@ impl TokenStore for SqliteTokenStore {
         .context(failed())?;
         tx.commit().await.into_alien_error().context(failed())?;
         Ok(())
+    }
+
+    async fn create_setup_token(
+        &self,
+        deployment_id: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> Result<TokenRecord, AlienError> {
+        let failed = || GenericError {
+            message: "Setup token creation failed".to_string(),
+        };
+        let id = alien_core::new_id(alien_core::IdType::Token);
+        let now = Utc::now();
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        // The earlier setup tokens go in the same transaction as the new one is
+        // stored, so two reruns never both hold a live token.
+        tx.execute(
+            "DELETE FROM tokens WHERE type = 'setup' AND deployment_id = ?1",
+            [deployment_id.to_owned()],
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.execute(
+            "INSERT INTO tokens (id, type, key_prefix, key_hash, deployment_group_id, deployment_id, created_at, expires_at) \
+             VALUES (?1, 'setup', ?2, ?3, NULL, ?4, ?5, ?6)",
+            (
+                id.clone(),
+                key_prefix.to_owned(),
+                key_hash.to_owned(),
+                deployment_id.to_owned(),
+                now.to_rfc3339(),
+                expires_at.to_rfc3339(),
+            ),
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.commit().await.into_alien_error().context(failed())?;
+        Ok(TokenRecord {
+            id,
+            token_type: TokenType::Setup,
+            key_prefix: key_prefix.to_owned(),
+            key_hash: key_hash.to_owned(),
+            deployment_group_id: None,
+            deployment_id: Some(deployment_id.to_owned()),
+            created_at: now,
+            expires_at: Some(expires_at),
+        })
     }
 }

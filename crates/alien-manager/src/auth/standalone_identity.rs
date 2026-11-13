@@ -18,7 +18,8 @@ use serde::Deserialize;
 use super::{
     identity_exchange::{
         IdentityEnrollmentRequest, IdentityEnrollmentResponse, IdentityExchangeRequest,
-        IdentityRotationRequest, IdentityRotationResponse, RuntimeIdentityProof,
+        IdentityRotationRequest, IdentityRotationResponse, IssuedSetupCredential,
+        RuntimeIdentityProof,
         RuntimeIdentityVerifier, VerifiedRuntimeIdentity,
     },
     runtime_capability::{RuntimeGrant, RuntimePurpose},
@@ -27,10 +28,13 @@ use super::{
 use crate::{
     error::ErrorData,
     stores::sqlite::{runtime_identity::DailyKeyState, SqliteRuntimeIdentityStore},
-    traits::{CredentialResolver, DeploymentRecord, DeploymentStore},
+    traits::{token_store::TokenType, CredentialResolver, DeploymentRecord, DeploymentStore, TokenStore},
 };
 
 const OPERATOR: &str = "operator";
+
+/// How long a setup key lives.
+const SETUP_CREDENTIAL_LIFETIME: chrono::Duration = chrono::Duration::minutes(15);
 
 /// Reads one deployment for the verifier, with system authority.
 #[async_trait]
@@ -49,6 +53,8 @@ pub struct StandaloneRuntimeIdentity {
     store: Arc<SqliteRuntimeIdentityStore>,
     deployments: Arc<dyn DeploymentLookup>,
     credentials: Arc<dyn CredentialResolver>,
+    /// Where setup keys are stored. Without it no setup key is issued.
+    tokens: Option<Arc<dyn TokenStore>>,
     gcp: GcpIdentityTokenVerifier,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     #[cfg(test)]
@@ -74,11 +80,18 @@ impl StandaloneRuntimeIdentity {
             store,
             deployments: Arc::new(deployments),
             credentials,
+            tokens: None,
             gcp: GcpIdentityTokenVerifier::with_clock(clock.clone())?,
             clock,
             #[cfg(test)]
             sts_transport: None,
         })
+    }
+
+    /// Issue setup keys into `tokens`.
+    pub fn with_token_store(mut self, tokens: Arc<dyn TokenStore>) -> Self {
+        self.tokens = Some(tokens);
+        self
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -384,6 +397,34 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
             RuntimeIdentityProof::DailyKey { key } => self.verify_daily_key(request, key).await,
             RuntimeIdentityProof::Session { .. } => Err(refused()),
         }
+    }
+
+    async fn issue_setup_credential(
+        &self,
+        deployment_id: &str,
+        operator_key: &str,
+    ) -> Result<IssuedSetupCredential, AlienError> {
+        let tokens = self.tokens.as_ref().ok_or_else(refused)?;
+        let now = self.now();
+        // Only the deployment's own live Operator key is accepted. A setup key
+        // or a deployment token is not a daily key, so neither can chain.
+        let state = self
+            .store
+            .verify_key(deployment_id, operator_key, now)
+            .await
+            .map_err(|_| unavailable())?
+            .ok_or_else(refused)?;
+        let record = self.operator_deployment(&state.deployment_id).await?;
+        let expires_at = now + SETUP_CREDENTIAL_LIFETIME;
+        let (raw, key_prefix, key_hash) = crate::ids::generate_token(TokenType::Setup.prefix());
+        tokens
+            .create_setup_token(&record.id, &key_prefix, &key_hash, expires_at)
+            .await
+            .map_err(|_| unavailable())?;
+        Ok(IssuedSetupCredential {
+            token: raw,
+            expires_at,
+        })
     }
 
     async fn issue_enrollment_code(

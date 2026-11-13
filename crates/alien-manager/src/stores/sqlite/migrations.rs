@@ -88,6 +88,7 @@ pub(crate) enum Tokens {
     DeploymentGroupId,
     DeploymentId,
     CreatedAt,
+    ExpiresAt,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -358,6 +359,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN input_values TEXT",
         "ALTER TABLE deployments ADD COLUMN next_step_after TEXT",
         "ALTER TABLE deployment_groups ADD COLUMN setup TEXT",
+        "ALTER TABLE tokens ADD COLUMN expires_at TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {

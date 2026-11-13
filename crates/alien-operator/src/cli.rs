@@ -393,6 +393,12 @@ pub fn cli_main_with_all_loops(
     // Ignoring `Err` makes this idempotent across re-invocations in tests.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // `setup-credential` runs next to a live Operator (kubectl exec), so it
+    // skips the instance lock and tracing and has its own flags.
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "setup-credential") {
+        std::process::exit(crate::setup_credential::main(std::env::args_os().skip(2)));
+    }
+
     let OperatorCliArgs {
         args,
         operator_image,
@@ -1626,7 +1632,7 @@ fn is_secret_file_mode_allowed(mode: u32) -> bool {
     has_owner_read && !has_owner_execute && !has_group_write_or_execute && !has_world_access
 }
 
-async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
+pub(crate) async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
         return read_secret_file(path, "encryption key").await;
     }

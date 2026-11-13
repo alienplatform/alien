@@ -107,6 +107,16 @@ pub struct IssuedEnrollmentCode {
     pub manager_audience: String,
 }
 
+/// A key that updates one installation for a few minutes, and its deadline.
+/// Not `Debug`: it holds a key.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuedSetupCredential {
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Trusted result of verifying both proof and recorded component membership.
 pub struct VerifiedRuntimeIdentity {
     pub grant: RuntimeGrant,
@@ -147,6 +157,20 @@ pub trait RuntimeIdentityVerifier: Send + Sync {
     /// never consumes the code. Implementations without codes refuse.
     async fn enrollment_code_is_live(&self, _code: &str) -> Result<bool, AlienError> {
         Ok(false)
+    }
+
+    /// Issue a short-lived key that updates `deployment_id`, to the Operator
+    /// that proves it holds that deployment's live key. The key is made for
+    /// one deployment, lives 15 minutes, and replaces the deployment's earlier
+    /// setup keys, so at most one is live. The implementation refuses any other
+    /// caller: another deployment's key, a setup key itself, an expired key.
+    /// By default no key is issued.
+    async fn issue_setup_credential(
+        &self,
+        _deployment_id: &str,
+        _operator_key: &str,
+    ) -> Result<IssuedSetupCredential, AlienError> {
+        Err(ErrorData::unauthorized("Setup credentials are unavailable").into_generic())
     }
 
     /// Issue a one-hour, one-use enrollment code for this deployment's operator.
@@ -193,6 +217,10 @@ pub fn router(
         .route(
             "/v1/deployments/{id}/enrollment-code",
             post(issue_enrollment_code),
+        )
+        .route(
+            "/v1/deployments/{id}/setup-credential",
+            post(issue_setup_credential),
         )
         .layer(Extension(credentials))
         .layer(Extension(verifier))
@@ -358,6 +386,40 @@ pub async fn issue_enrollment_code(
             }
             error.into_response()
         }
+    }
+}
+
+/// Issue a short-lived key for rerunning an installation, to its own Operator.
+///
+/// The caller proves itself with the Operator's live key as the bearer token.
+/// It is not a session: the key is checked against this deployment only, so
+/// every other caller gets the same refusal.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/deployments/{id}/setup-credential", operation_id = "issueSetupCredential",
+    tag = "identity",
+    params(("id" = String, Path, description = "Deployment ID")),
+    responses((status = 200, body = IssuedSetupCredential), (status = 401), (status = 503))
+))]
+pub async fn issue_setup_credential(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
+) -> Response {
+    let Some(key) = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|key| !key.is_empty())
+    else {
+        return ErrorData::unauthorized("Setup credential refused").into_response();
+    };
+    // Provider errors can carry the key. Never log or return their message.
+    match verifier.issue_setup_credential(&id, key).await {
+        Ok(issued) => ([(http::header::CACHE_CONTROL, "no-store")], Json(issued)).into_response(),
+        Err(error) if error.retryable => {
+            AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
+        }
+        Err(_) => ErrorData::unauthorized("Setup credential refused").into_response(),
     }
 }
 
