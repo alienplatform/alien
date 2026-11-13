@@ -325,6 +325,31 @@ qualification, including these mounts. A fresh container must repeat protection
 before image startup. Azure persists the custom session disk, so protecting the
 next boot's executable is required independently of the current process.
 
+## Azure preview, jobs, lifetime and identity
+
+- **Preview.** The agent's HTTPS port is published anonymously, so the agent is the only gate:
+  `preview(id, port)` asks it (`previewGrant`, over the boot-token connection) for a capability
+  bound to the sandbox, this boot, one declared port and an expiry of at most 15 minutes. The
+  binding returns the agent port route plus `x-alien-preview-capability` and
+  `x-alien-preview-port`; the caller's own `Authorization` is forwarded to the workload
+  untouched, and the capability headers are never forwarded. The per-boot key lives only in the
+  agent's memory. The platform's own port authentication (anonymous, or Entra ID for an object id
+  such as a service principal) cannot be the gate: the edge removes `Authorization`.
+  The agent's port is reachable from the internet; a request without a valid capability is
+  refused before any connection to the workload is opened.
+- **Jobs.** `start_job`, `poll_job` and `cancel_job` use the agent's job registry, which outlives
+  the client that started a job, so another process can poll it. Catalog images, which run
+  without the agent, refuse them.
+- **Lifetime.** Azure has no wall-clock ceiling of its own. The binding stamps
+  `alienExpiresAtMs` (the earliest of the request's `timeoutMs`, the declaration's ceiling and a
+  gateway identity's expiry) on each sandbox; every binding verb refuses a sandbox past it and
+  the controller's reaper deletes it. Sandboxes without the label are never reaped.
+- **Idempotent create.** Azure assigns ids and two identical creates make two sandboxes, so
+  `get_or_create` labels a sandbox with a hash of the requested id and looks for it first; two
+  racing creates converge on the oldest.
+- **Identity.** The platform's managed-identity variables (`IDENTITY_ENDPOINT`,
+  `IDENTITY_HEADER`) are removed from the boot and command environments.
+
 Azure clients cache the HTTPS client and boot credential per session. The first
 operation activates the boot after checking provider policy. A definitive 401
 refreshes the native-file credential; only a changed credential permits one

@@ -1540,8 +1540,8 @@ pub struct JobError {
 
 /// An authenticated, port-scoped capability to reach a service inside a sandbox.
 ///
-/// Not a URL string: AWS needs a JWE and a port header, Azure an Entra token, and a bare
-/// string cannot carry either. Returning one would push callers into building the request
+/// Not a URL string: AWS needs a JWE and a port header, Azure and GCP the agent's capability and
+/// port headers, and a bare string cannot carry any of them. Returning one would push callers into building the request
 /// themselves and getting the auth wrong.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
