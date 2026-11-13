@@ -38,7 +38,5 @@
       "remoteAccess": false
     }
   },
-  "supportedPlatforms": [
-    "aws"
-  ]
+  "supportedPlatforms": ["aws"]
 }
