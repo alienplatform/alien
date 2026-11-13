@@ -671,7 +671,7 @@ async fn replenish_warm_pool(
         super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
     else {
         return Ok(WarmPool {
-            idle: idle.items.len(),
+            idle: without_terminating(idle.items).len(),
             created,
         });
     };
@@ -715,7 +715,7 @@ async fn replenish_warm_pool(
         .annotations
         .get_or_insert_default()
         .insert(ANNOTATION_TEMPLATE_HASH.to_string(), template_hash.clone());
-    let (stale, fresh) = split_idle_pods(idle.items, &template_hash);
+    let (stale, fresh) = split_idle_pods(without_terminating(idle.items), &template_hash);
     let excess = excess_idle_pods(fresh.clone(), target);
     let waiting = fresh.len() - excess.len();
     retire_stale_idle_pods(&client, namespace, &sandbox.id, stale).await;
@@ -917,6 +917,15 @@ fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
         .take(8)
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Drops pods that are being deleted. A deleted pod keeps its idle label until its grace period
+/// ends, but it will never serve a session, so it must not count toward the warm pool.
+pub(crate) fn without_terminating(
+    mut pods: Vec<k8s_openapi::api::core::v1::Pod>,
+) -> Vec<k8s_openapi::api::core::v1::Pod> {
+    pods.retain(|pod| pod.metadata.deletion_timestamp.is_none());
+    pods
 }
 
 /// Splits idle pods into those built from a template other than `current` and those built from it.
@@ -1174,6 +1183,23 @@ async fn list_session_pods(
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
+
+    /// A deleted pod keeps its idle label until its grace period ends. It must not count toward
+    /// the pool, or a pool of terminating pods would never be refilled.
+    #[test]
+    fn pods_being_deleted_do_not_count_as_idle() {
+        let mut dying = idle_with_hash("dying", Some("h"));
+        dying.metadata.deletion_timestamp = Some(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()),
+        );
+        let live = idle_with_hash("live", Some("h"));
+
+        let available = without_terminating(vec![dying.clone(), live]);
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].metadata.name.as_deref(), Some("live"));
+        assert_eq!(pool_deficit(2, available.len()), 1);
+        assert_eq!(pool_deficit(2, without_terminating(vec![dying]).len()), 2);
+    }
 
     fn idle_with_hash(name: &str, hash: Option<&str>) -> Pod {
         let mut pod = Pod::default();
