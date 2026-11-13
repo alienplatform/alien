@@ -2780,10 +2780,13 @@ spec:
               done
 
               for cleanup_selector in $selectors; do
-              kubectl -n "$namespace" get deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,jobs.batch,pods,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
+              kubectl -n "$namespace" get deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,jobs.batch,pods,services,configmaps,secrets,networkpolicies.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
               kubectl -n "$namespace" delete deployments.apps,statefulsets.apps,daemonsets.apps -l "$cleanup_selector" --ignore-not-found=true --cascade=foreground --wait=false
               kubectl -n "$namespace" delete replicasets.apps,jobs.batch,pods -l "$cleanup_selector" --ignore-not-found=true --wait=false
-              kubectl -n "$namespace" delete services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
+              kubectl -n "$namespace" delete services,configmaps,secrets,networkpolicies.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
+              {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
+              kubectl -n "$namespace" get ingresses.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
+              kubectl -n "$namespace" delete ingresses.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
               if ! gateway_resources="$(kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>"$scratch/discovery-error")"; then
                 cat "$scratch/discovery-error" >&2
                 echo "Refusing cleanup: Gateway API discovery failed." >&2
@@ -2815,6 +2818,7 @@ spec:
                 kubectl -n "$namespace" get healthcheckpolicies.alb.networking.azure.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
                 kubectl -n "$namespace" delete healthcheckpolicies.alb.networking.azure.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
               fi
+              {{- end }}
               done
 
               sort -u "$scratch/env-secrets" -o "$scratch/env-secrets"

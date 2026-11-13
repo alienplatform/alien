@@ -388,6 +388,25 @@ fn the_routing_rules_of_the_operator_role_can_be_left_out() {
     }
     // Network policies are not routing: containers with network settings need them.
     assert!(without.contains("networkpolicies"));
+
+    // The uninstall cleanup shares the Role: it must not list what the Role leaves out.
+    let cleanup = |extra: &str| {
+        let values = format!("management:\n  token: test-credential\n{extra}");
+        let rendered = test_utils::helm_template(&chart, Some(&values));
+        rendered.assert_ok("cleanup");
+        rendered.stdout
+    };
+    let with_routing = cleanup("");
+    assert!(with_routing.contains("ingresses.networking.k8s.io"));
+    assert!(with_routing.contains("Refusing cleanup: Gateway API discovery failed"));
+    let no_routing = cleanup("rbac:\n  routing:\n    enabled: false\n");
+    for name in [
+        "ingresses.networking.k8s.io",
+        "gateway.networking.k8s.io",
+        "healthcheckpolicies",
+    ] {
+        assert!(!no_routing.contains(name), "cleanup still touches {name}");
+    }
 }
 
 /// Runs the manager-ownership part of the rendered runtime cleanup script against a fake
