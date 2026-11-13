@@ -58,3 +58,4 @@ rustc-ice-*.txt
 .pnpm-store
 packages/ai-gateway/npm/
 __pycache__/
+*.snap.new
