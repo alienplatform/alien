@@ -2078,6 +2078,72 @@ async fn transport_preview_forwards_the_callers_authorization_and_hides_the_capa
     assert_eq!(seen.lock().unwrap().len(), 1, "refused calls reach nothing");
 }
 
+/// A backend whose template cannot carry the environment names the declared ports in the grant.
+/// Only the ports named there are granted, and the capability then reaches the daemon.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_takes_declared_ports_from_the_grant_when_the_environment_has_none() {
+    let _env = PREVIEW_ENV.lock().await;
+    std::env::remove_var("ALIEN_SANDBOX_PREVIEW_PORTS");
+    let (base, _dir) = transport_agent().await;
+    let (port, seen) = upstream_server().await;
+    let (other, _) = upstream_server().await;
+    let client = reqwest::Client::new();
+    let grant_with = |sandbox: &'static str, port: u16, declared: Vec<u16>| {
+        let client = client.clone();
+        let base = base.clone();
+        async move {
+            client
+                .post(format!("{base}/"))
+                .json(&json!({"v": 1, "op": "previewGrant", "sandbox": sandbox, "port": port, "declaredPorts": declared}))
+                .send()
+                .await
+                .expect("responds")
+        }
+    };
+
+    // Named in neither the environment nor the request: refused.
+    assert_eq!(grant_with("sandbox-a", port, vec![]).await.status(), 403);
+    // A port the request does not name is refused even when another one is.
+    assert_eq!(
+        grant_with("sandbox-a", other, vec![port]).await.status(),
+        403
+    );
+    // The agent's own port is never grantable, whatever the request names.
+    assert_eq!(
+        grant_with("sandbox-a", 8971, vec![8971]).await.status(),
+        403
+    );
+
+    let granted: serde_json::Value = grant_with("sandbox-a", port, vec![port])
+        .await
+        .json()
+        .await
+        .unwrap();
+    let capability = granted["capability"].as_str().expect("a capability");
+    let ok = client
+        .get(format!("{base}/v1/preview/{port}/x"))
+        .header("authorization", "Bearer daemon-secret")
+        .header("x-alien-preview-port", port.to_string())
+        .header("x-alien-preview-capability", capability)
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(ok.status(), 200);
+    assert!(seen.lock().unwrap()[0]
+        .to_ascii_lowercase()
+        .contains("authorization: bearer daemon-secret"));
+    // The capability is for that port only.
+    let other_port = client
+        .get(format!("{base}/v1/preview/{other}/x"))
+        .header("x-alien-preview-port", other.to_string())
+        .header("x-alien-preview-capability", capability)
+        .send()
+        .await
+        .expect("responds");
+    assert!(matches!(other_port.status().as_u16(), 401 | 403));
+}
+
 /// The caller puts its bearer under the header its backend names (`caller_authorization_header`).
 /// Whichever it is, the daemon sees it as `Authorization` and never sees an `x-alien-*` header.
 #[tokio::test]

@@ -283,6 +283,15 @@ pub struct GcpAgentPlatformSandboxBinding {
     /// reader that never sees the template tell `allow` from `deny`. Absent means `deny`.
     #[serde(default)]
     pub allow_egress: bool,
+    /// Service account that signs the edge credential for preview requests. Preview is available
+    /// only when it is present: the edge host comes from each sandbox's own connection info.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_service_account: Option<BindingValue<String>>,
+    /// Ports the declaration names for preview. The template declares the same ports; carried so
+    /// a preview for any other port is refused before a call is spent, and so the agent learns
+    /// which ports the sandbox declared (its template cannot carry an environment).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_ports: Vec<u16>,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -427,6 +436,8 @@ impl SandboxBinding {
             region: region.into(),
             max_lifetime_seconds,
             allow_egress,
+            preview_service_account: None,
+            preview_ports: Vec::new(),
         })
     }
 
