@@ -1952,4 +1952,72 @@ mod tests {
         assert_eq!(grants.load(Ordering::SeqCst), 0);
         server.abort();
     }
+
+    /// A job the agent owns outlives the client that started it: a second provider, as a second
+    /// process would be, polls it to its end with the credential it reads itself.
+    #[tokio::test]
+    async fn a_job_started_by_one_provider_is_polled_by_another() {
+        let token = STANDARD.encode([7u8; 32]);
+        let expected = format!("Bearer {token}");
+        let (start_auth, poll_auth) = (expected.clone(), expected);
+        let router = Router::new()
+            .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
+            .route(
+                "/v1/jobs/start",
+                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                    let auth = start_auth.clone();
+                    async move {
+                        assert_eq!(headers["authorization"], auth);
+                        assert_eq!(body["command"], serde_json::json!(["sleep", "1"]));
+                        Json(serde_json::json!({"jobId": "j-1"}))
+                    }
+                }),
+            )
+            .route(
+                "/v1/jobs/poll",
+                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                    let auth = poll_auth.clone();
+                    async move {
+                        assert_eq!(headers["authorization"], auth);
+                        assert_eq!(body["jobId"], "j-1");
+                        Json(serde_json::json!({
+                            "running": false,
+                            "frames": [{"t": "stdout", "seq": 0, "data": "b2s="}],
+                            "exitCode": 0,
+                            "truncated": false,
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let labels = BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]);
+        let first = interactive_provider(url.clone(), token.clone(), labels.clone()).with_agent(true);
+        assert!(first.capabilities().jobs);
+        assert!(first.session_capabilities("session").await.unwrap().jobs);
+        let started = first
+            .start_job(
+                "session",
+                RunCommandRequest {
+                    command: "sleep".into(),
+                    args: vec!["1".into()],
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    timeout: Duration::from_secs(5),
+                },
+            )
+            .await
+            .unwrap();
+        drop(first);
+
+        let second = interactive_provider(url, token, labels).with_agent(true);
+        let polled = second.poll_job("session", &started.job_id, None).await.unwrap();
+        assert!(!polled.running);
+        assert_eq!(polled.exit.map(|exit| exit.code), Some(0));
+        assert_eq!(polled.frames.len(), 1);
+        server.abort();
+    }
 }

@@ -455,8 +455,9 @@ impl SandboxCapabilities {
         Self {
             files: true,
             reconnect: true,
-            // No Alien process runs inside the sandbox to own a command between two calls.
-            jobs: false,
+            // The in-sandbox agent owns a job between two calls, so a caller reconnects with
+            // `poll_job`. A catalog image has no agent and refuses at call time.
+            jobs: true,
             // Through the in-sandbox agent: the client streams `/v1/interactive` over the
             // sandbox's authenticated port. A session without the agent (the platform's own exec
             // takes no stdin) reports false from `session_capabilities`.

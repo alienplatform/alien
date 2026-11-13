@@ -5132,6 +5132,7 @@ mod tests {
         // the agent transport reports the interactive commands it cannot serve as false.
         let without_agent = SandboxCapabilities {
             interactive_commands: false,
+            jobs: false,
             preview: false,
             ..platform
         };
