@@ -431,8 +431,9 @@ async fn cold_create(
             let _ = pods.delete_pod(namespace, &name).await;
             return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
-                    "a new sandbox pod for '{sandbox_id}' did not start within {} seconds",
-                    COLD_CREATE_TIMEOUT.as_secs()
+                    "a new sandbox pod for '{sandbox_id}' did not start within {} seconds{}",
+                    COLD_CREATE_TIMEOUT.as_secs(),
+                    pod_not_ready_reason(current.as_ref())
                 ),
                 resource_id: Some(sandbox_id.to_string()),
             })
@@ -639,6 +640,31 @@ pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
             .ok()
             .as_deref(),
     )
+}
+
+/// Why a running pod is still not Ready, when the cause is the policy gate: its container runs
+/// but its network check never passed, so the cluster is not enforcing the pod's NetworkPolicy.
+/// Empty when the pod is not in that state (it may simply still be pulling its image).
+pub(crate) fn pod_not_ready_reason(pod: Option<&Pod>) -> &'static str {
+    let Some(pod) = pod else { return "" };
+    let running = pod
+        .status
+        .as_ref()
+        .is_some_and(|status| status.phase.as_deref() == Some("Running"));
+    let gated = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.containers.first())
+        .and_then(|container| container.env.as_ref())
+        .is_some_and(|env| {
+            env.iter()
+                .any(|var| var.name == "ALIEN_SANDBOX_POLICY_CANARY")
+        });
+    if running && gated && !pod_condition_ready(pod) {
+        ": the pod is running but its network policy is not enforced by this cluster, so it is never marked Ready; use a cluster network plugin that enforces NetworkPolicy (on EKS Auto Mode, enable network policy in the vpc-cni ConfigMap)"
+    } else {
+        ""
+    }
 }
 
 fn mark_policy_verified(pod: &mut Pod) {
@@ -1663,6 +1689,36 @@ mod tests {
             pod_is_ready_for(&pod, None),
             "no Operator address: nothing to compare"
         );
+    }
+
+    /// A running pod with the policy gate that is not Ready says why: the cluster does not enforce
+    /// its NetworkPolicy. A pod without the gate, or not yet running, gets no such claim.
+    #[test]
+    fn a_running_gated_pod_that_is_not_ready_names_the_missing_policy_enforcement() {
+        use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
+        let mut pod = idle_pod("p", "10.0.0.7");
+        pod.status.as_mut().unwrap().phase = Some("Running".into());
+        pod.status.as_mut().unwrap().conditions = Some(ready_condition(false));
+        assert_eq!(pod_not_ready_reason(Some(&pod)), "", "no gate, no claim");
+        pod.spec = Some(PodSpec {
+            containers: vec![Container {
+                name: "p".into(),
+                env: Some(vec![EnvVar {
+                    name: "ALIEN_SANDBOX_POLICY_CANARY".into(),
+                    value: Some("10.0.0.5:8080".into()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(pod_not_ready_reason(Some(&pod)).contains("not enforced by this cluster"));
+        pod.status.as_mut().unwrap().phase = Some("Pending".into());
+        assert_eq!(pod_not_ready_reason(Some(&pod)), "");
+        pod.status.as_mut().unwrap().phase = Some("Running".into());
+        pod.status.as_mut().unwrap().conditions = Some(ready_condition(true));
+        assert_eq!(pod_not_ready_reason(Some(&pod)), "");
+        assert_eq!(pod_not_ready_reason(None), "");
     }
 
     fn ready_condition(ready: bool) -> Vec<k8s_openapi::api::core::v1::PodCondition> {
