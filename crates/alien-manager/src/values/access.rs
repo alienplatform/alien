@@ -101,6 +101,9 @@ impl ValueGrant {
 pub struct ValueMove {
     pub from: ValueScope,
     pub to: ValueScope,
+    /// The claim's unique id. The store records a finished move under it, so
+    /// presenting the same claim again changes nothing.
+    pub claim_id: String,
 }
 
 /// Decides whether a request may use a scope's values.

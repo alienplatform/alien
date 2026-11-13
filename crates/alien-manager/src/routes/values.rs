@@ -706,9 +706,15 @@ pub(crate) async fn move_values(
         // A setup link keeps its values for the next deployment; a registration
         // creates one deployment, so its values move.
         let moved = if source.kind() == ScopeKind::SetupLink {
-            values.store.copy_scope(&claim.from, &claim.to).await?
+            values
+                .store
+                .copy_scope(&claim.from, &claim.to, &claim.claim_id)
+                .await?
         } else {
-            values.store.move_scope(&claim.from, &claim.to).await?
+            values
+                .store
+                .move_scope(&claim.from, &claim.to, &claim.claim_id)
+                .await?
         };
         Ok(ValueSlotsResponse {
             slots: moved.into_iter().map(Into::into).collect(),
