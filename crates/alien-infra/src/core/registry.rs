@@ -124,6 +124,11 @@ impl ResourceRegistry {
         ResourceRegistration::new(self, resource_type)
     }
 
+    /// Every (resource type, platform) that has a controller.
+    pub fn registered_controllers(&self) -> impl Iterator<Item = &(ResourceType, Platform)> {
+        self.controller_factories.keys()
+    }
+
     /// Gets a controller for the given resource type and platform
     pub fn get_controller(
         &self,
@@ -494,6 +499,34 @@ impl ResourceRegistry {
             Platform::Azure,
             Box::new(DefaultControllerFactory::<
                 crate::remote_stack_management::AzureRemoteStackManagementController,
+            >::new()),
+        );
+
+        // Register the verifier controller: setup owns the verifier on every cloud.
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<
+                crate::signing_verifier::SigningVerifierController,
+            >::new()),
+        );
+
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<
+                crate::signing_verifier::SigningVerifierController,
+            >::new()),
+        );
+
+        #[cfg(feature = "azure")]
+        registry.register_controller_factory(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::signing_verifier::SigningVerifierController,
             >::new()),
         );
 

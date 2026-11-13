@@ -13,6 +13,11 @@ deployment = ["dep:alien-deployment"]
 alien-core = { workspace = true, features = ["bundle-signature"] }
 alien-error = { workspace = true }
 alien-preflights = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-helm = { workspace = true }
+alien-signing = { workspace = true }
+alien-terraform = { workspace = true }
+bon = { workspace = true }
 alien-deployment = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"] }
 flate2 = { workspace = true }
@@ -29,8 +34,9 @@ tokio = { workspace = true, features = ["fs", "io-util"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-terraform = { workspace = true, features = ["test-utils"] }
+hcl-rs = { workspace = true }
 httpmock = { workspace = true }
-alien-helm = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "fs"] }
 

@@ -74,6 +74,7 @@ fn render_linked_binding(
                 targets_kubernetes: ctx.targets_kubernetes,
                 stack_settings: ctx.stack_settings,
                 names: ctx.names,
+                pins: ctx.pins,
             };
             let emitter = registry.require(&link.resource_type, ctx.platform)?;
             let binding_ref = emitter.emit_binding_ref(&linked_ctx)?.ok_or_else(|| {

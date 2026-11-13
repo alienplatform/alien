@@ -40,6 +40,7 @@ indexmap = { workspace = true, features = ["serde"] }
 alien-permissions = { path = ".", features = ["test-utils"] }
 insta = { workspace = true, features = ["yaml", "json"] }
 rstest = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt"] }
 anyhow = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }

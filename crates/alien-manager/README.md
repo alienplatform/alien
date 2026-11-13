@@ -5,7 +5,7 @@ The control plane for software you run in environments you don't control.
 The manager stores releases and deployments, deploys push-mode environments
 through cloud APIs, and serves pull-mode environments that connect to it
 outbound: the Operator's sync endpoint, an OCI registry for images and Helm
-charts, OpenTelemetry forwarding, tunnels into deployments, and remote commands.
+charts, OpenTelemetry forwarding, and remote commands.
 
 ## Running it
 
@@ -45,5 +45,4 @@ environment variable (the file's contents), or from the working directory.
 
 The manager is a library. `AlienManagerBuilder` assembles it from store,
 credential and authorization traits, so another service can embed it with its
-own implementations. Tunnels are opt-in for embedders (`.tunnels()`); the
-`alien-manager` binary and `alien serve` turn them on.
+own implementations.

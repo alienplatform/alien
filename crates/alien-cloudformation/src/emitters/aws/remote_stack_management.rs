@@ -8,10 +8,11 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, chunk_managed_policy_statements, managing_role_trust_statement,
-            required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
+            append_statements, cf_from_json, chunk_managed_policy_statements,
+            managing_role_trust_statement, required_logical_id, resource_config, tags,
+            take_statements_with_sid, uniquify_iam_statement_sids,
             CONDITION_HAS_MANAGEMENT_EXTERNAL_ID, PARAM_MANAGEMENT_EXTERNAL_ID,
-            PARAM_MANAGING_ROLE_ARN,
+            PARAM_MANAGING_ROLE_ARN, SIGNING_SETTINGS_DENY_SID,
         },
         service_account::permission_context,
     },
@@ -246,7 +247,9 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary";
-    let context = permission_context().with_aws_permissions_boundary_arn(boundary_arn);
+    let context = permission_context()
+        .with_aws_permissions_boundary_arn(boundary_arn)
+        .with_signing(ctx.stack_settings);
 
     if let Some(profile) = ctx.stack.management().profile() {
         for permission_set_ref in global_permission_refs(ctx, profile) {
@@ -340,7 +343,12 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     ]));
 
     // Chunk against the complete expanded ARN before replacing it with a short Ref.
-    let mut documents = chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))?;
+    let (statements, signing_denies) =
+        take_statements_with_sid(statements, SIGNING_SETTINGS_DENY_SID);
+    let mut documents = append_statements(
+        chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))?,
+        signing_denies,
+    )?;
     let boundary_id = boundary_logical_id(required_logical_id(ctx)?);
     for document in &mut documents {
         replace_expression(

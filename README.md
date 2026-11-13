@@ -73,8 +73,8 @@ For real customers, run the manager where their clusters can reach it over HTTPS
  │  alien CLI    your       │             │  Operator                    │
  │      │        backend    │  outbound   │   ├─ deploys each release    │
  │      ▼          │        │   HTTPS     │   ├─ ships logs and traces   │
- │   Manager ◀─────┘ ◀──────┼─────────────┼── ├─ relays tunnel requests  │
- │      │                   │             │   └─ updates itself          │
+ │   Manager ◀─────┘ ◀──────┼─────────────┼── └─ updates itself          │
+ │      │                   │             │                              │
  │      ▼                   │             │                              │
  │  OpenTelemetry backend   │             │  Your containers, storage    │
  └──────────────────────────┘             └──────────────────────────────┘
@@ -99,7 +99,7 @@ const api = new alien.Container("api")
   .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "api" } })
   .cpu(0.5)
   .memory("512Mi")
-  .tunnel(8080) // reachable from your backend through the manager
+  .port(8080)
   .link(bucket)
   .permissions("api")
   .build()
@@ -121,15 +121,6 @@ Once a customer installs, you don't need access to their environment again:
 - **Releases.** `alien release` rolls out to every deployment following its channel (`production` by default). Stage releases on other channels, promote them with `alien releases promote`, and pin a deployment with `alien deployments pin`. The Operator also updates itself to the version the manager runs.
 - **Images.** Clusters pull images through the manager with their deployment token. No registry credentials to hand out.
 - **Logs and traces.** Deployments send OpenTelemetry to the manager, which forwards it to your backend: Datadog, Grafana, Honeycomb, Axiom, Coralogix, or any OTLP endpoint. `alien logs --deployment acme/acme` shows recent logs without one.
-- **Tunnels.** Your backend calls a container inside any deployment through the manager, over the Operator's outbound connection. Request and response bodies stream in both directions, and the app's own `Authorization` header passes through:
-
-  ```bash
-  curl https://manager.example.com/v1/deployments/acme/tunnels/api/files \
-    -H "Proxy-Authorization: Bearer ax_tunnel_..." \
-    -H "Authorization: Bearer <your app's token>"
-  ```
-
-  `alien tokens create --tunnel` makes a token that can only call tunnels, optionally for a single customer. Revoke it with `alien tokens revoke`.
 - **Commands.** Invoke handlers inside a deployment from your backend with [Remote Commands](https://alien.dev/docs/commands).
 
 ## Air-gapped environments
@@ -186,7 +177,6 @@ More in [examples/](examples/).
 - [How Alien works](https://alien.dev/docs/how-alien-works)
 - [Self-hosting](https://alien.dev/docs/self-hosting)
 - [Kubernetes](https://alien.dev/docs/deploying/kubernetes)
-- [Tunnels](https://alien.dev/docs/tunnels)
 - [Observability](https://alien.dev/docs/observability)
 - [Remote commands](https://alien.dev/docs/commands)
 

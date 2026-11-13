@@ -1,4 +1,5 @@
 import {
+  type ContainerSecurity,
   type DaemonCode,
   type Daemon as DaemonConfig,
   type DaemonRuntime,
@@ -159,6 +160,24 @@ export class Daemon extends ResourceBuilder {
    */
   public runtime(runtime: DaemonRuntime): this {
     this._config.runtime = runtime
+    return this
+  }
+
+  /**
+   * Adjusts the Kubernetes Pod Security profile. Daemons run under the "restricted"
+   * profile by default (non-root, seccomp RuntimeDefault, all capabilities
+   * dropped, read-only root filesystem with a writable /tmp). Use
+   * `writablePaths` for other directories the image writes to.
+   *
+   * Opt out only for an image that must run as root:
+   * `.security({ profile: "unrestricted" })`. Other platforms ignore it.
+   *
+   * Rolling the Operator back to a release without this setting applies the
+   * restricted profile to an opted-out workload, so a root image stops starting
+   * instead of gaining privileges. Upgrade the Operator again to fix it.
+   */
+  public security(settings: ContainerSecurity): this {
+    this._config.security = settings
     return this
   }
 

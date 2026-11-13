@@ -304,14 +304,25 @@ struct EmailInboundContribution {
     enabled_when: Option<String>,
 }
 
-/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// The one principal that may write sandbox bundles: the management role the controller runs as,
+/// or the verifier on a protected install.
 /// A bundle is what the next image is built from, so a workload able to write one could choose
 /// what a sandbox runs; its grants reach this bucket like any other of the stack's.
 fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<CfExpression> {
-    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
-        .then(|| remote_stack_management_role_id(ctx))
-        .flatten()
-        .map(|role_id| CfExpression::get_att(&role_id, "Arn"))
+    if storage.id() != SANDBOX_BUNDLE_STORAGE_ID {
+        return None;
+    }
+    // A protected install's bundles are written by its verifier, which renders them from the
+    // signed release; management never writes one.
+    if ctx.stack.resources().any(|(_, entry)| {
+        entry.config.resource_type() == alien_core::SigningVerifier::RESOURCE_TYPE
+    }) {
+        return Some(CfExpression::get_att(
+            super::verifier::VERIFIER_ROLE_ID,
+            "Arn",
+        ));
+    }
+    remote_stack_management_role_id(ctx).map(|role_id| CfExpression::get_att(&role_id, "Arn"))
 }
 
 fn bucket_policy_document(
@@ -775,4 +786,46 @@ fn remote_stack_management_role_id(ctx: &EmitContext<'_>) -> Option<String> {
             Some(format!("{logical_id}Role"))
         }
     })
+}
+
+#[cfg(test)]
+mod shared_bucket_policy_tests {
+    use super::*;
+
+    /// The statement setup renders for a public storage is the one the verifier accepts: the
+    /// verifier compares a bucket policy's Allow to `public_read_statement`, so any difference
+    /// here would make a protected install refuse its own setup's policy.
+    #[test]
+    fn the_public_read_statement_is_the_one_the_verifier_accepts() {
+        let document = serde_json::to_value(bucket_policy_document("Assets", true, None, None))
+            .expect("the document serializes");
+        let statement = document["Statement"]
+            .as_array()
+            .expect("statements")
+            .iter()
+            .find(|statement| statement["Effect"] == "Allow")
+            .expect("an allow statement")
+            .clone();
+        let shared =
+            alien_permissions::aws_bucket_policy::public_read_statement("arn:aws:s3:::assets");
+        for key in ["Sid", "Effect", "Principal", "Action"] {
+            assert_eq!(statement[key], shared[key], "{key}");
+        }
+        assert!(
+            statement["Resource"].to_string().ends_with("/*\"}")
+                || statement["Resource"].to_string().contains("/*"),
+            "{}",
+            statement["Resource"]
+        );
+        assert_eq!(
+            statement
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>()
+                .len(),
+            shared.as_object().unwrap().keys().count(),
+            "the same fields"
+        );
+    }
 }

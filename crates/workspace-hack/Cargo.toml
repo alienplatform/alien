@@ -18,6 +18,7 @@ publish = false
 anstyle-parse = { version = "1" }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1", default-features = false, features = ["test-util"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client"] }
 aws-sigv4 = { version = "1", features = ["http0-compat"] }
 aws-smithy-async = { version = "1", default-features = false, features = ["rt-tokio"] }
 aws-smithy-runtime-api = { version = "1", features = ["client", "http-auth", "test-util"] }
@@ -69,7 +70,6 @@ hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
 icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
-idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["block-padding"] }
 insta = { version = "1", features = ["json", "yaml"] }
@@ -84,7 +84,6 @@ md-5 = { version = "0.11" }
 memchr = { version = "2" }
 moka = { version = "0.12", features = ["future", "sync"] }
 nom = { version = "7" }
-num-bigint = { version = "0.4" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object_store = { version = "0.12", features = ["aws", "azure", "gcp", "http", "tls-webpki-roots"] }
@@ -107,7 +106,7 @@ rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
 rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 ring = { version = "0.17", features = ["std"] }
@@ -119,7 +118,7 @@ schemars = { version = "0.8", features = ["chrono", "indexmap2", "uuid1"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
-serde_json = { version = "1", features = ["alloc", "preserve_order", "raw_value"] }
+serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
 serde_spanned = { version = "1", default-features = false, features = ["serde", "std"] }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11" }
 simd-adler32 = { version = "0.3", default-features = false, features = ["std"] }
@@ -168,6 +167,7 @@ zerovec = { version = "0.11", default-features = false, features = ["alloc", "de
 anstyle-parse = { version = "1" }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1", default-features = false, features = ["test-util"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client"] }
 aws-sigv4 = { version = "1", features = ["http0-compat"] }
 aws-smithy-async = { version = "1", default-features = false, features = ["rt-tokio"] }
 aws-smithy-runtime-api = { version = "1", features = ["client", "http-auth", "test-util"] }
@@ -223,7 +223,6 @@ hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
 icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
-idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["block-padding"] }
 insta = { version = "1", features = ["json", "yaml"] }
@@ -238,7 +237,6 @@ md-5 = { version = "0.11" }
 memchr = { version = "2" }
 moka = { version = "0.12", features = ["future", "sync"] }
 nom = { version = "7" }
-num-bigint = { version = "0.4" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object_store = { version = "0.12", features = ["aws", "azure", "gcp", "http", "tls-webpki-roots"] }
@@ -261,7 +259,7 @@ rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
 rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8", features = ["small_rng"] }
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 ring = { version = "0.17", features = ["std"] }
@@ -273,7 +271,7 @@ schemars = { version = "0.8", features = ["chrono", "indexmap2", "uuid1"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
-serde_json = { version = "1", features = ["alloc", "preserve_order", "raw_value"] }
+serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
 serde_spanned = { version = "1", default-features = false, features = ["serde", "std"] }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11" }
 simd-adler32 = { version = "0.3", default-features = false, features = ["std"] }

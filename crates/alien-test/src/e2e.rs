@@ -172,6 +172,9 @@ pub enum TestApp {
     /// A Live sandbox built from source and a Worker that opens a session in it and runs a
     /// command (`tests/e2e/test-apps/sandbox-session`).
     SandboxSession,
+    /// A frozen, remotely published sandbox the test drives itself, with no Worker
+    /// (`tests/e2e/test-apps/sandbox-remote`).
+    SandboxRemote,
 }
 
 impl std::fmt::Display for TestApp {
@@ -189,6 +192,7 @@ impl std::fmt::Display for TestApp {
             TestApp::AutomaticSetup => write!(f, "automatic-setup"),
             TestApp::StorageNotifications => write!(f, "storage-notifications"),
             TestApp::SandboxSession => write!(f, "sandbox-session"),
+            TestApp::SandboxRemote => write!(f, "sandbox-remote"),
         }
     }
 }
@@ -423,6 +427,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::AutomaticSetup => "test-apps/automatic-setup",
         TestApp::StorageNotifications => "test-apps/storage-notifications",
         TestApp::SandboxSession => "test-apps/sandbox-session",
+        TestApp::SandboxRemote => "test-apps/sandbox-remote",
     }
 }
 
@@ -443,7 +448,8 @@ fn deployment_environment_variables(
         | TestApp::EnabledDemo
         | TestApp::AutomaticSetup
         | TestApp::StorageNotifications
-        | TestApp::SandboxSession => None,
+        | TestApp::SandboxSession
+        | TestApp::SandboxRemote => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
@@ -970,6 +976,8 @@ pub async fn create_release(
             git_metadata: None,
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
         .send()
         .await
@@ -1176,6 +1184,8 @@ pub async fn developer_setup(
             git_metadata: None,
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
         .send()
         .await

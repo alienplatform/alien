@@ -1,4 +1,4 @@
-use super::{backend_name, failed, labels, missing, owned};
+use super::{backend_name, failed, has_runtime_scope, labels, missing, object_labels, owned};
 use crate::error::{ErrorData, Result};
 use alien_core::sync::TargetDynamicContainer;
 use alien_error::{Context, ContextError};
@@ -32,7 +32,7 @@ fn desired_deployment(
     namespace: &str,
     deployment_id: &str,
     target: &TargetDynamicContainer,
-    manager_pull_secret: bool,
+    pull_secrets: &[String],
     node_selector: Option<BTreeMap<String, String>>,
 ) -> Deployment {
     let name = backend_name(deployment_id, &target.name);
@@ -158,7 +158,7 @@ fn desired_deployment(
         metadata: ObjectMeta {
             name: Some(name.clone()),
             namespace: Some(namespace.to_string()),
-            labels: Some(scope.clone()),
+            labels: Some(object_labels(deployment_id, &target.name)),
             ..Default::default()
         },
         spec: Some(DeploymentSpec {
@@ -176,10 +176,11 @@ fn desired_deployment(
                     node_selector,
                     containers: vec![container],
                     automount_service_account_token: Some(false),
-                    image_pull_secrets: manager_pull_secret.then(|| {
-                        vec![LocalObjectReference {
-                            name: format!("{name}-registry"),
-                        }]
+                    image_pull_secrets: (!pull_secrets.is_empty()).then(|| {
+                        pull_secrets
+                            .iter()
+                            .map(|name| LocalObjectReference { name: name.clone() })
+                            .collect()
                     }),
                     security_context: Some(PodSecurityContext {
                         fs_group: Some(65532),
@@ -214,7 +215,7 @@ pub(super) async fn put_deployment(
     namespace: &str,
     deployment_id: &str,
     target: &TargetDynamicContainer,
-    manager_pull_secret: bool,
+    pull_secrets: &[String],
     node_selector: Option<BTreeMap<String, String>>,
 ) -> Result<Deployment> {
     let name = backend_name(deployment_id, &target.name);
@@ -230,7 +231,7 @@ pub(super) async fn put_deployment(
         namespace,
         deployment_id,
         target,
-        manager_pull_secret,
+        pull_secrets,
         node_selector,
     );
     if let Some(existing) = &current {
@@ -264,7 +265,8 @@ fn deployment_matches(current: &Deployment, desired: &Deployment) -> bool {
     ) else {
         return false;
     };
-    current_pod.containers.len() == 1
+    has_runtime_scope(&current.metadata)
+        && current_pod.containers.len() == 1
         && current_app.name == "app"
         && current_pod
             .init_containers

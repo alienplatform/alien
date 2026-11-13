@@ -10,6 +10,7 @@ pub mod container_network_settings;
 pub mod daemon_host_access_permissions;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
+pub mod health_check_startup_timeout;
 pub mod iam_inline_policy_size;
 #[cfg(feature = "runtime-checks")]
 pub(crate) mod iam_workload_aggregate;
@@ -53,6 +54,7 @@ pub use container_network_settings::ContainerNetworkSettingsCheck;
 pub use daemon_host_access_permissions::DaemonHostAccessPermissionsCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
+pub use health_check_startup_timeout::HealthCheckStartupTimeoutCheck;
 pub use iam_inline_policy_size::IamInlinePolicySizeCheck;
 pub use kubernetes_workload_settings::KubernetesWorkloadSettingsCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;

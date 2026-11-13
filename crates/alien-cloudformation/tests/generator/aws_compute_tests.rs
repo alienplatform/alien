@@ -398,6 +398,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
     let err = generate_cloudformation_template(
         &stack,
         alien_cloudformation::CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,

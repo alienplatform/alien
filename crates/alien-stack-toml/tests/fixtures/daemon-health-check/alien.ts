@@ -18,6 +18,7 @@ const everything = new alien.Daemon("everything")
     method: "POST",
     timeoutSeconds: 5,
     failureThreshold: 2,
+    startupTimeoutSeconds: 1800,
   })
   .build()
 

@@ -22,6 +22,18 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{EnvVar, PodTemplateSpec};
 use std::sync::Arc;
 
+/// Answer pod listings with no pods: controllers that wait for a workload also
+/// look at its pods to explain a stuck start.
+pub(crate) fn mock_empty_pod_list(server: &httpmock::MockServer) {
+    server.mock(|when, then| {
+        when.method(httpmock::Method::GET)
+            .path_matches(httpmock::Regex::new(r"^/api/v1/namespaces/[^/]+/pods$").unwrap());
+        then.status(200).json_body(serde_json::json!({
+            "apiVersion": "v1", "kind": "PodList", "metadata": {}, "items": []
+        }));
+    });
+}
+
 pub(crate) fn secret_env_var(
     name: &str,
     value: &str,
@@ -133,6 +145,12 @@ impl KubernetesManifestTestHarness {
                 .build(),
             cloud: None,
         }
+    }
+
+    /// Pulls every workload image from the site registry `registry`.
+    pub(crate) fn with_image_registry(mut self, registry: &str) -> Self {
+        self.deployment_config.image_registry = Some(registry.to_string());
+        self
     }
 
     /// Adds a resource the workload links, in the state its controller holds.

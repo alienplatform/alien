@@ -21,6 +21,7 @@ async fn aws_worker_source_cache_does_not_reuse_zstd_cloud_images() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
     let toolchain = ToolchainConfig::Rust {
         binary_name: "job".to_string(),
@@ -275,6 +276,7 @@ async fn aws_worker_source_image_uses_gzip() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
     let archive = out.path().join("linux-aarch64.oci.tar");
     build_target_to_file(
@@ -288,6 +290,7 @@ async fn aws_worker_source_image_uses_gzip() {
         &BinaryTarget::LinuxArm64,
         &archive,
         toolchain::WorkloadKind::Worker,
+        None,
     )
     .await
     .unwrap();

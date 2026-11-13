@@ -5,6 +5,7 @@ pub use kubernetes::*;
 pub use kubernetes::KubernetesClientConfigExt;
 
 // Re-export all client APIs
+pub use kubernetes::config_maps::ConfigMapApi;
 pub use kubernetes::deployments::DeploymentApi;
 pub use kubernetes::events::EventApi;
 pub use kubernetes::jobs::JobApi;

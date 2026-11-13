@@ -183,7 +183,7 @@ impl CfEmitter for AwsNetworkEmitter {
                             false,
                         );
                         if ctx.targets_kubernetes
-                            || alien_core::restricts_network_mode(ctx.stack, false)
+                            || crate::emitters::aws::helpers::network_mode_names_subnets(ctx.stack)
                         {
                             byo
                         } else {

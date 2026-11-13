@@ -8,6 +8,7 @@
 use crate::{
     emitter::{HelmFragment, InfrastructureValue},
     registry::HelmRegistry,
+    signing::SignedChartPins,
 };
 use alien_core::{
     access_request_crd::AccessRequestCrdNames,
@@ -215,9 +216,20 @@ pub struct OperatorLogCollectorOptions<'a> {
     pub pod_label_value: Option<&'a str>,
 }
 
-/// Generate a Helm chart for `stack`.
+/// Generate a Helm chart for `stack`. A stack whose settings pin release signing needs
+/// [`generate_signed_helm_chart`].
 pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<HelmChart> {
-    generate_helm_chart_internal(stack, options, None)
+    generate_helm_chart_internal(stack, options, None, None)
+}
+
+/// Generate the Helm chart of a stack whose settings pin release signing. The chart runs the
+/// Operator build `pins` names, which must be the one the signed release lists.
+pub fn generate_signed_helm_chart(
+    stack: &Stack,
+    options: HelmOptions<'_>,
+    pins: &SignedChartPins,
+) -> Result<HelmChart> {
+    generate_helm_chart_internal(stack, options, None, Some(pins))
 }
 
 /// Generate a product Helm chart with the Remote Operator in the same release.
@@ -226,7 +238,7 @@ pub fn generate_product_helm_chart(
     options: HelmOptions<'_>,
     remote_operator: ProductOperatorManifestOptions<'_>,
 ) -> Result<HelmChart> {
-    generate_helm_chart_internal(stack, options, Some((remote_operator, None)))
+    generate_helm_chart_internal(stack, options, Some((remote_operator, None)), None)
 }
 
 /// Generate a product Helm chart carrying an exact Remote Operator image receipt.
@@ -240,6 +252,7 @@ pub fn generate_product_helm_chart_with_image_identity(
         stack,
         options,
         Some((remote_operator, Some(image_identity))),
+        None,
     )
 }
 
@@ -250,6 +263,7 @@ fn generate_helm_chart_internal(
         ProductOperatorManifestOptions<'_>,
         Option<OperatorImageIdentityOptions<'_>>,
     )>,
+    signing_pins: Option<&SignedChartPins>,
 ) -> Result<HelmChart> {
     let mut platform_stack = stack.clone();
     alien_core::remove_off_platform_gated_resources(
@@ -293,7 +307,10 @@ fn generate_helm_chart_internal(
         "templates/serviceaccount.yaml".to_string(),
         serviceaccount_tpl(),
     );
-    files.insert("templates/role.yaml".to_string(), role_tpl());
+    files.insert(
+        "templates/role.yaml".to_string(),
+        role_tpl(options.stack_settings.signing.is_some()),
+    );
     files.insert("templates/rolebinding.yaml".to_string(), rolebinding_tpl());
     files.insert("templates/clusterrole.yaml".to_string(), clusterrole_tpl());
     files.insert(
@@ -366,6 +383,7 @@ fn generate_helm_chart_internal(
     let has_remote_operator = remote_operator.is_some();
 
     if let Some((remote_operator, image_identity)) = remote_operator {
+        crate::signing::refuse_remote_operator(&options.stack_settings)?;
         add_remote_operator_files(&mut files, remote_operator, image_identity)?;
     }
 
@@ -378,6 +396,14 @@ fn generate_helm_chart_internal(
             })
             .or_insert(notes);
     }
+
+    files
+        .entry("templates/NOTES.txt".to_string())
+        .and_modify(|existing| {
+            existing.push('\n');
+            existing.push_str(&management_url_notes_tpl());
+        })
+        .or_insert_with(management_url_notes_tpl);
 
     files.insert(
         "templates/_infrastructure.tpl".into(),
@@ -413,6 +439,14 @@ fn generate_helm_chart_internal(
         "examples/bootstrap.yaml".to_string(),
         bootstrap_values_example(),
     );
+    files.insert(
+        "examples/gitops/flux.yaml".to_string(),
+        flux_example(&chart_name),
+    );
+    files.insert(
+        "examples/gitops/argocd.yaml".to_string(),
+        argocd_example(&chart_name),
+    );
     let mut readme = readme_md(&chart_name);
     if analysis
         .postgres
@@ -436,6 +470,7 @@ fn generate_helm_chart_internal(
         "files/stack-settings.json".to_string(),
         ensure_trailing_newline(stack_settings_json),
     );
+    crate::signing::add_signing(&mut files, &options.stack_settings, signing_pins)?;
 
     Ok(HelmChart {
         name: chart_name,
@@ -1063,7 +1098,7 @@ spec:
           {{- end }}
       containers:
         - name: verify-history-backend
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1121,7 +1156,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: wait-for-identity
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1204,7 +1239,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1450,7 +1485,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: rollback-guard
-          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime)) "tag" (dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime)) "digest" (dig "image" "digest" "" (dig "cleanup" "onUninstall" dict .Values.runtime))) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -1475,6 +1510,15 @@ spec:
 /// The Secret name carries the deployment's resource prefix, which the chart
 /// does not know, so the notes give the vault key and point to the deployment
 /// status for the full name.
+fn management_url_notes_tpl() -> String {
+    r#"{{- $managementUrl := include "deployment.managementUrl" . }}
+{{- if and $managementUrl (not (hasPrefix "https://" (lower $managementUrl))) }}
+WARNING: the management URL {{ $managementUrl }} is not https. The Operator sends its deployment token to it in clear text. Set management.url (or management.defaultUrl) to the manager's https:// address.
+{{- end }}
+"#
+    .to_string()
+}
+
 fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
     // Manager-served charts use the original release stack, before preflights.
     // Its input definitions describe possible slots; deployment status determines
@@ -1985,6 +2029,16 @@ fn generate_operator_manifest_inner(
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
     dynamic_containers: bool,
 ) -> Result<String> {
+    if options
+        .stack_settings
+        .is_some_and(|settings| settings.signing.is_some())
+    {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "An Operator manifest has no signing settings ConfigMaps or locked RBAC; \
+                      install a stack with release signing from its signed Helm chart"
+                .to_string(),
+        }));
+    }
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
     }
@@ -3881,6 +3935,8 @@ impl ChartAnalysis {
                 targets_kubernetes: true,
                 stack_settings: &stack_settings,
                 names: &names,
+                // The chart runs no verifier: Kubernetes installs have none.
+                pins: &alien_core::SetupPins::default(),
             };
             let HelmFragment {
                 infrastructure,
@@ -4038,7 +4094,9 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
-  # Override the captured or installed endpoint when routing changes.
+  # Override the captured or installed endpoint when routing changes. The Operator sends its
+  # deployment token to this URL: use https. An http URL still works; the Operator and
+  # NOTES.txt warn about it.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -4049,10 +4107,18 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
 
 inputValues: {}
 
+global:
+  # Pull every image from this registry (host[/path]) instead of the public
+  # ones: the Operator, its hooks and probes, the log collector and the
+  # application's workloads. Copy the images there first, keeping each one's digest.
+  imageRegistry: ""
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
     tag: latest
+    # Set to run the Operator by digest (sha256:...); it wins over the tag.
+    digest: ""
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
     # the manager this chart connects to).
@@ -4061,6 +4127,7 @@ runtime:
     # upgrade. The Deployment is Recreate: the running pod stops before the
     # new one starts. Set false when you deliver upgrades yourself (Argo CD,
     # Flux, Renovate): the Operator then changes only with the chart version.
+    # Ignored when `digest` is set: a pinned Operator stays on that digest.
     selfUpdate: true
   # Pull secrets for the Operator and for the application's workloads (added
   # to their ServiceAccounts), for images in a registry that needs credentials.
@@ -4153,12 +4220,31 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
+  # Off by default. When enabled, `mode: open` (the default) keeps the Operator Pod
+  # reachable and unrestricted; `mode: restricted` limits it. Restricted ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
+    mode: open
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
     ingress:
       enabled: true
+      extraRules: []
     egress:
       enabled: true
+      ports: [443, 6443]
+      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -4177,6 +4263,8 @@ logCollector:
   maxStreams: 32
   # nodeAgent only. Generated on first install and retained on upgrade.
   token: ""
+  # nodeAgent only. Pull secrets for the collector image; defaults to runtime.imagePullSecrets.
+  imagePullSecrets: []
   image:
     repository: fluent/fluent-bit
     tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
@@ -4202,18 +4290,12 @@ heartbeat:
 
 airgapped:
   # No connection to the manager: targets arrive in bundles installed with
-  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # the deploy CLI's `sync` command, which also carries state and telemetry back. Needs
   # management.deploymentId from the bundle.
   enabled: false
   # Public key (ed25519:...) bundles must be signed with. Set by the first
-  # `alien-deploy sync --trusted-key`, and checked on every later one.
+  # `sync --trusted-key` of the deploy CLI, and checked on every later one.
   bundleSigningKey: ""
-
-tunnel:
-  # Serve requests the control plane sends through the manager to the stack's
-  # declared tunnel endpoints, over the Operator's outbound connection.
-  # false closes the tunnel; nothing else changes.
-  enabled: true
 
 clusterBootstrap:
   metricsServer:
@@ -4259,7 +4341,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n# Set true when Flux, Argo CD or another tool renders this chart without access to\n# the cluster (`helm template`). The render then fails unless existing Secrets supply\n# every credential the chart would otherwise generate: a generated value would change\n# on every render. Requires management.existingSecret.name,\n# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or\n# logCollector.token.\ngitops:\n  enabled: false\n\n# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health\n# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure\n# is disabled, so the Role doesn't carry them.\nrbac:\n  routing:\n    enabled: true\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -4288,6 +4370,9 @@ sandbox:
   # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is
   # empty: it starts a pod on demand, which takes as long as the node and image pull need.
   warmPoolSize: 2
+  # Network probe image (repository[:tag][@digest]). Empty uses the pinned default; an air-gapped
+  # install sets it to the copy in its registry mirror.
+  cniProbeImage: ""
   # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
   # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
   # these addresses and nothing else on private ranges. Find it with:
@@ -4774,11 +4859,36 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
 
 fn values_schema_json(stack: &Stack) -> Result<String> {
     let schema = values_schema_with_inputs_json(stack)?;
-    if !stack
+    let has_sandbox = stack
         .resources()
-        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some())
-    {
-        return Ok(schema);
+        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some());
+    if !has_sandbox {
+        // A container with egress runs the network probe, whose image an air-gapped
+        // install sets through `sandbox.cniProbeImage`; that is the only sandbox value.
+        let probe = stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Container>()
+                .is_some_and(|container| container.egress.is_some())
+        });
+        if !probe {
+            return Ok(schema);
+        }
+        let mut schema: serde_json::Value = serde_json::from_str(&schema)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationFailed {
+                reason: "failed to parse built-in Helm values schema".to_string(),
+            })?;
+        schema["properties"]["sandbox"] = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "cniProbeImage": { "type": "string" } }
+        });
+        return serde_json::to_string_pretty(&schema)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationFailed {
+                reason: "failed to serialize Helm values schema".to_string(),
+            });
     }
     let mut schema: serde_json::Value = serde_json::from_str(&schema).into_alien_error().context(
         ErrorData::JsonSerializationFailed {
@@ -4793,6 +4903,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "tolerations": { "type": "array" },
             "warmPoolSize": { "type": "integer", "minimum": 0 },
+            "cniProbeImage": { "type": "string" },
             "clusterDNS": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
@@ -4864,6 +4975,16 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         }
       }
     },
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imageRegistry": {
+          "type": "string",
+          "description": "Site registry (host[/path]) every image is pulled from: the Operator, its hooks and probes, the log collector and the application's workloads. Images keep their repository path, tag and digest."
+        }
+      }
+    },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -4875,6 +4996,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
             "pullWithManagementToken": { "type": "boolean" },
             "selfUpdate": { "type": "boolean" }
           }
@@ -5013,15 +5135,32 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "mode": { "type": "string", "enum": ["open", "restricted"] },
+            "dns": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "namespace": { "type": "string" },
+                "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+                "clusterIPs": { "type": "array", "items": { "type": "string" } }
+              }
+            },
             "ingress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             },
             "egress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "ports": { "type": "array", "items": { "type": "integer" } },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             }
           }
         },
@@ -5042,6 +5181,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
                   "properties": {
                     "repository": { "type": "string", "minLength": 1 },
                     "tag": { "type": "string", "minLength": 1 },
+                    "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
                     "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
                   }
                 }
@@ -5066,6 +5206,16 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
         "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
+        "imagePullSecrets": {
+          "type": "array",
+          "description": "Pull secrets for the node collector image. Defaults to runtime.imagePullSecrets.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "minLength": 1 } }
+          }
+        },
         "image": {
           "type": "object",
           "description": "Node collector image; ignored in podApi mode.",
@@ -5073,6 +5223,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
+            "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
           }
         },
@@ -5151,13 +5302,88 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "deploymentModel": { "type": "string", "enum": ["pull", "Pull"] },
         "updates": { "type": "string" },
         "telemetry": { "type": "string" },
-        "heartbeats": { "type": "string" }
+        "heartbeats": { "type": "string" },
+        "quotaWarningOverrides": { "type": "array", "items": { "type": "string" } },
+        "network": { "type": ["object", "null"] },
+        "domains": { "type": ["object", "null"] },
+        "compute": { "type": ["object", "null"] },
+        "publicEndpoints": { "type": ["object", "null"] },
+        "kubernetes": {
+          "type": ["object", "null"],
+          "properties": {
+            "cluster": {
+              "type": ["object", "null"],
+              "properties": {
+                "ownership": { "type": "string" },
+                "namespace": { "type": ["string", "null"] },
+                "cloud": { "type": ["object", "null"] }
+              }
+            },
+            "exposure": {
+              "type": ["object", "null"],
+              "required": ["mode"],
+              "properties": {
+                "mode": { "type": "string", "enum": ["disabled", "generated", "custom", "customBaseDomain"] },
+                "domain": { "type": "string" },
+                "baseDomain": { "type": "string" },
+                "route": { "type": "object" },
+                "certificate": { "type": "object" }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": true
     },
-    "postgres": { "type": "object" },
+    "postgres": {
+      "type": "object",
+      "description": "One entry per Postgres resource in the stack, keyed by resource ID.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead." },
+          "existingPasswordSecret": { "type": "string", "description": "Secret with a `password` key. Required for GitOps and offline rendering." },
+          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering." },
+          "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "repository": { "type": "string", "minLength": 1 },
+              "tag": { "type": "string", "minLength": 1 }
+            }
+          },
+          "storage": { "type": "string", "minLength": 1 },
+          "storageClassName": { "type": "string" },
+          "highAvailability": { "type": "boolean" },
+          "encryptionKey": { "type": ["object", "string", "null"] },
+          "resources": { "type": "object" }
+        }
+      }
+    },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Grant the Operator Role the rules for Ingresses, Gateways, HTTPRoutes and load balancer health checks." }
+          }
+        }
+      }
+    },
+    "gitops": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Fail the render unless existing Secrets supply the management token and the encryption key, so a render never generates credentials." }
+      }
+    },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -5199,6 +5425,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
     },
     "tunnel": {
       "type": "object",
+      "description": "Deprecated and ignored: container tunnels were removed. Kept so upgrades of installs that saved tunnel.enabled still pass validation.",
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" }
@@ -5644,6 +5871,65 @@ fn helpers_tpl() -> String {
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /*
+Image reference for a repository, tag and optional digest. When global.imageRegistry is set the
+registry host is replaced by it (a path after the host is kept as a prefix), so every image the chart
+runs comes from the site's mirror. A digest wins over the tag. Keep in step with the Operator's
+rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
+*/ -}}
+{{- define "deployment.image" -}}
+{{- $repository := .repository -}}
+{{- $mirror := trimSuffix "/" (default "" (default dict .root.Values.global).imageRegistry) -}}
+{{- if $mirror -}}
+{{- $parts := splitList "/" $repository -}}
+{{- $first := first $parts -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first) (eq $first "localhost")) -}}
+{{- $repository = join "/" (rest $parts) -}}
+{{- else if eq (len $parts) 1 -}}
+{{- $repository = printf "library/%s" $repository -}}
+{{- end -}}
+{{- if not (hasPrefix (printf "%s/" $mirror) .repository) -}}
+{{- $repository = printf "%s/%s" $mirror $repository -}}
+{{- else -}}
+{{- $repository = .repository -}}
+{{- end -}}
+{{- end -}}
+{{- if .digest -}}{{ $repository }}@{{ .digest }}{{- else -}}{{ $repository }}:{{ .tag }}{{- end -}}
+{{- end -}}
+{{- /* The installation's image pull secret names: comma-separated, and as CEL string literals. */ -}}
+{{- define "deployment.pullSecretCsv" -}}
+{{- $names := list -}}
+{{- range .Values.runtime.imagePullSecrets -}}{{- $names = append $names .name -}}{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+{{- define "deployment.pullSecretNames" -}}
+{{- $names := list -}}
+{{- range .Values.runtime.imagePullSecrets -}}{{- $names = append $names (printf "'%s'" .name) -}}{{- end -}}
+{{- join ", " $names -}}
+{{- end -}}
+{{- /* An image reference written as one string (repository[:tag][@digest]). */ -}}
+{{- define "deployment.mirroredImage" -}}
+{{- $image := .image -}}
+{{- $digest := "" -}}
+{{- $tag := "" -}}
+{{- if contains "@" $image -}}
+{{- $split := splitList "@" $image -}}
+{{- $image = first $split -}}
+{{- $digest = last $split -}}
+{{- end -}}
+{{- $last := last (splitList "/" $image) -}}
+{{- if contains ":" $last -}}
+{{- $tag = last (splitList ":" $last) -}}
+{{- $image = trimSuffix (printf ":%s" $tag) $image -}}
+{{- end -}}
+{{- $mirror := trimSuffix "/" (default "" (default dict .root.Values.global).imageRegistry) -}}
+{{- if not $mirror -}}
+{{- .image -}}
+{{- else -}}
+{{- $ref := include "deployment.image" (dict "root" .root "repository" $image "tag" (default "latest" $tag) "digest" $digest) -}}
+{{- $ref -}}
+{{- end -}}
+{{- end -}}
 {{- define "deployment.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
@@ -5834,18 +6120,31 @@ imagePullSecrets:
     .to_string()
 }
 
-fn role_tpl() -> String {
-    r#"apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "deployment.fullname" . }}
-  labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-rules:
-  - apiGroups: [""]
+/// The Operator's Role in the release namespace. With release signing the Operator reads
+/// ConfigMaps and writes only the install's ledger, so it can't rewrite the signing settings
+/// it checks itself against.
+fn role_tpl(signing: bool) -> String {
+    let core_rules = if signing {
+        crate::signing::OPERATOR_CORE_RULES
+    } else {
+        r#"  - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+"#
+    };
+    format!(
+        r#"apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{{{ include "deployment.fullname" . }}}}
+  labels:
+    {{{{- include "deployment.labels" . | nindent 4 }}}}
+rules:
+{core_rules}{ROLE_RULES}"#
+    )
+}
+
+const ROLE_RULES: &str = r#"  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -5868,6 +6167,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -5880,9 +6180,8 @@ rules:
   - apiGroups: ["alb.networking.azure.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-"#
-    .to_string()
-}
+  {{- end }}
+"#;
 
 fn rolebinding_tpl() -> String {
     r#"apiVersion: rbac.authorization.k8s.io/v1
@@ -6048,6 +6347,7 @@ fn secret_tpl() -> String {
 {{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
   {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
+{{- include "deployment.validateGitops" . -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
@@ -6229,13 +6529,20 @@ kind: Job
 metadata:
   name: {{ $pruneName }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": post-upgrade
     "helm.sh/hook-weight": "124"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # A failed prune Job stays for debugging, then Kubernetes removes it.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 0
   template:
+    metadata:
+      labels:
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -6250,6 +6557,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
         - name: current-history
           {{- if eq $backend "secret" }}
           secret:
@@ -6262,12 +6572,19 @@ spec:
           {{- end }}
       containers:
         - name: prune-unsafe-history
-          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
           command:
             - /bin/sh
             - -ec
@@ -6422,6 +6739,8 @@ spec:
             - name: current-history
               mountPath: /history
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
 {{- end }}
 {{- end }}
 "#
@@ -6455,8 +6774,10 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # A failed cleanup Job stays for debugging, then Kubernetes removes it.
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 1
   template:
     metadata:
@@ -6475,14 +6796,28 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       containers:
         - name: cleanup
-          image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           command:
             - /bin/sh
             - -ec
@@ -6570,11 +6905,33 @@ spec:
               # scoped dependent after the Job has already listed it.
               manager_name={{ include "deployment.fullname" . | quote }}
               if resource_exists "deployment/$manager_name"; then
-                manager_contract="$(kubectl -n "$namespace" get deployment "$manager_name" -o go-template='{{ "{{" }} printf "%s\t%s\t%s\t%s" (index .metadata.annotations "meta.helm.sh/release-name") (index .metadata.annotations "meta.helm.sh/release-namespace") (index .metadata.labels "app.kubernetes.io/managed-by") (index .metadata.labels "app.kubernetes.io/instance") {{ "}}" }}')"
-                IFS="$(printf '\t')" read -r manager_release_name manager_release_namespace manager_release_service manager_release_instance <<EOF
+                # Helm stamps ownership annotations on the Deployment; a GitOps
+                # tool that renders the chart itself (Argo CD) does not, and its
+                # label tracking overwrites app.kubernetes.io/instance. The chart
+                # therefore also labels the manager Deployment with its release
+                # name. Accept either proof; anything else is refused.
+                manager_contract="$(kubectl -n "$namespace" get deployment "$manager_name" -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"\n"}{.metadata.labels.app\.kubernetes\.io/managed-by}{"\n"}{.metadata.labels.app\.kubernetes\.io/instance}{"\n"}{.metadata.labels.alien\.dev/helm-release}{"\n"}{.metadata.namespace}{"\n"}')" || {
+                  echo "Refusing cleanup: cannot read manager Deployment $namespace/$manager_name." >&2
+                  exit 1
+                }
+                # One field per line: BusyBox ash `read` collapses empty IFS fields.
+                {
+                  read -r manager_release_name
+                  read -r manager_release_namespace
+                  read -r manager_release_service
+                  read -r manager_release_instance
+                  read -r manager_chart_release
+                  read -r manager_namespace
+                } <<EOF
               $manager_contract
               EOF
-                if [ "$manager_release_name" != "$expected_release_name" ] || [ "$manager_release_namespace" != "$expected_release_namespace" ] || [ "$manager_release_service" != "$expected_release_service" ] || [ "$manager_release_instance" != "$expected_release_name" ]; then
+                manager_owned=false
+                if [ "$manager_release_name" = "$expected_release_name" ] && [ "$manager_release_namespace" = "$expected_release_namespace" ] && [ "$manager_release_service" = "$expected_release_service" ] && [ "$manager_release_instance" = "$expected_release_name" ]; then
+                  manager_owned=true
+                elif [ "$manager_chart_release" = "$expected_release_name" ] && [ "$manager_namespace" = "$expected_release_namespace" ]; then
+                  manager_owned=true
+                fi
+                if [ "$manager_owned" != true ]; then
                   echo "Manager Deployment $namespace/$manager_name is not owned by this exact Helm release; refusing cleanup." >&2
                   exit 1
                 fi
@@ -6667,10 +7024,13 @@ spec:
               done
 
               for cleanup_selector in $selectors; do
-              kubectl -n "$namespace" get deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,jobs.batch,pods,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
+              kubectl -n "$namespace" get deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,jobs.batch,pods,services,configmaps,secrets,networkpolicies.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
               kubectl -n "$namespace" delete deployments.apps,statefulsets.apps,daemonsets.apps -l "$cleanup_selector" --ignore-not-found=true --cascade=foreground --wait=false
               kubectl -n "$namespace" delete replicasets.apps,jobs.batch,pods -l "$cleanup_selector" --ignore-not-found=true --wait=false
-              kubectl -n "$namespace" delete services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
+              kubectl -n "$namespace" delete services,configmaps,secrets,networkpolicies.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
+              {{- if dig "enabled" true (default dict (dig "routing" dict (default dict .Values.rbac))) }}
+              kubectl -n "$namespace" get ingresses.networking.k8s.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
+              kubectl -n "$namespace" delete ingresses.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
               if ! gateway_resources="$(kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>"$scratch/discovery-error")"; then
                 cat "$scratch/discovery-error" >&2
                 echo "Refusing cleanup: Gateway API discovery failed." >&2
@@ -6702,6 +7062,7 @@ spec:
                 kubectl -n "$namespace" get healthcheckpolicies.alb.networking.azure.io -l "$cleanup_selector" -o name >> "$scratch/pending-deletions"
                 kubectl -n "$namespace" delete healthcheckpolicies.alb.networking.azure.io -l "$cleanup_selector" --ignore-not-found=true --wait=false
               fi
+              {{- end }}
               done
 
               sort -u "$scratch/env-secrets" -o "$scratch/env-secrets"
@@ -6812,7 +7173,13 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
     );
-    let broker = format!("{broker}{placement}{dns}");
+    // The Operator's own pod address: a sandbox pod proves its NetworkPolicy is enforced by
+    // finding this address unreachable. `$(VAR)` expands an env var defined earlier in the list.
+    let operator_address = format!(
+        "            - name: ALIEN_OPERATOR_POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n            - name: {}\n              value: {{{{ printf \"$(ALIEN_OPERATOR_POD_IP):%d\" (int .Values.runtime.api.port) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS
+    );
+    let broker = format!("{broker}{placement}{dns}{operator_address}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"
@@ -6828,6 +7195,9 @@ metadata:
   name: {{ include "deployment.fullname" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+    # The runtime cleanup hook accepts this as proof of ownership when the
+    # chart is rendered by a GitOps tool that adds no Helm annotations.
+    alien.dev/helm-release: {{ .Release.Name | quote }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
   # The operator holds an exclusive lock on its persistent state directory.
@@ -6896,7 +7266,7 @@ spec:
       {{- end }}
       containers:
         - name: operator
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
@@ -7030,11 +7400,21 @@ spec:
             - name: CHART_DEFAULT_BINDINGS
               value: {{ include "deployment.chartDefaultBindings" . | quote }}
             {{- end }}
+            {{- with (default dict .Values.global).imageRegistry }}
+            - name: IMAGE_REGISTRY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.runtime.imagePullSecrets }}
+            {{- $pullSecretNames := list }}
+            {{- range .Values.runtime.imagePullSecrets }}
+            {{- $pullSecretNames = append $pullSecretNames .name }}
+            {{- end }}
+            - name: IMAGE_PULL_SECRETS
+              value: {{ join "," $pullSecretNames | quote }}
+            {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
-            - name: TUNNEL_ENABLED
-              value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
-            {{- if dig "selfUpdate" true .Values.runtime.image }}
+            {{- if and (dig "selfUpdate" true .Values.runtime.image) (not (dig "digest" "" .Values.runtime.image)) }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}
             {{- end }}
@@ -7222,6 +7602,10 @@ metadata:
     {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
+{{- with default $.Values.runtime.imagePullSecrets $.Values.logCollector.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -7375,6 +7759,10 @@ spec:
         checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
+      {{- with default $.Values.runtime.imagePullSecrets $.Values.logCollector.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
         - operator: Exists
       securityContext:
@@ -7382,7 +7770,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: collector
-          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.logCollector.image.repository "tag" .Values.logCollector.image.tag "digest" (dig "digest" "" .Values.logCollector.image)) | quote }}
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -7530,11 +7918,94 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Pods of this release namespace: log collectors and linked workloads.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.runtime.api.port }}
+    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
+    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
+        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+        - ipBlock:
+            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
+    # ports the bindings use (a database, a cache) and the manager's own port.
+    {{- $ports := list }}
+    {{- range (.Values.runtime.networkPolicy.egress.ports | default list) }}{{- $ports = append $ports (int .) }}{{- end }}
+    {{- $managerUrl := urlParse (default "" (include "deployment.managementUrl" .)) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" $managerUrl.host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}
+    {{- else if eq $managerUrl.scheme "http" }}{{- $ports = append $ports 80 }}
+    {{- else if eq $managerUrl.scheme "https" }}{{- $ports = append $ports 443 }}{{- end }}
+    {{- if $ports }}
+    - ports:
+        {{- range $ports | uniq }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "gcp" }}
+    # GKE: the Operator's cloud credentials come from the metadata server
+    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
+    # with the Workload Identity metadata server on dataplane v1).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "aws" }}
+    # EKS Pod Identity: the Operator's cloud credentials come from the Pod Identity agent
+    # on the node (AWS_CONTAINER_CREDENTIALS_FULL_URI, 169.254.170.23:80, fd00:ec2::23 on IPv6).
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+        - ipBlock:
+            cidr: fd00:ec2::23/128
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
 {{- end }}
 "#
@@ -7798,9 +8269,13 @@ spec:
         k8s-app: metrics-server
     spec:
       serviceAccountName: metrics-server
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: metrics-server
-          image: {{ default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image | quote }}
+          image: {{ include "deployment.mirroredImage" (dict "root" $ "image" (default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image)) | quote }}
           imagePullPolicy: IfNotPresent
           args:
             - --cert-dir=/tmp
@@ -7880,6 +8355,137 @@ fn aks_values_example(analysis: &ChartAnalysis) -> String {
         analysis,
         "azure.workload.identity/client-id",
         "00000000-0000-0000-0000-000000000000",
+    )
+}
+
+/// Values a GitOps install sets, written as the `values` of a Flux
+/// HelmRelease or the `valuesObject` of an Argo CD Application. `indent` is
+/// the number of spaces the block starts at.
+fn gitops_values(indent: usize) -> String {
+    let block = r#"gitops:
+  enabled: true
+management:
+  url: https://manager.example.com
+  existingSecret:
+    name: alien-management
+    tokenKey: sync-token
+runtime:
+  image:
+    # The GitOps tool owns the Operator image: a new chart version carries a new
+    # Operator, and the Operator doesn't change its own image.
+    selfUpdate: false
+  encryption:
+    existingSecret:
+      name: alien-encryption
+      key: encryption-key
+  imagePullSecrets:
+    - name: alien-registry
+infrastructureExistingSecret: alien-infrastructure
+logCollector:
+  enabled: true
+  mode: podApi
+"#;
+    block
+        .lines()
+        .map(|line| format!("{}{line}\n", " ".repeat(indent)))
+        .collect()
+}
+
+/// Flux: an OCIRepository that follows the manager's chart versions, and a
+/// HelmRelease that installs them.
+fn flux_example(chart_name: &str) -> String {
+    format!(
+        r#"# Install this chart with Flux. Use one namespace per install.
+#
+# Create these Secrets in the namespace first (not in git, or sealed):
+#   alien-management      key sync-token: the deployment group token
+#   alien-encryption      key encryption-key: 64 hex characters, kept for the life of the install
+#   alien-infrastructure  key external-bindings.json: the `infrastructure` values as JSON
+#                         (the Terraform module's chart_infrastructure_json output)
+#   alien-registry        kubernetes.io/dockerconfigjson: pulls the Operator image and charts
+#                         through the manager
+#
+# `semver: "1.x"` takes every new chart version. A new Operator image is a new chart
+# version, so the Operator upgrades through Flux without a git change. Pin an exact
+# version here to hold it. Use `v1` instead of `v1beta2` on Flux 2.6 and newer.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: {chart_name}
+spec:
+  interval: 10m
+  url: oci://manager.example.com/charts/{chart_name}
+  ref:
+    semver: "1.x"
+  secretRef:
+    name: alien-registry
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {chart_name}
+spec:
+  interval: 10m
+  # Without retries Flux marks the release Stalled after one failed install or upgrade and
+  # stops until someone forces a reconcile.
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  chartRef:
+    kind: OCIRepository
+    name: {chart_name}
+  values:
+{values}"#,
+        values = gitops_values(4)
+    )
+}
+
+/// Argo CD: an Application that renders this chart from the manager's registry.
+fn argocd_example(chart_name: &str) -> String {
+    format!(
+        r#"# Install this chart with Argo CD. Use one namespace per install.
+#
+# Create the Secrets named below in the destination namespace first (not in git, or
+# sealed): alien-management (sync-token), alien-encryption (encryption-key),
+# alien-infrastructure (external-bindings.json) and alien-registry
+# (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
+# repository with the manager's install credentials.
+#
+# `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
+# chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check
+# yours. Where it doesn't, pin an exact version and let Renovate or Argo CD Image
+# Updater open the bump.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {chart_name}
+  namespace: argocd
+  # Without this finalizer, deleting the Application removes only the Application (and the
+  # chart's pre-delete cleanup), and the chart's own objects stay in the namespace.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: manager.example.com/charts
+    chart: {chart_name}
+    targetRevision: "1.*"
+    helm:
+      valuesObject:
+{values}  destination:
+    server: https://kubernetes.default.svc
+    namespace: {chart_name}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+"#,
+        values = gitops_values(8)
     )
 }
 
@@ -8122,6 +8728,69 @@ log buffer and reads the selected log files from the beginning. When switching
 from nodeAgent to podApi, the Operator checks both collector names and waits for
 their Pods to stop, including when the chart is rendered without cluster access.
 Use an Operator image built with this chart version for that transition.
+
+## GitOps
+
+Flux and Argo CD render this chart without access to the cluster. Set
+`gitops.enabled: true` and the render fails unless existing Secrets supply the
+management token (`management.existingSecret`) and the encryption key
+(`runtime.encryption.existingSecret`), and unless the log collector is
+`podApi` or `logCollector.token` is set. Without it a render generates a
+different key every time. `examples/gitops/flux.yaml` and
+`examples/gitops/argocd.yaml` show the full setup. A GitOps tool owns the
+Operator image, so they set `runtime.image.selfUpdate: false` and take Operator
+upgrades through chart versions. Keep one release per namespace.
+
+## Permissions
+
+The Operator runs under one ServiceAccount with a Role in the release
+namespace and a ClusterRole for node health. The application's own
+ServiceAccounts get only the rules their permission profile needs.
+
+| Resource | Verbs | Why |
+| --- | --- | --- |
+| `configmaps`, `secrets`, `services`, `pods`, `persistentvolumeclaims` | all | Creates and updates what the application's containers, workers and daemons need |
+| `pods/log` | `get` | Reads Pod logs; only with `logCollector.mode: podApi` |
+| `serviceaccounts` | `get` | Reads the application ServiceAccounts the chart created |
+| `events` | `get`, `list`, `watch` | Reports why a workload can't start |
+| `deployments`, `statefulsets`, `daemonsets`, `replicasets` (`apps`) | all | Runs the application's workloads |
+| `pods` (`metrics.k8s.io`) | `get`, `list`, `watch` | Resource usage in health reports |
+| `jobs` (`batch`) | all | Build and one-off jobs |
+| `networkpolicies` | all | A container with network settings gets a NetworkPolicy |
+| `ingresses`; `gateways`, `httproutes` (Gateway API) | all | Public endpoints, for the exposure mode in `stackSettings.kubernetes.exposure` |
+| `healthcheckpolicies` (`networking.gke.io`, `alb.networking.azure.io`) | all | Load balancer health checks for public routes on GKE and AKS |
+| `nodes`; `nodes` (`metrics.k8s.io`) (ClusterRole) | `get`, `list`, `watch` | Node health; turn off with `heartbeat.collection.nodes.enabled: false` |
+
+Set `rbac.routing.enabled: false` to leave the Ingress, Gateway, HTTPRoute and
+health check rules out of the Role, for a stack whose
+`stackSettings.kubernetes.exposure` is disabled. It is on by default.
+
+## Upgrades and availability
+
+The Operator is one replica and its Deployment uses the `Recreate` strategy:
+during a chart upgrade the old Pod stops before the new one starts, so the
+Operator is unavailable for the time the new Pod takes to become ready. The
+application's own workloads keep running. Releases and health reports resume
+when the Operator is back.
+
+An upgrade that changes the Helm history can run a post-upgrade Job
+(`runtime-cleanup-history-prune`). It deletes Helm release revisions older
+than the first revision that is safe to roll back to, so a rollback can't
+restore a release without the runtime cleanup scope. It runs with a read-only
+root filesystem and a memory limit, and a failed run stays for a day for
+debugging. The pre-delete Job (`cleanup`) removes the Operator's runtime objects
+on `helm uninstall`, with the same limits.
+
+## Outbound connections
+
+The Operator connects to:
+
+- the management URL (`management.url`), for sync, deployment credentials and, when enabled, logs, metrics and telemetry;
+- the Kubernetes API server of its own cluster;
+- the registry of `runtime.image.repository` (the manager's registry when `runtime.image.pullWithManagementToken` is set), to pull the Operator image;
+- each service named in `infrastructure` (for example the object store, database or queue), and the cloud APIs the Pod's identity is allowed to call.
+
+The `nodeAgent` log collector reads logs on each node and sends them to the Operator in the cluster.
 "#
     )
 }
@@ -10401,6 +11070,109 @@ mod tests {
     }
 
     #[test]
+    fn one_registry_value_moves_every_image_and_the_operator_runs_by_digest() {
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let values = format!(
+            r#"
+global:
+  imageRegistry: mirror.site.internal:5000/alien
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  image:
+    repository: ghcr.io/vendor/operator
+    tag: "1.2.3"
+    digest: {digest}
+logCollector:
+  enabled: true
+  mode: nodeAgent
+  token: collector-token
+"#
+        );
+        for (label, chart) in [("chart", sample_product_chart_with_collector(true))] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(&values));
+            rendered.assert_ok(label);
+            let mut images = Vec::new();
+            for document in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+                let document = YamlValue::deserialize(document).expect("valid Kubernetes YAML");
+                let pod = match document["kind"].as_str() {
+                    Some("Pod") => &document["spec"],
+                    Some(_) => &document["spec"]["template"]["spec"],
+                    None => continue,
+                };
+                for key in ["containers", "initContainers"] {
+                    for container in pod[key].as_sequence().into_iter().flatten() {
+                        images.push(container["image"].as_str().unwrap().to_string());
+                    }
+                }
+            }
+            assert!(images.len() >= 2, "{label}: {images:?}");
+            for image in &images {
+                assert!(
+                    image.starts_with("mirror.site.internal:5000/alien/"),
+                    "{label}: {image} does not come from the mirror"
+                );
+            }
+            assert!(
+                images.contains(&format!(
+                    "mirror.site.internal:5000/alien/vendor/operator@{digest}"
+                )),
+                "{label}: the Operator runs by digest from the mirror: {images:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_collector_and_metrics_server_pull_with_the_install_pull_secrets() {
+        // With a private mirror every rewritten image needs the pull Secret.
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  imagePullSecrets:
+    - name: site-registry
+logCollector:
+  enabled: true
+  mode: nodeAgent
+clusterBootstrap:
+  metricsServer:
+    enabled: true
+"#;
+        let chart = sample_product_chart();
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("pull secrets");
+        let mut checked = Vec::new();
+        for doc in parse_manifest_docs(&rendered.stdout) {
+            let name = doc["metadata"]["name"].as_str().unwrap_or_default();
+            if !matches!(yaml_str(&doc, "kind"), Some("DaemonSet" | "Deployment"))
+                || !(yaml_str(&doc, "kind") == Some("DaemonSet") || name == "metrics-server")
+            {
+                continue;
+            }
+            let secrets: Vec<&str> = doc["spec"]["template"]["spec"]["imagePullSecrets"]
+                .as_sequence()
+                .map(|s| s.iter().filter_map(|s| s["name"].as_str()).collect())
+                .unwrap_or_default();
+            assert!(
+                secrets.contains(&"site-registry"),
+                "{name} lacks the pull Secret"
+            );
+            checked.push(name.to_string());
+        }
+        assert_eq!(checked.len(), 2, "expected both workloads: {checked:?}");
+    }
+
+    #[test]
     fn cleanup_hooks_pull_with_the_install_pull_secrets() {
         // A site whose registry needs a password installs with a pull Secret;
         // the uninstall and upgrade hooks pull the cleanup image from the same
@@ -10541,7 +11313,7 @@ runtime:
 
         let (pod_2, file_2) =
             rendered_operator_pod_and_release_file(&packaged("rel_2", "sha256:abc"));
-        let env: std::collections::BTreeMap<String, String> = pod_2["spec"]["containers"][0]["env"]
+        let env: crate::test_utils::LinterFiles = pod_2["spec"]["containers"][0]["env"]
             .as_array()
             .unwrap()
             .iter()
@@ -11068,6 +11840,198 @@ infrastructureExistingSecret: customer-bindings
             "{}",
             rendered.stderr
         );
+    }
+
+    fn sample_chart_files() -> crate::test_utils::LinterFiles {
+        let registry = HelmRegistry::built_in();
+        generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample".to_string(),
+            },
+        )
+        .expect("chart")
+        .files
+    }
+
+    fn network_policy_of(files: &crate::test_utils::LinterFiles, extra: &str) -> serde_yaml::Value {
+        use serde::Deserialize;
+        let values = format!(
+            "management:\n  token: test-credential\n  url: https://manager.example.test\nruntime:\n  networkPolicy:\n    enabled: true\n{extra}"
+        );
+        let rendered = crate::test_utils::helm_template(files, Some(&values));
+        rendered.assert_ok("network policy");
+        let documents: Vec<serde_yaml::Value> =
+            serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+                .collect();
+        documents
+            .into_iter()
+            .find(|document| document["kind"] == "NetworkPolicy")
+            .expect("the chart renders a NetworkPolicy")
+    }
+
+    #[test]
+    fn an_http_management_url_still_installs_and_is_warned_about_in_the_notes() {
+        let files = sample_chart_files();
+        let values = |url: &str| {
+            format!("management:\n  token: test-credential\n  url: {url}\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n")
+        };
+        let http = values("http://manager.example.test:8080");
+        // The chart never fails on the scheme: existing installs and GitOps renders keep working.
+        crate::test_utils::helm_template(&files, Some(&http)).assert_ok("http url install");
+        let notes = crate::test_utils::helm_render_notes(&files, &http, "shop", "apps");
+        notes.assert_ok("http url notes");
+        assert!(notes.stdout.contains("is not https"), "{}", notes.stdout);
+        assert!(
+            notes.stdout.contains("http://manager.example.test:8080"),
+            "{}",
+            notes.stdout
+        );
+
+        let https = values("https://manager.example.test");
+        let notes = crate::test_utils::helm_render_notes(&files, &https, "shop", "apps");
+        notes.assert_ok("https url notes");
+        assert!(!notes.stdout.contains("not https"), "{}", notes.stdout);
+    }
+
+    #[test]
+    fn the_operator_network_policy_stays_open_unless_restricted_is_chosen() {
+        let files = sample_chart_files();
+        let allow_all = serde_yaml::from_str::<serde_yaml::Value>("[{}]").unwrap();
+        // Today's behavior, unchanged: an existing `enabled: true` install keeps allow-all.
+        let open = network_policy_of(&files, "");
+        assert_eq!(open["spec"]["ingress"], allow_all);
+        assert_eq!(open["spec"]["egress"], allow_all);
+        assert_eq!(network_policy_of(&files, "    mode: open\n"), open);
+
+        let restricted = network_policy_of(&files, "    mode: restricted\n");
+        for direction in ["ingress", "egress"] {
+            for rule in restricted["spec"][direction].as_sequence().unwrap() {
+                assert!(
+                    !rule.as_mapping().unwrap().is_empty(),
+                    "{direction} allows everything"
+                );
+            }
+        }
+        assert_eq!(restricted["spec"]["ingress"][0]["ports"][0]["port"], 8080);
+        let ports: Vec<u64> = restricted["spec"]["egress"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .flat_map(|rule| rule["ports"].as_sequence().unwrap().iter())
+            .map(|port| port["port"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ports, [53, 53, 443, 6443]);
+
+        // DNS names the DNS Pods, plus the DNS address on clusters without one.
+        let dns = network_policy_of(
+            &files,
+            "    mode: restricted\n    dns:\n      clusterIPs: [\"172.20.0.10\"]\n",
+        );
+        assert_eq!(
+            dns["spec"]["egress"][0]["to"][0]["podSelector"]["matchLabels"]["k8s-app"],
+            "kube-dns"
+        );
+        assert_eq!(
+            dns["spec"]["egress"][0]["to"][1]["ipBlock"]["cidr"],
+            "172.20.0.10/32"
+        );
+
+        // Binding ports and extra rules come from values.
+        let extra = network_policy_of(
+            &files,
+            "    mode: restricted\n    egress:\n      ports: [443, 5432]\n      extraRules:\n        - ports:\n            - protocol: TCP\n              port: 6379\n",
+        );
+        let egress = extra["spec"]["egress"].as_sequence().unwrap();
+        assert_eq!(egress[1]["ports"][1]["port"], 5432);
+        assert_eq!(egress.last().unwrap()["ports"][0]["port"], 6379);
+
+        // An unknown mode is refused by the schema.
+        let bad = crate::test_utils::helm_template(
+            &files,
+            Some("management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: strict\n"),
+        );
+        assert!(!bad.is_ok());
+    }
+
+    #[test]
+    fn a_restricted_policy_infers_the_manager_port_and_never_emits_an_empty_port_rule() {
+        let files = sample_chart_files();
+        let egress_ports = |url: &str, extra: &str| -> Vec<Vec<u64>> {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: {url}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n{extra}"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted policy");
+            let policy = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            policy["spec"]["egress"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|rule| {
+                    assert!(
+                        !rule.as_mapping().unwrap().is_empty(),
+                        "an empty rule allows everything"
+                    );
+                    rule["ports"]
+                        .as_sequence()
+                        .map(|p| p.iter().map(|x| x["port"].as_u64().unwrap()).collect())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        // An http URL without a port needs port 80.
+        let http = egress_ports("http://manager.example.test", "");
+        assert!(http.iter().flatten().any(|p| *p == 80), "{http:?}");
+        // Clearing the port list with an https URL still reaches the manager on 443.
+        let https = egress_ports(
+            "https://manager.example.test",
+            "    egress:\n      ports: []\n",
+        );
+        assert!(https.iter().flatten().any(|p| *p == 443), "{https:?}");
+        // An explicit port is used as written, and no rule has an empty ports list.
+        let explicit = egress_ports(
+            "https://manager.example.test:9443",
+            "    egress:\n      ports: []\n",
+        );
+        assert_eq!(explicit.last().unwrap(), &vec![9443]);
+    }
+
+    #[test]
+    fn a_restricted_aws_policy_allows_the_pod_identity_agent_and_nothing_else_open() {
+        let files = sample_chart_files();
+        let policy = |platform: &str| {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: https://manager.example.test\nbasePlatform: {platform}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted aws policy");
+            let found = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            found
+        };
+        let aws = policy("aws");
+        let rules = aws["spec"]["egress"].as_sequence().unwrap();
+        for rule in rules {
+            assert!(!rule.as_mapping().unwrap().is_empty());
+        }
+        let agent = rules
+            .iter()
+            .find(|r| r["to"][0]["ipBlock"]["cidr"] == "169.254.170.23/32")
+            .expect("pod identity rule");
+        assert_eq!(agent["to"][1]["ipBlock"]["cidr"], "fd00:ec2::23/128");
+        assert_eq!(agent["ports"][0]["port"], 80);
+        // Other platforms get no Pod Identity rule.
+        let gcp = serde_yaml::to_string(&policy("gcp")).unwrap();
+        assert!(!gcp.contains("169.254.170.23"));
     }
 
     #[test]

@@ -42,6 +42,7 @@ async fn aws_build_fails_when_the_setup_boundary_does_not_fit() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
 
     let error = build_stack(stack, &settings)

@@ -1081,16 +1081,6 @@
             "integer",
             "null"
           ]
-        },
-        "tunnel": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/components/schemas/ContainerTunnel"
-            }
-          ]
         }
       },
       "required": [
@@ -1255,40 +1245,41 @@
           "$ref": "#/components/schemas/ContainerSecurityProfile"
         },
         "readOnlyRootFilesystem": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "runAsGroup": {
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "runAsUser": {
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "writablePaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "profile",
-        "runAsUser",
-        "runAsGroup",
-        "readOnlyRootFilesystem"
+        "profile"
       ],
       "type": "object"
     },
     "ContainerSecurityProfile": {
       "enum": [
-        "restricted"
+        "restricted",
+        "unrestricted"
       ],
       "type": "string"
-    },
-    "ContainerTunnel": {
-      "additionalProperties": false,
-      "properties": {
-        "port": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "port"
-      ],
-      "type": "object"
     },
     "CpuAmount": {
       "oneOf": [
@@ -1418,6 +1409,16 @@
             },
             {
               "$ref": "#/components/schemas/DaemonRuntime"
+            }
+          ]
+        },
+        "security": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerSecurity"
             }
           ]
         },
@@ -1739,6 +1740,12 @@
           "type": "string"
         },
         "port": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "startupTimeoutSeconds": {
           "type": [
             "integer",
             "null"
@@ -3054,6 +3061,16 @@
         },
         "runtimeIdentityExchange": {
           "type": "boolean"
+        },
+        "security": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/ContainerSecurity"
+            }
+          ]
         },
         "timeoutSeconds": {
           "type": "integer"

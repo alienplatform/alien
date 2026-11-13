@@ -9,9 +9,9 @@ pub mod error;
 pub mod output;
 
 use crate::commands::{
-    down_command, join_command, leave_command, list_command, operator_command, register_command,
-    status_command, up_command, DownArgs, JoinArgs, LeaveArgs, ListArgs, OperatorArgs,
-    RegisterArgs, StatusArgs, UpArgs,
+    down_command, inputs_command, join_command, leave_command, list_command, operator_command,
+    register_command, status_command, up_command, verify_command, DownArgs, InputsArgs, JoinArgs,
+    LeaveArgs, ListArgs, OperatorArgs, RegisterArgs, StatusArgs, UpArgs, VerifyArgs,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::embedded_config::{load_embedded_config_from_path, DeployCliConfig};
@@ -45,7 +45,7 @@ pub enum Commands {
     Status(StatusArgs),
     /// List tracked deployments
     List(ListArgs),
-    /// Manage the alien-operator background service
+    /// Manage the operator background service
     Operator(OperatorArgs),
     /// Register an externally-provisioned stack (CloudFormation Outputs,
     /// Terraform, …) with a manager.
@@ -58,6 +58,10 @@ pub enum Commands {
     Sync(commands::sync::SyncArgs),
     /// Return an air-gapped deployment to its previous release
     Rollback(commands::sync::RollbackArgs),
+    /// Change deployer inputs in your own store
+    Inputs(InputsArgs),
+    /// Check that this install runs only what the vendor signed
+    Verify(VerifyArgs),
 }
 
 /// Loads the configuration embedded in this binary, if it carries one.
@@ -189,6 +193,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Leave(args) => leave_command(args).await,
         Commands::Sync(args) => commands::sync::sync_command(args, embedded_config.as_ref()).await,
         Commands::Rollback(args) => commands::sync::rollback_command(args).await,
+        Commands::Inputs(args) => inputs_command(args).await,
+        Commands::Verify(args) => verify_command(args, embedded_config.as_ref()).await,
     }
 }
 
@@ -286,6 +292,65 @@ mod tests {
         let help = deploy.render_long_help().to_string();
         assert!(help.contains("acmectl deploy"));
         assert!(!help.contains("alien-deploy deploy"));
+    }
+
+    /// Every help text a customer can reach (each subcommand, each argument) in a branded CLI.
+    fn all_help_text(command: &mut Command, out: &mut Vec<String>) {
+        let name = command.get_name().to_string();
+        let help = command.render_long_help().to_string();
+        out.push(format!("{name}\n{help}"));
+        let names: Vec<String> = command
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_string())
+            .collect();
+        for name in names {
+            if let Some(child) = command.find_subcommand_mut(&name) {
+                all_help_text(child, out);
+            }
+        }
+    }
+
+    #[test]
+    fn branded_help_never_shows_the_default_product_name() {
+        let config = DeployCliConfig {
+            token: None,
+            deployment_group_id: None,
+            default_platform: None,
+            api_base_url: None,
+            agent_binary_url: None,
+            machine_bundle_url: None,
+            install_script_url: None,
+            setup_revision: None,
+            token_env_var: None,
+            name: Some("acmectl".to_string()),
+            display_name: Some("Acme Deployment CLI".to_string()),
+        };
+        let mut command = command_with_branding(Some(&config));
+        let mut texts = Vec::new();
+        all_help_text(&mut command, &mut texts);
+        let offending: Vec<String> = texts
+            .iter()
+            .flat_map(|text| text.lines())
+            // Environment variable names and the operator's data directory are existing,
+            // scripted contracts: they stay and are named here.
+            .map(|line| {
+                let mut line = line.replace("~/.alien/operator-data", "");
+                while let Some(start) = line.find("ALIEN_") {
+                    let end = line[start..]
+                        .find(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+                        .map_or(line.len(), |n| start + n);
+                    line.replace_range(start..end, "");
+                }
+                line
+            })
+            .filter(|line| line.to_ascii_lowercase().contains("alien"))
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert!(
+            offending.is_empty(),
+            "branded help mentions the default product name:\n{}",
+            offending.join("\n")
+        );
     }
 
     #[test]

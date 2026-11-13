@@ -687,6 +687,11 @@ output "kubernetes_kube_context" {
   description = "Kube context for managed Kubernetes clusters created by this module."
 }
 
+output "chart_service_accounts_json" {
+  value       = jsonencode({ serviceAccountPrefix = local.resource_prefix, serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
+  description = "The Helm chart's `serviceAccountPrefix`, `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created, and the prefix their trust policies expect in service account names), as JSON. Merge it into the chart's values. Install into the namespace set in `kubernetes_namespace`."
+}
+
 === README.md ===
 # Deployment setup - aks-overlay
 

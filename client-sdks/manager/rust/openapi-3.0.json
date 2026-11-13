@@ -64,6 +64,39 @@
         ]
       }
     },
+    "/v1/bindings/sandboxes/create": {
+      "post": {
+        "tags": [
+          "bindings"
+        ],
+        "operationId": "create_sandbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRemoteSandboxRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sandbox the data plane created, as it reports it",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/commands": {
       "post": {
         "tags": [
@@ -700,6 +733,79 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/config-statements": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "list_config_statements",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored config statements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigStatementsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "add_config_statement",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored"
           }
         },
         "security": [
@@ -1461,6 +1567,308 @@
         ]
       }
     },
+    "/v1/pending-changes/{id}": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "get_pending_change",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pending change id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/pending-changes/{id}/resolution": {
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "resolve_pending_change",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pending change id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolvePendingChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{project}/pending-changes": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "list_pending_changes",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only changes with this status.",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PendingChangeStatus"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending changes, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "create_pending_change",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePendingChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{project}/signer-lists": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "list_signer_lists",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored signer list versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerListsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "add_signer_list",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The same version was already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerListStored"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerListStored"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{project}/signing": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "get_project_signing",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Setup hosting for signed releases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSigningResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/release-channels": {
       "get": {
         "tags": [
@@ -1945,40 +2353,6 @@
             "bearer": []
           }
         ]
-      },
-      "post": {
-        "tags": [
-          "tokens"
-        ],
-        "summary": "`POST /v1/tokens` — create a scoped token (admin only).",
-        "operationId": "create_token",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateTokenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Token created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatedTokenResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
       }
     },
     "/v1/tokens/{id}": {
@@ -2393,9 +2767,9 @@
               "supportsExecutionClaims": {
                 "type": "boolean"
               },
-              "supportsTunnels": {
+              "supportsPodSecurity": {
                 "type": "boolean",
-                "description": "Absent for Operators that predate container tunnels."
+                "description": "Absent for Operators that predate the pod security profile settings."
               }
             }
           },
@@ -2485,6 +2859,15 @@
               }
             ]
           },
+          "signedConfig": {
+            "nullable": true,
+            "description": "The deployment's newest signed config, on every sync, so a protected\nOperator applies new developer values without a new release.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignedStatement"
+              }
+            ]
+          },
           "target": {},
           "targetDynamicContainers": {
             "type": "array",
@@ -2506,11 +2889,6 @@
           "targetOperatorImage": {
             "type": "string",
             "description": "Operator image this manager's charts install. Operators that manage\ntheir own workload update to it. Absent when the manager serves no\ncharts.",
-            "nullable": true
-          },
-          "tunnelUrl": {
-            "type": "string",
-            "description": "Base URL operators open tunnel connections to. Absent when this manager\ndoes not accept tunnels; operators then never dial.",
             "nullable": true
           }
         }
@@ -2737,10 +3115,46 @@
           "publicModelId": {
             "type": "string"
           },
+          "quotaWarnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiQuotaWarning"
+            },
+            "description": "Applied quotas far below the cloud's default for this model. Empty when none were read\nor none are low."
+          },
           "testedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "throttledLastHour": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Requests the cloud throttled for this model in the last hour, from the cloud's own\nmetrics. `None` when not read; `Some(0)` is a real zero.",
+            "minimum": 0,
+            "nullable": true
+          }
+        }
+      },
+      "AiQuotaWarning": {
+        "type": "object",
+        "description": "One quota the account has set well below the cloud's default (under 10%).",
+        "required": [
+          "quotaName",
+          "applied",
+          "default"
+        ],
+        "properties": {
+          "applied": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {
+            "type": "number",
+            "format": "double"
+          },
+          "quotaName": {
+            "type": "string"
           }
         }
       },
@@ -6925,6 +7339,22 @@
           }
         }
       },
+      "ConfigStatementsResponse": {
+        "type": "object",
+        "description": "Config statements stored for a deployment.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignedStatement"
+            },
+            "description": "Every stored statement, lowest sequence first."
+          }
+        }
+      },
       "ContainerAppsEnvironmentBinding": {
         "type": "object",
         "description": "Binding configuration for a pre-existing Azure Container Apps Environment.\n\nUsed when deploying to an existing environment instead of having Alien provision one.\nThis is useful for shared environments (e.g., test infrastructure) or enterprise\nsetups where environments are managed by a separate team.",
@@ -7076,13 +7506,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "CreatableTokenType": {
-        "type": "string",
-        "description": "Token kinds an admin can create through the API.",
-        "enum": [
-          "tunnel"
-        ]
       },
       "CreateCommandRequest": {
         "type": "object",
@@ -7279,6 +7702,32 @@
           }
         }
       },
+      "CreatePendingChangeRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{project}/pending-changes`: the body of the\nnext signer list, for an admin to review and sign.",
+        "required": [
+          "summary",
+          "basedOnVersion",
+          "body"
+        ],
+        "properties": {
+          "basedOnVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signer list version the body was prepared from.",
+            "minimum": 0
+          },
+          "body": {
+            "type": "object",
+            "description": "The next list's body (`previous`, `adminThreshold`, `signers`,\n`deny`, `recovered`)."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One line for lists, such as `bob-thinkpad asks to: release`."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateReleaseChannelRequest": {
         "type": "object",
         "description": "Body of `POST /v1/release-channels`.",
@@ -7321,27 +7770,52 @@
             "type": "string",
             "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
           },
+          "setupTemplates": {
+            "type": "object",
+            "description": "Setup template bytes (base64) keyed by platform and template name, as\nthe release signed them. Required for every template a signed\nstatement names, and refused unless each hashes to its signed digest.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "signedStacks": {
+            "type": "object",
+            "description": "Signed statements keyed by platform, from `alien release` with a\nsigning key. Stored and returned exactly as received; deployments in\nprotected mode verify them and deploy only the stack they contain.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SignedStatement"
+            }
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           }
         },
         "additionalProperties": false
       },
-      "CreateTokenRequest": {
+      "CreateRemoteSandboxRequest": {
         "type": "object",
+        "description": "What a caller chooses. An unknown field is refused, so nothing else can be asked for.",
         "required": [
-          "type"
+          "deploymentId",
+          "resourceId"
         ],
         "properties": {
-          "deploymentGroupId": {
-            "type": "string",
-            "description": "Limit the token to one deployment group's deployments.",
-            "nullable": true
+          "deploymentId": {
+            "type": "string"
           },
-          "type": {
-            "$ref": "#/components/schemas/CreatableTokenType"
+          "env": {
+            "type": "object",
+            "description": "Variables placed in the sandbox.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "resourceId": {
+            "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "CreateTokenResponse": {
         "type": "object",
@@ -7357,25 +7831,6 @@
             "type": "string"
           }
         }
-      },
-      "CreatedTokenResponse": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TokenResponse"
-          },
-          {
-            "type": "object",
-            "required": [
-              "token"
-            ],
-            "properties": {
-              "token": {
-                "type": "string",
-                "description": "The raw token. Shown once; only its hash is stored."
-              }
-            }
-          }
-        ]
       },
       "CustomCertificateConfig": {
         "type": "object",
@@ -7830,10 +8285,20 @@
             "type": "string",
             "description": "Required by the platform-SDK Deployment schema. Standalone is\nsingle-tenant; reuse the same synthetic project id used in the\ndeployment-groups route."
           },
+          "protected": {
+            "type": "boolean",
+            "description": "Whether the deployment's setup pins a signing fingerprint, so it runs\nonly signed releases. Only the install's own verification proves it.\nAbsent from older managers, which have no protected deployments;\na protected install refuses unsigned releases whatever this says, so\nreading it as false can't skip a signature.",
+            "default": false
+          },
           "retryRequested": {
             "type": "boolean"
           },
           "runtimeMetadata": {},
+          "signingFingerprint": {
+            "type": "string",
+            "description": "The fingerprint the deployment's setup pins.",
+            "nullable": true
+          },
           "stackSettings": {},
           "stackState": {},
           "status": {
@@ -13596,7 +14061,7 @@
           },
           "tunnels": {
             "type": "boolean",
-            "description": "Requests into deployments through `/v1/deployments/{id}/tunnels/...`."
+            "description": "Always false: container tunnels were removed. Still served because\nCLIs released before the removal require the field."
           },
           "values": {
             "type": "integer",
@@ -14494,6 +14959,86 @@
           }
         }
       },
+      "PendingChangeResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "projectId",
+          "status",
+          "summary",
+          "basedOnVersion",
+          "body",
+          "createdAt"
+        ],
+        "properties": {
+          "basedOnVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signer list version the body was prepared from.",
+            "minimum": 0
+          },
+          "body": {
+            "type": "object",
+            "description": "The next list's body."
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "Also the request id the pairing code covers."
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "type": "string",
+            "description": "Who filed it, display only.",
+            "nullable": true
+          },
+          "resolvedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "signerListVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Set when approved.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PendingChangeStatus"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Display only."
+          }
+        }
+      },
+      "PendingChangeStatus": {
+        "type": "string",
+        "description": "Where a pending change stands.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
+      "PendingChangesResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingChangeResponse"
+            }
+          }
+        }
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -14895,6 +15440,19 @@
           }
         ],
         "description": "Storage backend representation for different presigned request types"
+      },
+      "ProjectSigningResponse": {
+        "type": "object",
+        "description": "What a release of the project needs to know to sign its setup templates.",
+        "required": [
+          "setupHosting"
+        ],
+        "properties": {
+          "setupHosting": {
+            "type": "object",
+            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get."
+          }
+        }
       },
       "PromoteReleaseRequest": {
         "type": "object",
@@ -15941,11 +16499,79 @@
             "description": "Setup-step fingerprints — used by `alien release` to short-circuit\nre-pushing artifacts that haven't changed across releases. The\nplatform-API client requires this field to be present (even if\nempty). The OSS standalone manager doesn't track per-setup-step\nfingerprints, so we return an empty map.",
             "additionalProperties": {}
           },
+          "setupTemplates": {
+            "type": "object",
+            "description": "Setup template bytes (base64) keyed by platform and template name,\nexactly as the release uploaded them; each hashes to its signed digest.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "signedStacks": {
+            "type": "object",
+            "description": "Signed statements keyed by platform, exactly as they were created.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SignedStatement"
+            }
+          },
+          "signing": {
+            "nullable": true,
+            "description": "Who signed the release and for which channel, decoded from the stored\nstatements for display. `null` when the release is unsigned.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSigning"
+              }
+            ]
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           },
           "workspaceId": {
             "type": "string"
+          }
+        }
+      },
+      "ReleaseSigner": {
+        "type": "object",
+        "description": "One signer of a release.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`device`, `ci` or `recovery`; absent when the signer list doesn't name it.",
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ReleaseSigning": {
+        "type": "object",
+        "description": "A signed release's channel and signers, for the release badge. Display\nonly: decoded, never verified, because the manager isn't trusted to.",
+        "required": [
+          "channel",
+          "signers"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Channel the statements sign, such as `production`."
+          },
+          "signers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseSigner"
+            },
+            "description": "Signers of the statements, with their label and kind from the signer\nlist version they name."
           }
         }
       },
@@ -16199,6 +16825,11 @@
           "cpu": {
             "type": "string",
             "description": "Declared sandbox ceilings, where the declaration named them.",
+            "nullable": true
+          },
+          "createViaManager": {
+            "type": "boolean",
+            "description": "Set when this install creates its remote callers' sandboxes itself: the caller's own role\ncannot, so `POST /v1/bindings/sandboxes/create` does, from the signed release. Absent\neverywhere else, and for a client that predates it the data plane is the path.",
             "nullable": true
           },
           "dataPlaneEndpoint": {
@@ -16680,6 +17311,14 @@
             "description": "`logs`, `metrics` or `traces`."
           }
         }
+      },
+      "ResolutionStatus": {
+        "type": "string",
+        "description": "How a pending change ended.",
+        "enum": [
+          "approved",
+          "rejected"
+        ]
       },
       "ResolveBindingKind": {
         "type": "string",
@@ -17217,6 +17856,26 @@
           }
         ],
         "description": "One approved remote Storage binding paired with credentials for the same\nprovider. The discriminant makes cross-provider combinations impossible."
+      },
+      "ResolvePendingChangeRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/pending-changes/{id}/resolution`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "signerListVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The signer list version that carries the change; required when approved.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResolutionStatus"
+          }
+        },
+        "additionalProperties": false
       },
       "ResourceEntry": {
         "type": "object",
@@ -17920,21 +18579,6 @@
           },
           {
             "type": "object",
-            "description": "Connect the recorded operator tunnel.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "operatorTunnel"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
             "description": "Receive the operator's fixed operations queue.",
             "required": [
               "type"
@@ -18525,6 +19169,77 @@
           "automatic"
         ]
       },
+      "Signature": {
+        "type": "object",
+        "description": "One signature over a statement's payload.",
+        "required": [
+          "signer",
+          "sig"
+        ],
+        "properties": {
+          "sig": {
+            "type": "string",
+            "description": "Base64 DER ECDSA P-256 signature over the payload bytes."
+          },
+          "signer": {
+            "type": "string",
+            "description": "Id of the signer on the signer list."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignedStatement": {
+        "type": "object",
+        "description": "A statement as it is stored and carried.",
+        "required": [
+          "payload",
+          "signatures"
+        ],
+        "properties": {
+          "payload": {
+            "type": "string",
+            "description": "Base64 of the payload bytes."
+          },
+          "signatures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Signature"
+            },
+            "description": "Signatures over the payload bytes."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignerListStored": {
+        "type": "object",
+        "description": "Answer to storing a signer list version.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version stored.",
+            "minimum": 0
+          }
+        }
+      },
+      "SignerListsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignedStatement"
+            },
+            "description": "Every stored version, oldest first."
+          }
+        }
+      },
       "SourceCredentials": {
         "type": "string",
         "enum": [
@@ -18891,6 +19606,15 @@
             "$ref": "#/components/schemas/SetupManagement",
             "description": "Ongoing authority over infrastructure normally owned by setup. Automatic requires\nan explicit CLI setup grant; changing this setting alone never grants that authority."
           },
+          "signing": {
+            "nullable": true,
+            "description": "Release signing for this install. When set, setup writes the signing settings\n(the fingerprint, the install's prefix and the channel) where only setup can change\nthem, and the install's enforcers run only what the vendor signed. Setup alone writes\nthem: changing this later does not change what an install already pinned.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StackSigning"
+              }
+            ]
+          },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
             "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval"
@@ -18900,6 +19624,25 @@
             "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval"
           }
         }
+      },
+      "StackSigning": {
+        "type": "object",
+        "description": "What setup pins for a protected install.\n\nTake the values from the vendor's install guide or signed release, not from the\ncontrol plane.",
+        "required": [
+          "fingerprint",
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Release channel the install follows, such as `production`."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "`SHA256:<64 hex>` fingerprint of the vendor's signer list version 1."
+          }
+        },
+        "additionalProperties": false
       },
       "StackState": {
         "type": "object",
@@ -18924,6 +19667,18 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/StackResourceState"
             }
+          }
+        }
+      },
+      "StatementRequest": {
+        "type": "object",
+        "description": "A body carrying one signed statement.",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "$ref": "#/components/schemas/SignedStatement"
           }
         }
       },

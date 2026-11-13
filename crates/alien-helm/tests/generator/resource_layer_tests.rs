@@ -517,6 +517,114 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     );
     let rules = serde_yaml::to_string(&admission["spec"]["validations"]).unwrap();
     assert!(rules.contains("automountServiceAccountToken == false") && rules.contains(image));
+
+    // One chart value moves every image to the site's registry, and the admission policy
+    // that only admits the probe's exact image follows it.
+    let mirrored = super::test_utils::helm_template(
+        &chart.files,
+        Some("serviceAccountPrefix: custom-prefix\nglobal:\n  imageRegistry: mirror.site.internal:5000/alien\nheartbeat:\n  collection:\n    nodes:\n      enabled: false\n"),
+    );
+    mirrored.assert_ok("mirrored sandbox chart");
+    let mirrored_documents = rendered_documents(&mirrored);
+    // An air-gapped install passes the exact reference it bundled (a single-architecture
+    // export pins another digest than the default), and it follows the mirror too.
+    let bundled = super::test_utils::helm_template(
+        &chart.files,
+        Some("global:\n  imageRegistry: mirror.site.internal:5000/alien\nsandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
+    );
+    bundled.assert_ok("bundled probe image");
+    assert!(
+        bundled
+            .stdout
+            .contains("mirror.site.internal:5000/alien/library/python@sha256:aaaa"),
+        "the probe runs the bundled digest from the mirror"
+    );
+    assert!(!bundled.stdout.contains("70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"));
+    // A pinned Operator digest is the install's choice; self-update to the manager's tag would undo it.
+    let self_update_env = |values: &str| -> bool {
+        let rendered = super::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("self-update chart");
+        rendered_documents(&rendered).iter().any(|doc| {
+            doc["spec"]["template"]["spec"]["containers"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .any(|c| {
+                    c["env"]
+                        .as_sequence()
+                        .into_iter()
+                        .flatten()
+                        .any(|e| e["name"] == "OPERATOR_SELF_UPDATE_DEPLOYMENT")
+                })
+        })
+    };
+    assert!(self_update_env("serviceAccountPrefix: custom-prefix\n"));
+    assert!(!self_update_env(&format!(
+        "serviceAccountPrefix: custom-prefix\nruntime:\n  image:\n    digest: sha256:{}\n",
+        "a".repeat(64)
+    )));
+    let mut images = Vec::new();
+    for doc in &mirrored_documents {
+        let pod = match doc["kind"].as_str() {
+            Some("Pod") => &doc["spec"],
+            Some(_) => &doc["spec"]["template"]["spec"],
+            None => continue,
+        };
+        for key in ["containers", "initContainers"] {
+            for container in pod[key].as_sequence().into_iter().flatten() {
+                images.push(container["image"].as_str().unwrap().to_string());
+            }
+        }
+    }
+    assert!(!images.is_empty());
+    for image in &images {
+        assert!(
+            image.starts_with("mirror.site.internal:5000/alien/"),
+            "{image} does not come from the mirror"
+        );
+    }
+    let mirrored_probe = mirrored_documents
+        .iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("probe job");
+    let mirrored_image = mirrored_probe["spec"]["template"]["spec"]["containers"][0]["image"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        mirrored_image,
+        image.replace("docker.io/", "mirror.site.internal:5000/alien/"),
+    );
+    let mirrored_rules = serde_yaml::to_string(
+        &mirrored_documents
+            .iter()
+            .find(|doc| {
+                doc["kind"] == "ValidatingAdmissionPolicy"
+                    && doc["spec"]["matchConstraints"]["resourceRules"][0]["resources"][0] == "pods"
+            })
+            .unwrap()["spec"]["validations"],
+    )
+    .unwrap();
+    assert!(
+        mirrored_rules.contains(&format!("c.image == '{mirrored_image}'")),
+        "{mirrored_rules}"
+    );
+    let operator_env = mirrored_documents
+        .iter()
+        .find(|doc| doc["kind"] == "Deployment")
+        .map(|doc| {
+            serde_yaml::to_string(&doc["spec"]["template"]["spec"]["containers"][0]["env"]).unwrap()
+        })
+        .unwrap();
+    assert!(
+        operator_env.contains("IMAGE_REGISTRY")
+            && operator_env.contains("mirror.site.internal:5000/alien"),
+        "{operator_env}"
+    );
     // Created pods cannot ask for host powers the probe itself does not have.
     for required in [
         "'ALL' in c.securityContext.capabilities.drop",
@@ -1290,6 +1398,38 @@ fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<
         })
 }
 
+/// The Operator learns its own pod address from the downward API, so a sandbox pod can prove its
+/// NetworkPolicy refuses it before the pod takes a session.
+#[test]
+fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_kube_version(
+        &chart.files,
+        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
+        "acme",
+        None,
+    );
+    let operator = rendered_documents(&rendered)
+        .into_iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let find = |name: &str| env.iter().find(|variable| variable["name"] == name).cloned();
+    let pod_ip = find("ALIEN_OPERATOR_POD_IP").expect("the pod address variable");
+    assert_eq!(pod_ip["valueFrom"]["fieldRef"]["fieldPath"], "status.podIP");
+    let address = find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).expect("the address");
+    let value = address["value"].as_str().unwrap();
+    assert!(value.starts_with("$(ALIEN_OPERATOR_POD_IP):"), "{value}");
+    // The variable must be defined before the one that expands it.
+    let position = |name: &str| env.iter().position(|variable| variable["name"] == name);
+    assert!(
+        position("ALIEN_OPERATOR_POD_IP")
+            < position(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+    );
+}
+
 /// The chart, not the Operator, chooses the sandbox RuntimeClass: the value wins, and without
 /// one the cluster's own version string picks the vendor class.
 #[test]
@@ -1466,5 +1606,13 @@ fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
         chart.files.keys().collect::<Vec<_>>()
     );
     assert!(!chart.files.contains_key("templates/_sandbox.tpl"));
+    // An air-gapped install sets the probe image whenever the chart emits the probe, so the
+    // values schema of a chart with no Sandbox must accept it.
+    let bundled = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
+    );
+    bundled.assert_ok("probe image on a chart without a sandbox");
+    assert!(bundled.stdout.contains("python:3.13-slim@sha256:aaaa"), "{}", bundled.stdout);
     assert_helm_valid(&chart, "container_egress_no_sandbox");
 }

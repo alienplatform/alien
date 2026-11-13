@@ -21,21 +21,21 @@ pub struct OperatorArgs {
 
 #[derive(Subcommand)]
 pub enum OperatorCommand {
-    /// Install alien-operator as an OS service
+    /// Install operator as an OS service
     Install(InstallArgs),
-    /// Start the alien-operator service
+    /// Start the operator service
     Start,
-    /// Stop the alien-operator service
+    /// Stop the operator service
     Stop,
     /// Show the operator service status
     Status,
-    /// Uninstall the alien-operator service
+    /// Uninstall the operator service
     Uninstall,
 }
 
 #[derive(Args)]
 pub struct InstallArgs {
-    /// Path to the alien-operator binary. If omitted, searches PATH.
+    /// Path to the operator binary. If omitted, searches PATH.
     #[arg(long)]
     pub binary: Option<PathBuf>,
 

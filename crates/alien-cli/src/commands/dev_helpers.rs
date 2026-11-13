@@ -648,6 +648,7 @@ pub async fn build_and_post_release_simple(
             debug_mode: true,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         alien_build::build_stack(stack, &settings)
@@ -704,6 +705,8 @@ pub async fn build_and_post_release_simple(
             // sentinel and is required by the wire schema.
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
         .send()
         .await

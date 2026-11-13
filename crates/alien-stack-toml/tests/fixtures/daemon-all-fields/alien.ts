@@ -40,6 +40,7 @@ const agent = new alien.Daemon("agent")
       { source: "/etc/acme", target: "/config" },
     ],
   })
+  .security({ profile: "unrestricted" })
   .link(reports)
   .permissions("agent")
   .environment({ AGENT_MODE: "resident", AGENT_BATCH: "50" })

@@ -178,7 +178,7 @@ async fn target(
     }
     // No token: the environment pulls from its own registry and never calls
     // the manager. Bundles are applied by Operators that support air-gapped
-    // mode, which all understand tunnels.
+    // mode.
     let management_config = match super::sync::pull_management_config(&state, &deployment).await {
         Ok(management_config) => management_config,
         Err(error) => return error.into_response(),

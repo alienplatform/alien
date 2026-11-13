@@ -185,6 +185,26 @@ impl StackMutation for SecretsVaultMutation {
     }
 }
 
+/// The deployer secret slots of `config`'s deployment. A protected install reads every one from
+/// the vault: the verifier's list for a worker comes from the signed stack alone, so setup
+/// links and grants the same slots.
+fn deployer_slots<'a>(
+    inputs: &'a [alien_core::StackInputDefinition],
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Vec<alien_core::DeployerSecretSlot<'a>> {
+    if config.stack_settings.signing.is_some() {
+        return alien_core::protected_deployer_secret_slots(inputs, &config.input_values, platform);
+    }
+    alien_core::deployer_secret_slots(
+        inputs,
+        &config.input_values,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
+    )
+}
+
 /// Adds the setup-owned vault for customer-written deployer secret slots.
 pub struct DeployerSecretsVaultMutation;
 
@@ -196,15 +216,9 @@ impl StackMutation for DeployerSecretsVaultMutation {
 
     fn should_run(&self, stack: &Stack, state: &StackState, config: &DeploymentConfig) -> bool {
         state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID)
-            || alien_core::deployer_secret_slots(
-                &stack.inputs,
-                &config.input_values,
-                config.stored_secret_input_ids.as_deref(),
-                &config.environment_variables.variables,
-                state.platform,
-            )
-            .iter()
-            .any(|slot| !slot.has_stored_value)
+            || deployer_slots(&stack.inputs, config, state.platform)
+                .iter()
+                .any(|slot| !slot.has_stored_value)
             || (state.platform == Platform::Aws
                 && stack
                     .permissions
@@ -219,15 +233,9 @@ impl StackMutation for DeployerSecretsVaultMutation {
         state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
-        let has_native_slots = alien_core::deployer_secret_slots(
-            &stack.inputs,
-            &config.input_values,
-            config.stored_secret_input_ids.as_deref(),
-            &config.environment_variables.variables,
-            state.platform,
-        )
-        .iter()
-        .any(|slot| !slot.has_stored_value);
+        let has_native_slots = deployer_slots(&stack.inputs, config, state.platform)
+            .iter()
+            .any(|slot| !slot.has_stored_value);
         let installed_vault = state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID);
         if !has_native_slots && !installed_vault {
             if state.platform == Platform::Aws {
@@ -297,13 +305,7 @@ impl StackMutation for DeployerSecretsVaultMutation {
             add_deployer_secret_read_permissions(&mut stack, DEPLOYER_SECRETS_VAULT_ID, keys)?;
         }
         if !SecretDelivery::resolve(state.platform, ComputeKind::Worker).is_native_projection() {
-            let slots = alien_core::deployer_secret_slots(
-                &stack.inputs,
-                &config.input_values,
-                config.stored_secret_input_ids.as_deref(),
-                &config.environment_variables.variables,
-                state.platform,
-            );
+            let slots = deployer_slots(&stack.inputs, config, state.platform);
             for (id, entry) in &mut stack.resources {
                 if let Some(worker) = entry.config.downcast_mut::<Worker>() {
                     if slots.iter().any(|slot| {
@@ -564,13 +566,7 @@ fn deployer_secret_keys_by_profile(
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     // The same slots delivery reads: a secret the developer may also provide
     // and has a stored developer value is not a slot.
-    let slots = alien_core::deployer_secret_slots(
-        &stack.inputs,
-        &config.input_values,
-        config.stored_secret_input_ids.as_deref(),
-        &config.environment_variables.variables,
-        platform,
-    );
+    let slots = deployer_slots(&stack.inputs, config, platform);
     if slots.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -829,8 +825,18 @@ fn machine_workload_profiles(stack: &Stack) -> BTreeSet<String> {
         .collect()
 }
 
+/// Whether a profile name may be part of a machine workload secret prefix:
+/// letters, digits, `-` and `_` only. Anything else (notably `.`) could make one
+/// profile's prefix fall inside another's.
+pub fn is_machine_workload_profile_name(profile: &str) -> bool {
+    !profile.is_empty()
+        && profile
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// The prefix, within the secrets vault, of the secret values the control plane
-/// hands one machine workload profile.
+/// hands one machine workload profile. It always ends with the separator.
 pub fn machine_workload_secret_prefix(profile: &str) -> String {
     format!("hz.{profile}.")
 }
@@ -848,10 +854,7 @@ fn add_machine_workload_secret_read(stack: &mut Stack, vault_name: &str) -> Resu
         // The prefix is `hz.<profile>.`, so a profile `web.admin` would sit
         // inside the grant for `web`. The control plane refuses such names when
         // it writes values, so nothing is lost.
-        if !profile
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
+        if !is_machine_workload_profile_name(&profile) {
             continue;
         }
         let parameter = format!(
@@ -1606,6 +1609,35 @@ mod tests {
         assert!(DeployerSecretsVaultMutation.should_run(&stack, &state, &config));
     }
 
+    #[test]
+    fn a_protected_install_reads_a_stored_secret_from_the_vault_too() {
+        let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        stack.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        let state = StackState::new(Platform::Gcp);
+        let mut config = deployer_secret_config();
+        config.stored_secret_input_ids = Some(vec![stack.inputs[0].id.clone()]);
+        assert!(!DeployerSecretsVaultMutation.should_run(&stack, &state, &config));
+
+        config.stack_settings.signing = Some(
+            serde_json::from_value(serde_json::json!({
+                "fingerprint": format!("SHA256:{}", "9f2c".repeat(16)),
+                "channel": "production",
+            }))
+            .unwrap(),
+        );
+        assert!(
+            DeployerSecretsVaultMutation.should_run(&stack, &state, &config),
+            "the signed release lists the secret for the worker, so the worker needs the vault"
+        );
+        assert!(
+            !deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     fn secret_daemon_stack() -> Stack {
         let mut stack = deployer_secret_stack(&[], &["daemon"]);
         let daemon = Daemon::new("daemon".to_string())
@@ -1698,6 +1730,19 @@ mod tests {
             .unwrap();
         assert!(prepared.permissions.profiles.is_empty());
         assert_eq!(config.input_values["apiKey"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_grant_prefix_is_built_only_from_allowed_profiles_and_ends_with_the_separator() {
+        for ok in ["web", "jobs-1", "a_b", "W9"] {
+            assert!(is_machine_workload_profile_name(ok), "{ok}");
+            let prefix = machine_workload_secret_prefix(ok);
+            assert_eq!(prefix, format!("hz.{ok}."));
+            assert!(prefix.ends_with('.'));
+        }
+        for bad in ["", "web.admin", "we.b", "a/b", "a*", "a b", "web\u{e9}"] {
+            assert!(!is_machine_workload_profile_name(bad), "{bad}");
+        }
     }
 
     #[tokio::test]
@@ -3661,6 +3706,58 @@ mod tests {
                 !widened.errors.is_empty(),
                 "{platform:?}: a new read needs setup"
             );
+        }
+    }
+
+    /// A protected Azure install with a shared vault is set up like any other: the signing vault
+    /// is in a group of its own, so management's writes to this vault cannot reach it.
+    #[tokio::test]
+    async fn a_protected_azure_install_that_needs_a_vault_is_accepted() {
+        let stack = || {
+            Stack::new("secrets-write".to_string())
+                .add(
+                    Worker::new("api".to_string())
+                        .code(WorkerCode::Image {
+                            image: "test:latest".to_string(),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .permission(
+                    "execution",
+                    PermissionProfile::new().resource(SECRETS_VAULT_ID, ["vault/data-read"]),
+                )
+                .build()
+        };
+        let config = |protected: bool| {
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    signing: protected.then(|| alien_core::StackSigning {
+                        fingerprint: "SHA256:00".to_string(),
+                        channel: "production".to_string(),
+                    }),
+                    ..StackSettings::default()
+                })
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build()
+        };
+        for (platform, protected) in [
+            (Platform::Azure, false),
+            (Platform::Azure, true),
+            (Platform::Aws, true),
+            (Platform::Gcp, true),
+        ] {
+            crate::runner::PreflightRunner::new()
+                .apply_mutations(stack(), &StackState::new(platform), &config(protected))
+                .await
+                .unwrap_or_else(|error| panic!("{platform:?} protected={protected}: {error}"));
         }
     }
 }

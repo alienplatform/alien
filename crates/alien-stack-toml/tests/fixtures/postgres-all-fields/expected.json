@@ -47,7 +47,7 @@
       "description": "Transactional store for the ledger service.",
       "displayName": "Ledger database",
       "enabledWhen": "ledger_enabled",
-      "lifecycle": "live",
+      "lifecycle": "frozen",
       "remoteAccess": true
     }
   },

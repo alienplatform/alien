@@ -215,6 +215,21 @@ mod tests {
                 "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"}, "egress":"internet"}}
         }})).unwrap();
         let check = ContainerNetworkSettingsCheck;
+        // Containers are restricted by default; egress refuses the explicit opt-out.
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .security = Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        });
         let invalid = check.check(&stack, Platform::Local).await.unwrap();
         assert!(invalid
             .errors
@@ -229,9 +244,10 @@ mod tests {
             .unwrap()
             .security = Some(alien_core::ContainerSecurity {
             profile: alien_core::ContainerSecurityProfile::Restricted,
-            run_as_user: 1000,
-            run_as_group: 1000,
-            read_only_root_filesystem: false,
+            run_as_user: Some(1000),
+            run_as_group: Some(1000),
+            read_only_root_filesystem: Some(false),
+            writable_paths: Vec::new(),
         });
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             assert!(

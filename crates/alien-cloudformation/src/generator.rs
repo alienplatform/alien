@@ -34,6 +34,7 @@ use alien_core::{
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 use std::collections::{HashMap, HashSet};
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
@@ -78,6 +79,10 @@ const OUTPUT_SETUP_FINGERPRINT: &str = "DeploymentSetupFingerprint";
 const OUTPUT_SETUP_FINGERPRINT_VERSION: &str = "DeploymentSetupFingerprintVersion";
 const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
 const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
+/// The custom resource that registers the stack with the service.
+pub const REGISTRATION_RESOURCE: &str = "DeploymentRegistration";
+/// Its property that changes with every protected setup template (see `add_setup_revision`).
+pub const SETUP_REVISION: &str = "SetupRevision";
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
 const STANDARD_OUTPUT_COUNT: usize = 12;
@@ -89,7 +94,13 @@ const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
 const RULE_CUSTOM_DOMAIN_CERTIFICATE: &str = "CustomDomainCertificate";
 
 /// Registration behavior for the generated CloudFormation template.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum RegistrationMode {
     /// Register through a CloudFormation custom resource.
     CustomResource {
@@ -191,6 +202,9 @@ pub struct CloudFormationOptions<'a> {
     /// How strictly the template constrains who may manage the stack. The
     /// default leaves both parameters as open as they have always been.
     pub management_trust: ManagementTrustOptions,
+    /// What a protected template pins from the CLI build: the machine-image publisher and the
+    /// verifier image. Unprotected templates ignore it.
+    pub pins: alien_core::SetupPins,
 }
 
 /// Constraints on the parameters that decide who may assume the roles a
@@ -199,7 +213,8 @@ pub struct CloudFormationOptions<'a> {
 /// Both are off by default. Turning one on only narrows the values a
 /// parameter accepts: the resources and trust policies stay the same, so an
 /// installed stack that already satisfies the constraint updates in place.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagementTrustOptions {
     /// Make `ManagementExternalId` required: no default, and an empty value is
     /// refused at parameter validation, before anything is created or updated.
@@ -257,7 +272,7 @@ impl CloudFormationTarget {
 /// Setup resources that require subnet IDs cannot use implicit default networking.
 /// EKS also requires explicit subnets: this package does not discover the default VPC.
 fn restricts_network_mode(stack: &Stack, target: CloudFormationTarget) -> bool {
-    target.is_kubernetes() || alien_core::restricts_network_mode(stack, false)
+    target.is_kubernetes() || crate::emitters::aws::helpers::network_mode_names_subnets(stack)
 }
 
 /// Generate a CloudFormation template for a stack.
@@ -562,6 +577,7 @@ pub fn generate_cloudformation_template_with_profile(
             targets_kubernetes: options.target.is_kubernetes(),
             stack_settings: &stack_settings,
             names: &names,
+            pins: &options.pins,
         };
 
         let enabled_when = resource.enabled_when.as_deref();
@@ -667,6 +683,7 @@ pub fn generate_cloudformation_template_with_profile(
     };
 
     let management_config = management_config_expression(options.target);
+    let stack_settings_value = stack_settings.clone();
     let stack_settings = stack_settings_expression(
         options.target,
         stack,
@@ -682,7 +699,13 @@ pub fn generate_cloudformation_template_with_profile(
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
+    add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
+    // After consolidation, so the count of managed policies on the management role is final.
+    add_management_limits(&mut template, &stack_settings_value, stack)?;
+    if stack_settings_value.signing.is_some() {
+        refuse_unverifiable_code(&template)?;
+    }
 
     add_deployer_secret_outputs(
         &mut template,
@@ -741,7 +764,31 @@ pub fn generate_cloudformation_template_with_profile(
     validate_role_policy_limits(&template)?;
     validate_acyclic(&template)?;
     prune_unused_replication_input_conditions(&mut template, stack);
+    if stack_settings_value.signing.is_some() {
+        add_setup_revision(&mut template)?;
+    }
     Ok(template)
+}
+
+/// Makes a protected stack's registration run again on every setup update. CloudFormation
+/// re-runs the registration custom resource only when its properties change, and a signed
+/// setup update can change only what the install runs (a new verifier image). So the resource
+/// carries `SetupRevision`, the digest of the rest of the template: any other change to the
+/// template changes it, and the service hears of the update when it runs.
+fn add_setup_revision(template: &mut CfTemplate) -> Result<()> {
+    if !template.resources.contains_key(REGISTRATION_RESOURCE) {
+        return Ok(());
+    }
+    let digest = format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(to_yaml(template)?.as_bytes()))
+    );
+    if let Some(registration) = template.resources.get_mut(REGISTRATION_RESOURCE) {
+        registration
+            .properties
+            .insert(SETUP_REVISION.to_string(), CfExpression::from(digest));
+    }
+    Ok(())
 }
 
 fn public_http_resource_ids(stack: &Stack) -> Vec<String> {
@@ -1936,6 +1983,283 @@ fn add_sandbox_gateway_replica_secret(
     template.resources.insert(secret.logical_id.clone(), secret);
 }
 
+/// Template parameter that shows a protected install's signing fingerprint. It allows exactly
+/// one value, so a Quick-create link can't change it.
+pub const SIGNING_FINGERPRINT_PARAMETER: &str = "SigningFingerprint";
+/// Logical IDs of the parameters that hold a protected install's signing settings and ledger.
+const SIGNING_SETTINGS_ID: &str = "SigningFingerprintParameter";
+const SIGNING_LEDGER_ID: &str = "SigningStateParameter";
+/// Largest value a Standard-tier SSM parameter holds.
+const SSM_STANDARD_VALUE_MAX: usize = 4096;
+
+/// Writes a protected install's signing settings and its ledger: setup alone writes the
+/// settings. They live under `/signed/`, which no management grant on `<prefix>-*` reaches.
+/// The fingerprint and channel are literals, so the template's digest pins them; the
+/// `SigningFingerprint` parameter only shows the fingerprint to whoever creates the stack.
+fn add_signing_settings(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    target: CloudFormationTarget,
+) -> Result<()> {
+    let Some(signing) = &settings.signing else {
+        return Ok(());
+    };
+    if target.is_kubernetes() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "protect a Kubernetes install through CloudFormation".to_string(),
+            reason: "On Kubernetes the chart's signing values hold the settings; install the chart with them".to_string(),
+        }));
+    }
+    let prefix = "${AWS::StackName}";
+    // Check the fingerprint and channel; the prefix is the stack name, substituted by
+    // CloudFormation.
+    let mut signing_settings = signing.settings("stack")?;
+    signing_settings.prefix = prefix.to_string();
+
+    template.parameters.insert(
+        SIGNING_FINGERPRINT_PARAMETER.to_string(),
+        CfParameter {
+            parameter_type: "String".to_string(),
+            description: Some(
+                "Only software and settings signed with the vendor's keys run in this stack. Before creating it, check that this matches the fingerprint on the vendor's security page."
+                    .to_string(),
+            ),
+            default: Some(CfExpression::from(signing.fingerprint.as_str())),
+            allowed_values: Some(vec![CfExpression::from(signing.fingerprint.as_str())]),
+            allowed_pattern: None,
+            constraint_description: Some(
+                "This template runs only software signed with one fingerprint; it can't be changed."
+                    .to_string(),
+            ),
+            min_length: None,
+            max_length: None,
+            min_value: None,
+            max_value: None,
+            no_echo: None,
+        },
+    );
+    // The console shows the fingerprint first, under its own heading, so whoever creates the
+    // stack sees what it pins.
+    let missing_interface = || {
+        AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation".to_string(),
+            reason: "the template has no parameter groups to show the signing fingerprint in"
+                .to_string(),
+        })
+    };
+    let interface = template
+        .metadata
+        .get_mut("AWS::CloudFormation::Interface")
+        .ok_or_else(missing_interface)?;
+    let Some(Value::Array(groups)) = interface.get_mut("ParameterGroups") else {
+        return Err(missing_interface());
+    };
+    groups.insert(
+        0,
+        json!({
+            "Label": { "default": "Release signing" },
+            "Parameters": [SIGNING_FINGERPRINT_PARAMETER],
+        }),
+    );
+    let Some(Value::Object(labels)) = interface.get_mut("ParameterLabels") else {
+        return Err(missing_interface());
+    };
+    labels.insert(
+        SIGNING_FINGERPRINT_PARAMETER.to_string(),
+        json!({ "default": "Signing fingerprint" }),
+    );
+    template.outputs.insert(
+        SIGNING_FINGERPRINT_PARAMETER.to_string(),
+        output(
+            "Compare with the vendor's security page.",
+            CfExpression::from(alien_signing::display_fingerprint(&signing.fingerprint)),
+        ),
+    );
+
+    for (id, name, tier, value, description) in [
+        (
+            SIGNING_SETTINGS_ID,
+            alien_signing::settings::names::aws_settings(prefix),
+            "Standard",
+            // The parameter allows only the pinned fingerprint, so this is the same value.
+            signing_settings.to_json().replace(
+                &signing.fingerprint,
+                &format!("${{{SIGNING_FINGERPRINT_PARAMETER}}}"),
+            ),
+            "Software must be signed with these keys to run here. The vendor's access can't change this value; your administrators can.",
+        ),
+        (
+            SIGNING_LEDGER_ID,
+            alien_signing::settings::names::aws_ledger(prefix),
+            "Standard",
+            alien_signing::Ledger::new(prefix).to_json(),
+            "What this stack has already accepted, so older software can't be sent to new machines. Only the verifier and the stack's machines update it.",
+        ),
+    ] {
+        // Standard parameters hold 4 KB. A stack name is at most 128 characters.
+        if value.replace(prefix, &"x".repeat(128)).len() > SSM_STANDARD_VALUE_MAX {
+            return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "CloudFormation".to_string(),
+                reason: format!("the value of {id} could pass SSM's {SSM_STANDARD_VALUE_MAX} bytes"),
+            }));
+        }
+        let mut parameter = CfResource::new(id.to_string(), "AWS::SSM::Parameter".to_string());
+        parameter
+            .properties
+            .insert("Name".to_string(), CfExpression::sub(name));
+        parameter
+            .properties
+            .insert("Type".to_string(), CfExpression::from("String"));
+        parameter
+            .properties
+            .insert("Tier".to_string(), CfExpression::from(tier));
+        parameter
+            .properties
+            .insert("Description".to_string(), CfExpression::from(description));
+        parameter
+            .properties
+            .insert("Value".to_string(), CfExpression::sub(value));
+        insert_resource(template, parameter)?;
+    }
+    Ok(())
+}
+
+/// Logical ID of the limits on a protected install's management role.
+const MANAGEMENT_LIMITS_ID: &str = "ManagementLimits";
+
+/// Adds the limits on a protected install's management role, `<prefix>-management-limits`:
+/// only the stack changes what the install trusts, only its verifier changes what runs, and
+/// machines boot only the publisher's images.
+fn add_management_limits(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    stack: &Stack,
+) -> Result<()> {
+    if settings.signing.is_none() {
+        return Ok(());
+    }
+    let prefix = "${AWS::StackName}";
+    let account = "${AWS::AccountId}";
+    let region = "${AWS::Region}";
+    let verifier_name = alien_permissions::generators::signing_limits::aws_verifier_name(prefix);
+    let Some(management_role) = management_role_id(template) else {
+        return Ok(());
+    };
+    let attached = template
+        .resources
+        .values()
+        .filter(|resource| {
+            resource.resource_type == "AWS::IAM::ManagedPolicy"
+                && resource.properties.get("Roles").is_some_and(|roles| {
+                    matches!(roles, CfExpression::List(roles)
+                        if roles.contains(&CfExpression::ref_(&management_role)))
+                })
+        })
+        .count();
+    if attached + 1 > crate::inline_policy::IAM_MANAGED_POLICIES_PER_ROLE {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected AWS setup".to_string(),
+            reason: format!(
+                "the management role already has {attached} managed policies; the limits would pass IAM's {} per role",
+                crate::inline_policy::IAM_MANAGED_POLICIES_PER_ROLE
+            ),
+        }));
+    }
+    let mut limits = CfResource::new(
+        MANAGEMENT_LIMITS_ID.to_string(),
+        "AWS::IAM::ManagedPolicy".to_string(),
+    );
+    limits.properties.insert(
+        "ManagedPolicyName".to_string(),
+        CfExpression::sub(
+            alien_permissions::generators::signing_limits::aws_management_limits_name(prefix),
+        ),
+    );
+    limits.properties.insert(
+        "Description".to_string(),
+        CfExpression::sub(format!(
+            "Limits that hold even if another policy grants more: only this stack changes what the install trusts; only {verifier_name} changes what runs; machines boot only the publisher's images."
+        )),
+    );
+    limits.properties.insert(
+        "PolicyDocument".to_string(),
+        crate::emitters::aws::helpers::sub_json(
+            alien_permissions::generators::signing_limits::aws_management_limits(
+                prefix,
+                account,
+                region,
+                &stack.application_vault_ids(),
+            ),
+        ),
+    );
+    limits.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(management_role)]),
+    );
+    insert_resource(template, limits)
+}
+
+/// A protected template must say everything it runs, so its digest covers it: no transforms
+/// or nested stacks (their content lives elsewhere), no function or layer code from S3, and
+/// images only by digest.
+fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
+    let refuse = |what: String| {
+        Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected setup template".to_string(),
+            reason: format!("{what}; a signed template must contain everything it runs"),
+        }))
+    };
+    if !template.transform.is_empty() {
+        return refuse(format!("it uses the transforms {:?}", template.transform));
+    }
+    for (id, resource) in &template.resources {
+        let kind = resource.resource_type.as_str();
+        if kind == "AWS::CloudFormation::Stack" || kind.starts_with("AWS::Serverless::") {
+            return refuse(format!("resource '{id}' is a {kind}"));
+        }
+        let code = match kind {
+            "AWS::Lambda::Function" => resource.properties.get("Code"),
+            "AWS::Lambda::LayerVersion" => resource.properties.get("Content"),
+            _ => None,
+        };
+        let Some(CfExpression::Object(code)) = code else {
+            continue;
+        };
+        if let Some(key) = code.keys().find(|key| key.starts_with("S3")) {
+            return refuse(format!("resource '{id}' takes its code from {key}"));
+        }
+        if let Some(image) = code.get("ImageUri") {
+            let text = match image {
+                CfExpression::String(text) => Some(text.as_str()),
+                CfExpression::Object(fields) => match fields.get("Fn::Sub") {
+                    Some(CfExpression::String(text)) => Some(text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if !text.is_some_and(|text| text.contains("@sha256:")) {
+                return refuse(format!(
+                    "resource '{id}' runs an image not pinned by digest"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The logical ID of the role named `<prefix>-management`, if the template creates it.
+fn management_role_id(template: &CfTemplate) -> Option<String> {
+    template
+        .resources
+        .iter()
+        .find(|(_, resource)| {
+            resource.resource_type == "AWS::IAM::Role"
+                && resource.properties.get("RoleName")
+                    == Some(&CfExpression::sub("${AWS::StackName}-management"))
+        })
+        .map(|(id, _)| id.clone())
+}
+
 fn add_network_parameters(
     template: &mut CfTemplate,
     stack: &Stack,
@@ -2526,7 +2850,12 @@ fn add_standard_conditions(
                         .config
                         .downcast_ref::<alien_core::Postgres>()
                         .is_some()
-                        || entry.config.downcast_ref::<alien_core::Redis>().is_some())
+                        || entry.config.downcast_ref::<alien_core::Redis>().is_some()
+                        // The verifier names the subnets functions and machines join.
+                        || entry
+                            .config
+                            .downcast_ref::<alien_core::SigningVerifier>()
+                            .is_some())
             })
         {
             template.conditions.insert(
@@ -3207,7 +3536,7 @@ fn add_custom_resource(
         })
         .collect();
     let mut resource = CfResource::new(
-        "DeploymentRegistration".to_string(),
+        REGISTRATION_RESOURCE.to_string(),
         "AWS::CloudFormation::CustomResource".to_string(),
     );
     resource.depends_on = depends_on;
@@ -3230,6 +3559,14 @@ fn add_custom_resource(
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    // What setup reports about protection; the control plane shows it and trusts nothing
+    // else from it.
+    if let Some(signing) = &options.stack_settings.signing {
+        resource.properties.insert(
+            "SigningFingerprint".to_string(),
+            CfExpression::from(signing.fingerprint.as_str()),
+        );
+    }
     if !matches!(&input_values, CfExpression::Object(values) if values.is_empty()) {
         resource
             .properties
@@ -3574,13 +3911,31 @@ fn stack_settings_expression(
     bindings_only: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> CfExpression {
+    // A protected install registers as protected: the fingerprint it pins (the parameter
+    // allows only that value) and the channel it was signed for.
+    let signing = settings.signing.as_ref().map(|signing| {
+        (
+            "signing",
+            CfExpression::object([
+                (
+                    "fingerprint",
+                    CfExpression::ref_(SIGNING_FINGERPRINT_PARAMETER),
+                ),
+                ("channel", CfExpression::from(signing.channel.as_str())),
+            ]),
+        )
+    });
     if bindings_only {
-        return CfExpression::object([
-            ("deploymentModel", CfExpression::from("push")),
-            ("updates", CfExpression::from("approval-required")),
-            ("telemetry", CfExpression::from("off")),
-            ("heartbeats", CfExpression::from("on")),
-        ]);
+        return CfExpression::object(
+            [
+                ("deploymentModel", CfExpression::from("push")),
+                ("updates", CfExpression::from("approval-required")),
+                ("telemetry", CfExpression::from("off")),
+                ("heartbeats", CfExpression::from("on")),
+            ]
+            .into_iter()
+            .chain(signing),
+        );
     }
     let operation = |parameter, default: &str| {
         if profile == alien_core::SetupConfigurationProfile::Advanced {
@@ -3624,6 +3979,7 @@ fn stack_settings_expression(
     if let Some(compute) = compute_settings_expression(stack, settings.compute.as_ref()) {
         values.push(("compute", compute));
     }
+    values.extend(signing);
     CfExpression::object(values)
 }
 
@@ -4461,5 +4817,74 @@ mod tests {
             is_cloudformation_intrinsic(network),
             "intrinsic overlay should replace the structured base"
         );
+    }
+}
+
+#[cfg(test)]
+mod unverifiable_code_tests {
+    use super::*;
+
+    fn function(code: CfExpression) -> CfTemplate {
+        let mut template = CfTemplate::default();
+        let mut function = CfResource::new("Fn".to_string(), "AWS::Lambda::Function".to_string());
+        function.properties.insert("Code".to_string(), code);
+        template.resources.insert("Fn".to_string(), function);
+        template
+    }
+
+    fn reason(template: &CfTemplate) -> String {
+        refuse_unverifiable_code(template)
+            .expect_err("a protected template must refuse this")
+            .message
+    }
+
+    #[test]
+    fn inline_code_and_digest_images_pass() {
+        refuse_unverifiable_code(&function(CfExpression::object([(
+            "ZipFile",
+            CfExpression::from("def handler(e, c): pass"),
+        )])))
+        .expect("inline code is in the template");
+        refuse_unverifiable_code(&function(CfExpression::object([(
+            "ImageUri",
+            CfExpression::sub("1.dkr.ecr.${AWS::Region}.amazonaws.com/v@sha256:00"),
+        )])))
+        .expect("an image by digest is pinned by the template");
+    }
+
+    #[test]
+    fn code_from_s3_is_refused() {
+        let template = function(CfExpression::object([
+            ("S3Bucket", CfExpression::from("bucket")),
+            ("S3Key", CfExpression::from("code.zip")),
+        ]));
+        assert!(reason(&template).contains("takes its code from S3Bucket"));
+    }
+
+    #[test]
+    fn images_by_tag_are_refused() {
+        let template = function(CfExpression::object([(
+            "ImageUri",
+            CfExpression::from("1.dkr.ecr.us-east-1.amazonaws.com/v:latest"),
+        )]));
+        assert!(reason(&template).contains("not pinned by digest"));
+    }
+
+    #[test]
+    fn transforms_and_nested_stacks_are_refused() {
+        let mut template = CfTemplate {
+            transform: vec!["AWS::Serverless-2016-10-31".to_string()],
+            ..CfTemplate::default()
+        };
+        assert!(reason(&template).contains("transforms"));
+        template.transform.clear();
+        template.resources.insert(
+            "Nested".to_string(),
+            CfResource::new(
+                "Nested".to_string(),
+                "AWS::CloudFormation::Stack".to_string(),
+            ),
+        );
+        assert!(reason(&template).contains("AWS::CloudFormation::Stack"));
     }
 }

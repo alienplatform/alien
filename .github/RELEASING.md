@@ -19,6 +19,12 @@ The **Release qualification** check then:
 - packs every Cargo and npm package;
 - records the source Git tree plus every artifact checksum and image digest.
 
+Qualification fails at once unless the repository variables
+`MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT`, `MACHINE_IMAGE_PUBLISHER_GCP_PROJECT`,
+`MACHINE_IMAGE_PUBLISHER_AZURE_GALLERY` and `MACHINE_IMAGE_MINIMUM_CREATED`
+are set: `scripts/write-machine-image-pins.sh` compiles them into the
+verifier, which otherwise refuses every protected machine roll.
+
 Qualification artifacts are retained for 30 days. If they expire, rerun
 **Release qualification** with the version pull request's exact head commit.
 
@@ -33,6 +39,14 @@ After the version pull request and every required check pass, merge it. Run the
 Publishing first verifies that the merged commit has the qualified Git tree and
 that every stored checksum and image digest still matches. It then promotes
 those artifacts without rebuilding them.
+
+The verifier image is also copied, with its digest unchanged, to ECR in the
+machine-image publisher account (Lambda pulls only from ECR in its own region,
+so publishing waits until ECR has replicated it to every region) and to
+Artifact Registry (for Cloud Run). This needs the repository variables
+`VERIFIER_IMAGE_AWS_REPOSITORY`, `VERIFIER_IMAGE_GCP_REPOSITORY`,
+`VERIFIER_IMAGE_GCP_WIF_PROVIDER` and `VERIFIER_IMAGE_GCP_SERVICE_ACCOUNT`,
+and the `alien-verifier-publisher` role in the publisher account.
 
 Each destination is resumable:
 
@@ -59,3 +73,14 @@ CLI distribution publishes those from the release tag: it builds `alien`,
 creates the immutable GitHub release with the changelog (rendered from
 `cliff.toml`) and the archives of `alien` plus this release's binaries, then
 updates Homebrew and, last, `channels/stable`.
+
+Before it builds `alien`, the distribution writes
+`crates/alien-cli/enforcer-digests.json`: the `enforcer-digests` artifact of
+the publish run (the promoted `alien-operator` image digest, and the
+`alien-verifier` image digest as `verifier/{aws,gcp,azure}`: one linux/amd64
+image serves every cloud, and the AWS copy in the publisher's ECR keeps its
+digest) plus the `machine-agent/linux-x86_64` and `machine-agent/linux-aarch64`
+digests of the builds this version ships, each `sha256:<hex>`. Signed releases pin those builds; an install refuses any
+other. The GitHub release must stay immutable so that
+`gh release verify-asset` vouches for each archive: `alien devices add-ci`
+pins CI to the archive checksums it checks that way.
