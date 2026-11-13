@@ -2567,6 +2567,20 @@ enum DeleteRequest {
     Force { confirmed_name: String },
 }
 
+/// A refused delete says which role is missing instead of a bare 403. Developers can create
+/// deployments but not delete them, so this is the refusal they meet.
+fn name_missing_delete_role(error: AlienError<ErrorData>) -> AlienError<ErrorData> {
+    if error.http_status_code != Some(403) {
+        return error;
+    }
+    Err::<(), _>(error)
+        .context(ErrorData::ApiRequestFailed {
+            message: "Deleting a deployment needs project admin or workspace admin".to_string(),
+            url: None,
+        })
+        .unwrap_err()
+}
+
 async fn delete_deployment_task(
     client: &alien_manager_api::Client,
     reference: &str,
@@ -2658,7 +2672,8 @@ async fn delete_deployment_task(
         .context(ErrorData::ApiRequestFailed {
             message: "deleting deployment".to_string(),
             url: None,
-        })?
+        })
+        .map_err(name_missing_delete_role)?
         .into_inner();
 
     // The server says what it accepted, e.g. that runtime cleanup is done but the setup (a
@@ -4740,6 +4755,54 @@ mod tests {
             .expect_err("--force --yes must not read --yes as the name");
         parse_delete(&["dep_1", "--force", "example", "--yes"])
             .expect_err("--yes has no meaning with --force");
+    }
+
+    #[tokio::test]
+    async fn a_refused_delete_names_the_missing_role() {
+        async fn read_deployment() -> Response {
+            Json(deployment_with_releases(Some("rel_a"), Some("rel_a"))).into_response()
+        }
+        async fn refuse() -> Response {
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "code": "FORBIDDEN",
+                    "message": "Forbidden",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 403,
+                })),
+            )
+                .into_response()
+        }
+        let app = Router::new()
+            .route("/v1/deployments/dep_1", get(read_deployment))
+            .route("/v1/deployments/dep_1/delete", axum::routing::post(refuse));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let client = alien_manager_api::Client::new(&format!("http://{addr}"));
+
+        let error = delete_deployment_task(
+            &client,
+            "dep_1",
+            DeleteRequest::Cleanup {
+                yes: true,
+                erase_data: false,
+            },
+        )
+        .await
+        .expect_err("a refused delete must fail");
+
+        assert_eq!(
+            error.human_report().message,
+            "API request failed: Deleting a deployment needs project admin or workspace admin"
+        );
+        assert_eq!(error.http_status_code, Some(403));
     }
 
     #[tokio::test]
