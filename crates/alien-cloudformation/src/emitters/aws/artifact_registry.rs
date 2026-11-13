@@ -301,14 +301,21 @@ fn replication_resources(
             } else {
                 replication_slot_region(input_id, slot)
             };
-            CfExpression::if_(
-                replication_slot_condition(input_id, slot),
-                CfExpression::object([
-                    ("Region", region),
-                    ("RegistryId", CfExpression::ref_("AWS::AccountId")),
-                ]),
-                CfExpression::no_value(),
-            )
+            let destination = CfExpression::object([
+                ("Region", region),
+                ("RegistryId", CfExpression::ref_("AWS::AccountId")),
+            ]);
+            if slot == 0 {
+                // The whole resource is conditional on slot 0, so a nested
+                // condition on it could never be false.
+                destination
+            } else {
+                CfExpression::if_(
+                    replication_slot_condition(input_id, slot),
+                    destination,
+                    CfExpression::no_value(),
+                )
+            }
         })),
         None => CfExpression::list(registry.replication_regions.iter().map(|region| {
             CfExpression::object([

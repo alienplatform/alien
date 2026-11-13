@@ -2394,6 +2394,12 @@ fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
         let Some(input_id) = registry.replication_regions_input.as_deref() else {
             continue;
         };
+        // The slots read the parameter directly, so the generic "has a value"
+        // condition for this input would be defined and never used (W8001).
+        template.conditions.shift_remove(&format!(
+            "Has{}",
+            crate::generator::stack_input_parameter_name_for_id(input_id)
+        ));
         for slot in 0..=MAX_REPLICATION_REGION_SLOTS {
             template.conditions.insert(
                 replication_slot_condition(input_id, slot),
