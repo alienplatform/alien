@@ -5,21 +5,30 @@ use crate::{
     StackMutation,
 };
 use alien_core::{
-    ComputeCluster, DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, SigningVerifier,
-    Stack, StackState, Worker,
+    ComputeCluster, DeploymentConfig, Platform, Queue, ResourceEntry, ResourceLifecycle, Sandbox,
+    SigningVerifier, Stack, StackState, Storage, Worker,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
 use tracing::info;
 
 /// Adds the verifier to a stack with signing settings on AWS, GCP or Azure that has a function
-/// (a worker) or a machine cluster: the two things only the verifier may write. Setup creates
-/// it, so it is Frozen. A stack with neither, or a Kubernetes one, gets none.
+/// (a worker), a machine cluster, or a Live queue, storage or sandbox: the things only the
+/// verifier may write. Setup creates it, so it is Frozen. A stack with none of them (setup
+/// creates everything else itself), or a Kubernetes one, gets none.
 pub struct SigningVerifierMutation;
 
 fn is_written_by_the_verifier(entry: &ResourceEntry) -> bool {
     let resource_type = entry.config.resource_type();
-    resource_type == Worker::RESOURCE_TYPE || resource_type == ComputeCluster::RESOURCE_TYPE
+    if resource_type == Worker::RESOURCE_TYPE || resource_type == ComputeCluster::RESOURCE_TYPE {
+        return true;
+    }
+    // A Frozen queue, storage or sandbox is created by setup; a Live one is created and
+    // changed by its controller, whose reach-affecting writes go through the verifier.
+    entry.lifecycle == ResourceLifecycle::Live
+        && (resource_type == Queue::RESOURCE_TYPE
+            || resource_type == Storage::RESOURCE_TYPE
+            || resource_type == Sandbox::RESOURCE_TYPE)
 }
 
 #[async_trait]
@@ -184,5 +193,29 @@ mod tests {
         assert!(verifier(with_worker(), Platform::Kubernetes, true)
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_live_storage_or_queue_alone_gets_a_verifier_because_its_controller_writes_through_it() {
+        let live_storage = Stack::new("shop".to_string())
+            .add(
+                Storage::new("assets".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let live_queue = Stack::new("shop".to_string())
+            .add(
+                Queue::new("jobs".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for stack in [live_storage.clone(), live_queue.clone()] {
+                assert!(
+                    verifier(stack, platform, true).await.is_some(),
+                    "{platform:?}: a Live storage or queue needs the verifier"
+                );
+            }
+        }
     }
 }
