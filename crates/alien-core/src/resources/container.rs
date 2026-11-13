@@ -309,6 +309,7 @@ pub struct ContainerSecurity {
     /// Mount the root filesystem read-only. Defaults to true under `restricted`.
     pub read_only_root_filesystem: Option<bool>,
     /// Absolute paths backed by a writable emptyDir. `/tmp` is always writable.
+    #[serde(default)]
     pub writable_paths: Vec<String>,
 }
 
