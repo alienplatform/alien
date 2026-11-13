@@ -7,13 +7,21 @@ handler reads the current rules at the moment of the write, keeps every rule tha
 this registry's, and puts the list back with this registry's rule added, updated or removed.
 """
 import json
+import random
 import re
+import time
 import urllib.request
 
 import boto3
 from botocore.config import Config
 
 REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-[0-9]$")
+
+# ECR limits per account and region: rules in a configuration, destinations in one rule.
+MAX_RULES = 25
+MAX_DESTINATIONS = 10
+# Another writer can change the configuration between our read and our write.
+MAX_ATTEMPTS = 5
 
 
 def is_ours(rule, prefix, registry_id):
@@ -39,6 +47,10 @@ def merged_rules(existing, prefixes, registry_id, ours):
     return kept + ([ours] if ours else [])
 
 
+def read_rules(ecr):
+    return ecr.describe_registry().get("replicationConfiguration", {}).get("rules") or []
+
+
 def handler(event, context):
     physical_id = event.get("PhysicalResourceId") or (
         event["StackId"] + ":" + event["LogicalResourceId"]
@@ -58,6 +70,11 @@ def handler(event, context):
                     raise ValueError("'%s' is not a supported AWS region name" % region)
                 if region not in regions:
                     regions.append(region)
+            if len(regions) > MAX_DESTINATIONS:
+                raise ValueError(
+                    "%d regions requested and ECR allows at most %d destinations in one rule"
+                    % (len(regions), MAX_DESTINATIONS)
+                )
             if regions:
                 ours = {
                     "destinations": [
@@ -72,12 +89,35 @@ def handler(event, context):
             connect_timeout=5, read_timeout=10,
             retries={"mode": "standard", "total_max_attempts": 3},
         ))
-        existing = (
-            ecr.describe_registry().get("replicationConfiguration", {}).get("rules") or []
-        )
-        rules = merged_rules(existing, prefixes, properties["RegistryId"], ours)
-        if rules != existing:
+        for attempt in range(MAX_ATTEMPTS):
+            existing = read_rules(ecr)
+            rules = merged_rules(existing, prefixes, properties["RegistryId"], ours)
+            if rules == existing:
+                break
+            if len(rules) > MAX_RULES:
+                raise ValueError(
+                    "The account already has %d replication rules and ECR allows at most %d "
+                    "per region; remove a rule that is not needed or leave the regions empty"
+                    % (len(rules) - (1 if ours else 0), MAX_RULES)
+                )
             ecr.put_replication_configuration(replicationConfiguration={"rules": rules})
+            # Read back: the write replaces every rule, so a writer that raced us could
+            # have lost its rule, or ours could have been replaced.
+            after = read_rules(ecr)
+            kept = [rule for rule in rules if rule != ours]
+            if all(rule in after for rule in kept) and (ours is None or ours in after) and (
+                ours is not None or not any(
+                    is_ours(rule, prefix, properties["RegistryId"])
+                    for rule in after for prefix in prefixes
+                )
+            ):
+                break
+            if attempt == MAX_ATTEMPTS - 1:
+                raise RuntimeError(
+                    "Another writer kept changing the ECR replication configuration; "
+                    "gave up after %d attempts without confirming the rules" % MAX_ATTEMPTS
+                )
+            time.sleep(random.uniform(0.2, 1.0) * (attempt + 1))
     except Exception as error:
         status, reason = "FAILED", str(error)[:1000]
     finally:

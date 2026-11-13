@@ -678,6 +678,29 @@ fn aws_registry_replication_role_may_create_only_the_ecr_replication_service_lin
 }
 
 #[test]
+fn aws_registry_replication_write_grant_is_on_the_custom_resource_role_only() {
+    let template = render_template_json(&registry_stack(&["us-east-2"]));
+    let resources = template["Resources"].as_object().unwrap();
+    let granted: Vec<&String> = resources
+        .iter()
+        .filter(|(_, r)| {
+            r.to_string().contains("\"ecr:PutReplicationConfiguration\"")
+                && r["Type"] != "AWS::IAM::ManagedPolicy"
+                && r["Type"] != "Custom::EcrReplicationRule"
+        })
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(granted.len(), 1, "write grant must be on one role: {granted:?}");
+    assert!(granted[0].ends_with("ReplicationRole"), "{granted:?}");
+    // The Lambda that uses it is the only function assuming that role.
+    let function = resources
+        .values()
+        .find(|r| r["Type"] == "AWS::Lambda::Function" && r.to_string().contains("ReplicationRole"))
+        .expect("replication function");
+    assert!(function["Properties"]["Role"].to_string().contains(granted[0].as_str()));
+}
+
+#[test]
 fn aws_registry_conditional_regions_input_is_split_from_a_string_and_honors_its_condition() {
     let mut stack = input_registry_stack();
     let mut gate = alien_core::StackInputDefinition::deployer_boolean(
