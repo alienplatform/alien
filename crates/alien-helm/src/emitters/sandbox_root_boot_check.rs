@@ -10,7 +10,7 @@
 //! reads no cluster-scoped object. Pod Security admits or refuses on the pod's shape alone, so
 //! the pinned probe image stands in for the sandbox image, which is never pulled.
 
-use super::sandbox_cni::PROBE_IMAGE;
+use super::sandbox_cni::{PROBE_DIGEST, PROBE_REPOSITORY};
 
 pub(crate) const TEMPLATE: &str = "sandbox-root-boot-check.yaml";
 
@@ -35,6 +35,8 @@ pub(crate) fn template() -> String {
     format!(
         r#"{{{{- $name := printf "%s-root-boot-check" (include "deployment.fullname" . | trunc 45 | trimSuffix "-") -}}}}
 {{{{- $sandboxNamespace := include "deployment.sandboxNamespace" . -}}}}
+{{{{- $probeImage := include "deployment.image" (dict "root" . "repository" "{repository}" "digest" "{digest}") -}}}}
+{{{{- with dig "cniProbeImage" "" (default dict .Values.sandbox) }}}}{{{{ $probeImage = include "deployment.mirroredImage" (dict "root" $ "image" .) }}}}{{{{ end -}}}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -116,7 +118,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: check
-          image: {image}
+          image: {{{{ $probeImage | quote }}}}
           terminationMessagePolicy: FallbackToLogsOnError
           securityContext:
             allowPrivilegeEscalation: false
@@ -136,7 +138,7 @@ spec:
             - name: SANDBOX_RUNTIME_CLASS
               value: {{{{ include "deployment.sandboxRuntimeClassName" . | quote }}}}
             - name: PROBE_IMAGE
-              value: {image}
+              value: {{{{ $probeImage | quote }}}}
             - name: BOOT_CAPABILITIES
               value: {capabilities}
           command:
@@ -144,7 +146,8 @@ spec:
             - -c
             - |
 {script}"#,
-        image = PROBE_IMAGE,
+        repository = PROBE_REPOSITORY,
+        digest = PROBE_DIGEST,
         hook_sa = hook("-10"),
         hook_binding = hook("-9"),
         hook_job = hook("-8"),
