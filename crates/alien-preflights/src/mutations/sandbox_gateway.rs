@@ -31,10 +31,8 @@ impl StackMutation for SandboxGatewayMutation {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
-        matches!(
-            state.platform,
-            Platform::Aws | Platform::Kubernetes | Platform::Azure
-        ) && stack.resources().any(|(_, entry)| {
+        matches!(state.platform, Platform::Aws | Platform::Kubernetes)
+            && stack.resources().any(|(_, entry)| {
                 entry
                     .config
                     .downcast_ref::<Sandbox>()
@@ -372,24 +370,5 @@ mod tests {
         assert!(prepared
             .resources()
             .all(|(_, entry)| entry.config.downcast_ref::<alien_core::Kv>().is_none()));
-    }
-
-    /// Azure runs the gateway as a Container on the deployment's compute, in the VNet its sandbox
-    /// group attaches to, so the mutation prepares it there as it does on AWS and Kubernetes.
-    #[tokio::test]
-    async fn azure_internet_sandbox_gets_the_gateway_container() {
-        let (stack, _, config) = fixture();
-        let state = StackState::new(Platform::Azure);
-        assert!(SandboxGatewayMutation.should_run(&stack, &state, &config));
-        let prepared = SandboxGatewayMutation
-            .mutate(stack, &state, &config)
-            .await
-            .unwrap();
-        assert!(alien_core::sandbox_egress::has_sandbox_gateway(&prepared));
-        let gcp = StackState::new(Platform::Gcp);
-        assert!(
-            !SandboxGatewayMutation.should_run(&prepared, &gcp, &config)
-                || state.platform == Platform::Azure
-        );
     }
 }
