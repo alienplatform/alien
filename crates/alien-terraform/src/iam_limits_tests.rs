@@ -971,10 +971,10 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     let us_east_2 = "us-east-2".len();
     let stub = crate::aws_role_policies::STUB_POLICY.len();
     for (prefix, region, chunks) in [
-        (9, us_east_2, [4_671, 1_232]),
-        (39, us_east_2, [5_361, 1_352]),
-        (40, us_east_2, [5_384, 1_356]),
-        (PREFIX, REGION, [5_433, 1_391]),
+        (9, us_east_2, [4_722, 954]),
+        (39, us_east_2, [5_412, 1_014]),
+        (40, us_east_2, [5_435, 1_016]),
+        (PREFIX, REGION, [5_484, 1_037]),
     ] {
         let usage = rendered
             .usage(DeploymentLengths {
@@ -986,11 +986,12 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
         let case = format!("{prefix}-character prefix, {region}-character region");
         assert_eq!(
             usage.roles["execution_sa"],
-            // Two managed policies, each attached once more while an update replaces it.
+            // Three managed policies (two installed ones and the machine workload secrets
+            // grant), each attached once more while an update replaces it.
             RoleUsage {
                 inline_policies: 23,
                 inline_chars: 23 * stub,
-                attachments: 4,
+                attachments: 6,
             },
             "{case}"
         );
@@ -1002,6 +1003,17 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
                 .map(|(_, chars)| *chars)
                 .collect::<Vec<_>>(),
             chunks,
+            "{case}"
+        );
+        // The machine workload secrets grant is a policy of its own, so the installed ones
+        // keep their documents.
+        assert_eq!(
+            usage
+                .managed_policies
+                .iter()
+                .filter(|(label, _)| label.starts_with("execution_sa_late_setup_"))
+                .count(),
+            1,
             "{case}"
         );
     }
