@@ -282,12 +282,12 @@ pub enum ContainerSecurityProfile {
 ///
 /// Absent means `restricted` with the image's own non-root user.
 ///
-/// On the wire every field a previous Operator requires is always written
-/// (`runAsUser`/`runAsGroup` as `0` and `readOnlyRootFilesystem` as the
-/// profile's default when unset), so state and bundles written by this version
-/// stay readable after an Operator rollback. Reading maps those values back:
-/// `0` means "the image's own user/group", and a read-only flag equal to the
-/// profile default means "unset".
+/// On the wire every field a previous Operator requires is always written with
+/// a concrete value (`runAsUser`/`runAsGroup` as `0` and `readOnlyRootFilesystem`
+/// as the profile's default when unset), so state and bundles written by this
+/// version stay readable after an Operator rollback. The `*Unset` markers, which
+/// previous releases ignore, record that the value was not set, so reading
+/// restores `None` exactly and never treats a real `0` or `false` as unset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(
@@ -320,26 +320,28 @@ struct ContainerSecurityWire {
     run_as_group: Option<i64>,
     #[serde(default)]
     read_only_root_filesystem: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    run_as_user_unset: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    run_as_group_unset: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    read_only_root_filesystem_unset: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     writable_paths: Vec<String>,
 }
 
-impl ContainerSecurityProfile {
-    fn default_read_only_root_filesystem(self) -> bool {
-        self == ContainerSecurityProfile::Restricted
-    }
-}
-
 impl From<ContainerSecurity> for ContainerSecurityWire {
     fn from(security: ContainerSecurity) -> Self {
+        let default_read_only = security.profile == ContainerSecurityProfile::Restricted;
         Self {
             profile: security.profile,
+            run_as_user_unset: security.run_as_user.is_none(),
             run_as_user: Some(security.run_as_user.unwrap_or(0)),
+            run_as_group_unset: security.run_as_group.is_none(),
             run_as_group: Some(security.run_as_group.unwrap_or(0)),
+            read_only_root_filesystem_unset: security.read_only_root_filesystem.is_none(),
             read_only_root_filesystem: Some(
-                security
-                    .read_only_root_filesystem
-                    .unwrap_or_else(|| security.profile.default_read_only_root_filesystem()),
+                security.read_only_root_filesystem.unwrap_or(default_read_only),
             ),
             writable_paths: security.writable_paths,
         }
@@ -348,14 +350,13 @@ impl From<ContainerSecurity> for ContainerSecurityWire {
 
 impl From<ContainerSecurityWire> for ContainerSecurity {
     fn from(wire: ContainerSecurityWire) -> Self {
-        let default_read_only = wire.profile.default_read_only_root_filesystem();
         Self {
             profile: wire.profile,
-            run_as_user: wire.run_as_user.filter(|id| *id != 0),
-            run_as_group: wire.run_as_group.filter(|id| *id != 0),
+            run_as_user: wire.run_as_user.filter(|_| !wire.run_as_user_unset),
+            run_as_group: wire.run_as_group.filter(|_| !wire.run_as_group_unset),
             read_only_root_filesystem: wire
                 .read_only_root_filesystem
-                .filter(|value| *value != default_read_only),
+                .filter(|_| !wire.read_only_root_filesystem_unset),
             writable_paths: wire.writable_paths,
         }
     }
@@ -1098,14 +1099,21 @@ mod tests {
             profile: ContainerSecurityProfile::Unrestricted,
             run_as_user: Some(70),
             run_as_group: Some(71),
-            read_only_root_filesystem: Some(true),
+            read_only_root_filesystem: Some(false),
             writable_paths: vec!["/data".to_string()],
         };
         let unrestricted_defaults = ContainerSecurity {
             profile: ContainerSecurityProfile::Unrestricted,
             ..defaults.clone()
         };
-        for security in [defaults, explicit, unrestricted_defaults] {
+        let explicit_zero = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: Some(0),
+            run_as_group: None,
+            read_only_root_filesystem: Some(false),
+            writable_paths: Vec::new(),
+        };
+        for security in [defaults, explicit, unrestricted_defaults, explicit_zero] {
             let json = serde_json::to_value(&security).unwrap();
             serde_json::from_value::<PreviousContainerSecurity>(json.clone())
                 .unwrap_or_else(|error| panic!("previous release cannot read {json}: {error}"));
