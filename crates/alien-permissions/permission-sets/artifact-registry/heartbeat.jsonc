@@ -4,6 +4,20 @@
   "platforms": {
     "aws": [
       {
+        // Registry-level, read-only: reports whose image replication rules the account holds.
+        "grant": {
+          "actions": ["ecr:DescribeRegistry"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
         "grant": {
           "actions": ["ecr:DescribeRepositories"]
         },

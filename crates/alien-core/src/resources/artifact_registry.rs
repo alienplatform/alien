@@ -154,6 +154,37 @@ pub struct ArtifactRegistryOutputs {
     /// - Azure: Managed identity resource ID (e.g., "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/my-registry-push")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub push_role: Option<String>,
+
+    /// Who owns the account's image replication rules, as last read from the registry.
+    /// AWS only. Absent until the controller has read the registry once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replication: Option<RegistryReplicationReport>,
+}
+
+/// Whose rules the registry's replication configuration holds. The configuration is one
+/// per account and region, and writing it replaces every rule, so the setup that writes ours
+/// must only run when none of the rules belong to someone else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum RegistryReplicationOwner {
+    /// No rules.
+    None,
+    /// Exactly the one rule this registry's setup writes.
+    Ours,
+    /// At least one rule this registry did not write.
+    Foreign,
+}
+
+/// The replication rules a registry reported, without anything beyond rule shapes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryReplicationReport {
+    pub owner: RegistryReplicationOwner,
+    /// One short line per rule that is not ours: destination regions and repository filters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub foreign_rules: Vec<String>,
 }
 
 impl ResourceOutputsDefinition for ArtifactRegistryOutputs {

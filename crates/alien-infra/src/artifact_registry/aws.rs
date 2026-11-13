@@ -9,7 +9,7 @@ use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, IamRoleWriter};
 use alien_core::{
-    standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
+    standard_resource_tags, RegistryReplicationOwner, RegistryReplicationReport, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
     AwsEcrRepositoryHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth,
     Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
@@ -114,6 +114,13 @@ pub struct AwsArtifactRegistryController {
     pub(crate) push_role_arn: Option<String>,
     /// The repository prefix (resource id)
     pub(crate) repository_prefix: Option<String>,
+    /// The replication ownership read from the registry on the last refresh.
+    #[serde(default)]
+    pub(crate) replication: Option<RegistryReplicationReport>,
+    /// Set once the registry has reported our own rule. Foreign rules after that mean someone
+    /// else wrote the account's configuration over ours, and the controller fails loudly.
+    #[serde(default)]
+    pub(crate) replication_seen_ours: Option<bool>,
 }
 
 #[controller]
@@ -963,6 +970,8 @@ impl AwsArtifactRegistryController {
             );
         }
 
+        self.refresh_replication(ctx, &config.id).await?;
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -991,6 +1000,7 @@ impl AwsArtifactRegistryController {
                 registry_endpoint,
                 pull_role: self.pull_role_arn.clone(),
                 push_role: self.push_role_arn.clone(),
+                replication: self.replication.clone(),
             }))
         } else {
             None
@@ -1053,6 +1063,114 @@ async fn owned_role_arn(
             );
             Ok(None)
         }
+    }
+}
+
+/// Classify the registry's replication rules: none, exactly the rule this registry's setup
+/// writes (its repository prefix, destinations in the same account), or anything else.
+pub(crate) fn classify_replication(
+    rules: &[alien_aws_clients::aws::ecr::ReplicationRule],
+    repository_prefix: &str,
+    account_id: &str,
+) -> RegistryReplicationReport {
+    if rules.is_empty() {
+        return RegistryReplicationReport {
+            owner: RegistryReplicationOwner::None,
+            foreign_rules: vec![],
+        };
+    }
+    let foreign_rules = rules
+        .iter()
+        .filter(|rule| {
+            let ours = rule.repository_filters.len() == 1
+                && rule.repository_filters[0].filter_type == "PREFIX_MATCH"
+                && rule.repository_filters[0].filter == repository_prefix
+                && !rule.destinations.is_empty()
+                && rule
+                    .destinations
+                    .iter()
+                    .all(|destination| destination.registry_id == account_id);
+            !ours
+        })
+        .map(|rule| {
+            let regions = rule
+                .destinations
+                .iter()
+                .map(|d| format!("{} (account {})", d.region, d.registry_id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let filters = if rule.repository_filters.is_empty() {
+                "all repositories".to_string()
+            } else {
+                rule.repository_filters
+                    .iter()
+                    .map(|f| format!("{} {}", f.filter_type, f.filter))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("copies {filters} to {regions}")
+        })
+        .collect::<Vec<_>>();
+    RegistryReplicationReport {
+        owner: if foreign_rules.is_empty() {
+            RegistryReplicationOwner::Ours
+        } else {
+            RegistryReplicationOwner::Foreign
+        },
+        foreign_rules,
+    }
+}
+
+impl AwsArtifactRegistryController {
+    /// Read the account's replication rules with this identity and record whose they are.
+    /// A read that fails keeps the last report: the registry stays usable, and the setup
+    /// that would write replication waits for a report instead of guessing.
+    async fn refresh_replication(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<()> {
+        let (Some(account_id), Some(prefix)) =
+            (self.account_id.clone(), self.repository_prefix.clone())
+        else {
+            return Ok(());
+        };
+        let ecr_client = ctx
+            .service_provider
+            .get_aws_ecr_client(ctx.get_aws_config()?)
+            .await?;
+        let registry = match ecr_client.describe_registry().await {
+            Ok(registry) => registry,
+            Err(error) => {
+                warn!(
+                    resource_id = %resource_id,
+                    error = %error,
+                    "Could not read ECR replication rules; keeping the last report"
+                );
+                return Ok(());
+            }
+        };
+        let report = classify_replication(
+            &registry.replication_configuration.rules,
+            &prefix,
+            &account_id,
+        );
+        if report.owner == RegistryReplicationOwner::Foreign
+            && self.replication_seen_ours == Some(true)
+        {
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: resource_id.to_string(),
+                message: format!(
+                    "The account's ECR replication rules changed after this registry's own rule was in place; {}. Image copies to other regions may no longer follow this registry's rule.",
+                    report.foreign_rules.join("; ")
+                ),
+            }));
+        }
+        if report.owner == RegistryReplicationOwner::Ours {
+            self.replication_seen_ours = Some(true);
+        }
+        self.replication = Some(report);
+        Ok(())
     }
 }
 
@@ -1430,6 +1548,8 @@ impl AwsArtifactRegistryController {
             pull_role_arn: Some(format!("arn:aws:iam::{}:role/test-pull-role", account_id)),
             push_role_arn: Some(format!("arn:aws:iam::{}:role/test-push-role", account_id)),
             repository_prefix: Some("test-artifact-registry".to_string()),
+            replication: None,
+            replication_seen_ours: None,
             _internal_stay_count: None,
         }
     }
@@ -2053,6 +2173,178 @@ mod tests {
         }
     }
 
+    fn rule(prefix: Option<&str>, registry_id: &str, region: &str) -> alien_aws_clients::aws::ecr::ReplicationRule {
+        use alien_aws_clients::aws::ecr::{ReplicationDestination, ReplicationRule, RepositoryFilter};
+        ReplicationRule {
+            destinations: vec![ReplicationDestination {
+                region: region.to_string(),
+                registry_id: registry_id.to_string(),
+            }],
+            repository_filters: prefix
+                .map(|p| {
+                    vec![RepositoryFilter {
+                        filter: p.to_string(),
+                        filter_type: "PREFIX_MATCH".to_string(),
+                    }]
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn replication_rules_are_none_ours_or_foreign() {
+        let acct = "123456789012";
+        let none = classify_replication(&[], "test-images", acct);
+        assert_eq!(none.owner, RegistryReplicationOwner::None);
+
+        let ours = classify_replication(
+            &[rule(Some("test-images"), acct, "us-east-2")],
+            "test-images",
+            acct,
+        );
+        assert_eq!(ours.owner, RegistryReplicationOwner::Ours);
+        assert!(ours.foreign_rules.is_empty());
+
+        // A rule for all repositories, a different prefix, or another account is not ours.
+        for foreign in [
+            rule(None, acct, "us-west-2"),
+            rule(Some("other-"), acct, "us-west-2"),
+            rule(Some("test-images"), "999999999999", "us-west-2"),
+        ] {
+            let report = classify_replication(&[foreign], "test-images", acct);
+            assert_eq!(report.owner, RegistryReplicationOwner::Foreign);
+            assert_eq!(report.foreign_rules.len(), 1);
+            assert!(report.foreign_rules[0].contains("us-west-2"));
+        }
+
+        // Ours next to a vendor's own rule is foreign: writing the configuration would replace it.
+        let mixed = classify_replication(
+            &[
+                rule(Some("test-images"), acct, "us-east-2"),
+                rule(None, acct, "eu-west-1"),
+            ],
+            "test-images",
+            acct,
+        );
+        assert_eq!(mixed.owner, RegistryReplicationOwner::Foreign);
+        assert_eq!(mixed.foreign_rules.len(), 1);
+    }
+
+    async fn ready_step_with_registry_rules(
+        saved: AwsArtifactRegistryController,
+        rules: Result<Vec<alien_aws_clients::aws::ecr::ReplicationRule>>,
+    ) -> (
+        Result<()>,
+        AwsArtifactRegistryController,
+    ) {
+        use alien_aws_clients::aws::ecr::{
+            DescribeRegistryResponse, DescribeRepositoriesResponse, MockEcrApi,
+            ReplicationConfiguration,
+        };
+        let mut ecr = MockEcrApi::new();
+        ecr.expect_describe_repositories().returning(|_| {
+            Ok(DescribeRepositoriesResponse {
+                repositories: vec![],
+                next_token: None,
+            })
+        });
+        let rules = std::sync::Mutex::new(Some(rules));
+        ecr.expect_describe_registry().returning(move || {
+            match rules.lock().unwrap().take().unwrap() {
+                Ok(rules) => Ok(DescribeRegistryResponse {
+                    registry_id: "123456789012".to_string(),
+                    replication_configuration: ReplicationConfiguration { rules },
+                }),
+                Err(_) => Err(AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "registry".to_string(),
+                    resource_name: "ecr".to_string(),
+                })),
+            }
+        });
+        let ecr = Arc::new(ecr);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ecr_client()
+            .returning(move |_| Ok(ecr.clone()));
+        let mut registry = ArtifactRegistry::new("images".to_string()).build();
+        registry.replication_regions = vec![];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry)
+            .controller(saved)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        let outcome = executor.step().await.map(|_| ());
+        let state = executor
+            .internal_state::<AwsArtifactRegistryController>()
+            .unwrap();
+        (outcome, state.clone())
+    }
+
+    fn ready_registry() -> AwsArtifactRegistryController {
+        AwsArtifactRegistryController {
+            state: AwsArtifactRegistryState::Ready,
+            account_id: Some("123456789012".to_string()),
+            region: Some("us-east-1".to_string()),
+            repository_prefix: Some("test-images".to_string()),
+            pull_role_arn: Some("arn:aws:iam::123456789012:role/test-images-pull".to_string()),
+            push_role_arn: Some("arn:aws:iam::123456789012:role/test-images-push".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_registry_reports_none_ours_and_foreign_rules_each_refresh() {
+        let acct = "123456789012";
+        let (outcome, state) = ready_step_with_registry_rules(ready_registry(), Ok(vec![])).await;
+        outcome.unwrap();
+        assert_eq!(state.replication.unwrap().owner, RegistryReplicationOwner::None);
+
+        let (outcome, state) = ready_step_with_registry_rules(
+            ready_registry(),
+            Ok(vec![rule(Some("test-images"), acct, "us-east-2")]),
+        )
+        .await;
+        outcome.unwrap();
+        assert_eq!(state.replication.unwrap().owner, RegistryReplicationOwner::Ours);
+        assert_eq!(state.replication_seen_ours, Some(true));
+
+        let (outcome, state) =
+            ready_step_with_registry_rules(ready_registry(), Ok(vec![rule(None, acct, "eu-west-1")]))
+                .await;
+        outcome.unwrap();
+        let report = state.replication.unwrap();
+        assert_eq!(report.owner, RegistryReplicationOwner::Foreign);
+        assert!(report.foreign_rules[0].contains("eu-west-1"));
+    }
+
+    #[tokio::test]
+    async fn foreign_rules_after_ours_fail_loudly_and_a_failed_read_does_not() {
+        let acct = "123456789012";
+        let mut after_ours = ready_registry();
+        after_ours.replication_seen_ours = Some(true);
+        let (outcome, _) =
+            ready_step_with_registry_rules(after_ours, Ok(vec![rule(None, acct, "eu-west-1")])).await;
+        let message = format!("{:?}", outcome.unwrap_err());
+        assert!(message.contains("eu-west-1") && message.contains("changed"), "{message}");
+
+        // An unreadable registry keeps the registry usable and the old report.
+        let mut known = ready_registry();
+        known.replication = Some(RegistryReplicationReport {
+            owner: RegistryReplicationOwner::None,
+            foreign_rules: vec![],
+        });
+        let denied = Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: "AccessDenied".to_string(),
+            resource_id: None,
+        }));
+        let (outcome, state) = ready_step_with_registry_rules(known, denied).await;
+        outcome.unwrap();
+        assert_eq!(state.replication.unwrap().owner, RegistryReplicationOwner::None);
+    }
+
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds() {
         let registry = basic_artifact_registry();
@@ -2139,6 +2431,8 @@ mod tests {
             pull_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-pull".to_string()),
             push_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-push".to_string()),
             repository_prefix: Some("test-registry".to_string()),
+            replication: None,
+            replication_seen_ours: None,
             _internal_stay_count: None,
         };
 
@@ -2434,6 +2728,8 @@ mod tests {
             pull_role_arn: None,
             push_role_arn: None,
             repository_prefix: Some("test-my-registry".to_string()),
+            replication: None,
+            replication_seen_ours: None,
             _internal_stay_count: None,
         }
     }

@@ -124,6 +124,8 @@ use utoipa::OpenApi;
     BuildConfig,
     ArtifactRegistry,
     ArtifactRegistryOutputs,
+    RegistryReplicationOwner,
+    RegistryReplicationReport,
     ServiceAccount,
     ServiceAccountOutputs,
     RemoteStackManagement,
