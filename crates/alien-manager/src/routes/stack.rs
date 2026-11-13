@@ -1707,6 +1707,9 @@ async fn prepare_import_stack(
             deployment_name: &req.deployment_name,
             management_config: req.management_config.as_ref(),
             imported_quota_activation,
+            imported_management_identity: req.resources.iter().any(|resource| {
+                resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE
+            }),
         },
         stack_settings,
     )
@@ -1721,6 +1724,8 @@ pub(super) struct PrepareSetupStack<'a> {
     pub management_config: Option<&'a alien_core::ManagementConfig>,
     /// The setup delivered the optional quota API resource.
     pub imported_quota_activation: bool,
+    /// The setup delivered the management identity (`RemoteStackManagement`).
+    pub imported_management_identity: bool,
 }
 
 /// Derives the stack setup installs: the source stack after template
@@ -1744,7 +1749,24 @@ pub(super) async fn prepare_setup_stack(
             })
         })?;
 
-    let stack_state = StackState::new(mutation_platform);
+    let mut stack_state = StackState::new(mutation_platform);
+    if req.imported_management_identity {
+        // Mutations read an installed management identity from the state, which a registration
+        // does not have yet: the setup delivering it is what installs it.
+        let identity = alien_core::Resource::new(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+        );
+        let mut installed = alien_core::StackResourceState::new_pending(
+            alien_core::RemoteStackManagement::RESOURCE_TYPE.to_string(),
+            identity,
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        installed.status = alien_core::ResourceStatus::Running;
+        stack_state
+            .resources
+            .insert("management".to_string(), installed);
+    }
     let config = DeploymentConfig {
         image_registry: None,
         image_pull_secrets: Vec::new(),
@@ -2351,6 +2373,124 @@ mod setup_update_authorization_tests {
             error.message.contains("api") && !error.message.contains("agents"),
             "only the worker is unowned"
         );
+    }
+
+    fn kubernetes_pull_request(
+        ownership: alien_core::KubernetesClusterOwnership,
+        delivers_management: bool,
+    ) -> StackImportRequest {
+        let mut req = request();
+        req.platform = Platform::Kubernetes;
+        req.base_platform = Some(Platform::Aws);
+        req.stack_settings = StackSettings {
+            deployment_model: alien_core::DeploymentModel::Pull,
+            setup_management: alien_core::SetupManagement::Manual,
+            kubernetes: Some(alien_core::KubernetesSettings {
+                cluster: Some(alien_core::KubernetesClusterSettings {
+                    ownership,
+                    namespace: None,
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        };
+        if delivers_management {
+            req.resources = vec![ImportedResource {
+                id: "management".to_string(),
+                resource_type: alien_core::RemoteStackManagement::RESOURCE_TYPE,
+                import_data: serde_json::json!({}),
+            }];
+        }
+        req
+    }
+
+    /// Registers what the setup owns for a Kubernetes pull install on AWS, as the setup
+    /// artifact does: every resource setup emits, plus the management identity when it
+    /// delivers one.
+    async fn register_kubernetes_pull(
+        ownership: alien_core::KubernetesClusterOwnership,
+        delivers_management: bool,
+    ) -> crate::error::Result<()> {
+        let mut req = kubernetes_pull_request(ownership, delivers_management);
+        let source = Stack::new("app".into())
+            .permission("execution", alien_core::PermissionProfile::new())
+            .add(
+                Worker::new("api".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "example.com/api:latest".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let prepared = prepare_import_stack(source.clone(), &req, &req.stack_settings)
+            .await
+            .unwrap();
+        let mut delivered: Vec<ImportedResource> = prepared
+            .resources
+            .iter()
+            .filter(|(_, entry)| {
+                alien_core::emits_package_scaffolding(
+                    entry,
+                    req.stack_settings.setup_management,
+                    Platform::Aws,
+                )
+            })
+            .map(|(id, entry)| ImportedResource {
+                id: id.clone(),
+                resource_type: entry.config.resource_type(),
+                import_data: serde_json::json!({}),
+            })
+            .collect();
+        if delivers_management && !delivered.iter().any(|resource| resource.id == "management") {
+            delivered.push(ImportedResource {
+                id: "management".to_string(),
+                resource_type: alien_core::RemoteStackManagement::RESOURCE_TYPE,
+                import_data: serde_json::json!({}),
+            });
+        }
+        req.resources = delivered;
+        let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+            .await
+            .unwrap();
+        validate_import_handoff(&req, &prepared)
+    }
+
+    /// The registration the Terraform module for an EKS cluster delivers, in both cluster modes:
+    /// the cluster and the management identity the module creates for the Operator. The manager
+    /// must expect the same set whether setup created the cluster or the customer already had it.
+    #[tokio::test]
+    async fn a_terraform_registration_for_an_existing_eks_cluster_is_accepted() {
+        for ownership in [
+            alien_core::KubernetesClusterOwnership::Managed,
+            alien_core::KubernetesClusterOwnership::Existing,
+        ] {
+            register_kubernetes_pull(ownership, true)
+                .await
+                .unwrap_or_else(|error| panic!("{ownership:?}: {}", error.message));
+        }
+    }
+
+    /// An external cluster brings its own workload identity: a delivered management identity is
+    /// not setup-owned there, and a registration without one is complete.
+    #[tokio::test]
+    async fn an_external_cluster_registers_without_an_identity() {
+        let ownership = alien_core::KubernetesClusterOwnership::External;
+        register_kubernetes_pull(ownership, false).await.unwrap();
+        let error = register_kubernetes_pull(ownership, true)
+            .await
+            .expect_err("an external cluster does not own a management identity");
+        assert!(error.message.contains("management"), "{}", error.message);
+    }
+
+    /// Without a delivered identity, an existing cluster registers as before.
+    #[tokio::test]
+    async fn an_existing_cluster_registration_without_an_identity_is_unchanged() {
+        register_kubernetes_pull(alien_core::KubernetesClusterOwnership::Existing, false)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
