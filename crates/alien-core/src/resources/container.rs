@@ -1145,6 +1145,28 @@ mod tests {
         }
     }
 
+    /// An opted-out workload is written as `restricted` plus a marker. A previous
+    /// Operator ignores the marker and applies the restricted settings, so a
+    /// rollback fails safe: a root image stops starting instead of gaining
+    /// privileges. Upgrading the Operator again restores the opt-out.
+    #[test]
+    fn unrestricted_opt_out_reads_as_restricted_with_the_previous_release_struct() {
+        let security = ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            run_as_user: Some(0),
+            run_as_group: Some(0),
+            read_only_root_filesystem: Some(false),
+            writable_paths: Vec::new(),
+        };
+        let json = serde_json::to_value(&security).unwrap();
+        assert_eq!(json["profile"], "restricted");
+        assert_eq!(json["unrestricted"], true);
+        let previous: PreviousContainerSecurity = serde_json::from_value(json.clone()).unwrap();
+        assert!(matches!(previous.profile, PreviousProfile::Restricted));
+        let back: ContainerSecurity = serde_json::from_value(json).unwrap();
+        assert_eq!(back, security);
+    }
+
     #[test]
     fn security_reads_accept_the_plain_unrestricted_profile() {
         let security: ContainerSecurity =

@@ -170,6 +170,10 @@ export class Worker extends ResourceBuilder {
    *
    * Opt out only for an image that must run as root:
    * `.security({ profile: "unrestricted" })`. Other platforms ignore it.
+   *
+   * Rolling the Operator back to a release without this setting applies the
+   * restricted profile to an opted-out workload, so a root image stops starting
+   * instead of gaining privileges. Upgrade the Operator again to fix it.
    */
   public security(settings: ContainerSecurity): this {
     this._config.security = settings
