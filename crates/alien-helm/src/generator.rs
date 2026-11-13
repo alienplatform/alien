@@ -4368,9 +4368,11 @@ sandbox:
   # keeps them in the release namespace. The chart never creates this namespace: an administrator
   # makes it, and a sandbox whose image starts as root needs it to admit Pod Security `baseline`:
   #   kubectl create namespace <name> && kubectl label namespace <name> pod-security.kubernetes.io/enforce=baseline
-  # The release namespace can then stay `restricted`.
+  # The release namespace can then stay `restricted`. If the namespace does not exist, the install
+  # fails with Helm's `namespaces "<name>" not found`: run the commands above, then install again.
   namespace: ""
   # Extra scheduling for sandbox pods, applied on top of what the RuntimeClass itself sets.
+  # The sandbox agent is amd64 only: a `kubernetes.io/arch` other than `amd64` is refused.
   nodeSelector: {}
   tolerations: []
   # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is

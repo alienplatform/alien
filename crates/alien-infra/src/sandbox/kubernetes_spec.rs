@@ -71,7 +71,8 @@ impl SandboxPlacement {
         }) {
             return Err(format!(
                 "sandbox node selector asks for {arch} nodes, but the sandbox agent is built for \
-                 amd64 only; remove the architecture from sandbox.nodeSelector or select amd64 nodes"
+                 amd64 only; schedule sandboxes on amd64 nodes (set kubernetes.io/arch to amd64 or remove it \
+                 from sandbox.nodeSelector). arm64 sandboxes on Kubernetes are not supported yet"
             ));
         }
         let tolerations = match present(tolerations) {
@@ -656,6 +657,10 @@ mod tests {
                     SandboxPlacement::from_values(Some(&format!(r#"{{"{key}":"{arch}"}}"#)), None)
                         .unwrap_err();
                 assert!(error.contains("amd64 only"), "{error}");
+                assert!(
+                    error.contains("schedule sandboxes on amd64 nodes"),
+                    "{error}"
+                );
             }
             assert!(
                 SandboxPlacement::from_values(Some(&format!(r#"{{"{key}":"amd64"}}"#)), None)
