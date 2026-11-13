@@ -51,7 +51,9 @@ const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("--egress-path-check") {
-        std::process::exit(alien_sandbox_agent::gateway_egress::command_path_check());
+        std::process::exit(alien_sandbox_agent::gateway_egress::command_path_check(
+            std::env::args().any(|argument| argument == "--privileged"),
+        ));
     }
 
     // Before anything reads the environment: the validate hook runs this binary as the exec
