@@ -283,11 +283,14 @@ pub enum ContainerSecurityProfile {
 /// Absent means `restricted` with the image's own non-root user.
 ///
 /// On the wire every field a previous Operator requires is always written with
-/// a concrete value (`runAsUser`/`runAsGroup` as `0` and `readOnlyRootFilesystem`
-/// as the profile's default when unset), so state and bundles written by this
-/// version stay readable after an Operator rollback. The `*Unset` markers, which
-/// previous releases ignore, record that the value was not set, so reading
-/// restores `None` exactly and never treats a real `0` or `false` as unset.
+/// a concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`
+/// as the profile's default when unset) and `profile` is written as `restricted`
+/// (the only value a previous release knows), so state and bundles written by
+/// this version stay readable after an Operator rollback. The `*Unset` and
+/// `unrestricted` markers, which previous releases ignore, record what was
+/// really set, so reading restores the exact value and never treats a real `0`
+/// or `false` as unset. A previous Operator applies `restricted` to an opted-out
+/// workload, so an image that needs root must not be rolled back to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(
@@ -309,6 +312,10 @@ pub struct ContainerSecurity {
     pub writable_paths: Vec<String>,
 }
 
+/// Stands in for an unset user or group on the wire: a previous release needs a
+/// positive ID, and 65532 is the user source-built images run as.
+const PREVIOUS_RELEASE_ID: i64 = 65532;
+
 /// Wire form of [`ContainerSecurity`]; see its documentation.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -320,6 +327,9 @@ struct ContainerSecurityWire {
     run_as_group: Option<i64>,
     #[serde(default)]
     read_only_root_filesystem: Option<bool>,
+    /// The opt-out, which `profile` cannot carry for a previous release.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unrestricted: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     run_as_user_unset: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -332,18 +342,17 @@ struct ContainerSecurityWire {
 
 impl From<ContainerSecurity> for ContainerSecurityWire {
     fn from(security: ContainerSecurity) -> Self {
-        let default_read_only = security.profile == ContainerSecurityProfile::Restricted;
+        let unrestricted = security.profile == ContainerSecurityProfile::Unrestricted;
         Self {
-            profile: security.profile,
+            profile: ContainerSecurityProfile::Restricted,
+            unrestricted,
             run_as_user_unset: security.run_as_user.is_none(),
-            run_as_user: Some(security.run_as_user.unwrap_or(0)),
+            run_as_user: Some(security.run_as_user.unwrap_or(PREVIOUS_RELEASE_ID)),
             run_as_group_unset: security.run_as_group.is_none(),
-            run_as_group: Some(security.run_as_group.unwrap_or(0)),
+            run_as_group: Some(security.run_as_group.unwrap_or(PREVIOUS_RELEASE_ID)),
             read_only_root_filesystem_unset: security.read_only_root_filesystem.is_none(),
             read_only_root_filesystem: Some(
-                security
-                    .read_only_root_filesystem
-                    .unwrap_or(default_read_only),
+                security.read_only_root_filesystem.unwrap_or(!unrestricted),
             ),
             writable_paths: security.writable_paths,
         }
@@ -352,8 +361,13 @@ impl From<ContainerSecurity> for ContainerSecurityWire {
 
 impl From<ContainerSecurityWire> for ContainerSecurity {
     fn from(wire: ContainerSecurityWire) -> Self {
+        let profile = if wire.unrestricted {
+            ContainerSecurityProfile::Unrestricted
+        } else {
+            wire.profile
+        };
         Self {
-            profile: wire.profile,
+            profile,
             run_as_user: wire.run_as_user.filter(|_| !wire.run_as_user_unset),
             run_as_group: wire.run_as_group.filter(|_| !wire.run_as_group_unset),
             read_only_root_filesystem: wire
@@ -1075,6 +1089,12 @@ impl ResourceDefinition for Container {
 
 #[cfg(test)]
 mod tests {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    enum PreviousProfile {
+        Restricted,
+    }
+
     /// `ContainerSecurity` exactly as the previous release declares it. State and
     /// air-gap bundles written by this version must parse with it, so an Operator
     /// rollback keeps working.
@@ -1082,7 +1102,7 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     #[allow(dead_code)]
     struct PreviousContainerSecurity {
-        profile: ContainerSecurityProfile,
+        profile: PreviousProfile,
         run_as_user: i64,
         run_as_group: i64,
         read_only_root_filesystem: bool,
@@ -1123,6 +1143,13 @@ mod tests {
             let back: ContainerSecurity = serde_json::from_value(json).unwrap();
             assert_eq!(back, security);
         }
+    }
+
+    #[test]
+    fn security_reads_accept_the_plain_unrestricted_profile() {
+        let security: ContainerSecurity =
+            serde_json::from_str(r#"{"profile":"unrestricted"}"#).unwrap();
+        assert_eq!(security.profile, ContainerSecurityProfile::Unrestricted);
     }
 
     #[test]
