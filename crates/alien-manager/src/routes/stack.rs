@@ -1746,6 +1746,8 @@ pub(super) async fn prepare_setup_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         // Template preparation grants no access and does not select an
         // installation authorization namespace.
         gcp_federation_scope: None,

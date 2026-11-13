@@ -4342,7 +4342,7 @@ mod tests {
                 .collect();
             assert_eq!(images.len(), 1, "{targets:?}");
             assert!(
-                images[0].starts_with(&format!("{host}/artifacts/prj_a:")),
+                images[0].starts_with(&format!("{host}/artifacts/prj_a@sha256:")),
                 "{targets:?}: {images:?}"
             );
             assert_eq!(resolves.load(Ordering::SeqCst), 2, "{targets:?}");

@@ -2028,7 +2028,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protocol_old_server_refusal_stops_before_any_controller_step() {
+    async fn protocol_old_server_refusal_halts_before_any_controller_step() {
         let transport = TerminalCheckpointTransport::default();
         let mut state = test_state();
         state.protocol_version = 1;
@@ -2150,6 +2150,8 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
@@ -2357,7 +2359,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn stops_immediately_when_checkpoint_rejection_is_terminal() {
+    async fn halts_immediately_when_checkpoint_rejection_is_terminal() {
         let transport = TerminalCheckpointTransport::default();
         let mut state = test_state();
         let mut config = test_config();
@@ -2606,7 +2608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observe_only_state_stops_without_transport_or_steps() {
+    async fn observe_only_state_halts_without_transport_or_steps() {
         let transport = FailFirstCheckpointTransport::default();
         let mut state = test_state();
         state.status = DeploymentStatus::Running;

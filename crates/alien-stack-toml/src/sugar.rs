@@ -515,14 +515,11 @@ fn container(ctx: &Context<'_>, table: &mut Table) -> Result<()> {
     }
     endpoints(ctx, table, "container")?;
 
-    if let Some(tunnel) = table.get_mut("tunnel") {
-        if let Value::Integer(port) = tunnel.value {
-            *tunnel = port_table(tunnel.span.clone(), port);
-        }
-        if let Some(port) = tunnel.as_table().and_then(|t| integer(t.get("port"))) {
-            let span = tunnel.span.clone();
-            add_port(table, port, span);
-        }
+    if let Some(tunnel) = table.get("tunnel") {
+        return Err(ctx.error(
+            tunnel.span.clone(),
+            "Container tunnels were removed. Expose the port with `public-endpoints`, or reach the service from inside the cluster.",
+        ));
     }
 
     if let Some(entry) = table.remove("persistent-storage") {
@@ -626,7 +623,7 @@ fn port_table(span: Range<usize>, port: i64) -> Node {
     Node::table(span, table)
 }
 
-/// Makes sure a container's `ports` lists `port`, which a public endpoint or a tunnel needs.
+/// Makes sure a container's `ports` lists `port`, which a public endpoint needs.
 fn add_port(table: &mut Table, port: i64, span: Range<usize>) {
     if table.get("ports").is_none() {
         table.insert("ports", span.clone(), Node::array(span.clone(), Vec::new()));

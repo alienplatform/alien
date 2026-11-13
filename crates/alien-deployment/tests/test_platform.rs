@@ -278,6 +278,8 @@ fn synced_digest(state: &DeploymentState) -> Option<String> {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         gcp_federation_scope: None,
         stored_secret_input_ids: None,
@@ -2191,7 +2193,7 @@ async fn test_delete_failed_retry_gate_returns_to_deleting() {
 /// E) Delete flow tests
 
 #[tokio::test]
-async fn default_delete_stops_software_and_hands_off_retained_data() {
+async fn default_delete_halts_software_and_hands_off_retained_data() {
     let _vault = test_vault_env().await;
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);

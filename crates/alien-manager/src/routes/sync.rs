@@ -151,9 +151,9 @@ pub struct AgentSyncRequest {
     pub session: String,
     #[serde(default)]
     pub supports_execution_claims: bool,
-    /// Absent for Operators that predate container tunnels.
+    /// Absent for Operators that predate the pod security profile settings.
     #[serde(default)]
-    pub supports_tunnels: bool,
+    pub supports_pod_security: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -246,10 +246,6 @@ pub struct AgentSyncResponse {
     /// Complete release-independent target set. Older embedders omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
-    /// Base URL operators open tunnel connections to. Absent when this manager
-    /// does not accept tunnels; operators then never dial.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_url: Option<String>,
     /// Operator image this manager's charts install. Operators that manage
     /// their own workload update to it. Absent when the manager serves no
     /// charts.
@@ -1183,14 +1179,13 @@ pub(in crate::routes) mod tests {
                 &crate::auth::Subject::system(),
                 &request,
                 error,
-                Some("https://manager.example.test".into()),
             )
             .await
             .expect("acknowledge completed receipt")
             .expect("successful recovery");
             assert_eq!(
                 serde_json::to_value(response).expect("serialize acknowledgment"),
-                json!({"tunnelUrl": "https://manager.example.test"})
+                json!({})
             );
         }
     }
@@ -1212,7 +1207,6 @@ pub(in crate::routes) mod tests {
             &crate::auth::Subject::system(),
             &request,
             "SYNC_FAILED",
-            None,
         )
         .await
         .expect("unrelated error")
@@ -1222,7 +1216,6 @@ pub(in crate::routes) mod tests {
             &crate::auth::Subject::system(),
             &request,
             "DEPLOYMENT_UPDATE_CLAIM_LOST",
-            None,
         )
         .await
         .expect("live claim is not recovered")
@@ -1556,7 +1549,6 @@ pub(in crate::routes) mod tests {
                 RegistryRoutingTable::new(vec![]).expect("empty routing table"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-            tunnels: None,
             charts: None,
             release_channels: None,
             signing: None,
@@ -3722,60 +3714,6 @@ pub(in crate::routes) mod tests {
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
         assert!(!req.supports_execution_claims);
-        assert!(
-            !req.supports_tunnels,
-            "Operators that predate tunnels don't send the flag"
-        );
-    }
-
-    #[test]
-    fn tunnels_are_removed_for_operators_that_predate_them() {
-        let container = |id: &str, tunnel: Option<u16>| {
-            alien_core::Container::new(id.to_string())
-                .code(alien_core::ContainerCode::Image {
-                    image: "api:latest".to_string(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.5".to_string(),
-                    desired: "1".to_string(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "512Mi".to_string(),
-                    desired: "1Gi".to_string(),
-                })
-                .port(8080)
-                .maybe_tunnel(tunnel.map(|port| alien_core::ContainerTunnel { port }))
-                .permissions("execution".to_string())
-                .build()
-        };
-        let mut stack = alien_core::Stack::new("app".to_string())
-            .add(
-                container("api", Some(8080)),
-                alien_core::ResourceLifecycle::Live,
-            )
-            .add(
-                container("worker", None),
-                alien_core::ResourceLifecycle::Live,
-            )
-            .build();
-
-        assert!(crate::routes::sync::remove_container_tunnels(&mut stack));
-        let json = serde_json::to_value(&stack).unwrap();
-        assert!(
-            !json.to_string().contains("\"tunnel\""),
-            "no container may carry a tunnel: {json}"
-        );
-        // The rest of the container is delivered unchanged.
-        let api = stack
-            .resources()
-            .find(|(id, _)| id.as_str() == "api")
-            .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
-            .expect("api container");
-        assert_eq!(api.ports.len(), 1);
-        assert!(
-            !crate::routes::sync::remove_container_tunnels(&mut stack),
-            "nothing left to remove"
-        );
     }
 
     #[test]
@@ -4389,8 +4327,125 @@ pub(in crate::routes) mod tests {
         }
     }
 
+    #[test]
+    fn security_settings_old_operators_cannot_read_are_removed() {
+        use alien_core::{ContainerSecurity, ContainerSecurityProfile};
+        let container = |id: &str, security: Option<ContainerSecurity>| {
+            let mut container = alien_core::Container::new(id.to_string())
+                .code(alien_core::ContainerCode::Image {
+                    image: "api:latest".to_string(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .port(8080)
+                .permissions("execution".to_string())
+                .build();
+            container.security = security;
+            container
+        };
+        let old_form = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            run_as_group: Some(1000),
+            read_only_root_filesystem: Some(true),
+            writable_paths: vec![],
+        };
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(
+                container(
+                    "optout",
+                    Some(ContainerSecurity {
+                        profile: ContainerSecurityProfile::Unrestricted,
+                        run_as_user: None,
+                        run_as_group: None,
+                        read_only_root_filesystem: None,
+                        writable_paths: vec![],
+                    }),
+                ),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container(
+                    "partial",
+                    Some(ContainerSecurity {
+                        run_as_user: None,
+                        ..old_form.clone()
+                    }),
+                ),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container("complete", Some(old_form.clone())),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert!(super::downgrade_container_security(&mut stack));
+        let security = |id: &str| {
+            stack
+                .resources()
+                .find(|(rid, _)| rid.as_str() == id)
+                .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
+                .expect("container")
+                .security
+                .clone()
+        };
+        assert_eq!(security("optout"), None);
+        assert_eq!(security("partial"), None);
+        assert_eq!(security("complete"), Some(old_form));
+        assert!(!super::downgrade_container_security(&mut stack));
+    }
+
+    #[test]
+    fn older_operators_get_daemons_and_workers_without_security() {
+        use alien_core::{ContainerSecurity, Daemon, DaemonCode, Worker, WorkerCode};
+        let security = ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        let mut daemon = Daemon::new("d".to_string())
+            .permissions("p".to_string())
+            .code(DaemonCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        daemon.security = Some(security.clone());
+        let mut worker = Worker::new("w".to_string())
+            .permissions("p".to_string())
+            .code(WorkerCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        worker.security = Some(security);
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        assert!(super::downgrade_container_security(&mut stack));
+        for (_, entry) in stack.resources() {
+            if let Some(d) = entry.config.downcast_ref::<Daemon>() {
+                assert!(d.security.is_none());
+            }
+            if let Some(w) = entry.config.downcast_ref::<Worker>() {
+                assert!(w.security.is_none());
+            }
+        }
+        assert!(!super::downgrade_container_security(&mut stack));
+    }
+
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
@@ -4981,7 +5036,6 @@ async fn acknowledge_completed_claim(
     subject: &crate::auth::Subject,
     request: &AgentSyncRequest,
     error_code: &str,
-    tunnel_url: Option<String>,
 ) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
     if !matches!(
         error_code,
@@ -5005,7 +5059,6 @@ async fn acknowledge_completed_claim(
         commands_url: None,
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
-        tunnel_url,
         target_operator_image: None,
         signed_config: None,
     }))
@@ -5177,7 +5230,6 @@ async fn agent_sync(
                 &subject,
                 &req,
                 &error.code,
-                state.tunnels.as_ref().map(|_| state.config.base_url()),
             )
             .await
             {
@@ -5301,7 +5353,6 @@ async fn agent_sync(
                                     &subject,
                                     &req,
                                     &e.code,
-                                    state.tunnels.as_ref().map(|_| state.config.base_url()),
                                 )
                                 .await
                                 {
@@ -5504,7 +5555,7 @@ async fn agent_sync(
                     r,
                     management_config,
                     agent_token,
-                    req.supports_tunnels,
+                    req.supports_pod_security,
                 )
                 .await
                 {
@@ -5716,7 +5767,6 @@ async fn agent_sync(
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
         target_dynamic_containers,
-        tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
         // Charts this manager serves name the image. A manager without charts
         // uses the one its store reported for this deployment.
         target_operator_image: state
@@ -5799,14 +5849,31 @@ async fn save_pull_render_failure(
 /// The target a pull deployment converges to for `release`: the release's
 /// stack for the deployment's platform and the deployment's configuration.
 /// Sync delivers it to connected Operators; air-gapped bundles carry it.
-/// Remove tunnel declarations from every container in `stack`, for Operators
-/// that would otherwise reject the whole target. Returns whether any were
-/// removed.
-fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
+/// Drop `security` settings an Operator that predates pod security profiles
+/// cannot parse (it would reject the whole target, including its own
+/// self-update). Such Operators already apply no security context unless a
+/// container declares the complete old form, so removing the rest keeps their
+/// behavior as it was. Returns whether anything was removed.
+fn downgrade_container_security(stack: &mut alien_core::Stack) -> bool {
+    use alien_core::ContainerSecurityProfile;
     let mut removed = false;
     for (_, entry) in stack.resources_mut() {
         if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
-            removed |= container.tunnel.take().is_some();
+            let readable = container.security.as_ref().is_none_or(|security| {
+                security.profile == ContainerSecurityProfile::Restricted
+                    && security.run_as_user.is_some()
+                    && security.run_as_group.is_some()
+                    && security.read_only_root_filesystem.is_some()
+            });
+            if !readable {
+                container.security = None;
+                removed = true;
+            }
+        } else if let Some(daemon) = entry.config.downcast_mut::<alien_core::Daemon>() {
+            // Older Operators have no `security` field on daemons or workers.
+            removed |= daemon.security.take().is_some();
+        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
+            removed |= worker.security.take().is_some();
         }
     }
     removed
@@ -5835,7 +5902,7 @@ pub(crate) async fn build_pull_target(
     r: crate::traits::ReleaseRecord,
     management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
-    operator_supports_tunnels: bool,
+    operator_supports_pod_security: bool,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
@@ -5881,11 +5948,11 @@ pub(crate) async fn build_pull_target(
         }
     };
 
-    if !operator_supports_tunnels && remove_container_tunnels(&mut stack) {
+    if !operator_supports_pod_security && downgrade_container_security(&mut stack) {
         tracing::info!(
             deployment_id = %deployment.id,
             release_id = %r.id,
-            "Operator predates container tunnels; delivering the release without them. Upgrade the Operator to enable tunnels."
+            "Operator predates pod security profiles; delivering the release without the settings it cannot read. Upgrade the Operator to apply them."
         );
     }
 

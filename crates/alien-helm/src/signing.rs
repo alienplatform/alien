@@ -69,11 +69,9 @@ const METRICS_SERVER_IMAGE_VALUES: &str =
 /// Image references the generator renders inside a quoted string, by template. A value with
 /// `"` or `#` could end that string and drop what follows, so a protected chart renders
 /// `repository@<digest>` through `quote`, with the digest written into the template.
-const OPERATOR_IMAGE_TEMPLATE: &str =
-    r#"image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}""#;
-const LOG_COLLECTOR_IMAGE_TEMPLATE: &str =
-    r#"image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}""#;
-const CLEANUP_IMAGE_TEMPLATE: &str = r#"image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}""#;
+const OPERATOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}"#;
+const LOG_COLLECTOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.logCollector.image.repository "tag" .Values.logCollector.image.tag "digest" (dig "digest" "" .Values.logCollector.image)) | quote }}"#;
+const CLEANUP_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}"#;
 
 /// A registry host (with an optional port) and repository path, as image references allow
 /// them: no tag, digest, quote, comment or whitespace.
@@ -207,8 +205,12 @@ fn pin_templates(
         .rsplit_once('@')
         .map(|(_, digest)| digest)
         .ok_or_else(|| missing("the cleanup image digest"))?;
+    // The same include the chart renders with, so a site's `global.imageRegistry` mirror still
+    // applies; the digest is the literal one written here, never a value.
     let pinned = |repository: &str, digest: &str| {
-        format!(r#"image: {{{{ printf "%s@%s" {repository} "{digest}" | quote }}}}"#)
+        format!(
+            r#"image: {{{{ include "deployment.image" (dict "root" $ "repository" {repository} "tag" "" "digest" "{digest}") | quote }}}}"#
+        )
     };
     for (path, template, replacement) in [
         (

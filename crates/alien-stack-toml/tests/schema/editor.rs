@@ -593,13 +593,6 @@ impl Editor {
                 "Ports the container listens on: numbers, or tables.",
             ),
         );
-        let tunnel = properties
-            .remove("tunnel")
-            .expect("a container has a tunnel");
-        properties.insert(
-            "tunnel".into(),
-            one_of(vec![json!({ "type": "integer" }), tunnel]),
-        );
         let storage = properties
             .remove("persistent-storage")
             .expect("a container has persistent storage");

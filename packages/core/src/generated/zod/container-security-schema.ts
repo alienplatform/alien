@@ -7,15 +7,16 @@ import * as z from "zod";
 import { ContainerSecurityProfileSchema } from "./container-security-profile-schema.js";
 
 /**
- * @description Container process identity and filesystem security.
+ * @description Container process identity and filesystem security.\n\nAbsent means `restricted` with the image\'s own non-root user.\n\nOn the wire every field a previous Operator requires is always written with\na concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`\nas the profile\'s default when unset) and `profile` is written as `restricted`\n(the only value a previous release knows), so state and bundles written by\nthis version stay readable after an Operator rollback. The `*Unset` and\n`unrestricted` markers, which previous releases ignore, record what was\nreally set, so reading restores the exact value and never treats a real `0`\nor `false` as unset. A previous Operator applies `restricted` to an opted-out\nworkload, so an image that needs root must not be rolled back to it.
  */
 export const ContainerSecuritySchema = z.object({
     get "profile"(){
-                return ContainerSecurityProfileSchema.describe("Security profile shared by container runtimes.")
+                return ContainerSecurityProfileSchema.describe("Security profile shared by container runtimes.\n\nEvery workload the Operator creates runs under the Kubernetes Pod Security\n`restricted` profile unless its stack sets `security.profile` to\n`unrestricted`. The opt-out is per workload; use it only for an image that\nmust run as root or write outside its declared writable paths.")
               },
-"readOnlyRootFilesystem": z.boolean().describe("Mount the root filesystem read-only."),
-"runAsGroup": z.int().describe("Numeric GID for the container process."),
-"runAsUser": z.int().describe("Numeric UID for the container process.")
-    }).describe("Container process identity and filesystem security.")
+"readOnlyRootFilesystem": z.boolean().describe("Mount the root filesystem read-only. Defaults to true under `restricted`.").nullish(),
+"runAsGroup": z.int().describe("Numeric GID for the container process. Defaults to the image's group.").nullish(),
+"runAsUser": z.int().describe("Numeric UID for the container process. Defaults to the image's user,\nwhich must not be root.").nullish(),
+"writablePaths": z.optional(z.array(z.string()).describe("Absolute paths backed by a writable emptyDir. `/tmp` is always writable."))
+    }).describe("Container process identity and filesystem security.\n\nAbsent means `restricted` with the image's own non-root user.\n\nOn the wire every field a previous Operator requires is always written with\na concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`\nas the profile's default when unset) and `profile` is written as `restricted`\n(the only value a previous release knows), so state and bundles written by\nthis version stay readable after an Operator rollback. The `*Unset` and\n`unrestricted` markers, which previous releases ignore, record what was\nreally set, so reading restores the exact value and never treats a real `0`\nor `false` as unset. A previous Operator applies `restricted` to an opted-out\nworkload, so an image that needs root must not be rolled back to it.")
 
 export type ContainerSecurity = z.infer<typeof ContainerSecuritySchema>

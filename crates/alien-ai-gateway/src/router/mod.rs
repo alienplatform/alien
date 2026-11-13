@@ -375,6 +375,7 @@ fn build_router_inner(
         )
         .route("/{binding}/v1/messages", post(proxy_messages))
         .route("/{binding}/v1/responses", post(proxy_responses_universal))
+        .route("/{binding}/v1/embeddings", post(proxy_embeddings))
         .route("/{binding}/v1/models", get(list_models))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .with_state(state)
@@ -749,6 +750,74 @@ async fn proxy_chat_completions(
     .await
 }
 
+/// `POST /<name>/v1/embeddings`: OpenAI-compatible embeddings, forwarded as is
+/// with the model rewritten to the upstream deployment. Served where the catalog
+/// lists an embeddings model for the binding's cloud (Azure today).
+const AZURE_EMBEDDINGS_API_VERSION: &str = "2024-10-21";
+
+async fn proxy_embeddings(
+    State(state): State<Arc<AppState>>,
+    Path(binding): Path<String>,
+    ProxyBody(body): ProxyBody,
+) -> Result<Response> {
+    let (mut payload, requested_model, model) = parse_model_request(&body)?;
+    let route = state.routes.get(&binding).ok_or_else(|| {
+        AlienError::new(ErrorData::UnknownBinding {
+            binding: binding.clone(),
+        })
+    })?;
+    let not_available = || {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.clone(),
+            binding: binding.clone(),
+        })
+    };
+    let GatewayTarget::Cloud(cloud) = route.target else {
+        return Err(not_available());
+    };
+    let embedding = ai_catalog::resolve_embedding_for(&model, cloud).ok_or_else(not_available)?;
+    let endpoint = route
+        .azure_endpoint
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "endpoint"))?;
+    let base = route
+        .upstream_base_override
+        .clone()
+        .unwrap_or_else(|| endpoint.to_string());
+    // The deployment path, not `/openai/v1/embeddings`: the v1 embeddings route answers
+    // 401 PermissionDenied for the Cognitive Services User role the workload holds,
+    // while the deployment route accepts it (verified against a real account).
+    let url = format!(
+        "{}/openai/deployments/{}/embeddings?api-version={AZURE_EMBEDDINGS_API_VERSION}",
+        base.trim_end_matches('/'),
+        embedding.upstream_id
+    );
+    payload["model"] = Value::String(embedding.upstream_id.to_string());
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
+    // Embeddings answer in the OpenAI shape, so the chat-completions token parser reads
+    // `prompt_tokens`. Everything from here on is a provider-bound request and is reported.
+    let descriptor = AiUsageContext::new(
+        &binding,
+        cloud_usage_provider(cloud),
+        &model,
+        embedding.upstream_id,
+        AiUsageClientApi::OpenAiChatCompletions,
+        route.region.clone(),
+    )
+    .with_requested_model(&requested_model);
+    let response = async {
+        let upstream = sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
+        forward_response(upstream).await
+    }
+    .await;
+    observe_result(response, state.usage_observer.as_ref(), descriptor)
+}
+
 async fn proxy_messages(
     state: State<Arc<AppState>>,
     binding: Path<String>,
@@ -1071,7 +1140,7 @@ async fn proxy(
 
     let response = async {
         let (provider_model, url, aws_service) =
-            if effective_provider_api == ProviderApi::OpenAiResponses {
+            if effective_provider_api == ProviderApi::OpenAiResponses && cloud == Platform::Aws {
                 let target = ai_catalog::responses_target(cm.public_id).ok_or_else(|| {
                     AlienError::new(ErrorData::ModelNotAvailable {
                         model: model.clone(),
@@ -1389,6 +1458,17 @@ pub(crate) fn upstream_target(
             (
                 endpoint.trim_end_matches('/').to_string(),
                 "/openai/v1/chat/completions".to_string(),
+                "",
+            )
+        }
+        (Platform::Azure, ProviderApi::OpenAiResponses) => {
+            let endpoint = route
+                .azure_endpoint
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "endpoint"))?;
+            (
+                endpoint.trim_end_matches('/').to_string(),
+                "/openai/v1/responses".to_string(),
                 "",
             )
         }
@@ -2144,6 +2224,120 @@ mod tests {
             upstream_base_override: None,
             additional_headers: AdditionalHeaders::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn azure_gpt5_responses_pass_through_with_web_search() {
+        // The GPT-5 deployments serve Responses on Foundry's /openai/v1/responses.
+        // The body, including the server-side web_search tool, is not translated.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/responses")
+                    .matches(|req: &HttpMockRequest| {
+                        let body: Value =
+                            serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                .unwrap_or(Value::Null);
+                        body["model"] == "gpt-5.5" && body["tools"][0]["type"] == "web_search"
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"resp_1","object":"response","output":[]}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![azure_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({
+                "model": "byo/gpt-5.5",
+                "input": "hi",
+                "tools": [{"type": "web_search"}]
+            }))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn azure_embeddings_forward_to_the_deployment() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/deployments/text-embedding-3-large/embeddings")
+                    .query_param("api-version", "2024-10-21")
+                    .matches(|req: &HttpMockRequest| {
+                        let body: Value =
+                            serde_json::from_slice(req.body.as_deref().unwrap_or_default())
+                                .unwrap_or(Value::Null);
+                        body["model"] == "text-embedding-3-large" && body["input"] == "hello"
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"object":"list","data":[{"embedding":[0.1,0.2],"index":0}]}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![azure_route(&server.base_url())])).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "byo/text-embedding-3-large", "input": "hello"}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200);
+        assert!(resp.text().await.unwrap().contains("\"embedding\""));
+        mock.assert_async().await;
+
+        // A chat model is not an embeddings model: rejected before any upstream call.
+        let resp = client
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "gpt-4.1", "input": "hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_client_error(), "{}", resp.status());
+        // The rejected request never reached the upstream.
+        assert_eq!(mock.hits_async().await, 1);
+    }
+
+    #[tokio::test]
+    async fn azure_embeddings_report_usage() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/openai/deployments/text-embedding-3-large/embeddings");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"object":"list","data":[{"embedding":[0.1],"index":0}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#);
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![azure_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "byo/text-embedding-3-large", "input": "hello"}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200);
+        resp.bytes().await.expect("body");
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("embeddings usage observation");
+        assert_eq!(event.provider, AiUsageProvider::AzureFoundry);
+        assert_eq!(event.public_model, "text-embedding-3-large");
+        assert_eq!(event.provider_model, "text-embedding-3-large");
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
+        assert_eq!(event.tokens.input_tokens, Some(7));
     }
 
     #[tokio::test]

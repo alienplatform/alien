@@ -2468,58 +2468,6 @@ impl OperatorDb {
         write_json(&conn, SIGNING_LEDGER_KEY, &merged).await
     }
 
-    /// Manager URL to open tunnel connections to, from the last sync.
-    /// `None` when the manager does not accept tunnels.
-    pub async fn get_tunnel_url(&self) -> Result<Option<String>> {
-        let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query("SELECT value FROM state WHERE key = 'tunnel_url'", ())
-            .await
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to query tunnel_url".to_string(),
-            })?;
-        match rows
-            .next()
-            .await
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to fetch tunnel_url row".to_string(),
-            })? {
-            Some(row) => Ok(Some(row.get(0).into_alien_error().context(
-                ErrorData::DatabaseError {
-                    message: "Failed to read tunnel_url value".to_string(),
-                },
-            )?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Record the tunnel URL from the manager's sync response; `None` clears it.
-    pub async fn set_tunnel_url(&self, url: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().await;
-        let result = match url {
-            Some(url) => {
-                conn.execute(
-                    "INSERT INTO state (key, value, updated_at) VALUES ('tunnel_url', ?, datetime('now'))
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                    (url.to_string(),),
-                )
-                .await
-            }
-            None => {
-                conn.execute("DELETE FROM state WHERE key = 'tunnel_url'", ())
-                    .await
-            }
-        };
-        result
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to set tunnel_url".to_string(),
-            })?;
-        Ok(())
-    }
-
     /// Set the commands URL from the manager's sync response.
     pub async fn set_commands_url(&self, url: &str) -> Result<()> {
         let conn = self.conn.lock().await;
@@ -2881,6 +2829,47 @@ mod tests {
             .await
             .unwrap());
         assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![heartbeat]);
+    }
+
+    /// Put the retired `tunnel` field on every container in a saved value.
+    fn add_retired_tunnel(value: &mut serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut added = 0;
+                if map.contains_key("cpu") && map.contains_key("code") {
+                    map.insert("tunnel".into(), serde_json::json!({"port": 8080}));
+                    added += 1;
+                }
+                added + map.values_mut().map(add_retired_tunnel).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(add_retired_tunnel).sum(),
+            _ => 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_saved_with_a_container_tunnel_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let mut saved = serde_json::to_value(heartbeat_state()).unwrap();
+        assert_eq!(add_retired_tunnel(&mut saved), 2, "{saved}");
+        db.conn
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))",
+                (saved.to_string(),),
+            )
+            .await
+            .unwrap();
+        let loaded = db
+            .get_deployment_state()
+            .await
+            .expect("the old checkpoint is readable")
+            .expect("checkpoint present");
+        assert_eq!(loaded.stack_state.unwrap().resources.len(), 2);
     }
 
     #[tokio::test]

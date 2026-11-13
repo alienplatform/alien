@@ -1165,7 +1165,6 @@ dependencies = [
  "alien-permissions",
  "alien-preflights",
  "alien-signing",
- "alien-tunnel",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -1299,7 +1298,6 @@ dependencies = [
  "alien-local",
  "alien-manager-api",
  "alien-signing",
- "alien-tunnel",
  "async-trait",
  "aws-config",
  "aws-credential-types",
@@ -1646,31 +1644,6 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
- "workspace-hack",
-]
-
-[[package]]
-name = "alien-tunnel"
-version = "3.3.64"
-dependencies = [
- "alien-error",
- "alien-tunnel",
- "bytes",
- "futures",
- "hex",
- "http 1.5.0",
- "http-body-util",
- "hyper 1.11.1",
- "hyper-util",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
  "workspace-hack",
 ]
 

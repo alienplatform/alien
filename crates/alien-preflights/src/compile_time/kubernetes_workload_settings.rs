@@ -3,7 +3,16 @@ use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Container, Platform, Stack};
 
 /// Prevents Kubernetes-only workload settings from being silently ignored.
+///
+/// `security` is different: every platform accepts it. On Local there is no pod to apply it to,
+/// so the check warns that it only takes effect on Kubernetes.
 pub struct KubernetesWorkloadSettingsCheck;
+
+fn has_kubernetes_only_settings(container: &Container) -> bool {
+    !container.kubernetes_secret_mounts.is_empty()
+        || container.kubernetes_liveness_probe.is_some()
+        || container.kubernetes_readiness_probe.is_some()
+}
 
 #[async_trait::async_trait]
 impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
@@ -18,39 +27,45 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                     .config
                     .downcast_ref::<Container>()
                     .is_some_and(|container| {
-                        !container.kubernetes_secret_mounts.is_empty()
-                            || container.kubernetes_liveness_probe.is_some()
-                            || container.kubernetes_readiness_probe.is_some()
+                        has_kubernetes_only_settings(container)
                             || (platform == Platform::Local && container.security.is_some())
                     })
             })
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
-        let errors = stack
-            .resources()
-            .filter_map(|(id, entry)| {
-                entry
-                    .config
-                    .downcast_ref::<Container>()
-                    .filter(|container| {
-                        !container.kubernetes_secret_mounts.is_empty()
-                            || container.kubernetes_liveness_probe.is_some()
-                            || container.kubernetes_readiness_probe.is_some()
-                            || (platform == Platform::Local && container.security.is_some())
-                    })
-                    .map(|_| {
-                        format!(
-                            "Container '{id}' configures security or Kubernetes workload settings that the target platform {platform} does not support"
-                        )
-                    })
+        let containers = || {
+            stack
+                .resources()
+                .filter_map(|(id, entry)| Some((id, entry.config.downcast_ref::<Container>()?)))
+        };
+        let errors = containers()
+            .filter(|(_, container)| has_kubernetes_only_settings(container))
+            .map(|(id, _)| {
+                format!(
+                    "Container '{id}' configures Kubernetes workload settings that the target platform {platform} does not support"
+                )
             })
             .collect::<Vec<_>>();
-
-        if errors.is_empty() {
-            Ok(CheckResult::success())
+        let warnings = if platform == Platform::Local {
+            containers()
+                .filter(|(_, container)| container.security.is_some())
+                .map(|(id, _)| {
+                    format!(
+                        "Container '{id}' sets security, which applies on Kubernetes only; it has no effect on Local"
+                    )
+                })
+                .collect::<Vec<_>>()
         } else {
-            Ok(CheckResult::failed(errors))
+            Vec::new()
+        };
+
+        if !errors.is_empty() {
+            Ok(CheckResult::failed_with_warnings(errors, warnings))
+        } else if !warnings.is_empty() {
+            Ok(CheckResult::with_warnings(warnings))
+        } else {
+            Ok(CheckResult::success())
         }
     }
 }
@@ -126,7 +141,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_security_when_the_target_cannot_apply_it() {
+    async fn security_only_warns_on_local() {
         let container = Container::new("worker".to_string())
             .code(ContainerCode::Image {
                 image: "worker:latest".to_string(),
@@ -141,9 +156,10 @@ mod tests {
             })
             .security(ContainerSecurity {
                 profile: ContainerSecurityProfile::Restricted,
-                run_as_user: 65532,
-                run_as_group: 65532,
-                read_only_root_filesystem: true,
+                run_as_user: Some(65532),
+                run_as_group: Some(65532),
+                read_only_root_filesystem: Some(true),
+                writable_paths: Vec::new(),
             })
             .permissions("worker".to_string())
             .build();
@@ -174,21 +190,15 @@ mod tests {
         assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, platform));
-            assert!(
-                KubernetesWorkloadSettingsCheck
-                    .check(&stack, platform)
-                    .await
-                    .unwrap()
-                    .success
-            );
         }
         assert!(KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Local));
         let result = KubernetesWorkloadSettingsCheck
             .check(&stack, Platform::Local)
             .await
             .expect("preflight succeeds");
-        assert!(!result.success);
-        assert!(result.errors[0].contains("worker"));
-        assert!(result.errors[0].contains("security"));
+        assert!(result.success, "security must not fail the Local preflight");
+        assert!(result.errors.is_empty());
+        assert!(result.warnings[0].contains("worker"));
+        assert!(result.warnings[0].contains("Kubernetes only"));
     }
 }

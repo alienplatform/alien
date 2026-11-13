@@ -147,36 +147,35 @@ impl KubernetesServiceAccountController {
             client.get_base_url()
         );
         let request = client.client().request(Method::GET, url);
-        let account: KubernetesServiceAccount =
-            match sign_send_json(request, &client.auth_config()).await {
-                Ok(account) => account,
-                // The chart creates the account before the Operator runs, so a missing
-                // one is not a race to wait out: the installed chart no longer provides it
-                // (for example after a rollback). Failing at once lets the health check
-                // report it, instead of spending its retry budget while the deployment
-                // still shows Running.
-                Err(error)
-                    if matches!(
-                        error.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+        let account: KubernetesServiceAccount = match sign_send_json(request, &client.auth_config())
+            .await
+        {
+            Ok(account) => account,
+            // The chart creates the account before the Operator runs, so a missing
+            // one is not a race to wait out: the installed chart no longer provides it
+            // (for example after a rollback). Failing at once lets the health check
+            // report it, instead of spending its retry budget while the deployment
+            // still shows Running.
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                         resource_id: config.id().to_string(),
                         message: format!(
                             "Helm-owned ServiceAccount {namespace}/{name} is unavailable: the installed chart does not provide it"
                         ),
                     }));
-                }
-                Err(error) => {
-                    return Err(error).context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Helm-owned ServiceAccount {namespace}/{name} is unavailable"
-                        ),
-                        resource_id: Some(config.id().to_string()),
-                    });
-                }
-            };
+            }
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Helm-owned ServiceAccount {namespace}/{name} is unavailable"),
+                    resource_id: Some(config.id().to_string()),
+                });
+            }
+        };
         if account.metadata.name.as_deref() != Some(&name) {
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id().to_string(),

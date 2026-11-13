@@ -162,8 +162,9 @@ impl KubernetesDaemonController {
         .await?;
         let proxy_image = match &config.code {
             DaemonCode::Image { image }
-                if ctx.deployment_config.runtime_identity_audience.is_none()
-                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+                if ctx.deployment_config.image_registry.is_none()
+                    && (ctx.deployment_config.runtime_identity_audience.is_none()
+                        || crate::kubernetes_registry::uses_manager_proxy(ctx, image)) =>
             {
                 Some(image)
             }
@@ -298,7 +299,11 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
+        if self.workload_failure.is_none() {
+            self.workload_failure = restricted_hint;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -580,8 +585,9 @@ impl KubernetesDaemonController {
         .await?;
         let proxy_image = match &config.code {
             DaemonCode::Image { image }
-                if ctx.deployment_config.runtime_identity_audience.is_none()
-                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+                if ctx.deployment_config.image_registry.is_none()
+                    && (ctx.deployment_config.runtime_identity_audience.is_none()
+                        || crate::kubernetes_registry::uses_manager_proxy(ctx, image)) =>
             {
                 Some(image)
             }
@@ -674,7 +680,11 @@ impl KubernetesDaemonController {
                 suggested_delay: None,
             });
         }
+        let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
+        if self.workload_failure.is_none() {
+            self.workload_failure = restricted_hint;
+        }
 
         Ok(HandlerAction::Stay {
             max_times: Some(60),
@@ -1076,6 +1086,27 @@ impl KubernetesDaemonController {
     }
 
     /// Remember why pods cannot be created, when the mapped PriorityClass is missing.
+    /// Fails the rollout with the opt-out message when pods of the desired
+    /// template are blocked by the restricted profile; otherwise a hint for a
+    /// read-only crash loop, if any.
+    async fn root_image_hint(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
+        let mut restricted_hint = None;
+        if let (Some(namespace), Some((selector, template))) = (
+            self.namespace.as_deref(),
+            self.read_daemonset(ctx).await?.and_then(|daemonset| {
+                let spec = daemonset.spec?;
+                Some((spec.selector.match_labels?, spec.template))
+            }),
+        ) {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            restricted_hint = crate::core::fail_if_root_image_blocked(
+                ctx, namespace, &selector, &template, &config.id,
+            )
+            .await?;
+        }
+        Ok(restricted_hint)
+    }
+
     async fn record_workload_failure(&mut self, ctx: &ResourceControllerContext<'_>) {
         self.workload_failure = match (
             ctx.desired_resource_config::<Daemon>(),
@@ -1164,7 +1195,7 @@ impl KubernetesDaemonController {
         // entrypoint, deployed here as a DaemonSet. Reaching here with
         // unbuilt source means the build step was skipped.
         let image = match &config.code {
-            DaemonCode::Image { image } => image.clone(),
+            DaemonCode::Image { image } => ctx.deployment_config.workload_image(image),
             DaemonCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
@@ -1198,8 +1229,11 @@ impl KubernetesDaemonController {
         // vault-load pointer is stripped from the manifest.
         let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
+        let security = crate::core::pod_security(&config.id, config.security.as_ref(), &[])?;
         let container = Container {
             name: DAEMON_CONTAINER_NAME.to_string(),
+            security_context: security.container,
+            volume_mounts: (!security.mounts.is_empty()).then_some(security.mounts),
             image: Some(image),
             // The daemon contract: `command` overrides the image default
             // entrypoint, and the declared ResourceSpecs become real
@@ -1237,11 +1271,10 @@ impl KubernetesDaemonController {
             ..Default::default()
         };
 
-        let image_pull_secrets = image_pull_secret_name.map(|name| {
-            vec![LocalObjectReference {
-                name: name.to_string(),
-            }]
-        });
+        let image_pull_secrets = crate::kubernetes_registry::workload_pull_secrets(
+            ctx.deployment_config,
+            image_pull_secret_name,
+        );
 
         let pool =
             alien_core::kubernetes_daemon_pool(ctx.desired_stack, config).map_err(|message| {
@@ -1269,6 +1302,8 @@ impl KubernetesDaemonController {
             priority_class_name,
             service_account_name: service_account_name.map(str::to_owned),
             automount_service_account_token: service_account_name.is_none().then_some(false),
+            security_context: security.pod,
+            volumes: (!security.volumes.is_empty()).then_some(security.volumes),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
             image_pull_secrets,
@@ -1431,6 +1466,53 @@ mod tests {
             namespace: Some("test-ns".to_string()),
             ..Default::default()
         }
+    }
+
+    /// Writes the daemon's DaemonSet, as the controller renders it, for the Kind test that
+    /// applies it to a namespace enforcing the `restricted` Pod Security profile. See
+    /// `write_the_default_deployment_for_the_kind_test` in the container controller.
+    #[tokio::test]
+    #[ignore = "writes manifests for the Kind pod security test"]
+    async fn write_the_default_daemonset_for_the_kind_test() {
+        let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
+        let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
+        let mut config = match std::env::var("ALIEN_KIND_CONFIG") {
+            Ok(path) => serde_json::from_str(&std::fs::read_to_string(path).expect("config"))
+                .expect("daemon config"),
+            Err(_) => manifest_test_daemon(&[]),
+        };
+        let name = std::env::var("ALIEN_KIND_NAME").unwrap_or_else(|_| "agent".to_string());
+        let out = std::env::var("ALIEN_KIND_OUT").unwrap_or_else(|_| "daemon.yaml".to_string());
+        config.code = DaemonCode::Image { image };
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        if let Ok(registry) = std::env::var("ALIEN_KIND_IMAGE_REGISTRY") {
+            harness = harness.with_image_registry(&registry);
+        }
+        let daemonset = manifest_test_controller()
+            .build_daemonset(
+                &config,
+                &name,
+                "default",
+                Some("default"),
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest");
+        let mut value = serde_json::to_value(&daemonset).expect("serialize");
+        value["apiVersion"] = "apps/v1".into();
+        value["kind"] = "DaemonSet".into();
+        // The Kind test chooses the namespace.
+        value["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("namespace");
+        std::fs::write(
+            std::path::Path::new(&dir).join(out),
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write manifest");
     }
 
     #[tokio::test]

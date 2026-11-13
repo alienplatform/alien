@@ -300,14 +300,20 @@ pub struct Mount {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Security {
-    /// `restricted` or `restrictedInternet`.
+    /// `restricted`, `restrictedInternet`, or `unrestricted` (the workload's opt-out).
     pub profile: String,
-    /// User id.
-    pub run_as_user: i64,
-    /// Group id.
-    pub run_as_group: i64,
-    /// Whether the root filesystem is read-only.
-    pub read_only_root_filesystem: bool,
+    /// User id; absent means the image's own non-root user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_as_user: Option<i64>,
+    /// Group id; absent means the image's own group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_as_group: Option<i64>,
+    /// Whether the root filesystem is read-only; absent means the profile's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_root_filesystem: Option<bool>,
+    /// Absolute paths backed by a writable emptyDir.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writable_paths: Vec<String>,
 }
 
 /// Upper bounds on what the control plane may request.

@@ -12,7 +12,9 @@
 //! an older API server refuses the install.
 
 /// Digest-pinned probe image (python:3.13-slim, multi-architecture index).
-pub(crate) const PROBE_IMAGE: &str = "docker.io/library/python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f";
+pub(crate) const PROBE_REPOSITORY: &str = "docker.io/library/python";
+pub(crate) const PROBE_DIGEST: &str =
+    "sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f";
 
 /// Pods the probe creates, named `<job>-<role>`.
 const PROBE_ROLES: &[&str] = &[
@@ -50,6 +52,8 @@ pub(crate) fn template(sandbox_class_helper: bool) -> String {
         .join(", ");
     format!(
         r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" . | trunc 51 | trimSuffix "-") -}}}}
+{{{{- $probeImage := include "deployment.image" (dict "root" . "repository" "{repository}" "digest" "{digest}") -}}}}
+{{{{- with dig "cniProbeImage" "" (default dict .Values.sandbox) }}}}{{{{ $probeImage = include "deployment.mirroredImage" (dict "root" $ "image" .) }}}}{{{{ end -}}}}
 {{{{- $cluster := printf "%s-%s" $name (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -81,8 +85,10 @@ spec:
       message: probe pods mount nothing
     - expression: "!has(object.spec.initContainers) && !has(object.spec.ephemeralContainers) && size(object.spec.containers) == 1"
       message: probe pods run one container
-    - expression: "object.spec.containers.all(c, c.image == '{image}' && (!has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false))"
+    - expression: {{{{ printf "object.spec.containers.all(c, c.image == '%s' && (!has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false))" $probeImage | quote }}}}
       message: probe pods run the pinned probe image unprivileged
+    - expression: {{{{ printf "!has(object.spec.imagePullSecrets) || object.spec.imagePullSecrets.all(s, s.name in [%s])" (include "deployment.pullSecretNames" .) | quote }}}}
+      message: probe pods pull only with the installation's image pull secrets
     - expression: "(!has(object.spec.hostNetwork) || !object.spec.hostNetwork) && (!has(object.spec.hostPID) || !object.spec.hostPID) && (!has(object.spec.hostIPC) || !object.spec.hostIPC)"
       message: probe pods use no host namespaces
     - expression: "has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 65534 && has(object.spec.securityContext.seccompProfile) && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'"
@@ -323,6 +329,10 @@ spec:
     spec:
       serviceAccountName: {{{{ $name }}}}
       restartPolicy: Never
+      {{{{- with .Values.runtime.imagePullSecrets }}}}
+      imagePullSecrets:
+        {{{{- toYaml . | nindent 8 }}}}
+      {{{{- end }}}}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -330,7 +340,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: probe
-          image: {image}
+          image: {{{{ $probeImage | quote }}}}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -351,7 +361,9 @@ spec:
             - name: PROBE_JOB
               value: {{{{ $name | quote }}}}
             - name: PROBE_IMAGE
-              value: {image}
+              value: {{{{ $probeImage | quote }}}}
+            - name: PROBE_PULL_SECRETS
+              value: {{{{ include "deployment.pullSecretCsv" . | quote }}}}
             - name: PROBE_RUNTIME_CLASS
               value: {runtime_class}
             - name: PROBE_NODE_SELECTOR
@@ -366,6 +378,7 @@ spec:
             - -c
             - |
 {script}"#,
-        image = PROBE_IMAGE,
+        repository = PROBE_REPOSITORY,
+        digest = PROBE_DIGEST,
     )
 }

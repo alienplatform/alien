@@ -3,9 +3,7 @@
   "permissions": {
     "profiles": {
       "single": {},
-      "multiple": {},
-      "tunnel-listed": {},
-      "tunnel-added": {}
+      "multiple": {}
     }
   },
   "resources": {
@@ -75,82 +73,6 @@
         ],
         "publicEndpoints": [],
         "stateful": false
-      },
-      "dependencies": [],
-      "lifecycle": "live"
-    },
-    "tunnel-listed": {
-      "config": {
-        "id": "tunnel-listed",
-        "type": "container",
-        "code": {
-          "image": "ghcr.io/acme/tunnel:1.0.0",
-          "type": "image"
-        },
-        "commandsEnabled": false,
-        "cpu": {
-          "desired": "1",
-          "min": "1"
-        },
-        "environment": {},
-        "kubernetesSecretMounts": [],
-        "links": [],
-        "memory": {
-          "desired": "1Gi",
-          "min": "1Gi"
-        },
-        "permissions": "tunnel-listed",
-        "ports": [
-          {
-            "port": 7000
-          },
-          {
-            "port": 8080
-          }
-        ],
-        "publicEndpoints": [],
-        "stateful": false,
-        "tunnel": {
-          "port": 7000
-        }
-      },
-      "dependencies": [],
-      "lifecycle": "live"
-    },
-    "tunnel-added": {
-      "config": {
-        "id": "tunnel-added",
-        "type": "container",
-        "code": {
-          "image": "ghcr.io/acme/tunnel:1.0.0",
-          "type": "image"
-        },
-        "commandsEnabled": false,
-        "cpu": {
-          "desired": "1",
-          "min": "1"
-        },
-        "environment": {},
-        "kubernetesSecretMounts": [],
-        "links": [],
-        "memory": {
-          "desired": "1Gi",
-          "min": "1Gi"
-        },
-        "permissions": "tunnel-added",
-        "ports": [
-          {
-            "port": 8080
-          },
-          {
-            "port": 7001
-          }
-        ],
-        "publicEndpoints": [],
-        "stateful": false,
-        "tunnel": {
-          "port": 7001
-        }
       },
       "dependencies": [],
       "lifecycle": "live"

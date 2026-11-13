@@ -797,6 +797,9 @@ fn protect_config(
         // config names; the manager's are ignored.
         external_bindings: signed_external_bindings(stack, signed_config)?,
         // The Operator fills this from the identity it enrolled with, never from a manager's value.
+        // Like the name above, filled from the installation's own settings by the deployment loop.
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         base_platform: None,
         label_domain: None,

@@ -14,6 +14,7 @@ const processor = new alien.Worker("processor")
   .concurrencyLimit(25)
   .memoryMb(2048)
   .timeoutSeconds(600)
+  .security({ profile: "restricted" })
   .readinessProbe({ method: "GET", path: "/ready" })
   .publicEndpoint("hooks")
   .trigger({

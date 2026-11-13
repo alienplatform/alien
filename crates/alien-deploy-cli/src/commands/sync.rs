@@ -4508,6 +4508,19 @@ async fn helm_upgrade(
     }
     let images = airgap::chart_images(chart, &serde_json::Value::Null, &values)
         .context(config_error("checking the site's chart images"))?;
+    for key in images
+        .keys()
+        .filter(|key| key.starts_with(airgap::TEMPLATE_IMAGE_PREFIX))
+    {
+        if !record.chart_images.contains_key(key) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: key.clone(),
+                message: format!(
+                    "The chart runs an image ({key}) that is not in the bundle. Remove this pending bundle from to-site/, then pass the same values file online and at the site and re-download the update."
+                ),
+            }));
+        }
+    }
     for key in images.keys().filter(|key| key.starts_with("postgres.")) {
         if !record.chart_images.contains_key(key) {
             let resource = key
@@ -4530,18 +4543,44 @@ async fn helm_upgrade(
         "management": {"deploymentId": deployment_id, "name": deployment_name},
         // The Operator buffers container logs for the next report.
         "logCollector": {"enabled": true, "mode": "podApi"},
-        "tunnel": {"enabled": false},
     });
     if let Some(digest) = accepted_chart {
         overrides["airgapped"]["acceptedChart"] = digest.into();
     }
-    for (key, image) in &record.chart_images {
+    // Every other image the chart and the Operator run (probes, collector, workloads
+    // not named in the target) follows the same registry.
+    if let Some(registry) = record.registry.as_deref().filter(|r| !r.is_empty()) {
+        overrides["global"]["imageRegistry"] = registry.trim_end_matches('/').into();
+    }
+    // The templates' own images: the exact bundled reference, since a single-architecture
+    // export pins another digest than the chart's default.
+    let probe_key = format!("{}sandboxCniProbe", airgap::TEMPLATE_IMAGE_PREFIX);
+    let metrics_key = format!("{}metricsServer", airgap::TEMPLATE_IMAGE_PREFIX);
+    if let Some(image) = record.chart_images.get(&probe_key) {
+        if airgap::chart_takes_probe_image(chart)
+            .context(config_error("checking the chart's sandbox probe"))?
+        {
+            overrides["sandbox"]["cniProbeImage"] =
+                format!("{}:{}", image.repository, image.tag).into();
+        }
+    }
+    if let Some(image) = record.chart_images.get(&metrics_key) {
+        overrides["clusterBootstrap"]["metricsServer"]["image"] =
+            format!("{}:{}", image.repository, image.tag).into();
+    }
+    for (key, image) in record
+        .chart_images
+        .iter()
+        .filter(|(key, _)| !key.starts_with(airgap::TEMPLATE_IMAGE_PREFIX))
+    {
         let mut node = &mut overrides;
         for part in chart_image_key(key)? {
             node = &mut node[part];
         }
         node["repository"] = image.repository.clone().into();
         node["tag"] = image.tag.clone().into();
+        // The tag carries the pin; a digest from the values would name another image.
+        node["digest"] = "".into();
     }
     overrides["runtime"]["image"]["pullWithManagementToken"] = false.into();
     overrides["runtime"]["image"]["selfUpdate"] = false.into();

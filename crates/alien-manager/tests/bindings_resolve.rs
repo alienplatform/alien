@@ -210,7 +210,6 @@ async fn build_for_platform(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: None,
         charts: None,
         release_channels: None,
         signing: None,

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use crate::error::{ErrorData, Result};
 use alien_error::{Context, ContextError, IntoAlienError};
-use k8s_openapi::api::core::v1::PodSpec;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{LocalObjectReference, PodSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 pub(crate) fn uses_manager_proxy(
@@ -132,6 +132,28 @@ pub(crate) async fn ensure_registry_pull_secret(
             }
         }
     }
+}
+
+/// Pull secrets for a workload pod: the manager-registry Secret when one is used, plus the
+/// installation's own `runtime.imagePullSecrets` (needed when it mirrors images privately).
+pub(crate) fn workload_pull_secrets(
+    config: &alien_core::DeploymentConfig,
+    manager_secret: Option<&str>,
+) -> Option<Vec<LocalObjectReference>> {
+    let mut names: Vec<&str> = manager_secret.into_iter().collect();
+    for name in &config.image_pull_secrets {
+        if !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
+    (!names.is_empty()).then(|| {
+        names
+            .into_iter()
+            .map(|name| LocalObjectReference {
+                name: name.to_string(),
+            })
+            .collect()
+    })
 }
 
 pub(crate) fn pod_spec_references_image_pull_secret(
@@ -352,6 +374,40 @@ mod tests {
         );
         assert!(
             prepare_registry_secret_update(&mut desired, &existing, "api-registry", false).is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod pull_secret_tests {
+    use super::workload_pull_secrets;
+    use alien_core::DeploymentConfig;
+
+    #[test]
+    fn lists_manager_and_installation_secrets_once() {
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .build();
+        assert!(workload_pull_secrets(&config, None).is_none());
+        config.image_pull_secrets = vec!["mirror".into(), "shared".into()];
+        let names = |secrets: Option<Vec<_>>| {
+            secrets
+                .unwrap()
+                .into_iter()
+                .map(|s: k8s_openapi::api::core::v1::LocalObjectReference| s.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(workload_pull_secrets(&config, None)), ["mirror", "shared"]);
+        assert_eq!(
+            names(workload_pull_secrets(&config, Some("shared"))),
+            ["shared", "mirror"]
         );
     }
 }

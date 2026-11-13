@@ -169,7 +169,6 @@ fn sync(target: TargetDeployment) -> SyncResponse {
         commands_url: None,
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
-        tunnel_url: None,
         target_operator_image: None,
     }
 }

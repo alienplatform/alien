@@ -11,4 +11,3 @@ mod observed_release;
 pub mod operations_exec;
 pub mod otlp;
 pub mod sync;
-pub mod tunnel;

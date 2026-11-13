@@ -68,7 +68,6 @@ impl Modify for BearerSecurity {
         crate::routes::airgap::bundle_signature,
         crate::routes::airgap::status_report,
         crate::routes::tokens::list_tokens,
-        crate::routes::tokens::create_token,
         crate::routes::tokens::delete_token,
         // Deployments
         crate::routes::deployments::create_deployment,
@@ -224,9 +223,6 @@ impl Modify for BearerSecurity {
         crate::routes::airgap::StatusReportResponse,
         crate::routes::tokens::TokenResponse,
         crate::routes::tokens::ListTokensResponse,
-        crate::routes::tokens::CreateTokenRequest,
-        crate::routes::tokens::CreatableTokenType,
-        crate::routes::tokens::CreatedTokenResponse,
         // Health types
         crate::routes::health::HealthResponse,
         // Core types

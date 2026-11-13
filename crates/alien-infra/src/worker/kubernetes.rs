@@ -1,6 +1,6 @@
 use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::{
     kubernetes_cleanup_resource_labels, linked_bindings, reconcile_environment_secret,
@@ -157,8 +157,9 @@ impl KubernetesWorkerController {
         // from the manager's registry. Required for image-based deployments.
         let proxy_image = match &config.code {
             WorkerCode::Image { image }
-                if ctx.deployment_config.runtime_identity_audience.is_none()
-                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+                if ctx.deployment_config.image_registry.is_none()
+                    && (ctx.deployment_config.runtime_identity_audience.is_none()
+                        || crate::kubernetes_registry::uses_manager_proxy(ctx, image)) =>
             {
                 Some(image)
             }
@@ -313,6 +314,19 @@ impl KubernetesWorkerController {
                     });
                 }
                 debug!(deployment_name=%deployment_name, "Deployment not yet ready");
+                if let Some((selector, template)) = deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| Some((spec.selector.match_labels.as_ref()?, &spec.template)))
+                {
+                    if let Some(hint) = crate::core::fail_if_root_image_blocked(
+                        ctx, namespace, selector, template, &config.id,
+                    )
+                    .await?
+                    {
+                        warn!(id=%config.id, "{hint}");
+                    }
+                }
             }
             Err(e)
                 if matches!(
@@ -686,8 +700,9 @@ impl KubernetesWorkerController {
         // Registry pull secret is required for image-based deployments.
         let proxy_image = match &config.code {
             WorkerCode::Image { image }
-                if ctx.deployment_config.runtime_identity_audience.is_none()
-                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+                if ctx.deployment_config.image_registry.is_none()
+                    && (ctx.deployment_config.runtime_identity_audience.is_none()
+                        || crate::kubernetes_registry::uses_manager_proxy(ctx, image)) =>
             {
                 Some(image)
             }
@@ -813,6 +828,19 @@ impl KubernetesWorkerController {
                     });
                 }
                 debug!(deployment_name=%deployment_name, "Deployment rollout in progress");
+                if let Some((selector, template)) = deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| Some((spec.selector.match_labels.as_ref()?, &spec.template)))
+                {
+                    if let Some(hint) = crate::core::fail_if_root_image_blocked(
+                        ctx, namespace, selector, template, &config.id,
+                    )
+                    .await?
+                    {
+                        warn!(id=%config.id, "{hint}");
+                    }
+                }
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
@@ -1336,6 +1364,7 @@ mod tests {
     #[tokio::test]
     async fn create_retry_converges_existing_worker_to_corrective_release() {
         let server = httpmock::MockServer::start_async().await;
+        crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
         let config = Worker::new("worker".into())
             .code(WorkerCode::Image {
                 image: "example.test/worker:corrected".into(),
@@ -1448,6 +1477,7 @@ mod tests {
     async fn worker_create_accepts_ready_capacity_and_update_waits_through_slow_rollouts() {
         for (ready, total, complete) in [(3, 3, true), (1, 1, true), (1, 3, false), (0, 1, false)] {
             let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             let mut response = server.mock(|when, then| {
                 when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
                 then.status(200).json_body(serde_json::json!({

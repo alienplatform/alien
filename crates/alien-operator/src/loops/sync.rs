@@ -400,7 +400,7 @@ async fn sync_with_manager(
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
         supports_execution_claims: true,
-        supports_tunnels: true,
+        supports_pod_security: true,
         execution_claim,
         current_state: Some(deployment_state),
         heartbeats,
@@ -537,16 +537,6 @@ async fn sync_with_manager(
         if let Err(e) = state.db.set_commands_url(commands_url).await {
             error!(error = %e, "Failed to persist commands_url");
         }
-    }
-
-    // The manager advertises its tunnel endpoint on every sync; an absent URL
-    // (older manager, or tunnels disabled) stops the tunnel loop from dialing.
-    if let Err(e) = state
-        .db
-        .set_tunnel_url(sync_response.tunnel_url.as_deref())
-        .await
-    {
-        error!(error = %e, "Failed to persist tunnel_url");
     }
 
     if let Some(image) = sync_response.target_operator_image.as_deref() {

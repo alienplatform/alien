@@ -229,7 +229,6 @@ async fn deployment_with_queued_update(manager_has_signing_key: bool) -> Fixture
             RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: None,
         charts: None,
         release_channels: None,
         signing: None,

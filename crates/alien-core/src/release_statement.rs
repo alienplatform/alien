@@ -569,7 +569,9 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
         workload.env = container.environment.clone().into_iter().collect();
         workload.runtime = Runtime {
             security: container.security.as_ref().map(|security| Security {
-                profile: if container.egress.is_some() {
+                profile: if security.profile == crate::ContainerSecurityProfile::Unrestricted {
+                    "unrestricted".to_string()
+                } else if container.egress.is_some() {
                     "restrictedInternet".to_string()
                 } else {
                     "restricted".to_string()
@@ -577,6 +579,7 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
                 run_as_user: security.run_as_user,
                 run_as_group: security.run_as_group,
                 read_only_root_filesystem: security.read_only_root_filesystem,
+                writable_paths: security.writable_paths.clone(),
             }),
             egress: container.egress.map(|_| "internet".to_string()),
             ..Runtime::default()

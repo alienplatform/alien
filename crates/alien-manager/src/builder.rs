@@ -57,8 +57,6 @@ pub struct AlienManagerBuilder {
     /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
-    /// Open tunnel connections; `Some` mounts the tunnel routes.
-    tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts from the registry.
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
@@ -101,7 +99,6 @@ impl AlienManagerBuilder {
             bindings_provider_override: None,
             target_bindings_providers_override: None,
             import_registry: None,
-            tunnels: None,
             charts: None,
             release_channels: None,
             signing: None,
@@ -180,17 +177,6 @@ impl AlienManagerBuilder {
     /// manager.
     pub fn charts(mut self, settings: crate::routes::charts::ChartSettings) -> Self {
         self.charts = Some(Arc::new(settings));
-        self
-    }
-
-    /// Accept tunnel connections from operators and serve
-    /// `/v1/deployments/{deployment}/tunnels/{container}/...`, which forwards
-    /// requests into deployments over their operators' outbound connections.
-    ///
-    /// Off unless called. Operators only dial managers that advertise the
-    /// tunnel in their sync responses.
-    pub fn tunnels(mut self) -> Self {
-        self.tunnels = Some(alien_tunnel::manager::TunnelRegistry::new());
         self
     }
 
@@ -995,7 +981,6 @@ impl AlienManagerBuilder {
             self.platform_routes,
             self.dev_status_tx,
             self.import_registry,
-            self.tunnels,
             charts,
             self.release_channels,
             self.signing,
@@ -1216,7 +1201,6 @@ async fn finalize(
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
-    tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     signing: Option<Arc<dyn crate::traits::SigningStore>>,
@@ -1264,7 +1248,6 @@ async fn finalize(
         // [`AlienManagerBuilder::import_registry`].
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
-        tunnels,
         charts,
         release_channels: release_channels.clone(),
         signing: signing.clone(),

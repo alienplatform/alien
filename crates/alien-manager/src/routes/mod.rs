@@ -20,7 +20,6 @@ pub mod stack;
 pub mod sync;
 pub mod telemetry;
 pub mod tokens;
-pub mod tunnel;
 pub mod values;
 pub mod vault;
 pub mod whoami;
@@ -91,9 +90,6 @@ pub struct AppState {
     /// [`alien_infra::ImporterRegistry::built_in`], so the per-request path
     /// is a `Arc` clone and a hash-map lookup.
     pub import_registry: Arc<alien_infra::ImporterRegistry>,
-    /// Open tunnel connections. `None` when tunnels are not enabled; the
-    /// tunnel routes are mounted only when this is `Some`.
-    pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
     pub charts: Option<Arc<charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
@@ -243,9 +239,6 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
     }
     if options.include_initialize {
         router = router.merge(sync::initialize_router());
-    }
-    if state.tunnels.is_some() {
-        router = router.merge(tunnel::router());
     }
 
     router.with_state(state)

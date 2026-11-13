@@ -93,7 +93,7 @@ fn sort_objects(value: &mut serde_json::Value) {
     }
 }
 
-/// This gate grants only setup import. Ordinary CRUD, sync, command, tunnel,
+/// This gate grants only setup import. Ordinary CRUD, sync, command,
 /// credential and release endpoints must continue to reject this role.
 pub fn permits_import(subject: &Subject, deployment: &DeploymentRecord) -> bool {
     matches!(subject.kind, SubjectKind::ServiceAccount { .. })

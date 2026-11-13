@@ -187,6 +187,8 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
         volume_restores: Vec::new(),
         deletion_policy: Default::default(),
         release_statements: None,
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         signed_config: None,
     }
 }

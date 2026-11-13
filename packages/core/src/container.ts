@@ -358,28 +358,6 @@ export class Container extends ResourceBuilder {
   }
 
   /**
-   * Makes an HTTP port reachable from your control plane through the manager.
-   *
-   * Requests to `https://<manager>/v1/deployments/<deployment>/tunnels/<container>/...`
-   * are forwarded to this port over the Operator's outbound connection. Nothing
-   * is exposed on the deployment's network, and the environment needs no
-   * inbound access. Available on Kubernetes deployments.
-   *
-   * @param port Port that serves HTTP. Added to the container's ports if missing.
-   * @returns The Container builder instance.
-   */
-  public tunnel(port: number): this {
-    if (!this._config.ports) {
-      this._config.ports = []
-    }
-    if (!this._config.ports.some(p => p.port === port)) {
-      this._config.ports.push({ port })
-    }
-    this._config.tunnel = { port }
-    return this
-  }
-
-  /**
    * Sets environment variables for the container.
    * @param vars Key-value pairs of environment variables.
    * @returns The Container builder instance.
@@ -450,7 +428,19 @@ export class Container extends ResourceBuilder {
     return this
   }
 
-  /** Sets a portable container security profile and process identity. */
+  /**
+   * Adjusts the container's security profile. Containers run under the Pod
+   * Security "restricted" profile by default (non-root, seccomp RuntimeDefault,
+   * all capabilities dropped, read-only root filesystem with a writable /tmp).
+   * Use `writablePaths` for other directories the image writes to.
+   *
+   * Opt out only for an image that must run as root:
+   * `.security({ profile: "unrestricted" })`.
+   *
+   * Rolling the Operator back to a release without this setting applies the
+   * restricted profile to an opted-out workload, so a root image stops starting
+   * instead of gaining privileges. Upgrade the Operator again to fix it.
+   */
   public security(settings: ContainerSecurity): this {
     this._config.security = settings
     return this
