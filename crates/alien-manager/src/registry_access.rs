@@ -2276,6 +2276,7 @@ mod tests {
         metadata.registry_access = Some(RegistryAccess {
             repositories: vec!["alien-artifacts-other".to_string()],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         });
         cleanup_deleted_registry_access(
             &MockDeploymentStore::new(),
