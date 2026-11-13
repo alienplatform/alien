@@ -684,9 +684,22 @@ pub struct Written {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Request {
+    ReadDeployerInputs(ReadDeployerInputs),
     ApplyWrite(ApplyWrite),
     ApplyResourceWrite(ApplyResourceWrite),
     DeleteWorkload(DeleteWorkload),
+}
+
+/// `readDeployerInputs`: the values the install's store holds for the deployer inputs of one
+/// signed workload, as the verifier reads them for its own checks.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadDeployerInputs {
+    pub release: SignedStatement,
+    pub signer_lists: Vec<SignedStatement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<SignedStatement>,
+    pub workload: String,
 }
 
 /// Delete a Live workload's function, service or app. Deleting needs no signed statement.
@@ -862,6 +875,86 @@ pub async fn apply_resource_write(
         }));
     }
     Ok(written)
+}
+
+/// Ask `verifier` for the deployer input values the install's store holds for `workload`: the
+/// values it checks a function's environment against, so the controller builds the same one.
+pub async fn read_deployer_inputs(
+    verifier: &dyn Verifier,
+    statements: &ReleaseStatements,
+    config: Option<&SignedStatement>,
+    workload: &str,
+) -> Result<HashMap<String, serde_json::Value>> {
+    #[derive(Deserialize)]
+    struct Answer {
+        inputs: HashMap<String, String>,
+    }
+    let request = Request::ReadDeployerInputs(ReadDeployerInputs {
+        release: statements.release.clone(),
+        signer_lists: statements.signer_lists.clone(),
+        config: config.cloned(),
+        workload: workload.to_string(),
+    });
+    let answer = match verifier.call(&request).await {
+        Ok(answer) => answer,
+        Err(CallError::Answered { code, reason }) => {
+            return Err(answered(verifier, workload, code, reason))
+        }
+        Err(CallError::Failed(error)) => return Err(error),
+    };
+    let answer: Answer = serde_json::from_value(answer).into_alien_error().context(
+        ErrorData::CloudPlatformError {
+            message: format!(
+                "The answer of verifier '{}' to readDeployerInputs is not a map of input values",
+                verifier.name()
+            ),
+            resource_id: Some(workload.to_string()),
+        },
+    )?;
+    Ok(answer
+        .inputs
+        .into_iter()
+        .map(|(id, value)| (id, serde_json::Value::String(value)))
+        .collect())
+}
+
+/// The deployer input values of `workload` on a protected install: read from the install's
+/// store through its verifier, the read the verifier checks the environment against, and not
+/// from `DeploymentConfig.input_values`, which a store change never reaches. Empty on an
+/// unprotected install, where the caller keeps `input_values`.
+pub async fn protected_deployer_inputs(
+    ctx: &ResourceControllerContext<'_>,
+    workload: &str,
+) -> Result<Option<HashMap<String, serde_json::Value>>> {
+    let Some(statements) = protected_statements(ctx, workload)? else {
+        return Ok(None);
+    };
+    let config = ctx.deployment_config.signed_config.as_ref();
+    let values = match ctx.platform {
+        alien_core::Platform::Aws => {
+            let lambda = ctx
+                .service_provider
+                .get_aws_lambda_client(ctx.get_aws_config()?)
+                .await?;
+            let verifier = LambdaVerifier::new(lambda, ctx.resource_prefix);
+            read_deployer_inputs(&verifier, statements, config, workload).await?
+        }
+        alien_core::Platform::Gcp => {
+            let verifier = gcp_verifier(ctx)?;
+            read_deployer_inputs(&verifier, statements, config, workload).await?
+        }
+        alien_core::Platform::Azure => {
+            let verifier = azure_verifier(ctx).await?;
+            read_deployer_inputs(&verifier, statements, config, workload).await?
+        }
+        other => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("Protected installs have no verifier on {other}"),
+                resource_id: Some(workload.to_string()),
+            }))
+        }
+    };
+    Ok(Some(values))
 }
 
 /// Have `verifier` delete `workload`'s function, service or app, `function`, with what the cloud
@@ -1112,7 +1205,9 @@ pub fn gcp_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpVerifier>
 pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpVerifier> {
     let config = ctx.get_azure_config()?;
     let resource_group = crate::azure_utils::get_resource_group_name(ctx.state)?;
-    let apps = ctx.service_provider.get_azure_container_apps_client(config)?;
+    let apps = ctx
+        .service_provider
+        .get_azure_container_apps_client(config)?;
     azure_verifier_in(config, &ctx.resource_prefix, &resource_group, apps.as_ref()).await
 }
 

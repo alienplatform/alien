@@ -29,6 +29,9 @@ pub enum Request {
     /// Check a cloud write a controller built for a resource of the signed stack, then send it
     /// unchanged.
     ApplyResourceWrite(crate::cloud_write::resource::ApplyResourceWrite),
+    /// Read the values the install's store holds for the deployer inputs of one signed
+    /// workload, so a controller builds the environment the verifier checks.
+    ReadDeployerInputs(crate::cloud_write::ReadDeployerInputs),
     /// Roll a machine cluster to the release's launch template (AWS).
     RollMachines(crate::machines::RollMachines),
     /// Resize a machine cluster within its signed bounds (GCP, Azure).

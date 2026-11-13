@@ -343,6 +343,21 @@ pub async fn http_verifier_stub(
     status: axum::http::StatusCode,
     answer: serde_json::Value,
 ) -> (String, HttpRequests) {
+    http_verifier_stub_with_inputs(status, answer, &[]).await
+}
+
+/// [`http_verifier_stub`] whose store holds `inputs`: a `readDeployerInputs` request is
+/// answered with them (and not recorded, so `requests` holds the writes), anything else with
+/// `status` and `answer`.
+pub async fn http_verifier_stub_with_inputs(
+    status: axum::http::StatusCode,
+    answer: serde_json::Value,
+    inputs: &[(&str, &str)],
+) -> (String, HttpRequests) {
+    let inputs: serde_json::Map<String, serde_json::Value> = inputs
+        .iter()
+        .map(|(id, value)| (id.to_string(), serde_json::json!(value)))
+        .collect();
     let requests: HttpRequests = Arc::new(Mutex::new(Vec::new()));
     let recorded = requests.clone();
     let app = axum::Router::new().route(
@@ -351,7 +366,16 @@ pub async fn http_verifier_stub(
             move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
                 let recorded = recorded.clone();
                 let answer = answer.clone();
+                let inputs = inputs.clone();
                 async move {
+                    if serde_json::from_slice::<serde_json::Value>(&body)
+                        .is_ok_and(|request| request.get("readDeployerInputs").is_some())
+                    {
+                        return (
+                            axum::http::StatusCode::OK,
+                            axum::Json(serde_json::json!({"inputs": inputs})),
+                        );
+                    }
                     let bearer = headers
                         .get(axum::http::header::AUTHORIZATION)
                         .and_then(|value| value.to_str().ok())

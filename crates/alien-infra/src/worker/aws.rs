@@ -6354,7 +6354,8 @@ impl AwsWorkerController {
             .add_linked_resources(&runtime_links, ctx, worker_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
-            .add_signed_values(ctx, &worker_config.id)?
+            .add_signed_values(ctx, &worker_config.id)
+            .await?
             .build();
 
         Ok(env_vars)
@@ -12470,6 +12471,11 @@ mod tests {
             .expect_get_function_configuration()
             .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
         lambda.expect_invoke().returning(move |request| {
+            let read: serde_json::Value = serde_json::from_slice(&request.payload).unwrap();
+            if read.get("readDeployerInputs").is_some() {
+                // The install's store holds no input value; not a write, so not recorded.
+                return Ok(invoke_answer(None, serde_json::json!({"inputs": {}})));
+            }
             invocations
                 .lock()
                 .unwrap()

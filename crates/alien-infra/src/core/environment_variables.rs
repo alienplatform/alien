@@ -844,17 +844,22 @@ impl EnvironmentVariableBuilder {
     /// On a protected install, render what the signed statements decide for `workload`: its
     /// secrets list and the values its signed config sets (see
     /// [`verifier::apply_signed_values`]).
-    pub fn add_signed_values(
+    pub async fn add_signed_values(
         mut self,
         ctx: &ResourceControllerContext<'_>,
         workload: &str,
     ) -> Result<Self> {
         if let Some(statements) = verifier::protected_statements(ctx, workload)? {
+            // The values come from the install's store, as the verifier reads them, so the
+            // environment built here is the one it checks.
+            let values = verifier::protected_deployer_inputs(ctx, workload)
+                .await?
+                .unwrap_or_default();
             verifier::apply_signed_values(
                 statements,
                 ctx.deployment_config.signed_config.as_ref(),
                 workload,
-                &ctx.deployment_config.input_values,
+                &values,
                 &mut self.env_vars,
             )?;
         }

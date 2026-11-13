@@ -11,12 +11,12 @@ use serde_json::{json, Value};
 use tracing::info;
 
 use crate::cloud_write::resource::{ApplyResourceWrite, ResourceFacts, ResourceWrite};
-use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
+use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts, ReadDeployerInputs};
 use crate::error::{ErrorData, Result};
 use crate::function::Accepting;
 use crate::machines::{self, DeleteMachines, RemoveMachines, RollMachines, Scale};
 use crate::plan::{DeleteWorkload, OwnResource, Place, Reads, Request, SetupNetwork};
-use crate::trust::{accept, find_install, Acceptance, Install, InstallStore};
+use crate::trust::{accept, find_install, Acceptance, Accepted, Install, InstallStore};
 
 /// The cloud writes one verifier makes.
 #[async_trait]
@@ -184,6 +184,7 @@ impl Verifier {
         match request {
             Request::ApplyWrite(request) => self.write(&request).await,
             Request::ApplyResourceWrite(request) => self.resource_write(&request).await,
+            Request::ReadDeployerInputs(request) => self.read_inputs(&request).await,
             Request::RollMachines(request) => self.roll(&request).await,
             Request::Scale(request) => self.scale(&request).await,
             Request::RemoveMachines(request) => self.remove(&request).await,
@@ -287,6 +288,49 @@ impl Verifier {
         }))
     }
 
+    /// The values the install's store holds for the deployer inputs `workload` reads or the
+    /// release gates on. The one read a write is checked against, and the one a controller
+    /// asks for to build the same environment.
+    async fn read_deployer_inputs(
+        &self,
+        place: &Place,
+        accepted: &Accepted,
+        workload: &Workload,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        let gating = alien_core::release_statement::gating_deployer_inputs(&accepted.release.body)
+            .context(ErrorData::Refused {
+                reason: "the signed release's inputs can't be read".to_string(),
+            })?;
+        let mut values = std::collections::BTreeMap::new();
+        for input in workload.deployer_env.values().chain(&gating) {
+            if values.contains_key(input) {
+                continue;
+            }
+            if let Some(value) = self.store.input(&place.prefix, input).await? {
+                values.insert(input.clone(), value);
+            }
+        }
+        Ok(values)
+    }
+
+    /// Answer a controller's read of the deployer input values of one signed workload.
+    async fn read_inputs(&self, request: &ReadDeployerInputs) -> Result<Value> {
+        let (install, place) = self.install().await?;
+        let accepted = accept(
+            &install,
+            &request.signer_lists,
+            &request.release,
+            request.config.as_ref(),
+            place.platform(),
+            Utc::now(),
+        )?;
+        let (workload, _) = own_workload(&place, &accepted.release.body, &request.workload)?;
+        let inputs = self
+            .read_deployer_inputs(&place, &accepted, workload)
+            .await?;
+        Ok(serde_json::json!({ "inputs": inputs }))
+    }
+
     async fn write(&self, request: &ApplyWrite) -> Result<Value> {
         let (install, place) = self.install().await?;
         let accepted = accept(
@@ -303,18 +347,9 @@ impl Verifier {
             own: self.backend.own_resource(&place, &own_name).await?,
             ..Reads::default()
         };
-        let gating = alien_core::release_statement::gating_deployer_inputs(&accepted.release.body)
-            .context(ErrorData::Refused {
-                reason: "the signed release's inputs can't be read".to_string(),
-            })?;
-        for input in workload.deployer_env.values().chain(&gating) {
-            if reads.deployer_inputs.contains_key(input) {
-                continue;
-            }
-            if let Some(value) = self.store.input(&place.prefix, input).await? {
-                reads.deployer_inputs.insert(input.clone(), value);
-            }
-        }
+        reads.deployer_inputs = self
+            .read_deployer_inputs(&place, &accepted, workload)
+            .await?;
         let facts = Facts {
             place: &place,
             accepted: &accepted,
@@ -2449,6 +2484,52 @@ mod tests {
             let reason = refusal(verifier.handle(request(!sink_expected)).await);
             assert!(reason.contains("AUDIT_SINK"), "audit={audit}: {reason}");
             verifier.handle(request(sink_expected)).await.unwrap();
+        }
+    }
+
+    /// A controller reads the deployer input values through the verifier, so the environment it
+    /// builds is the one the verifier checks: the install's store answers, only for inputs the
+    /// signed release names, and a change in the store shows in the next read.
+    #[tokio::test]
+    async fn a_controller_reads_the_inputs_the_verifier_reads() {
+        let read = |sink: bool| {
+            json!({"readDeployerInputs": {
+                "release": crate::plan::tests::release_with_gated_input(),
+                "config": config(
+                    1,
+                    alien_signing::ConfigBody {
+                        inputs: serde_json::from_value(json!({"auditSink": "https://audit.example"}))
+                            .unwrap(),
+                        ..Default::default()
+                    },
+                ),
+                "signerLists": [signer_list()],
+                "workload": if sink { "api" } else { "other" },
+            }})
+        };
+        for audit in ["false", "true"] {
+            let mut store = MemoryStore::protected(&settings());
+            store.inputs.insert("audit".to_string(), audit.to_string());
+            store
+                .inputs
+                .insert("unrelated".to_string(), "x".to_string());
+            let store = Arc::new(store);
+            let verifier = Verifier {
+                own_name: format!("{PREFIX}-verifier"),
+                install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+                store: store.clone(),
+                backend: Arc::new(Forwards {
+                    store: store.clone(),
+                    forwarded: Mutex::new(Vec::new()),
+                    fail_once: Mutex::new(None),
+                }),
+                vpc: None,
+                machine_network: None,
+            };
+            let answer = verifier.handle(read(true)).await.unwrap();
+            assert_eq!(answer, json!({"inputs": {"audit": audit}}), "audit={audit}");
+            let reason = refusal(verifier.handle(read(false)).await);
+            assert!(reason.contains("other"), "{reason}");
         }
     }
 

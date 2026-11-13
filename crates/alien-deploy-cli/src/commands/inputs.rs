@@ -273,7 +273,7 @@ pub async fn inputs_command(args: InputsArgs) -> Result<()> {
                     Change::Unset { name } => println!("removed {}", store.location(name)),
                 }
             }
-            println!("Workloads pick the change up on their next check.");
+            println!("Saved. It applies at the next deployment update (a new signed release or config).");
             Ok(())
         }
     }

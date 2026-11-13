@@ -42,6 +42,21 @@ pub struct ApplyWrite {
     pub writes: Vec<CloudWrite>,
 }
 
+/// A read of the deployer input values the install's store holds for one signed workload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadDeployerInputs {
+    /// The release, as the vendor signed it.
+    pub release: SignedStatement,
+    /// The signer list chain, from version 1.
+    pub signer_lists: Vec<SignedStatement>,
+    /// This install's config, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<SignedStatement>,
+    /// The signed workload.
+    pub workload: String,
+}
+
 /// One cloud write, with the request body as the cloud client serialises it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

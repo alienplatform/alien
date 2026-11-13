@@ -5260,7 +5260,8 @@ impl GcpWorkerController {
             .add_linked_resources(&runtime_links, ctx, function_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
-            .add_signed_values(ctx, &worker_config.id)?
+            .add_signed_values(ctx, &worker_config.id)
+            .await?
             .build();
 
         Ok(env_vars)
@@ -10216,7 +10217,12 @@ mod tests {
                 &[("auditSink", serde_json::json!("https://audit.example"))],
                 1,
             );
-            let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
+            let (url, requests) = crate::core::verifier_test_support::http_verifier_stub_with_inputs(
+                axum::http::StatusCode::OK,
+                written(2),
+                &[("audit", audit)],
+            )
+            .await;
             let mut executor = SingleControllerExecutor::builder()
                 .resource(worker.clone())
                 .controller(protected_controller())
@@ -10233,9 +10239,12 @@ mod tests {
                         federation_trust: None,
                     },
                 ))
+                // The deployment's own copy disagrees with the store: the store wins.
                 .input_values(std::collections::HashMap::from([(
                     "audit".to_string(),
-                    serde_json::Value::String(audit.to_string()),
+                    serde_json::Value::String(
+                        if audit == "true" { "false" } else { "true" }.to_string(),
+                    ),
                 )]))
                 .signed_release(release, Some(config))
                 .build()

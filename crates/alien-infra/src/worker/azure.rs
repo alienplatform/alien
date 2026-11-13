@@ -4490,7 +4490,8 @@ impl AzureWorkerController {
             .add_linked_resources(&func.runtime_binding_links(), ctx, &func.id)
             .await?
             .add_self_worker_binding(&func.id, self_binding_params.as_ref())?
-            .add_signed_values(ctx, &func.id)?
+            .add_signed_values(ctx, &func.id)
+            .await?
             .build();
 
         // Add managed identity environment variable from ServiceAccount
