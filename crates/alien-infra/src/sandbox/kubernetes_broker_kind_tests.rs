@@ -1005,3 +1005,209 @@ async fn kubernetes_broker_kind_token_audience_is_enforced() {
         ])
         .output();
 }
+
+/// A pod is Ready only once its NetworkPolicy is proven in force: the real agent is given a
+/// listening pod as the address the policy must refuse. With no policy the pod can reach it and
+/// `/v1/network-ready` stays 503; once a deny-all egress policy selects the pod, the connection is
+/// dropped and it answers 200. Needs a CNI that enforces NetworkPolicy, as the Kind workflow's.
+#[tokio::test]
+#[ignore = "needs a Kind cluster that enforces NetworkPolicy and the agent binary; see the module docs"]
+async fn kubernetes_broker_kind_pod_is_ready_only_once_its_policy_is_enforced() {
+    use std::io::Write;
+    let namespace = env("ALIEN_BROKER_KIND_NAMESPACE");
+    let binary = env("ALIEN_AGENT_BINARY");
+    let ns = ["--namespace", namespace.as_str()];
+    let kubectl_ns = |rest: &[&str]| {
+        let mut all = ns.to_vec();
+        all.extend_from_slice(rest);
+        kubectl(&all)
+    };
+    let apply = |manifest: &str| {
+        let mut child = std::process::Command::new("kubectl")
+            .args(["apply", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("kubectl apply");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(manifest.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success(), "apply failed:\n{manifest}");
+    };
+    for pod in ["gate-listener", "gate-agent"] {
+        kubectl_ns(&["delete", "pod", pod, "--ignore-not-found", "--wait=true"]);
+    }
+    kubectl_ns(&[
+        "delete",
+        "networkpolicy",
+        "gate-agent-deny",
+        "--ignore-not-found",
+    ]);
+
+    apply(&format!(
+        r#"apiVersion: v1
+kind: Pod
+metadata: {{name: gate-listener, namespace: {namespace}}}
+spec:
+  containers:
+    - name: p
+      image: python:3.12-slim
+      command: ["python3", "-m", "http.server", "8080"]
+"#
+    ));
+    kubectl_ns(&[
+        "wait",
+        "--for=condition=Ready",
+        "pod/gate-listener",
+        "--timeout=240s",
+    ]);
+    let listener_ip = kubectl_ns(&[
+        "get",
+        "pod",
+        "gate-listener",
+        "-o",
+        "jsonpath={.status.podIP}",
+    ]);
+
+    // The pod applied is the one the code under test builds, readiness probe included: only the
+    // image, the command and the environment a layered image would carry are filled in.
+    let mut pod = template(&namespace);
+    super::kubernetes_spec::require_enforced_policy(&mut pod, Some(&format!("{listener_ip}:8080")));
+    {
+        let mut contract = alien_core::sandbox_image::KUBERNETES_SANDBOX
+            .contract_env_vars()
+            .to_vec();
+        for (name, value) in contract.iter_mut() {
+            match *name {
+                "ALIEN_SANDBOX_EXEC_UID" | "ALIEN_SANDBOX_EXEC_GID" => *value = "1001".into(),
+                "ALIEN_SANDBOX_ROOT" => *value = "/tmp/sbx".into(),
+                _ => {}
+            }
+        }
+        let public_key = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .encode(ed25519_compact::KeyPair::generate().pk.as_ref())
+        };
+        let spec = pod.spec.as_mut().unwrap();
+        let container = &mut spec.containers[0];
+        assert!(
+            container.readiness_probe.is_some(),
+            "the gate adds a readiness probe"
+        );
+        assert_eq!(
+            container
+                .readiness_probe
+                .as_ref()
+                .and_then(|probe| probe.http_get.as_ref())
+                .and_then(|get| get.path.as_deref()),
+            Some("/v1/network-ready")
+        );
+        container.image = Some("python:3.12-slim".into());
+        container.image_pull_policy = Some("IfNotPresent".into());
+        container.command = Some(vec![
+            "sh".into(),
+            "-c".into(),
+            "mkdir -p /tmp/sbx; sleep 3600".into(),
+        ]);
+        let env = container.env.get_or_insert_default();
+        let mut add = |name: &str, value: String| {
+            env.retain(|var| var.name != name);
+            env.push(k8s_openapi::api::core::v1::EnvVar {
+                name: name.to_string(),
+                value: Some(value),
+                value_from: None,
+            });
+        };
+        for (name, value) in contract {
+            add(name, value.to_string());
+        }
+        add("ALIEN_SANDBOX_PUBLIC_KEY", public_key);
+        add("ALIEN_SANDBOX_GENERATION", "1".into());
+        // The agent identifies itself by the pod uid.
+        if !env.iter().any(|var| var.name == "ALIEN_SANDBOX_SESSION_ID") {
+            env.push(k8s_openapi::api::core::v1::EnvVar {
+                name: "ALIEN_SANDBOX_SESSION_ID".into(),
+                value: None,
+                value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                    field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
+                        field_path: "metadata.uid".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            });
+        }
+    }
+    pod.metadata.name = Some("gate-agent".into());
+    pod.metadata.generate_name = None;
+    pod.metadata.namespace = Some(namespace.clone());
+    // This pod only exercises the readiness gate. Carrying the template's pool, sandbox and
+    // deployment labels would put it in the idle pool the other tests in this namespace claim
+    // from and count, so it keeps only the label the NetworkPolicy selects.
+    pod.metadata.labels = Some([("gate".to_string(), "agent".to_string())].into());
+    pod.metadata.annotations = None;
+    apply(&serde_json::to_string(&pod).unwrap());
+    kubectl_ns(&[
+        "wait",
+        "--for=jsonpath={.status.phase}=Running",
+        "pod/gate-agent",
+        "--timeout=240s",
+    ]);
+    let ready = || {
+        kubectl_ns(&[
+            "get",
+            "pod",
+            "gate-agent",
+            "-o",
+            "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}",
+        ])
+    };
+    kubectl_ns(&["cp", &binary, "gate-agent:/tmp/agent"]);
+    kubectl_ns(&[
+        "exec",
+        "gate-agent",
+        "--",
+        "sh",
+        "-c",
+        "chmod +x /tmp/agent; (/tmp/agent >/tmp/agent.log 2>&1 &); sleep 2",
+    ]);
+    // No policy: the listener answers, so the policy is not in force and kubelet's probe fails.
+    for _ in 0..6 {
+        assert_eq!(ready(), "False", "an unrestricted pod must not be Ready");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+
+    apply(&format!(
+        r#"apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {{name: gate-agent-deny, namespace: {namespace}}}
+spec:
+  podSelector: {{matchLabels: {{gate: agent}}}}
+  policyTypes: [Egress]
+"#
+    ));
+    let mut became_ready = false;
+    for _ in 0..40 {
+        if ready() == "True" {
+            became_ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    assert!(
+        became_ready,
+        "Ready once the deny-all egress policy is enforced"
+    );
+
+    kubectl_ns(&[
+        "delete",
+        "pod",
+        "gate-agent",
+        "gate-listener",
+        "--wait=false",
+    ]);
+    kubectl_ns(&["delete", "networkpolicy", "gate-agent-deny"]);
+}

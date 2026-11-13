@@ -365,3 +365,107 @@ async fn target_s3() -> anyhow::Result<S3Client> {
         .map_err(|error| anyhow::anyhow!("target S3 credentials: {error}"))?,
     ))
 }
+
+/// Resolves the deployment's remotely published sandbox, opens a session and drives a shell loop
+/// over stdin: two writes, each answered before the next, then end of input and a clean exit.
+/// The program is fixed; the check ends the session however it goes.
+pub async fn check_remote_interactive_command(
+    deployment: &alien_test::TestDeployment,
+    platform: Platform,
+) -> anyhow::Result<()> {
+    use alien_bindings::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest};
+    use futures::StreamExt;
+
+    let discovery = super::remote_bindings::DiscoveryServer::start(deployment, platform).await?;
+    let bindings = alien_bindings::RemoteBindings::for_deployment(
+        &deployment.id,
+        &deployment.token,
+        Some(&discovery.url),
+    )
+    .await
+    .context("discover assigned manager for remote bindings")?;
+    let sandbox = bindings.sandbox("agents").await.context("resolve the remote sandbox")?;
+
+    let capabilities = sandbox.capabilities();
+    eprintln!("capabilities: {capabilities:?}");
+    ensure!(
+        capabilities.interactive_commands,
+        "the capability table does not report interactiveCommands: {capabilities:?}"
+    );
+
+    let created = sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .context("create a sandbox session")?;
+    eprintln!("sandbox session {}", created.sandbox_id);
+    let outcome = async {
+        let mut command = sandbox
+            .run_interactive(
+                &created.sandbox_id,
+                RunCommandRequest {
+                    command: "sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        "while read -r line; do echo \"echo:$line\"; done".into(),
+                    ],
+                    cwd: None,
+                    env: Default::default(),
+                    timeout: Duration::from_secs(120),
+                },
+            )
+            .await
+            .context("start the interactive command")?;
+        let mut replies = String::new();
+        let mut exit = None;
+        for (line, want) in [("first\n", "echo:first\n"), ("second\n", "echo:second\n")] {
+            command.input.write(line.as_bytes()).await.context("write stdin")?;
+            let started = std::time::Instant::now();
+            while !replies.ends_with(want) {
+                ensure!(started.elapsed() < Duration::from_secs(60), "no reply to {line:?}: {replies:?}");
+                match tokio::time::timeout(Duration::from_secs(60), command.output.next())
+                    .await
+                    .context("wait for output")?
+                {
+                    Some(Ok(CommandOutput::Stdout { data, .. })) => {
+                        replies.push_str(&String::from_utf8_lossy(&data))
+                    }
+                    Some(Ok(CommandOutput::Stderr { data, .. })) => {
+                        eprintln!("stderr: {}", String::from_utf8_lossy(&data))
+                    }
+                    Some(Ok(other)) => {
+                        exit = Some(other);
+                        break;
+                    }
+                    Some(Err(error)) => return Err(anyhow::anyhow!("{error:?}")),
+                    None => break,
+                }
+            }
+        }
+        command.input.close_stdin().await.context("close stdin")?;
+        while exit.is_none() {
+            match tokio::time::timeout(Duration::from_secs(60), command.output.next())
+                .await
+                .context("wait for exit")?
+            {
+                Some(Ok(CommandOutput::Stdout { data, .. })) => {
+                    replies.push_str(&String::from_utf8_lossy(&data))
+                }
+                Some(Ok(CommandOutput::Stderr { .. })) => {}
+                Some(Ok(other)) => exit = Some(other),
+                Some(Err(error)) => return Err(anyhow::anyhow!("{error:?}")),
+                None => break,
+            }
+        }
+        eprintln!("replies {replies:?} exit {exit:?}");
+        ensure!(replies == "echo:first\necho:second\n", "unexpected replies {replies:?}");
+        ensure!(
+            matches!(exit, Some(CommandOutput::Exit { code: 0, .. })),
+            "the command did not exit cleanly: {exit:?}"
+        );
+        Ok(())
+    }
+    .await;
+    let ended = sandbox.terminate(&created.sandbox_id).await;
+    outcome?;
+    ended.context("terminate the session")
+}

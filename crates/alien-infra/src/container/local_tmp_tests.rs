@@ -100,7 +100,7 @@ async fn non_root_tmp_writes_survive_saved_health_and_ready_checkpoints() {
         .code(ContainerCode::Image { image: artifact.to_string_lossy().into_owned() })
         .command(vec!["sh".to_string(), "-c".to_string(),
             format!("set -eu; test $(id -u) = {image_uid}; mkdir -p /tmp/web; chmod 777 /tmp/web; echo owned >/tmp/owned; echo ready >/tmp/web/health; exec busybox httpd -f -p 8080 -h /tmp/web")])
-        .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 20 })
+        .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 20, startup_timeout_seconds: None })
         .build();
     let client = alien_core::ClientConfig::Local {
         state_directory: directory.path().to_string_lossy().into_owned(),

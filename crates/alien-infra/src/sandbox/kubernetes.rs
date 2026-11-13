@@ -468,6 +468,7 @@ impl KubernetesSandboxController {
 
         let created = pool.created;
         debug!(sandbox_id = %config.id, sessions, created, "Sandbox health check passed");
+        report_pods_without_network_ready_endpoint(ctx, &namespace, &config.id).await;
 
         // Counts of pods, never anything inside one. `sessions` covers every pod carrying the
         // sandbox label, the idle pool included, so what an application is actually running is
@@ -493,6 +494,76 @@ impl KubernetesSandboxController {
         });
 
         Ok(())
+    }
+}
+
+/// Message for a pool pod whose agent answers the readiness probe with 404.
+pub(crate) const NETWORK_READY_MISSING_MESSAGE: &str =
+    "sandbox agent image predates the network readiness check; use the agent image of this release";
+
+/// Names of the pods whose readiness probe failed because `/v1/network-ready` does not exist
+/// (HTTP 404). A pod with a policy that is not yet enforced answers 503 instead, which is not
+/// reported here.
+pub(crate) fn pods_probing_a_missing_network_ready_endpoint(
+    events: &[k8s_openapi::api::core::v1::Event],
+) -> Vec<String> {
+    let mut names: Vec<String> = events
+        .iter()
+        .filter(|event| {
+            event.involved_object.kind.as_deref() == Some("Pod")
+                && event.reason.as_deref() == Some("Unhealthy")
+                && event.message.as_deref().is_some_and(|m| {
+                    m.contains("Readiness probe failed") && m.contains("statuscode: 404")
+                })
+        })
+        .filter_map(|event| event.involved_object.name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Keeps the names of this sandbox's pool pods (`alien-sbx-<sandbox>-pool-<suffix>`).
+fn pool_pods_among(names: Vec<String>, sandbox_id: &str) -> Vec<String> {
+    let prefix = format!("{}-", super::kubernetes_spec::pod_name(sandbox_id, "pool"));
+    names
+        .into_iter()
+        .filter(|name| name.starts_with(&prefix))
+        .collect()
+}
+
+/// Says why pool pods stay unready when their agent has no `/v1/network-ready`. Only logs; a
+/// failure to read events is not a health failure.
+async fn report_pods_without_network_ready_endpoint(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    sandbox_id: &str,
+) {
+    let Ok(config) = ctx.get_kubernetes_config() else {
+        return;
+    };
+    let Ok(client) = ctx
+        .service_provider
+        .get_kubernetes_event_client(config)
+        .await
+    else {
+        return;
+    };
+    let Ok(events) = client
+        .list_events(
+            namespace,
+            Some("involvedObject.kind=Pod,reason=Unhealthy".to_string()),
+        )
+        .await
+    else {
+        return;
+    };
+    let pods = pool_pods_among(
+        pods_probing_a_missing_network_ready_endpoint(&events.items),
+        sandbox_id,
+    );
+    if !pods.is_empty() {
+        warn!(sandbox_id = %sandbox_id, pods = ?pods, "{NETWORK_READY_MISSING_MESSAGE}");
     }
 }
 
@@ -600,7 +671,7 @@ async fn replenish_warm_pool(
         super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
     else {
         return Ok(WarmPool {
-            idle: idle.items.len(),
+            idle: without_terminating(idle.items).len(),
             created,
         });
     };
@@ -614,6 +685,12 @@ async fn replenish_warm_pool(
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
     );
     placement.apply(&mut pod);
+    super::kubernetes_spec::require_enforced_policy(
+        &mut pod,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+            .ok()
+            .as_deref(),
+    );
     if let Some(secret_name) = ensure_image_pull_secret(ctx, sandbox, namespace).await? {
         pod.spec
             .as_mut()
@@ -842,7 +919,17 @@ fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
         .collect()
 }
 
+/// Drops pods that are being deleted. A deleted pod keeps its idle label until its grace period
+/// ends, but it will never serve a session, so it must not count toward the warm pool.
+pub(crate) fn without_terminating(
+    mut pods: Vec<k8s_openapi::api::core::v1::Pod>,
+) -> Vec<k8s_openapi::api::core::v1::Pod> {
+    pods.retain(|pod| pod.metadata.deletion_timestamp.is_none());
+    pods
+}
+
 /// Splits idle pods into those built from a template other than `current` and those built from it.
+/// Pods that are being deleted are in neither.
 pub(crate) fn split_idle_pods(
     idle: Vec<k8s_openapi::api::core::v1::Pod>,
     current: &str,
@@ -852,7 +939,7 @@ pub(crate) fn split_idle_pods(
 ) {
     let mut stale = Vec::new();
     let mut fresh = Vec::new();
-    for pod in idle {
+    for pod in without_terminating(idle) {
         let built_from = pod
             .metadata
             .annotations
@@ -1090,13 +1177,57 @@ async fn list_session_pods(
             resource_id: Some(sandbox_id.to_string()),
         })?;
 
-    Ok(pods.items.len())
+    Ok(count_session_pods(pods.items))
+}
+
+/// Pods being deleted are not sessions: they would count as active once the idle pool leaves
+/// them out.
+fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
+    without_terminating(pods).len()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
+
+    /// A deleted pod keeps its idle label until its grace period ends. It must not count toward
+    /// the pool, or a pool of terminating pods would never be refilled.
+    #[test]
+    fn pods_being_deleted_do_not_count_as_idle() {
+        let mut dying = idle_with_hash("dying", Some("h"));
+        dying.metadata.deletion_timestamp = Some(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()),
+        );
+        let live = idle_with_hash("live", Some("h"));
+
+        let available = without_terminating(vec![dying.clone(), live]);
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].metadata.name.as_deref(), Some("live"));
+        assert_eq!(pool_deficit(2, available.len()), 1);
+        assert_eq!(
+            pool_deficit(2, without_terminating(vec![dying.clone()]).len()),
+            2
+        );
+        // Neither retired as stale nor counted as fresh.
+        let (stale, fresh) = split_idle_pods(vec![dying], "h");
+        assert!(stale.is_empty() && fresh.is_empty());
+    }
+
+    /// Two terminating idle pods and no sessions must report zero active sessions.
+    #[test]
+    fn terminating_idle_pods_are_not_active_sessions() {
+        let dying = |name: &str| {
+            let mut pod = idle_with_hash(name, Some("h"));
+            pod.metadata.deletion_timestamp = Some(
+                k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()),
+            );
+            pod
+        };
+        let pods = vec![dying("a"), dying("b")];
+        let idle = without_terminating(pods.clone()).len();
+        assert_eq!(count_session_pods(pods).saturating_sub(idle), 0);
+    }
 
     fn idle_with_hash(name: &str, hash: Option<&str>) -> Pod {
         let mut pod = Pod::default();
@@ -1123,6 +1254,50 @@ mod tests {
 
     /// A pod whose retire write succeeded but whose delete failed is in no pool. The next tick's
     /// sweep finds it by its `retired` label and deletes it.
+    #[test]
+    fn a_404_from_the_network_ready_probe_is_reported_and_a_503_is_not() {
+        use k8s_openapi::api::core::v1::{Event, ObjectReference};
+        let event = |name: &str, message: &str| Event {
+            involved_object: ObjectReference {
+                kind: Some("Pod".into()),
+                name: Some(name.into()),
+                ..Default::default()
+            },
+            reason: Some("Unhealthy".into()),
+            message: Some(message.into()),
+            ..Default::default()
+        };
+        let events = vec![
+            event(
+                "s-old",
+                "Readiness probe failed: HTTP probe failed with statuscode: 404",
+            ),
+            event(
+                "s-old",
+                "Readiness probe failed: HTTP probe failed with statuscode: 404",
+            ),
+            event(
+                "s-waiting",
+                "Readiness probe failed: HTTP probe failed with statuscode: 503",
+            ),
+        ];
+        assert_eq!(
+            pods_probing_a_missing_network_ready_endpoint(&events),
+            vec!["s-old"]
+        );
+        assert!(NETWORK_READY_MISSING_MESSAGE.contains("use the agent image of this release"));
+    }
+
+    #[test]
+    fn pool_pods_are_matched_by_their_generated_name() {
+        let names = vec![
+            "alien-sbx-s-pool-abc12".to_string(),
+            "alien-sbx-other-pool-abc12".to_string(),
+            "s-old".to_string(),
+        ];
+        assert_eq!(pool_pods_among(names, "s"), vec!["alien-sbx-s-pool-abc12"]);
+    }
+
     #[tokio::test]
     async fn a_retired_pod_whose_delete_failed_is_deleted_by_the_next_sweep() {
         let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));

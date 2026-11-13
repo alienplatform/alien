@@ -313,3 +313,69 @@ async fn create_failing_after_a_mid_create_change_is_replaced_against_the_config
     assert_eq!(recorded_image(&state, id), "image-v2");
     assert_nothing_planned(&executor_v2, &state)
 }
+
+/// A state that opted in to being interrupted takes the newer config at once, instead of
+/// finishing the wait first. The update re-enters its flow with the new config.
+#[tokio::test]
+async fn update_waiting_in_an_interruptible_state_takes_the_newer_config_at_once() -> Result<()> {
+    let id = "interrupt-wait";
+    let state = run_to_synced(
+        &new_executor(&stack_of(worker(id, "image-v1", &[])))?,
+        new_test_state(),
+    )
+    .await?;
+
+    let stuck = new_executor(&stack_of(worker(
+        id,
+        "image-v2",
+        &[("SIMULATE_UPDATE_EXTERNAL_WAIT", "true")],
+    )))?;
+    let state =
+        step_until_controller(&stuck, state, id, TestWorkerState::UpdateExternalWait).await?;
+    // Still waiting after more steps: nothing ends the wait by itself.
+    let mut state = state;
+    for _ in 0..5 {
+        state = stuck.step(state).await?.next_state;
+    }
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::Updating));
+
+    // Promote the previous image again, as a rollback does.
+    let rollback = new_executor(&stack_of(worker(id, "image-v1", &[])))?;
+    let state = run_to_synced(&rollback, state).await?;
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::Running));
+    assert_eq!(recorded_image(&state, id), "image-v1");
+    assert_eq!(
+        deployed_images(id),
+        vec!["image-v1", "image-v2", "image-v1"],
+        "the rollback was deployed while the v2 update was still waiting"
+    );
+    assert_nothing_planned(&rollback, &state)
+}
+
+/// The guard for the test above: a state that did not opt in keeps today's behavior. A newer
+/// config is not applied while an update is in flight; it waits for the update to finish.
+#[tokio::test]
+async fn update_waiting_in_a_state_that_did_not_opt_in_still_defers_the_newer_config() -> Result<()>
+{
+    let id = "defer-wait";
+    let state = run_to_synced(
+        &new_executor(&stack_of(worker(id, "image-v1", &[])))?,
+        new_test_state(),
+    )
+    .await?;
+    let pending = new_executor(&stack_of(worker(
+        id,
+        "image-v2",
+        &[("SIMULATE_UPDATE_PENDING", "true")],
+    )))?;
+    let mut state =
+        step_until_controller(&pending, state, id, TestWorkerState::UpdateCodePolling).await?;
+    let rollback = new_executor(&stack_of(worker(id, "image-v1", &[])))?;
+    for _ in 0..5 {
+        state = rollback.step(state).await?.next_state;
+    }
+    // The v2 update was neither interrupted nor re-planned with v1 while it was in flight.
+    assert_eq!(deployed_images(id), vec!["image-v1", "image-v2"]);
+    assert_eq!(recorded_image(&state, id), "image-v2");
+    Ok(())
+}

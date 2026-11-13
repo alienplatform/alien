@@ -724,8 +724,8 @@ pub async fn check_offerings(
     }
     for (decided, machine) in machines.iter().enumerate() {
         // A catalog row can add an accelerator to a machine type; GCP knows the machine type.
-        let machine_type = find_instance_type(Platform::Gcp, machine)
-            .map_or(*machine, |spec| spec.machine_type);
+        let machine_type =
+            find_instance_type(Platform::Gcp, machine).map_or(*machine, |spec| spec.machine_type);
         let mut offered = false;
         for zone in &zones {
             match compute

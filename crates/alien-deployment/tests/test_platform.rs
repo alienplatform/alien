@@ -21,6 +21,8 @@ use tokio::sync::MutexGuard;
 
 #[path = "test_platform/interrupted_update_recovery.rs"]
 mod interrupted_update_recovery;
+#[path = "test_platform/interruptible_update_takeover.rs"]
+mod interruptible_update_takeover;
 
 const MAX_STEPS: usize = 100;
 
