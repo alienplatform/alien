@@ -2021,3 +2021,26 @@ async fn an_agent_refusal_of_the_grant_is_surfaced_and_nothing_is_cached() {
     assert!(provider.preview("s1", 9).await.is_err());
     assert!(provider.preview("s1", 9).await.is_err());
 }
+
+#[tokio::test]
+async fn iam_edge_signer_signs_claims_for_the_edge_audience_with_the_service_account() {
+    let mut iam = alien_gcp_clients::gcp::iam::MockIamApi::new();
+    iam.expect_sign_jwt()
+        .withf(|account, request| {
+            let claims: serde_json::Value = serde_json::from_str(&request.payload).unwrap();
+            account == "sa@p.iam.gserviceaccount.com"
+                && claims["iss"] == "sa@p.iam.gserviceaccount.com"
+                && claims["sub"] == "sa@p.iam.gserviceaccount.com"
+                && claims["aud"] == "https://aiplatform.googleapis.com/"
+                && claims["exp"].as_i64().unwrap() > claims["iat"].as_i64().unwrap()
+                && claims["nonce"].as_u64().is_some()
+        })
+        .times(1)
+        .returning(|_, _| {
+            Ok(alien_gcp_clients::gcp::iam::SignJwtResponse {
+                signed_jwt: "signed.jwt".to_string(),
+            })
+        });
+    let signer = IamEdgeTokenSigner::new(Arc::new(iam), "sa@p.iam.gserviceaccount.com");
+    assert_eq!(signer.sign().await.unwrap(), "signed.jwt");
+}

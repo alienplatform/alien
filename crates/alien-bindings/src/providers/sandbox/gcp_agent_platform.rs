@@ -159,6 +159,60 @@ pub trait EdgeTokenSigner: Send + Sync + std::fmt::Debug {
     async fn sign(&self) -> Result<String>;
 }
 
+/// Audience the sandbox edge requires on its ingress JWT.
+const EDGE_JWT_AUDIENCE: &str = "https://aiplatform.googleapis.com/";
+/// Lifetime of a minted edge JWT. Kept short: it is minted per call and never cached.
+const EDGE_JWT_LIFETIME_SECONDS: i64 = 300;
+
+/// Signs the edge JWT with the deployment service account's managed key through IAM Credentials,
+/// so no key file exists anywhere.
+#[derive(Debug)]
+pub struct IamEdgeTokenSigner {
+    iam: Arc<dyn alien_gcp_clients::gcp::iam::IamApi>,
+    service_account: String,
+}
+
+impl IamEdgeTokenSigner {
+    pub fn new(
+        iam: Arc<dyn alien_gcp_clients::gcp::iam::IamApi>,
+        service_account: impl Into<String>,
+    ) -> Self {
+        Self {
+            iam,
+            service_account: service_account.into(),
+        }
+    }
+
+    fn claims(&self, now: i64) -> String {
+        json!({
+            "iat": now,
+            "exp": now + EDGE_JWT_LIFETIME_SECONDS,
+            "iss": self.service_account,
+            "sub": self.service_account,
+            "nonce": uuid::Uuid::new_v4().as_u128() % 1_000_000_000 + 1,
+            "aud": EDGE_JWT_AUDIENCE,
+        })
+        .to_string()
+    }
+}
+
+#[async_trait]
+impl EdgeTokenSigner for IamEdgeTokenSigner {
+    async fn sign(&self) -> Result<String> {
+        let request = alien_gcp_clients::gcp::iam::SignJwtRequest {
+            payload: self.claims(chrono::Utc::now().timestamp()),
+        };
+        let response = self
+            .iam
+            .sign_jwt(self.service_account.clone(), request)
+            .await
+            .context(ErrorData::Other {
+                message: "Failed to sign the sandbox edge credential".to_string(),
+            })?;
+        Ok(response.signed_jwt)
+    }
+}
+
 #[derive(Debug)]
 struct PreviewIngress {
     /// Private endpoint of the sandbox service attachment, inside the deployment network.

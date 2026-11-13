@@ -523,6 +523,8 @@ impl ResolvedRemoteBinding {
                             .transpose()?,
                         // Absent from a manager older than the field: fail closed.
                         allow_egress: binding.allow_egress.unwrap_or(false),
+                        preview_endpoint: None,
+                        preview_service_account: None,
                     }),
                     client_config: Box::new(alien_core::GcpClientConfig {
                         project_id: client_config.project_id,

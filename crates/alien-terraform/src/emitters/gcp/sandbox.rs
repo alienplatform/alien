@@ -606,6 +606,8 @@ mod tests {
                 region: alien_core::BindingValue::Value("us-central1".to_string()),
                 max_lifetime_seconds: Some(1800),
                 allow_egress: false,
+                preview_endpoint: None,
+                preview_service_account: None,
             })
             .expect("the binding type serializes");
             assert_eq!(
