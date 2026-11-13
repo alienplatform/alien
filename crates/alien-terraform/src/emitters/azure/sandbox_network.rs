@@ -97,6 +97,22 @@ pub(super) fn subnet_label(network: &str, sandbox: &str) -> String {
     format!("{network}_sandbox_{sandbox}")
 }
 
+/// The sandbox NSG's allow rule for the egress gateway: the proxy port only.
+fn gateway_rule(fragment: &mut TfFragment, label: &str, network: &str) {
+    rule(
+        fragment,
+        label,
+        Rule {
+            name: "gateway",
+            priority: 100,
+            destination: expr::raw(format!(
+                "azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0]"
+            )),
+            allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
+        },
+    );
+}
+
 fn emit_group(
     ctx: &EmitContext<'_>,
     network: &str,
@@ -174,18 +190,7 @@ fn emit_group(
             attr("tags", tags(ctx, "sandbox-network")),
         ],
     ));
-    rule(
-        fragment,
-        &label,
-        Rule {
-            name: "gateway",
-            priority: 100,
-            destination: expr::raw(format!(
-                "azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0]"
-            )),
-            allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
-        },
-    );
+    gateway_rule(fragment, &label, network);
     // Azure's platform metadata/DNS addresses need their service tags: ordinary range denies
     // do not apply to these platform services. The gateway uses a numeric internal address.
     for (name, priority, destination) in [
@@ -455,16 +460,7 @@ mod proxy_rule_tests {
     #[test]
     fn the_gateway_rule_allows_the_proxy_port_only() {
         let mut fragment = TfFragment::default();
-        rule(
-            &mut fragment,
-            "agents",
-            Rule {
-                name: "gateway",
-                priority: 100,
-                destination: expr::raw("azurerm_subnet.net_sandbox_gateway.address_prefixes[0]"),
-                allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
-            },
-        );
+        gateway_rule(&mut fragment, "agents", "net");
         let rendered = hcl::to_string(
             &hcl::Body::builder()
                 .add_blocks(fragment.resource_blocks.clone())
