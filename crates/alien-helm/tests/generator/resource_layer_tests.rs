@@ -1606,5 +1606,13 @@ fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
         chart.files.keys().collect::<Vec<_>>()
     );
     assert!(!chart.files.contains_key("templates/_sandbox.tpl"));
+    // An air-gapped install sets the probe image whenever the chart emits the probe, so the
+    // values schema of a chart with no Sandbox must accept it.
+    let bundled = super::test_utils::helm_template(
+        &chart.files,
+        Some("sandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
+    );
+    bundled.assert_ok("probe image on a chart without a sandbox");
+    assert!(bundled.stdout.contains("python:3.13-slim@sha256:aaaa"), "{}", bundled.stdout);
     assert_helm_valid(&chart, "container_egress_no_sandbox");
 }

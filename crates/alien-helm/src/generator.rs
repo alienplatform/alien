@@ -4818,11 +4818,36 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
 
 fn values_schema_json(stack: &Stack) -> Result<String> {
     let schema = values_schema_with_inputs_json(stack)?;
-    if !stack
+    let has_sandbox = stack
         .resources()
-        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some())
-    {
-        return Ok(schema);
+        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some());
+    if !has_sandbox {
+        // A container with egress runs the network probe, whose image an air-gapped
+        // install sets through `sandbox.cniProbeImage`; that is the only sandbox value.
+        let probe = stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Container>()
+                .is_some_and(|container| container.egress.is_some())
+        });
+        if !probe {
+            return Ok(schema);
+        }
+        let mut schema: serde_json::Value = serde_json::from_str(&schema)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationFailed {
+                reason: "failed to parse built-in Helm values schema".to_string(),
+            })?;
+        schema["properties"]["sandbox"] = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "cniProbeImage": { "type": "string" } }
+        });
+        return serde_json::to_string_pretty(&schema)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationFailed {
+                reason: "failed to serialize Helm values schema".to_string(),
+            });
     }
     let mut schema: serde_json::Value = serde_json::from_str(&schema).into_alien_error().context(
         ErrorData::JsonSerializationFailed {

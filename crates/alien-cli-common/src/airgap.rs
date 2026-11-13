@@ -721,8 +721,8 @@ pub const CHART_IMAGE_VALUES: [&str; 2] = ["runtime.image", "runtime.cleanup.onU
 
 /// Key prefix of images a chart's templates run but no `repository`/`tag`
 /// values name: the sandbox network probe and the metrics server. They are
-/// bundled so the site's mirror holds them; the chart finds them there through
-/// `global.imageRegistry`, so nothing is set for them at install.
+/// bundled so the site's mirror holds them; install passes the exact bundled
+/// reference (`sandbox.cniProbeImage`, `clusterBootstrap.metricsServer.image`).
 pub const TEMPLATE_IMAGE_PREFIX: &str = "template.";
 
 /// The images a packaged chart runs by default, by values key, as
@@ -866,13 +866,20 @@ pub fn chart_images(
             let reference = line.trim().strip_prefix("image:")?.trim().trim_matches('"');
             reference.split_once('@')
         });
-        let (repository, digest) = image.or(literal).ok_or_else(|| {
-            AlienError::new(invalid("the chart's sandbox probe names no pinned image"))
-        })?;
-        images.insert(
-            format!("{TEMPLATE_IMAGE_PREFIX}sandboxCniProbe"),
-            format!("{repository}@{digest}"),
-        );
+        // The install's own `sandbox.cniProbeImage` replaces the pinned default.
+        let overridden = values["sandbox"]["cniProbeImage"]
+            .as_str()
+            .filter(|image| !image.is_empty());
+        let reference = match overridden {
+            Some(image) => image.to_string(),
+            None => {
+                let (repository, digest) = image.or(literal).ok_or_else(|| {
+                    AlienError::new(invalid("the chart's sandbox probe names no pinned image"))
+                })?;
+                format!("{repository}@{digest}")
+            }
+        };
+        images.insert(format!("{TEMPLATE_IMAGE_PREFIX}sandboxCniProbe"), reference);
     }
     let metrics_server = &values["clusterBootstrap"]["metricsServer"];
     if metrics_server["enabled"].as_bool() == Some(true) {
@@ -1754,6 +1761,17 @@ mod tests {
             "the pre-install probe runs from the mirror, so the bundle must carry it"
         );
         assert!(!images.contains_key("template.metricsServer"));
+
+        // The site's own probe image replaces the default in the bundle.
+        let custom: serde_yaml::Value = serde_yaml::from_str(
+            "sandbox: {cniProbeImage: 'registry.site.internal/probe:1@sha256:bbbb'}",
+        )
+        .unwrap();
+        let images = chart_images(&path, &serde_json::Value::Null, &[custom]).unwrap();
+        assert_eq!(
+            images["template.sandboxCniProbe"],
+            "registry.site.internal/probe:1@sha256:bbbb"
+        );
 
         let metrics: serde_yaml::Value =
             serde_yaml::from_str("clusterBootstrap: {metricsServer: {enabled: true}}").unwrap();
