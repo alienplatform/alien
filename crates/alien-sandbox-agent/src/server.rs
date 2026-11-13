@@ -295,6 +295,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
 
     let router = Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/network-ready", get(network_ready))
         .route("/v1/activate", post(activate_boot))
         .route(&hook_path("ready"), get(hook_ready).post(hook_ready))
         .route(
@@ -439,6 +440,17 @@ fn container_boot_id() -> std::io::Result<String> {
 #[cfg(not(target_os = "linux"))]
 fn container_boot_id() -> std::io::Result<String> {
     Ok("dev-build-no-boot-id".to_string())
+}
+
+/// 200 once the cluster is proven to enforce this pod's NetworkPolicy, 503 before. The pod's
+/// readiness probe reads it, so the Operator hands out no pod whose egress is still unrestricted.
+/// Unauthenticated, like `/v1/health`: it reveals nothing about a session.
+async fn network_ready() -> StatusCode {
+    if crate::policy_canary::is_enforced() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 /// The image's readiness hook.
