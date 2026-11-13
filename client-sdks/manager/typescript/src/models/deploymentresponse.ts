@@ -56,8 +56,22 @@ export type DeploymentResponse = {
    * deployment-groups route.
    */
   projectId: string;
+  /**
+   * Whether the deployment's setup pins a signing fingerprint, so it runs
+   *
+   * @remarks
+   * only signed releases. Only the install's own verification proves it.
+   * Absent from older managers, which have no protected deployments;
+   * a protected install refuses unsigned releases whatever this says, so
+   * reading it as false can't skip a signature.
+   */
+  protected: boolean;
   retryRequested: boolean;
   runtimeMetadata?: any | undefined;
+  /**
+   * The fingerprint the deployment's setup pins.
+   */
+  signingFingerprint?: string | null | undefined;
   stackSettings?: any | undefined;
   stackState?: any | undefined;
   status: string;
@@ -88,8 +102,10 @@ export const DeploymentResponse$inboundSchema: z.ZodType<
   operatorVersion: z.nullable(z.string()).optional(),
   platform: PlatformEnum$inboundSchema,
   projectId: z.string(),
+  protected: z.boolean().default(false),
   retryRequested: z.boolean(),
   runtimeMetadata: z.any().optional(),
+  signingFingerprint: z.nullable(z.string()).optional(),
   stackSettings: z.any().optional(),
   stackState: z.any().optional(),
   status: z.string(),

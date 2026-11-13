@@ -12,6 +12,7 @@ import { Identity } from "./identity.js";
 import { Leases } from "./leases.js";
 import { Manager } from "./manager.js";
 import { Releases } from "./releases.js";
+import { Signing } from "./signing.js";
 import { StackImport } from "./stackimport.js";
 import { Sync } from "./sync.js";
 import { Tokens } from "./tokens.js";
@@ -48,6 +49,11 @@ export class AlienManager extends ClientSDK {
   private _deployments?: Deployments;
   get deployments(): Deployments {
     return (this._deployments ??= new Deployments(this._options));
+  }
+
+  private _signing?: Signing;
+  get signing(): Signing {
+    return (this._signing ??= new Signing(this._options));
   }
 
   private _identity?: Identity;
