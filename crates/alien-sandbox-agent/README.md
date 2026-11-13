@@ -332,7 +332,7 @@ ConfigMap `amazon-vpc-cni` in `kube-system` with `enable-network-policy-controll
 NodeClass `networkPolicy` field only sets the default. The probe's failure message names this step.
 A policy can still load about one second after a pod's container starts, so the agent, before it
 starts the ENTRYPOINT (root or non-root image), proves the restriction. Each round tries the
-cluster API, `169.254.169.254:80` and `1.1.1.1:443`, which must time out. A timeout also looks like a
+cluster API and `1.1.1.1:443`, which must time out. A timeout also looks like a
 network that is not ready, so a round counts only with a control: in `internet` mode the gateway must
 connect in the same round; in `none` mode nothing may be used as a control, so the pod must have an
 address and a route and every blocked attempt must time out (ENETUNREACH and the like fail closed),
@@ -349,7 +349,7 @@ Preview serves ports 8080, 8081 and 8090 over HTTP and WebSocket. The capability
 `X-Alien-Preview-Capability` (optionally with `X-Alien-Preview-Port`); the caller's own
 `Authorization` header reaches the workload unchanged.
 
-Limits: the own node's kubelet port (10250) stays reachable from a pod because many CNIs never
+Limits: on Kubernetes, the metadata address may stay reachable; the agent refuses to start if any credential or instance identity can be obtained from it. The own node's kubelet port (10250) stays reachable from a pod because many CNIs never
 filter pod-to-own-node traffic; it requires authentication. The layered agent is amd64 only, so a node selector for another architecture is refused
 at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernetes are not
 supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until

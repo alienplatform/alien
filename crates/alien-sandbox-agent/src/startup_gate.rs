@@ -3,7 +3,8 @@
 //! A pod's NetworkPolicy can load a moment after its container starts (measured at about one
 //! second on EKS Auto Mode). Anything the workload connects to in that window is unrestricted.
 //! So on Kubernetes the agent, before it starts the ENTRYPOINT, tries to connect to destinations
-//! the policy refuses in every egress mode (the cluster API and the instance metadata address).
+//! the policy refuses in every egress mode (the cluster API and a public address). The metadata address is not a target: some CNIs leave it
+//! reachable, so credential exposure there is a separate check.
 //! A drop looks like a timeout, and so does a pod network that is not ready yet, so a round only
 //! counts when it also proves the network works:
 //! - `internet`: the gateway connects in the same round (a positive control);
@@ -20,7 +21,6 @@ use std::time::{Duration, Instant};
 /// Set by the Kubernetes backend on every sandbox pod. Unset elsewhere: nothing to prove.
 pub const ENV_STARTUP_GATE: &str = "ALIEN_SANDBOX_STARTUP_EGRESS_GATE";
 
-const METADATA_ADDRESS: &str = "169.254.169.254:80";
 /// A public address every egress mode must refuse to reach directly.
 const PUBLIC_ADDRESS: &str = "1.1.1.1:443";
 /// How often the check re-runs after launch.
@@ -160,7 +160,7 @@ fn network_up() -> bool {
 }
 
 fn probe_from_env() -> Probe {
-    let mut blocked = vec![METADATA_ADDRESS.to_string(), PUBLIC_ADDRESS.to_string()];
+    let mut blocked = vec![PUBLIC_ADDRESS.to_string()];
     if let (Ok(host), Ok(port)) = (
         std::env::var("KUBERNETES_SERVICE_HOST"),
         std::env::var("KUBERNETES_SERVICE_PORT"),
