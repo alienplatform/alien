@@ -894,6 +894,8 @@ impl Sandbox for KubernetesSandbox {
             allowed_ports: vec![port],
             expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
                 .unwrap_or(0),
+            caller_authorization_header: "Authorization".to_string(),
+            subprotocols: Vec::new(),
         })
     }
 

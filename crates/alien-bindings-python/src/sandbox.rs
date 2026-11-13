@@ -60,6 +60,8 @@ pub(crate) struct Preview {
     headers: BTreeMap<String, String>,
     allowed_ports: Vec<u16>,
     expires_in_seconds: u64,
+    caller_authorization_header: String,
+    subprotocols: Vec<String>,
 }
 
 fn preview(value: PreviewCapability) -> Preview {
@@ -68,6 +70,8 @@ fn preview(value: PreviewCapability) -> Preview {
         headers: value.headers,
         allowed_ports: value.allowed_ports,
         expires_in_seconds: value.expires_in_seconds,
+        caller_authorization_header: value.caller_authorization_header,
+        subprotocols: value.subprotocols,
     }
 }
 
