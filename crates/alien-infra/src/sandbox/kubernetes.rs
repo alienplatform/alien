@@ -1199,7 +1199,10 @@ mod tests {
         assert_eq!(available.len(), 1);
         assert_eq!(available[0].metadata.name.as_deref(), Some("live"));
         assert_eq!(pool_deficit(2, available.len()), 1);
-        assert_eq!(pool_deficit(2, without_terminating(vec![dying.clone()]).len()), 2);
+        assert_eq!(
+            pool_deficit(2, without_terminating(vec![dying.clone()]).len()),
+            2
+        );
         // Neither retired as stale nor counted as fresh.
         let (stale, fresh) = split_idle_pods(vec![dying], "h");
         assert!(stale.is_empty() && fresh.is_empty());
