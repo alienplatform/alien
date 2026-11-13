@@ -341,7 +341,9 @@ impl From<ContainerSecurity> for ContainerSecurityWire {
             run_as_group: Some(security.run_as_group.unwrap_or(0)),
             read_only_root_filesystem_unset: security.read_only_root_filesystem.is_none(),
             read_only_root_filesystem: Some(
-                security.read_only_root_filesystem.unwrap_or(default_read_only),
+                security
+                    .read_only_root_filesystem
+                    .unwrap_or(default_read_only),
             ),
             writable_paths: security.writable_paths,
         }
