@@ -457,6 +457,33 @@ async fn prepare_stack(
         .await
 }
 
+/// The response for a stack the preparation refuses: the preparation's own code and message,
+/// with the client status its error type maps to. A refused stack is the caller's input, not a
+/// server fault, so a failed validation is a 422 and carries the reasons of every failed check.
+fn preparation_refused(
+    error: alien_error::AlienError<alien_preflights::error::ErrorData>,
+) -> Response {
+    use alien_preflights::error::ErrorData;
+    let mut message = error.message.clone();
+    let status = match &error.error {
+        Some(ErrorData::ValidationFailed { results, .. }) => {
+            let reasons: Vec<&str> = results
+                .iter()
+                .flat_map(|result| result.errors.iter().map(String::as_str))
+                .collect();
+            if !reasons.is_empty() {
+                message = format!("{message}: {}", reasons.join("; "));
+            }
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        _ => error
+            .http_status_code
+            .and_then(|code| StatusCode::from_u16(code).ok())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    oci_error(status, error.code, message)
+}
+
 /// Render a release's chart.
 async fn render(
     state: &AppState,
@@ -480,7 +507,7 @@ async fn render(
     // from the prepared stack, the same one `alien render` prints.
     let prepared = prepare_stack(stack, &stack_settings)
         .await
-        .map_err(|e| render_failed(format!("failed to prepare the stack: {e}")))?;
+        .map_err(preparation_refused)?;
     let stack = &prepared;
     let chart = generate_helm_chart(
         stack,
@@ -622,8 +649,9 @@ fn split_image(image: &str) -> (&str, &str) {
     }
 }
 
-fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
-    let body = serde_json::json!({ "errors": [{ "code": code, "message": message.into() }] });
+fn oci_error(status: StatusCode, code: impl Into<String>, message: impl Into<String>) -> Response {
+    let body =
+        serde_json::json!({ "errors": [{ "code": code.into(), "message": message.into() }] });
     (status, axum::Json(body)).into_response()
 }
 

@@ -455,3 +455,48 @@ async fn the_chart_of_an_internet_sandbox_carries_the_gateway_service_account() 
         values["serviceAccounts"]
     );
 }
+
+/// A stack the preparation refuses is the caller's input, not a server fault: the route answers
+/// with a client error that carries the preparation's own code and message.
+#[tokio::test]
+async fn a_stack_the_preparation_refuses_is_a_client_error_with_its_message() {
+    use alien_core::{Container, ContainerCode, ContainerEgress, ResourceLifecycle, ResourceSpec};
+    let api = Container::new("api".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/api:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.5".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .port(8080)
+        .permissions("execution".to_string())
+        .egress(ContainerEgress::Internet)
+        .build();
+    let stack = Stack::new(CHART.to_string())
+        .add(api, ResourceLifecycle::Live)
+        .build();
+    let stores = stores().await;
+    create_release_of(&stores, stack).await;
+    let state = manager(&stores, OLD_OPERATOR).await;
+    let version = tags(&state).await.remove(0);
+    let pulled = pull(&state, &format!("charts/{CHART}/manifests/{version}")).await;
+    assert_eq!(
+        pulled.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        String::from_utf8_lossy(&pulled.body)
+    );
+    let body: Value = serde_json::from_slice(&pulled.body).unwrap();
+    let error = &body["errors"][0];
+    assert_eq!(error["code"], "VALIDATION_FAILED");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.to_lowercase().contains("egress"),
+        "the preparation's reason must reach the caller: {message}"
+    );
+}
