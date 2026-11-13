@@ -49,7 +49,10 @@ impl BedrockRuntimeClient {
     }
 
     fn host(&self) -> String {
-        format!("bedrock-runtime.{}.amazonaws.com", self.credentials.region())
+        format!(
+            "bedrock-runtime.{}.amazonaws.com",
+            self.credentials.region()
+        )
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -195,7 +198,8 @@ mod tests {
 
     #[test]
     fn a_model_the_account_may_not_use_is_refused() {
-        let body = r#"{"message":"You don't have access to the model with the specified model ID."}"#;
+        let body =
+            r#"{"message":"You don't have access to the model with the specified model ID."}"#;
         assert_eq!(
             classify_converse_failure(403, body),
             refused("AccessDeniedException")

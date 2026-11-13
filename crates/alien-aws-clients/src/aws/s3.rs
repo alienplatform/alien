@@ -540,14 +540,10 @@ impl S3Api for S3Client {
 
         // Build the request – include the XML body & headers only when necessary.
         let url = self.url(bucket, "");
-        // Object ACLs stay off: every bucket is created with `BucketOwnerEnforced`, which is also
-        // S3's default for new buckets. Creating one with another ownership, or with an ACL,
-        // takes `s3:PutBucketOwnershipControls` or `s3:PutBucketAcl`.
-        let mut builder = self
-            .client
-            .request(Method::PUT, &url)
-            .host(&host)
-            .header("x-amz-object-ownership", "BucketOwnerEnforced");
+        // No ownership or ACL header: new buckets default to `BucketOwnerEnforced` (ACLs off),
+        // and sending `x-amz-object-ownership` takes `s3:PutBucketOwnershipControls`, which
+        // storage provisioning does not grant and protected management denies.
+        let mut builder = self.client.request(Method::PUT, &url).host(&host);
 
         if let Some(body_xml) = body {
             builder = builder
@@ -2323,15 +2319,20 @@ mod tests {
         S3Client::new(Client::new(), credentials)
     }
 
-    /// A bucket is created with ownership `BucketOwnerEnforced`, so object ACLs are off.
+    /// CreateBucket sends no ownership or ACL header: those need grants storage does not have.
     #[tokio::test]
-    async fn a_bucket_is_created_with_object_ownership_enforced() {
+    async fn a_bucket_is_created_without_ownership_or_acl_headers() {
         let server = MockServer::start_async().await;
         let created = server
             .mock_async(|when, then| {
-                when.method(PUT)
-                    .path("/new-bucket")
-                    .header("x-amz-object-ownership", "BucketOwnerEnforced");
+                when.method(PUT).path("/new-bucket").matches(|req| {
+                    !req.headers.iter().flatten().any(|(name, _)| {
+                        let name = name.to_ascii_lowercase();
+                        name == "x-amz-object-ownership"
+                            || name.starts_with("x-amz-grant")
+                            || name == "x-amz-acl"
+                    })
+                });
                 then.status(200);
             })
             .await;

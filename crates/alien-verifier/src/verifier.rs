@@ -1085,6 +1085,23 @@ mod tests {
         }
     }
 
+    /// The storage account setup gives the install of `PREFIX`.
+    const OWN_ACCOUNT: &str = "acmeproddefault";
+
+    #[test]
+    fn the_install_storage_account_is_the_one_setup_names() {
+        assert_eq!(
+            crate::cloud_write::resource::azure_storage_account_name(PREFIX),
+            OWN_ACCOUNT
+        );
+        assert_eq!(
+            crate::cloud_write::resource::azure_storage_account_name(
+                "Long-Prefix-With-Many-Parts-X"
+            ),
+            "longprefixwithmanypartsx"
+        );
+    }
+
     /// The verifier of a GCP install, whose backend applies the GCP rules to a bucket holding
     /// `current`.
     fn gcp_resource_verifier(current: &Value) -> (Verifier, Arc<ResourceForwards>) {
@@ -1137,7 +1154,7 @@ mod tests {
                 .handle(request(
                     declared,
                     operation,
-                    "acmestore",
+                    OWN_ACCOUNT,
                     &container,
                     body.clone(),
                 ))
@@ -1154,44 +1171,51 @@ mod tests {
             (
                 "public on a private storage",
                 false,
-                "acmestore",
+                OWN_ACCOUNT,
                 container.as_str(),
                 public.clone(),
             ),
             (
                 "private on a public storage",
                 true,
-                "acmestore",
+                OWN_ACCOUNT,
                 container.as_str(),
                 private.clone(),
             ),
             (
                 "container access",
                 false,
-                "acmestore",
+                OWN_ACCOUNT,
                 container.as_str(),
                 json!({"properties": {"publicAccess": "Container"}}),
             ),
             (
                 "another container",
                 false,
-                "acmestore",
+                OWN_ACCOUNT,
                 "other",
                 private.clone(),
             ),
             (
                 "another field",
                 false,
-                "acmestore",
+                OWN_ACCOUNT,
                 container.as_str(),
                 json!({"properties": {"publicAccess": "None", "defaultEncryptionScope": "x"}}),
             ),
             (
                 "a top-level field",
                 false,
-                "acmestore",
+                OWN_ACCOUNT,
                 container.as_str(),
                 json!({"properties": {}, "id": "x"}),
+            ),
+            (
+                "the same container in another account",
+                false,
+                "acmestore",
+                container.as_str(),
+                private.clone(),
             ),
             (
                 "an odd account",
@@ -2096,7 +2120,7 @@ mod tests {
         let (verifier, backend) = fresh();
         let body = signed(own_queue.clone());
         verifier
-            .handle(request("acmestore", &name, body.clone()))
+            .handle(request(OWN_ACCOUNT, &name, body.clone()))
             .await
             .unwrap_or_else(|error| panic!("the signed rule: {}", crate::describe(&error)));
         assert_eq!(
@@ -2131,47 +2155,47 @@ mod tests {
         for (what, account, subscription, body) in [
             (
                 "another queue of the stack",
-                "acmestore",
+                OWN_ACCOUNT,
                 name.as_str(),
                 signed(queue_id("bus", PREFIX, &format!("{PREFIX}-other"))),
             ),
             (
                 "a queue in another group",
-                "acmestore",
+                OWN_ACCOUNT,
                 name.as_str(),
                 signed(queue_id("bus", "elsewhere", &format!("{PREFIX}-jobs"))),
             ),
             (
                 "a queue outside the stack",
-                "acmestore",
+                OWN_ACCOUNT,
                 name.as_str(),
                 signed(queue_id("bus", PREFIX, "rogue")),
             ),
             (
                 "a nested destination",
-                "acmestore",
+                OWN_ACCOUNT,
                 name.as_str(),
                 signed(format!("{own_queue}/x")),
             ),
             (
                 "another container",
-                "acmestore",
+                OWN_ACCOUNT,
                 name.as_str(),
                 other_filter,
             ),
-            ("more event types", "acmestore", name.as_str(), other_types),
-            ("a webhook", "acmestore", name.as_str(), webhook),
-            ("another field", "acmestore", name.as_str(), extra),
+            ("more event types", OWN_ACCOUNT, name.as_str(), other_types),
+            ("a webhook", OWN_ACCOUNT, name.as_str(), webhook),
+            ("another field", OWN_ACCOUNT, name.as_str(), extra),
             (
                 "a rule without its suffix",
-                "acmestore",
+                OWN_ACCOUNT,
                 name.as_str(),
                 no_suffix,
             ),
-            ("advanced filters", "acmestore", name.as_str(), advanced),
+            ("advanced filters", OWN_ACCOUNT, name.as_str(), advanced),
             (
                 "a name that is not a rule",
-                "acmestore",
+                OWN_ACCOUNT,
                 "attacker-subscription",
                 signed(own_queue.clone()),
             ),

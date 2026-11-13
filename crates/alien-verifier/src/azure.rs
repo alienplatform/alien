@@ -356,7 +356,8 @@ impl Azure {
         ))
         .into_alien_error()
         .context(failed("the sandbox data plane address"))?;
-        url.query_pairs_mut().append_pair("api-version", API_VERSION);
+        url.query_pairs_mut()
+            .append_pair("api-version", API_VERSION);
         let what = format!("sandboxGroups.diskimages.write {group}");
         self.call(
             reqwest::Method::PUT,
@@ -383,7 +384,8 @@ impl Azure {
         ))
         .into_alien_error()
         .context(failed("the sandbox data plane address"))?;
-        url.query_pairs_mut().append_pair("api-version", API_VERSION);
+        url.query_pairs_mut()
+            .append_pair("api-version", API_VERSION);
         Ok(url)
     }
 

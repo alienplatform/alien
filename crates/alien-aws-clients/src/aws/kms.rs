@@ -162,7 +162,8 @@ impl KmsApi for KmsClient {
 
     async fn enable_key_rotation(&self, key_id: &str) -> Result<()> {
         let body = key_id_body("EnableKeyRotation", key_id)?;
-        self.send_no_response("EnableKeyRotation", body, key_id).await
+        self.send_no_response("EnableKeyRotation", body, key_id)
+            .await
     }
 
     async fn get_key_rotation_status(&self, key_id: &str) -> Result<bool> {

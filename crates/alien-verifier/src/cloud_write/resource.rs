@@ -1801,8 +1801,8 @@ pub fn azure_container_name(prefix: &str, id: &str) -> String {
 
 /// Check a write for an Azure resource: the container must be the storage's own and carry only
 /// the public access the signed stack declares. The storage account is named by setup and the
-/// verifier only reaches the ones in its own resource group, so the name is only checked to be
-/// a plain account name.
+/// verifier only reaches the ones in its own resource group, but the account is still bound to the
+/// one setup assigned (`azure_storage_account_name`), so a same-named container elsewhere is refused.
 pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Result<()> {
     let (account, container, body) = match write {
         ResourceWrite::CreateBlobContainer {
@@ -1860,7 +1860,7 @@ pub fn check_azure_write(facts: &ResourceFacts<'_>, write: &ResourceWrite) -> Re
             facts.resource_id
         )));
     }
-    check_account_name(write, account)?;
+    check_account_name(facts, write.operation(), account)?;
     check_blob_container_body(body, storage.public_read).map_err(refused)
 }
 
@@ -2005,17 +2005,27 @@ pub fn check_sandbox_create(
     Ok(())
 }
 
-fn check_account_name(write: &ResourceWrite, account: &str) -> Result<()> {
-    let plain = (3..=24).contains(&account.len())
-        && account
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
-    if plain {
+/// The storage account setup gives an install: Terraform's
+/// `substr(replace(lower("${local.resource_prefix}default"), "-", ""), 0, 24)`
+/// (`storage_account_name_local`).
+pub fn azure_storage_account_name(prefix: &str) -> String {
+    format!("{prefix}default")
+        .to_lowercase()
+        .replace('-', "")
+        .chars()
+        .take(24)
+        .collect()
+}
+
+/// A write may only name the one storage account setup assigned this install. A container of the
+/// same name in any other account of the resource group is not this storage.
+fn check_account_name(facts: &ResourceFacts<'_>, operation: &str, account: &str) -> Result<()> {
+    let own = azure_storage_account_name(&facts.place.prefix);
+    if account == own {
         Ok(())
     } else {
         Err(refused(format!(
-            "{} names storage account '{account}', which is not an Azure storage account name",
-            write.operation()
+            "{operation} names storage account '{account}', not {own}, the account setup assigned this install"
         )))
     }
 }
@@ -2032,14 +2042,7 @@ fn check_event_subscription(
     body: &Value,
 ) -> Result<()> {
     let operation = "PutEventSubscription";
-    check_account_name(
-        &ResourceWrite::PutEventSubscription {
-            account: account.to_string(),
-            name: name.to_string(),
-            body: Value::Null,
-        },
-        account,
-    )?;
+    check_account_name(facts, operation, account)?;
     let alien_signing::InstallId::Azure {
         subscription,
         resource_group,
