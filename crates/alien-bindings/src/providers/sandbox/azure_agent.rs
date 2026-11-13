@@ -391,7 +391,8 @@ impl AzureSandbox {
                 ),
             ]),
             allowed_ports: vec![port],
-            expires_in_seconds: u64::try_from(grant.expires_at - now).unwrap_or(0),
+            expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
+                .unwrap_or(0),
         })
     }
 }

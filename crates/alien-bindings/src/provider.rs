@@ -2230,7 +2230,8 @@ impl BindingsProviderApi for BindingsProvider {
                     disk,
                 )
                 .with_agent(azure_binding.agent)
-                .with_preview_ports(azure_binding.preview_ports.clone());
+                .with_preview_ports(azure_binding.preview_ports.clone())
+                .with_max_lifetime(azure_binding.max_lifetime_seconds);
                 if let Some(route) = &self.sandbox_create_route {
                     sandbox = sandbox.with_create_route(route.clone());
                 }

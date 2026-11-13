@@ -31,6 +31,16 @@ use alien_core::{
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
+/// Label carrying a hash of the id a caller asked `get_or_create` for. Azure allocates its own
+/// ids and two identical creates make two sandboxes, so this is how a retry or a second process
+/// finds the one the first made.
+const REQUEST_KEY_LABEL: &str = "alienRequestKey";
+
+fn request_key(requested_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(requested_id.as_bytes()))[..32].to_string()
+}
+
 /// A Sandbox backed by the Azure ADC data plane.
 #[derive(Debug)]
 pub struct AzureSandbox {
@@ -52,6 +62,9 @@ pub struct AzureSandbox {
     idle_pause_seconds: Option<u32>,
     /// Ports a preview capability may be granted for, from the declaration.
     preview_ports: Vec<u16>,
+    /// Wall-clock ceiling on a sandbox from the declaration. Azure has none of its own, so it is
+    /// stamped on the sandbox as a deadline label that the controller's reaper deletes by.
+    max_lifetime_seconds: Option<u32>,
     /// Capabilities already granted, per sandbox and port, reused until shortly before they expire.
     preview_grants: std::sync::Mutex<std::collections::HashMap<(String, u16), agent::CachedGrant>>,
     /// Sandbox ceilings, in the data plane's own units. Disk is optional because the data plane
@@ -98,6 +111,7 @@ impl AzureSandbox {
             default_policy: None,
             idle_pause_seconds,
             preview_ports: Vec::new(),
+            max_lifetime_seconds: None,
             preview_grants: Default::default(),
             cpu,
             memory,
@@ -153,6 +167,11 @@ impl AzureSandbox {
         ))
     }
 
+    /// Declares the wall-clock ceiling every sandbox is created under.
+    pub fn with_max_lifetime(mut self, seconds: Option<u32>) -> Self {
+        self.max_lifetime_seconds = seconds;
+        self
+    }
 
     /// Declares the ports a preview capability may be granted for.
     pub fn with_preview_ports(mut self, ports: Vec<u16>) -> Self {
@@ -377,14 +396,6 @@ fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &
                 .to_string(),
         }));
     }
-    if request.timeout_ms.is_some() {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: SandboxCapability::SandboxLifetime.as_str().to_string(),
-            reason: "Azure sandboxes have auto-suspend and auto-delete but no wall-clock \
-                     ceiling; terminate the sandbox when the caller is done with it"
-                .to_string(),
-        }));
-    }
     Ok(())
 }
 
@@ -444,13 +455,30 @@ impl Sandbox for AzureSandbox {
         }
 
         let mut labels = BTreeMap::new();
+        if let Some(requested) = request.sandbox_id.as_deref() {
+            labels.insert(REQUEST_KEY_LABEL.to_string(), request_key(requested));
+        }
         if self.agent {
             labels.insert(
                 agent::TRANSPORT_LABEL.into(),
                 agent::TRANSPORT_VERSION.into(),
             );
         }
-        if let Some(expires) = self.creation_deadline() {
+        // The earliest of the gateway identity's own expiry, the declaration's ceiling and the
+        // caller's `timeoutMs`; the reaper and every verb on this binding hold the sandbox to it.
+        let now = chrono::Utc::now().timestamp_millis();
+        let deadline = [
+            self.creation_deadline(),
+            self.max_lifetime_seconds
+                .map(|seconds| now.saturating_add(i64::from(seconds) * 1000)),
+            request
+                .timeout_ms
+                .map(|ms| now.saturating_add(i64::try_from(ms).unwrap_or(i64::MAX))),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        if let Some(expires) = deadline {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
         let asked = self.native_policy();
@@ -615,7 +643,29 @@ impl Sandbox for AzureSandbox {
             }
         }
 
-        self.create(request).await.map(ResolvedSandbox::created)
+        let Some(id) = request.sandbox_id.clone() else {
+            return self.create(request).await.map(ResolvedSandbox::created);
+        };
+        // Look before creating: Azure names the sandbox itself, so a retry whose first answer was
+        // lost, or a second process asking for the same id, would otherwise make a second one.
+        if let Some(found) = self.find_by_request_key(&id, None).await? {
+            if let (Some(_), Some(policy)) = (&self.egress_manager, request.egress.clone()) {
+                self.update_egress(&found.sandbox_id, policy).await?;
+            }
+            return Ok(ResolvedSandbox::found(found));
+        }
+        let created = self.create(request).await?;
+        // Two callers can both have looked before either created. The oldest sandbox with the key
+        // wins and the other deletes its own, so the pair converge on one.
+        match self.find_by_request_key(&id, Some(&created.sandbox_id)).await {
+            Ok(Some(winner)) if winner.sandbox_id != created.sandbox_id => {
+                if let Err(error) = self.terminate(&created.sandbox_id).await {
+                    warn!(sandbox_id = %created.sandbox_id, %error, "could not delete the losing duplicate create");
+                }
+                Ok(ResolvedSandbox::found(winner))
+            }
+            _ => Ok(ResolvedSandbox::created(created)),
+        }
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
@@ -1027,6 +1077,51 @@ impl AzureSandbox {
     /// sandbox, so an id that cannot serve becomes a fresh sandbox rather than an error the
     /// caller has no way to act on. Only a `Failed` sandbox is deleted here — one refused for its
     /// policy is left alone, because the group is shared and it may be in use.
+    /// The oldest live sandbox this group holds for a requested id, reconnected like any other.
+    ///
+    /// `own` is a sandbox this call just made: it takes part in the ordering, so it can lose to an
+    /// older one, and it is not reconnected to (the create already waited for it).
+    async fn find_by_request_key(
+        &self,
+        requested_id: &str,
+        own: Option<&str>,
+    ) -> Result<Option<SandboxInstance>> {
+        let key = request_key(requested_id);
+        let mut candidates: Vec<_> = self
+            .client
+            .list_sandboxes(&self.sandbox_group)
+            .await
+            .map_err(|error| Self::failed(GET_OR_CREATE, error))?
+            .into_iter()
+            .filter(|listed| {
+                listed.labels.get(REQUEST_KEY_LABEL) == Some(&key)
+                    && !listed.state.eq_ignore_ascii_case("Deleting")
+                    && !listed.state.eq_ignore_ascii_case("Failed")
+            })
+            .collect();
+        candidates.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        for candidate in candidates {
+            if Some(candidate.id.as_str()) == own {
+                // Nothing older was usable, so the sandbox this call made is the answer.
+                return Ok(None);
+            }
+            match self.reconnect(&candidate.id).await {
+                Ok(sandbox) => return Ok(Some(sandbox)),
+                // Gone, or no longer as declared: the same answers `get_or_create` gives for an id
+                // it was handed, and it moves on to the next candidate or to a fresh create.
+                Err(error)
+                    if error.code == "SANDBOX_NOT_AS_DECLARED"
+                        || matches!(
+                            &error.error,
+                            Some(ErrorData::SandboxCommandFailed { failure, .. })
+                                if failure == "sandboxGone" || failure == "sandboxTerminated"
+                        ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
     async fn reconnect(&self, sandbox_id: &str) -> Result<SandboxInstance> {
         let gone = || {
             AlienError::new(ErrorData::SandboxCommandFailed {
@@ -1174,6 +1269,19 @@ impl AzureSandbox {
         }
         if self.egress_manager.is_some() {
             return self.check_gateway_floor(sandbox);
+        }
+        if let Some(expires) = sandbox
+            .labels
+            .get(SANDBOX_EXPIRY_LABEL)
+            .and_then(|value| value.parse::<i64>().ok())
+        {
+            if expires <= chrono::Utc::now().timestamp_millis() {
+                return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                    sandbox_id: sandbox.id.clone(),
+                    restriction: "lifetime".to_string(),
+                    reason: "its lifetime has ended; create a new sandbox".to_string(),
+                }));
+            }
         }
         let Some(asked) = egress_policy(&self.egress) else {
             return Ok(());
@@ -3396,6 +3504,96 @@ mod tests {
             .await;
     }
 
+    fn listed(
+        id: &str,
+        requested: &str,
+        age_seconds: i64,
+    ) -> alien_azure_clients::azure::sandbox_data_plane::ListedSandbox {
+        alien_azure_clients::azure::sandbox_data_plane::ListedSandbox {
+            id: id.to_string(),
+            created_at: chrono::Utc::now() - chrono::Duration::seconds(age_seconds),
+            labels: BTreeMap::from([(REQUEST_KEY_LABEL.to_string(), request_key(requested))]),
+            state: "Running".to_string(),
+        }
+    }
+
+    fn asks_for(id: &str) -> CreateSandboxRequest {
+        CreateSandboxRequest {
+            sandbox_id: Some(id.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Azure allocates the id and two identical creates make two sandboxes, so a second process
+    /// (or a retry whose answer was lost) has to find the first one by the label rather than
+    /// create again.
+    #[tokio::test]
+    async fn a_repeated_request_finds_the_sandbox_the_first_one_made() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().returning(|_, id| {
+            if id == "ask-1" {
+                Err(AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "sandbox".to_string(),
+                    resource_name: id.to_string(),
+                }))
+            } else {
+                Ok(running(id, None))
+            }
+        });
+        client
+            .expect_list_sandboxes()
+            .returning(|_| Ok(vec![listed("azure-7", "ask-1", 30), listed("other", "ask-2", 60)]));
+        client.expect_create_sandbox().never();
+        let resolved = sandbox_with(client).get_or_create(asks_for("ask-1")).await.unwrap();
+        assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
+        assert!(!resolved.created, "found, not created");
+    }
+
+    /// Two callers can both look before either creates; the oldest sandbox with the label wins and
+    /// the newer one deletes itself, so both callers end up with the same sandbox.
+    #[tokio::test]
+    async fn two_concurrent_creates_converge_on_the_oldest_sandbox() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().returning(|_, id| {
+            if id == "ask-1" {
+                Err(AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "sandbox".to_string(),
+                    resource_name: id.to_string(),
+                }))
+            } else {
+                Ok(running(id, None))
+            }
+        });
+        let lists = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = lists.clone();
+        client.expect_list_sandboxes().returning(move |_| {
+            // Empty before this call creates; afterwards the other caller's older sandbox shows.
+            Ok(if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                vec![]
+            } else {
+                vec![listed("theirs", "ask-1", 5), listed("mine", "ask-1", 0)]
+            })
+        });
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.labels.get(REQUEST_KEY_LABEL) == Some(&request_key("ask-1")))
+            .times(1)
+            .returning(|_, request| {
+                let mut record = running("mine", request.egress);
+                record.labels = request.labels;
+                Ok(record)
+            });
+        client
+            .expect_delete_sandbox()
+            .withf(|_, id| id == "mine")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        settles_running(&mut client, None);
+        let resolved = sandbox_with(client).get_or_create(asks_for("ask-1")).await.unwrap();
+        assert_eq!(resolved.sandbox.sandbox_id, "theirs");
+        assert!(!resolved.created);
+    }
+
     fn running(
         id: &str,
         egress: Option<EgressPolicy>,
@@ -3584,6 +3782,7 @@ mod tests {
     #[tokio::test]
     async fn a_terminated_sandbox_is_replaced_rather_than_reconnected_to() {
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(vec![]));
         client.expect_get_sandbox().times(1).returning(|_, id| {
             Ok(running(id, None)).map(
                 |mut sandbox: alien_azure_clients::azure::sandbox_data_plane::Sandbox| {
@@ -3954,6 +4153,7 @@ mod tests {
     #[tokio::test]
     async fn a_stale_policy_sandbox_is_replaced_rather_than_refused_forever() {
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(vec![]));
         // The stale sandbox is running under no policy at all; the replacement carries the one
         // the declaration asks for.
         client.expect_get_sandbox().returning(move |_, id| {
@@ -4066,6 +4266,7 @@ mod tests {
         };
 
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(vec![]));
         let mut reads = 0;
         let stopped = declared.clone();
         client.expect_get_sandbox().returning(move |_, id| {
@@ -4798,6 +4999,7 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_sandbox_is_judged_before_it_is_woken() {
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(vec![]));
         let declared = EgressPolicy {
             default_action: "Deny".to_string(),
             host_rules: vec![EgressHostRule {
@@ -4857,6 +5059,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_sandbox_is_replaced() {
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(vec![]));
         client.expect_get_sandbox().returning(|_, id| {
             if id == "fresh" {
                 return Ok(running(id, None));
@@ -4920,6 +5123,7 @@ mod tests {
     #[tokio::test]
     async fn a_sandbox_that_dies_during_the_wait_is_replaced() {
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(vec![]));
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             if id == "fresh" {

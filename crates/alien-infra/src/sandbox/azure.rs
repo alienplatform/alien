@@ -126,6 +126,9 @@ pub struct AzureSandboxController {
     /// Ports the declaration allows a preview capability for.
     #[serde(default)]
     pub(crate) preview_ports: Vec<u16>,
+    /// Wall-clock ceiling from the declaration.
+    #[serde(default)]
+    pub(crate) max_lifetime_seconds: Option<u32>,
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
@@ -488,6 +491,7 @@ impl AzureSandboxController {
         // as its own default, so filling one in alone would assert a size nobody declared.
         azure.agent = self.agent;
         azure.preview_ports = self.preview_ports.clone();
+        azure.max_lifetime_seconds = self.max_lifetime_seconds;
         azure.egress = egress.clone();
         azure.default_policy = self
             .default_policy
@@ -538,15 +542,21 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Option<String> {
-        if !uses_gateway(ctx, config) {
-            return None;
-        }
+        // Every Azure sandbox carries its deadline as a label, so the reaper runs for all of
+        // them. Without a gateway and a declared ceiling, an unlabelled sandbox has no deadline.
+        let ceiling = [
+            uses_gateway(ctx, config).then_some(AZURE_GATEWAY_MAX_LIFETIME_SECONDS),
+            config.lifecycle.max_lifetime_seconds,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let result = async {
             let (group, client) = self.data_plane(ctx, &config.id)?;
             super::azure_lifetime::reap_expired_azure_sandboxes(
                 client.as_ref(),
                 &group,
-                AZURE_GATEWAY_MAX_LIFETIME_SECONDS,
+                ceiling,
             )
             .await
         }
@@ -599,6 +609,7 @@ impl AzureSandboxController {
         self.default_policy = config.default_policy.clone();
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.preview_ports = config.preview_ports.clone();
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.limits = config.limits.clone();
         Ok(())
     }
@@ -1083,6 +1094,7 @@ mod tests {
         let controller = AzureSandboxController {
             agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1139,6 +1151,7 @@ mod tests {
         let controller = AzureSandboxController {
             agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1305,6 +1318,7 @@ mod tests {
         let mut controller = AzureSandboxController {
             agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1357,6 +1371,7 @@ mod tests {
         let mut controller = AzureSandboxController {
             agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1412,6 +1427,7 @@ mod tests {
         let controller = AzureSandboxController {
             agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1454,6 +1470,7 @@ mod tests {
         let controller = AzureSandboxController {
             agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1565,6 +1582,7 @@ mod tests {
             AzureSandboxController {
                 agent: false,
             preview_ports: vec![],
+            max_lifetime_seconds: None,
                 state: AzureSandboxState::Ready,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),
@@ -1644,9 +1662,10 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn only_gateway_groups_reap_sessions_on_ready_ticks() {
-            // Without a gateway in the stack nothing issues 24-hour identities, so an
-            // Internet group must not have its sessions reaped.
+        async fn only_gateway_groups_reap_unlabelled_sessions_on_ready_ticks() {
+            // Every group is listed on a tick so a labelled deadline is honoured, but without a
+            // gateway in the stack nothing issues 24-hour identities, so an unlabelled session
+            // in an Internet group must not be reaped.
             for (egress, with_gateway) in [
                 (SandboxEgress::Internet, true),
                 (SandboxEgress::Internet, false),
@@ -1657,7 +1676,7 @@ mod tests {
                 let mut client = MockSandboxDataPlaneApi::new();
                 client
                     .expect_list_sandboxes()
-                    .times(usize::from(gateway))
+                    .times(1)
                     .returning(|_| {
                         Ok(vec![ListedSandbox {
                             id: "expired".into(),

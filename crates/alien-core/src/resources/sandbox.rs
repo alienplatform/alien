@@ -481,10 +481,11 @@ impl SandboxCapabilities {
             // sizing rule at plan time instead of matching a tier.
             enforced_limits: true,
             process_limit: false,
-            // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
-            // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
-            // to prevent, so this is a decision rather than a gap.
-            sandbox_lifetime: false,
+            // The platform has no wall-clock ceiling, so the binding stamps a deadline label on
+            // each sandbox and the controller's reaper deletes by it; every verb on the binding
+            // also refuses a sandbox past its label, so the ceiling does not wait for a reaper
+            // tick.
+            sandbox_lifetime: true,
             // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
             supervisor_pid_namespace: false,
             // No Alien process runs the command at all — the platform's own data plane does,
@@ -2534,7 +2535,12 @@ mod tests {
 
         for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
             sandbox.lifecycle.max_lifetime_seconds = Some(0);
-            for platform in [Platform::Aws, Platform::Kubernetes, Platform::Gcp] {
+            for platform in [
+                Platform::Aws,
+                Platform::Kubernetes,
+                Platform::Gcp,
+                Platform::Azure,
+            ] {
                 let error = sandbox
                     .validate_for_platform(platform)
                     .expect_err("a zero lifetime is refused");
@@ -2549,7 +2555,7 @@ mod tests {
             }
 
             // Where the field is unsupported, that is the answer, not the value.
-            for platform in [Platform::Azure, Platform::Local] {
+            for platform in [Platform::Local] {
                 let error = sandbox
                     .validate_for_platform(platform)
                     .expect_err("a lifetime is refused where nothing applies it");
@@ -2719,9 +2725,9 @@ mod tests {
         assert!(label.chars().all(|c| c.is_ascii_hexdigit()), "{label}");
     }
 
-    /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
-    /// `activeDeadlineSeconds` and Lambda's `maximumDurationInSeconds`. Everywhere else it would
-    /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
+    /// A deadline is accepted only where something terminates on it: the kubelet's
+    /// `activeDeadlineSeconds`, Lambda's `maximumDurationInSeconds`, or on Azure the controller's
+    /// reaper. Elsewhere it is refused rather than accepted and dropped.
     #[test]
     fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
         let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
@@ -2734,7 +2740,11 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("Lambda terminates the MicroVM at maximumDurationInSeconds");
 
-        for platform in [Platform::Azure, Platform::Local] {
+        sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect("the binding stamps a deadline label and the controller's reaper deletes by it");
+
+        for platform in [Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("a deadline nothing applies must be refused");
@@ -2975,10 +2985,8 @@ mod tests {
     /// Azure declares an idle-pause policy but not a wall-clock ceiling.
     ///
     /// The two travel together in `SandboxLifecyclePolicy` and are gated separately on purpose:
-    /// Azure pauses on idle and has no maximum lifetime, so accepting one and refusing the
-    /// other is the honest split rather than an inconsistency.
     #[test]
-    fn azure_takes_an_idle_policy_and_still_refuses_a_lifetime_ceiling() {
+    fn azure_takes_an_idle_policy_and_a_lifetime_ceiling() {
         let with_policy = |lifecycle: SandboxLifecyclePolicy| {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
@@ -2997,17 +3005,11 @@ mod tests {
         })
         .expect("Azure pauses a sandbox on idle");
 
-        let error = with_policy(SandboxLifecyclePolicy {
+        with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
         })
-        .expect_err("Azure has no wall-clock ceiling to enforce one with");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(
-            error.message.contains("sandboxLifetime"),
-            "names the capability: {}",
-            error.message
-        );
+        .expect("the reaper enforces a wall-clock ceiling");
     }
 
     /// An allowlist naming nothing is a deny-all wearing an allowlist's label.

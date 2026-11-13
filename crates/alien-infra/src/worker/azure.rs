@@ -8180,6 +8180,7 @@ mod tests {
             AzureSandboxController {
                 agent: false,
                 preview_ports: vec![],
+                max_lifetime_seconds: None,
                 state,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),

@@ -81,6 +81,7 @@ impl ResourceImporter for AzureSandboxImporter {
             egress: Some(sandbox.into()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             preview_ports: sandbox.preview_ports.clone(),
+            max_lifetime_seconds: sandbox.lifecycle.max_lifetime_seconds,
             limits: sandbox.limits.clone(),
             egress_network_verified: false,
             egress_public_key: None,
