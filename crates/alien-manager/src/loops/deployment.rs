@@ -29,7 +29,9 @@ use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy,
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::{LocalBindingsProvider, LocalContainerManager};
-use alien_preflights::mutations::remote_stack_management::stack_renders_management_identity;
+use alien_preflights::mutations::remote_stack_management::{
+    management_identity_installed, stack_renders_management_identity,
+};
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
@@ -1768,7 +1770,7 @@ impl ManagementIdentityUse {
 ///
 /// The resolver derives the identity from `platform`'s management binding. How its failure is
 /// handled follows [`ManagementIdentityUse`]. A stack with no setup-owned management resource,
-/// e.g. an Operator's in an existing cluster, renders the same without the identity, so for it a
+/// e.g. an Operator's in an external cluster, renders the same without the identity, so for it a
 /// failure is logged and the render goes on without it, as before. Which stacks have one is
 /// [`stack_renders_management_identity`], the predicate the RemoteStackManagement mutation uses.
 pub(crate) async fn resolve_deployment_management_config(
@@ -1815,6 +1817,10 @@ pub(crate) async fn resolve_deployment_management_config(
                     deployment.platform,
                     deployment.base_platform,
                     settings,
+                    deployment
+                        .stack_state
+                        .as_ref()
+                        .is_some_and(management_identity_installed),
                 )
             }) =>
         {

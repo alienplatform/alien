@@ -4460,6 +4460,9 @@ fn locals_body(
             "deployment_kubernetes_settings",
             expr::raw(
                 r#"merge(try(local.advanced_settings.kubernetes, {}), {
+  cluster = merge(try(local.advanced_settings.kubernetes.cluster, {}), {
+    ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing"
+  })
   exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure))
 })"#,
             ),

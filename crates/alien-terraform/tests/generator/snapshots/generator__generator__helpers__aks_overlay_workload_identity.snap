@@ -216,7 +216,7 @@ locals {
   kubernetes_exposure = {
     mode = "disabled"
   }
-  deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
+  deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { cluster = merge(try(local.advanced_settings.kubernetes.cluster, {}), { ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing" }), exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
   deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
