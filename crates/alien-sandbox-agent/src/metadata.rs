@@ -98,10 +98,17 @@ fn check(address: SocketAddr) -> Result<(), Leak> {
         });
     }
     let azure = "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/";
-    if matches!(
-        request(address, "GET", azure, &[("Metadata", "true")]),
-        Ok(Some(_))
-    ) {
+    // A 400 that talks about identities means the node has several user-assigned identities and
+    // wants a `client_id`: a command that knows one can still get a token, so it counts as a leak.
+    let azure_reply = exchange(address, "GET", azure, &[("Metadata", "true")]);
+    let azure_leak = match &azure_reply {
+        Ok((status, body)) => {
+            (200..300).contains(status) && !body.trim().is_empty()
+                || (*status == 400 && body.to_ascii_lowercase().contains("identit"))
+        }
+        Err(_) => false,
+    };
+    if azure_leak {
         return Err(Leak {
             cloud: "Azure",
             path: "/metadata/identity/oauth2/token",
@@ -111,7 +118,7 @@ fn check(address: SocketAddr) -> Result<(), Leak> {
     Ok(())
 }
 
-/// One HTTP/1.0 exchange. `Err`: the connection failed. `Ok(Some(body))`: a 2xx status with a
+/// One HTTP/1.1 exchange (`Connection: close`; Azure's service requires 1.1). `Err`: the connection failed. `Ok(Some(body))`: a 2xx status with a
 /// non-empty body. `Ok(None)`: anything else (401, 403, 404, empty, unreadable).
 fn request(
     address: SocketAddr,
@@ -119,30 +126,42 @@ fn request(
     path: &str,
     headers: &[(&str, &str)],
 ) -> std::io::Result<Option<String>> {
+    let (status, body) = exchange(address, method, path, headers)?;
+    Ok(((200..300).contains(&status) && !body.trim().is_empty()).then_some(body))
+}
+
+/// The status (0 when unreadable) and body of one exchange; `Err` when the connection failed.
+fn exchange(
+    address: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> std::io::Result<(u16, String)> {
     let mut stream = TcpStream::connect_timeout(&address, TIMEOUT)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
-    let mut message = format!("{method} {path} HTTP/1.0\r\nHost: 169.254.169.254\r\n");
+    let mut message =
+        format!("{method} {path} HTTP/1.1\r\nHost: 169.254.169.254\r\nConnection: close\r\n");
     for (name, value) in headers {
         message.push_str(&format!("{name}: {value}\r\n"));
     }
     message.push_str("Content-Length: 0\r\n\r\n");
     if stream.write_all(message.as_bytes()).is_err() {
-        return Ok(None);
+        return Ok((0, String::new()));
     }
     let mut raw = Vec::new();
     // A timeout or reset after partial data still leaves what arrived to inspect.
     let _ = stream.take(64 * 1024).read_to_end(&mut raw);
     let text = String::from_utf8_lossy(&raw);
     let Some((head, body)) = text.split_once("\r\n\r\n") else {
-        return Ok(None);
+        return Ok((0, String::new()));
     };
     let status: u16 = head
         .split_whitespace()
         .nth(1)
         .and_then(|code| code.parse().ok())
         .unwrap_or(0);
-    Ok(((200..300).contains(&status) && !body.trim().is_empty()).then(|| body.to_string()))
+    Ok((status, body.to_string()))
 }
 
 #[cfg(test)]
@@ -244,5 +263,29 @@ mod tests {
             "{\"access_token\":\"x\"}",
         )]);
         assert_eq!(check(address).unwrap_err().cloud, "Azure");
+    }
+
+    #[test]
+    fn an_azure_node_that_wants_an_identity_selector_is_a_leak() {
+        let address = serve(vec![(
+            "GET",
+            "/metadata/identity/oauth2/token",
+            false,
+            400,
+            "{\"error\":\"invalid_request\",\"error_description\":\"Multiple user assigned identities exist, please specify the clientId\"}",
+        )]);
+        assert_eq!(check(address).unwrap_err().cloud, "Azure");
+    }
+
+    #[test]
+    fn a_plain_azure_400_passes() {
+        let address = serve(vec![(
+            "GET",
+            "/metadata/identity/oauth2/token",
+            false,
+            400,
+            "bad",
+        )]);
+        assert_eq!(check(address), Ok(()));
     }
 }
