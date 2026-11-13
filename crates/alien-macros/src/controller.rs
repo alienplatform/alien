@@ -18,6 +18,7 @@ struct HandlerAttr {
     on_failure: Ident,
     status: ExprPath,
     progress: Option<syn::LitStr>,
+    interruptible: bool,
 }
 
 impl Parse for HandlerAttr {
@@ -26,6 +27,7 @@ impl Parse for HandlerAttr {
         let mut on_failure = None;
         let mut status = None;
         let mut progress = None;
+        let mut interruptible = false;
 
         let args = Punctuated::<ExprAssign, Token![,]>::parse_terminated(input)?;
 
@@ -45,6 +47,21 @@ impl Parse for HandlerAttr {
                 }
                 let value = &arg.right;
                 progress = Some(syn::parse2::<syn::LitStr>(quote! { #value })?);
+                continue;
+            }
+            if key.path.is_ident("interruptible") {
+                match &*arg.right {
+                    Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Bool(value),
+                        ..
+                    }) => interruptible = value.value,
+                    other => {
+                        return Err(Error::new_spanned(
+                            other,
+                            "'interruptible' must be true or false",
+                        ))
+                    }
+                }
                 continue;
             }
             if !["state", "on_failure", "status"]
@@ -75,6 +92,7 @@ impl Parse for HandlerAttr {
             status: status
                 .ok_or_else(|| Error::new(input.span(), "missing 'status' in handler attribute"))?,
             progress,
+            interruptible,
         })
     }
 }
@@ -568,6 +586,18 @@ fn generate_controller_impl(
             }
         }
     };
+    let interruptible_arms = handlers
+        .values()
+        .filter(|(_, attr)| attr.interruptible)
+        .map(|(_, attr)| &attr.state)
+        .collect::<Vec<_>>();
+    let is_interruptible_body = if interruptible_arms.is_empty() {
+        quote! { false }
+    } else {
+        quote! {
+            matches!(&self.state, #(#state_enum_name::#interruptible_arms)|*)
+        }
+    };
     let transition_to_failure_body = generate_transition_to_failure(state_enum_name, handlers);
     let transition_to_delete_body = generate_transition_to_delete(state_enum_name, flow_entries);
     let transition_to_teardown_body =
@@ -697,6 +727,10 @@ fn generate_controller_impl(
 
             fn get_progress(&self) -> Option<&str> {
                 #get_progress_body
+            }
+
+            fn is_interruptible(&self) -> bool {
+                #is_interruptible_body
             }
 
             fn get_outputs(&self) -> Option<alien_core::ResourceOutputs> {
@@ -847,6 +881,13 @@ fn generate_transition_to_update(
 ) -> TokenStream2 {
     if let Some((update_start_state, update_flow)) = flow_entries.get("Update") {
         let mut allowed_states = update_flow.from_states.clone();
+        // A state marked `interruptible` can always be re-entered through the update flow:
+        // that is what interrupting it means.
+        for (_, attr) in handlers.values() {
+            if attr.interruptible && !allowed_states.contains(&attr.state) {
+                allowed_states.push(attr.state.clone());
+            }
+        }
         if let Some((_, update_start_handler)) = handlers.get(&update_start_state.to_string()) {
             let update_failure_state = &update_start_handler.on_failure;
             if !allowed_states.contains(update_failure_state) {

@@ -379,6 +379,14 @@ fn generate_helm_chart_internal(
             .or_insert(notes);
     }
 
+    files
+        .entry("templates/NOTES.txt".to_string())
+        .and_modify(|existing| {
+            existing.push('\n');
+            existing.push_str(&management_url_notes_tpl());
+        })
+        .or_insert_with(management_url_notes_tpl);
+
     files.insert(
         "templates/_infrastructure.tpl".into(),
         infrastructure_helpers_tpl(),
@@ -1475,6 +1483,15 @@ spec:
 /// The Secret name carries the deployment's resource prefix, which the chart
 /// does not know, so the notes give the vault key and point to the deployment
 /// status for the full name.
+fn management_url_notes_tpl() -> String {
+    r#"{{- $managementUrl := include "deployment.managementUrl" . }}
+{{- if and $managementUrl (not (hasPrefix "https://" (lower $managementUrl))) }}
+WARNING: the management URL {{ $managementUrl }} is not https. The Operator sends its deployment token to it in clear text. Set management.url (or management.defaultUrl) to the manager's https:// address.
+{{- end }}
+"#
+    .to_string()
+}
+
 fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
     // Manager-served charts use the original release stack, before preflights.
     // Its input definitions describe possible slots; deployment status determines
@@ -4038,7 +4055,9 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
-  # Override the captured or installed endpoint when routing changes.
+  # Override the captured or installed endpoint when routing changes. The Operator sends its
+  # deployment token to this URL: use https. An http URL still works; the Operator and
+  # NOTES.txt warn about it.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -4153,12 +4172,31 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
+  # Off by default. When enabled, `mode: open` (the default) keeps the Operator Pod
+  # reachable and unrestricted; `mode: restricted` limits it. Restricted ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
+    mode: open
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
     ingress:
       enabled: true
+      extraRules: []
     egress:
       enabled: true
+      ports: [443, 6443]
+      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -5013,15 +5051,32 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "mode": { "type": "string", "enum": ["open", "restricted"] },
+            "dns": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "namespace": { "type": "string" },
+                "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+                "clusterIPs": { "type": "array", "items": { "type": "string" } }
+              }
+            },
             "ingress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             },
             "egress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "ports": { "type": "array", "items": { "type": "integer" } },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             }
           }
         },
@@ -7536,11 +7591,94 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Pods of this release namespace: log collectors and linked workloads.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.runtime.api.port }}
+    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
+    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
+        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+        - ipBlock:
+            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
+    # ports the bindings use (a database, a cache) and the manager's own port.
+    {{- $ports := list }}
+    {{- range (.Values.runtime.networkPolicy.egress.ports | default list) }}{{- $ports = append $ports (int .) }}{{- end }}
+    {{- $managerUrl := urlParse (default "" (include "deployment.managementUrl" .)) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" $managerUrl.host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}
+    {{- else if eq $managerUrl.scheme "http" }}{{- $ports = append $ports 80 }}
+    {{- else if eq $managerUrl.scheme "https" }}{{- $ports = append $ports 443 }}{{- end }}
+    {{- if $ports }}
+    - ports:
+        {{- range $ports | uniq }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "gcp" }}
+    # GKE: the Operator's cloud credentials come from the metadata server
+    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
+    # with the Workload Identity metadata server on dataplane v1).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "aws" }}
+    # EKS Pod Identity: the Operator's cloud credentials come from the Pod Identity agent
+    # on the node (AWS_CONTAINER_CREDENTIALS_FULL_URI, 169.254.170.23:80, fd00:ec2::23 on IPv6).
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+        - ipBlock:
+            cidr: fd00:ec2::23/128
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
 {{- end }}
 "#
@@ -10547,7 +10685,7 @@ runtime:
 
         let (pod_2, file_2) =
             rendered_operator_pod_and_release_file(&packaged("rel_2", "sha256:abc"));
-        let env: std::collections::BTreeMap<String, String> = pod_2["spec"]["containers"][0]["env"]
+        let env: crate::test_utils::LinterFiles = pod_2["spec"]["containers"][0]["env"]
             .as_array()
             .unwrap()
             .iter()
@@ -11074,6 +11212,198 @@ infrastructureExistingSecret: customer-bindings
             "{}",
             rendered.stderr
         );
+    }
+
+    fn sample_chart_files() -> crate::test_utils::LinterFiles {
+        let registry = HelmRegistry::built_in();
+        generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample".to_string(),
+            },
+        )
+        .expect("chart")
+        .files
+    }
+
+    fn network_policy_of(files: &crate::test_utils::LinterFiles, extra: &str) -> serde_yaml::Value {
+        use serde::Deserialize;
+        let values = format!(
+            "management:\n  token: test-credential\n  url: https://manager.example.test\nruntime:\n  networkPolicy:\n    enabled: true\n{extra}"
+        );
+        let rendered = crate::test_utils::helm_template(files, Some(&values));
+        rendered.assert_ok("network policy");
+        let documents: Vec<serde_yaml::Value> =
+            serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+                .collect();
+        documents
+            .into_iter()
+            .find(|document| document["kind"] == "NetworkPolicy")
+            .expect("the chart renders a NetworkPolicy")
+    }
+
+    #[test]
+    fn an_http_management_url_still_installs_and_is_warned_about_in_the_notes() {
+        let files = sample_chart_files();
+        let values = |url: &str| {
+            format!("management:\n  token: test-credential\n  url: {url}\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n")
+        };
+        let http = values("http://manager.example.test:8080");
+        // The chart never fails on the scheme: existing installs and GitOps renders keep working.
+        crate::test_utils::helm_template(&files, Some(&http)).assert_ok("http url install");
+        let notes = crate::test_utils::helm_render_notes(&files, &http, "shop", "apps");
+        notes.assert_ok("http url notes");
+        assert!(notes.stdout.contains("is not https"), "{}", notes.stdout);
+        assert!(
+            notes.stdout.contains("http://manager.example.test:8080"),
+            "{}",
+            notes.stdout
+        );
+
+        let https = values("https://manager.example.test");
+        let notes = crate::test_utils::helm_render_notes(&files, &https, "shop", "apps");
+        notes.assert_ok("https url notes");
+        assert!(!notes.stdout.contains("not https"), "{}", notes.stdout);
+    }
+
+    #[test]
+    fn the_operator_network_policy_stays_open_unless_restricted_is_chosen() {
+        let files = sample_chart_files();
+        let allow_all = serde_yaml::from_str::<serde_yaml::Value>("[{}]").unwrap();
+        // Today's behavior, unchanged: an existing `enabled: true` install keeps allow-all.
+        let open = network_policy_of(&files, "");
+        assert_eq!(open["spec"]["ingress"], allow_all);
+        assert_eq!(open["spec"]["egress"], allow_all);
+        assert_eq!(network_policy_of(&files, "    mode: open\n"), open);
+
+        let restricted = network_policy_of(&files, "    mode: restricted\n");
+        for direction in ["ingress", "egress"] {
+            for rule in restricted["spec"][direction].as_sequence().unwrap() {
+                assert!(
+                    !rule.as_mapping().unwrap().is_empty(),
+                    "{direction} allows everything"
+                );
+            }
+        }
+        assert_eq!(restricted["spec"]["ingress"][0]["ports"][0]["port"], 8080);
+        let ports: Vec<u64> = restricted["spec"]["egress"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .flat_map(|rule| rule["ports"].as_sequence().unwrap().iter())
+            .map(|port| port["port"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ports, [53, 53, 443, 6443]);
+
+        // DNS names the DNS Pods, plus the DNS address on clusters without one.
+        let dns = network_policy_of(
+            &files,
+            "    mode: restricted\n    dns:\n      clusterIPs: [\"172.20.0.10\"]\n",
+        );
+        assert_eq!(
+            dns["spec"]["egress"][0]["to"][0]["podSelector"]["matchLabels"]["k8s-app"],
+            "kube-dns"
+        );
+        assert_eq!(
+            dns["spec"]["egress"][0]["to"][1]["ipBlock"]["cidr"],
+            "172.20.0.10/32"
+        );
+
+        // Binding ports and extra rules come from values.
+        let extra = network_policy_of(
+            &files,
+            "    mode: restricted\n    egress:\n      ports: [443, 5432]\n      extraRules:\n        - ports:\n            - protocol: TCP\n              port: 6379\n",
+        );
+        let egress = extra["spec"]["egress"].as_sequence().unwrap();
+        assert_eq!(egress[1]["ports"][1]["port"], 5432);
+        assert_eq!(egress.last().unwrap()["ports"][0]["port"], 6379);
+
+        // An unknown mode is refused by the schema.
+        let bad = crate::test_utils::helm_template(
+            &files,
+            Some("management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: strict\n"),
+        );
+        assert!(!bad.is_ok());
+    }
+
+    #[test]
+    fn a_restricted_policy_infers_the_manager_port_and_never_emits_an_empty_port_rule() {
+        let files = sample_chart_files();
+        let egress_ports = |url: &str, extra: &str| -> Vec<Vec<u64>> {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: {url}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n{extra}"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted policy");
+            let policy = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            policy["spec"]["egress"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|rule| {
+                    assert!(
+                        !rule.as_mapping().unwrap().is_empty(),
+                        "an empty rule allows everything"
+                    );
+                    rule["ports"]
+                        .as_sequence()
+                        .map(|p| p.iter().map(|x| x["port"].as_u64().unwrap()).collect())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        // An http URL without a port needs port 80.
+        let http = egress_ports("http://manager.example.test", "");
+        assert!(http.iter().flatten().any(|p| *p == 80), "{http:?}");
+        // Clearing the port list with an https URL still reaches the manager on 443.
+        let https = egress_ports(
+            "https://manager.example.test",
+            "    egress:\n      ports: []\n",
+        );
+        assert!(https.iter().flatten().any(|p| *p == 443), "{https:?}");
+        // An explicit port is used as written, and no rule has an empty ports list.
+        let explicit = egress_ports(
+            "https://manager.example.test:9443",
+            "    egress:\n      ports: []\n",
+        );
+        assert_eq!(explicit.last().unwrap(), &vec![9443]);
+    }
+
+    #[test]
+    fn a_restricted_aws_policy_allows_the_pod_identity_agent_and_nothing_else_open() {
+        let files = sample_chart_files();
+        let policy = |platform: &str| {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: https://manager.example.test\nbasePlatform: {platform}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted aws policy");
+            let found = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            found
+        };
+        let aws = policy("aws");
+        let rules = aws["spec"]["egress"].as_sequence().unwrap();
+        for rule in rules {
+            assert!(!rule.as_mapping().unwrap().is_empty());
+        }
+        let agent = rules
+            .iter()
+            .find(|r| r["to"][0]["ipBlock"]["cidr"] == "169.254.170.23/32")
+            .expect("pod identity rule");
+        assert_eq!(agent["to"][1]["ipBlock"]["cidr"], "fd00:ec2::23/128");
+        assert_eq!(agent["ports"][0]["port"], 80);
+        // Other platforms get no Pod Identity rule.
+        let gcp = serde_yaml::to_string(&policy("gcp")).unwrap();
+        assert!(!gcp.contains("169.254.170.23"));
     }
 
     #[test]
