@@ -326,6 +326,10 @@ spec:
     metadata:
       labels:
         alien.dev/cni-probe-runner: {{{{ $name }}}}
+      annotations:
+        # Auto Mode and Karpenter consolidate nodes that look underutilized, and the probe's
+        # short-lived pods are exactly that: an eviction mid-probe fails the install.
+        karpenter.sh/do-not-disrupt: "true"
     spec:
       serviceAccountName: {{{{ $name }}}}
       restartPolicy: Never
