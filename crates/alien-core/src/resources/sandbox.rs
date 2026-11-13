@@ -104,7 +104,7 @@ const KUBERNETES_MAX_LIFETIME_SECONDS: u32 = i32::MAX as u32;
 
 /// Largest ephemeral storage Agent Platform accepts on a sandbox template (10 GiB). A larger
 /// request is refused when the template is created.
-const GCP_MAX_DISK_MIB: i64 = 10 * 1024;
+const GCP_MAX_DISK_BYTES: u128 = 10 * 1024 * 1024 * 1024;
 
 /// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
 /// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
@@ -988,15 +988,16 @@ impl Sandbox {
         let Some(limits) = self.limits.as_ref() else {
             return Ok(());
         };
-        let disk_mib = quantity_mib(&limits.disk).ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxLimitInvalid {
-                resource_id: self.id.clone(),
-                field: "disk".to_string(),
-                value: limits.disk.clone(),
-                reason: "expected a size such as 8Gi".to_string(),
-            })
-        })?;
-        if disk_mib > GCP_MAX_DISK_MIB {
+        let over_cap =
+            quantity_exceeds_bytes(&limits.disk, GCP_MAX_DISK_BYTES).ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "disk".to_string(),
+                    value: limits.disk.clone(),
+                    reason: "expected a size such as 8Gi".to_string(),
+                })
+            })?;
+        if over_cap {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
                 field: "disk".to_string(),
@@ -1312,6 +1313,37 @@ pub fn quantity_mib(value: &str) -> Option<i64> {
         _ => return None,
     };
     Some((bytes / (1024.0 * 1024.0)) as i64)
+}
+
+/// Whether a size quantity is strictly above `cap_bytes`, compared exactly in integer bytes
+/// (no rounding down first, so `10240.5Mi` is above a 10Gi cap). `None` for an unparsable value.
+fn quantity_exceeds_bytes(value: &str, cap_bytes: u128) -> Option<bool> {
+    let trimmed = value.trim();
+    let digits_end = trimmed
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(trimmed.len());
+    let (number, suffix) = trimmed.split_at(digits_end);
+    let unit: u128 = match suffix {
+        "" => 1,
+        "k" => 1_000,
+        "M" => 1_000_000,
+        "G" => 1_000_000_000,
+        "T" => 1_000_000_000_000,
+        "Ki" => 1 << 10,
+        "Mi" => 1 << 20,
+        "Gi" => 1 << 30,
+        "Ti" => 1 << 40,
+        _ => return None,
+    };
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if (whole.is_empty() && fraction.is_empty()) || fraction.contains('.') {
+        return None;
+    }
+    let digits = format!("{whole}{fraction}");
+    let scale = 10u128.checked_pow(u32::try_from(fraction.len()).ok()?)?;
+    let mantissa: u128 = digits.parse().ok()?;
+    // mantissa / scale * unit > cap  <=>  mantissa * unit > cap * scale
+    Some(mantissa.checked_mul(unit)? > cap_bytes.checked_mul(scale)?)
 }
 
 /// A CPU quantity in millicores.
@@ -2329,6 +2361,14 @@ mod tests {
         with_disk("10Gi")
             .validate_for_platform(Platform::Gcp)
             .expect("the cap itself is allowed");
+        with_disk("10240Mi")
+            .validate_for_platform(Platform::Gcp)
+            .expect("the cap in MiB is allowed");
+        for over in ["10240.5Mi", "10241Mi", "10.0000001Gi"] {
+            with_disk(over)
+                .validate_for_platform(Platform::Gcp)
+                .expect_err(&format!("{over} is above the cap and must not round down"));
+        }
         with_disk("8Gi")
             .validate_for_platform(Platform::Gcp)
             .expect("the default disk is allowed");

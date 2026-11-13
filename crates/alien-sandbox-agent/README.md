@@ -385,8 +385,11 @@ private user namespace does not grant control over provider devices.
 
 # GCP Agent Platform sandboxes
 
-Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as root with Docker's
-default capabilities minus NET_RAW; exec and jobs stay non-root. Sandboxes use the project's
+Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as the image's OCI `USER`
+(`start_from_with_env` resolves the saved USER against the image's passwd and group files). It is
+root, with Docker's default capabilities minus NET_RAW, only when the image sets no user or sets
+root; an image with a non-root USER starts as that user with no capabilities. Exec and jobs always
+stay non-root. Sandboxes use the project's
 default network placement and are reached through `:execute`.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
