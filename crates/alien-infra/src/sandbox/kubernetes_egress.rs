@@ -906,8 +906,9 @@ mod tests {
         let existing = server
             .mock_async(|when, then| {
                 when.method(GET).path(named.clone());
-                then.status(200)
-                    .json_body(serde_json::to_value(&desired).unwrap());
+                let mut stored = serde_json::to_value(&desired).unwrap();
+                stored["metadata"]["resourceVersion"] = json!("41");
+                then.status(200).json_body(stored);
             })
             .await;
         reconcile_gateway_service_policy(&ctx, &sandbox, "test-ns", gateway)
@@ -916,7 +917,14 @@ mod tests {
         create.assert_hits_async(1).await;
         let replace = server
             .mock_async(|when, then| {
-                when.method(PUT).path(named.clone());
+                when.method(PUT).path(named.clone()).matches(|request| {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(request.body.as_deref().unwrap_or_default())
+                            .unwrap_or_default();
+                    body["metadata"]["resourceVersion"] == "41"
+                        && body["spec"]["egress"]
+                            == json!([{"to":[{"ipBlock":{"cidr":"10.96.0.8/32"}}],"ports":[{"port":3128,"protocol":"TCP"}]}])
+                });
                 then.status(200)
                     .json_body(serde_json::to_value(&desired).unwrap());
             })
