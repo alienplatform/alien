@@ -3,7 +3,7 @@
 //! A sandbox that declares `internet` egress or preview ports reaches the deployment VPC through
 //! Private Service Connect interface (PSC-I). Google pins a project's sandbox network placement when
 //! its first sandbox is created, so the subnet, the network attachment and the Agent Platform
-//! service agent's network grant must exist before any template does. They change the customer's
+//! service agent's network grant must exist before any template does. They change the deploying account's
 //! VPC and IAM, so setup creates them and the template controller only reads the attachment.
 //! Stacks with no such sandbox get nothing from this module.
 
