@@ -1,11 +1,11 @@
 //! Setup-owned private network layer for GCP Agent Platform sandboxes.
 //!
-//! A sandbox that declares `internet` egress or preview ports reaches the deployment VPC through
+//! A sandbox whose egress is `none` or `internet`, or that declares preview ports, reaches the deployment VPC through
 //! Private Service Connect interface (PSC-I). Google pins a project's sandbox network placement when
 //! its first sandbox is created, so the subnet, the network attachment and the Agent Platform
 //! service agent's network grant must exist before any template does. They change the deploying account's
 //! VPC and IAM, so setup creates them and the template controller only reads the attachment.
-//! Stacks with no such sandbox get nothing from this module.
+//! Stacks with no such sandbox (`allow` egress, no preview) get nothing from this module.
 
 use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress};
 use alien_error::AlienError;
@@ -299,7 +299,7 @@ mod tests {
 
         #[test]
         fn a_stack_without_a_psc_sandbox_gets_no_new_resources_or_import_field() {
-            for sandbox in [None, Some((SandboxEgress::Deny, vec![]))] {
+            for sandbox in [None, Some((SandboxEgress::Allow, vec![]))] {
                 let (fragment, import_ref) = emit(&stack(CREATE(), sandbox));
                 assert!(!types(&fragment)
                     .iter()
@@ -312,9 +312,10 @@ mod tests {
         }
 
         #[test]
-        fn internet_or_preview_ports_create_the_subnet_attachment_and_grant() {
+        fn deny_internet_or_preview_ports_create_the_subnet_attachment_and_grant() {
             for sandbox in [
                 (SandboxEgress::Internet, vec![]),
+                (SandboxEgress::Deny, vec![]),
                 (SandboxEgress::Deny, vec![8080]),
             ] {
                 let (fragment, import_ref) = emit(&stack(CREATE(), Some(sandbox)));

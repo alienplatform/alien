@@ -192,10 +192,11 @@ mod tests {
     /// The template controller reads the setup-created network attachment from the network's
     /// state, so a sandbox that needs Private Service Connect must deploy after the network.
     #[tokio::test]
-    async fn a_private_network_sandbox_depends_on_the_network_and_others_do_not() {
+    async fn a_private_network_sandbox_depends_on_the_network_and_allow_does_not() {
         for (egress, depends) in [
             (SandboxEgress::Internet, true),
-            (SandboxEgress::None, false),
+            (SandboxEgress::None, true),
+            (SandboxEgress::Allow, false),
         ] {
             let sandbox = Sandbox::new("worker-sbx".to_string())
                 .code(SandboxCode::Image {

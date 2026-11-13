@@ -837,7 +837,7 @@ fn sandbox_network_attachment(
     let missing = |reason: &str| {
         AlienError::new(ErrorData::ResourceConfigInvalid {
             message: format!(
-                "{reason}. Sandboxes with internet egress or preview ports need the network attachment that setup creates; re-run setup with the current module."
+                "{reason}. Sandboxes whose egress is not `allow`, and sandboxes with preview ports, need the network attachment that setup creates; re-run setup with the current module."
             ),
             resource_id: Some(sandbox.id.clone()),
         })
@@ -1483,7 +1483,7 @@ mod tests {
         let provider = provider_with(Arc::new(m));
 
         let mut executor = SingleControllerExecutor::builder()
-            .resource(sandbox_with(SandboxEgress::None, "old:v1", None, None))
+            .resource(sandbox_with(SandboxEgress::Allow, "old:v1", None, None))
             .controller(GcpAgentPlatformTemplateController::mock_ready(
                 "eng", "tpl1",
             ))
@@ -1495,7 +1495,7 @@ mod tests {
             .expect("executor builds");
 
         executor
-            .update(sandbox_with(SandboxEgress::None, "new:v2", None, None))
+            .update(sandbox_with(SandboxEgress::Allow, "new:v2", None, None))
             .expect("update accepted");
         executor.run_until_terminal().await.expect("replace runs");
         assert_eq!(executor.status(), ResourceStatus::Running);
@@ -1645,7 +1645,8 @@ mod tests {
     #[tokio::test]
     async fn a_failed_template_stops_the_create_and_names_the_likely_cause() {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_template().returning(|_, _| Ok(pending_op()));
+        m.expect_create_template()
+            .returning(|_, _| Ok(pending_op()));
         m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
         m.expect_get_template().returning(|_, id| {
             Ok(SandboxEnvironmentTemplate {
@@ -1659,7 +1660,10 @@ mod tests {
         )
         .await;
         let result = executor.run_until_terminal().await;
-        let message = format!("{:?}", result.expect_err("a FAILED template must fail the create"));
+        let message = format!(
+            "{:?}",
+            result.expect_err("a FAILED template must fail the create")
+        );
         assert!(message.contains("exits"), "{message}");
         assert!(message.contains("foreground"), "{message}");
     }
@@ -1686,7 +1690,7 @@ mod tests {
     #[tokio::test]
     async fn a_sandbox_that_needs_no_private_network_keeps_the_default_placement() {
         create_with_network(
-            SandboxEgress::None,
+            SandboxEgress::Allow,
             Some("projects/p/regions/r/networkAttachments/na"),
             None,
         )

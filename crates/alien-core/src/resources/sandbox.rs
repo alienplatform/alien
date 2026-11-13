@@ -722,7 +722,10 @@ impl Sandbox {
     /// Google fixes a project's sandbox network placement when its first sandbox is created, so
     /// setup, the controller and the plan-time dependency all key off this one answer.
     pub fn needs_gcp_private_network(&self) -> bool {
-        matches!(self.egress, SandboxEgress::Internet) || !self.preview_ports.is_empty()
+        // Measured: a template with `internetAccess: false` and no attachment is created FAILED
+        // with no reason, so the `none` mode needs the attachment too.
+        matches!(self.egress, SandboxEgress::None | SandboxEgress::Internet)
+            || !self.preview_ports.is_empty()
     }
 
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
@@ -1216,7 +1219,9 @@ impl Sandbox {
 
         if platform == Platform::Gcp && !self.preview_ports.is_empty() {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                capability: "preview: preview is not available on GCP yet; remove the preview ports".to_string(),
+                capability:
+                    "preview: preview is not available on GCP yet; remove the preview ports"
+                        .to_string(),
                 platform: platform.to_string(),
             }));
         }
@@ -1885,7 +1890,9 @@ mod tests {
             .expect_err("preview is refused on GCP");
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
         assert!(
-            error.to_string().contains("preview is not available on GCP yet"),
+            error
+                .to_string()
+                .contains("preview is not available on GCP yet"),
             "{error}"
         );
         sandbox_with(SandboxEgress::Deny, vec![])
@@ -1894,10 +1901,13 @@ mod tests {
     }
 
     #[test]
-    fn only_internet_egress_or_preview_ports_need_the_gcp_private_network() {
+    fn every_mode_but_allow_needs_the_gcp_private_network() {
         assert!(sandbox_with(SandboxEgress::Internet, vec![]).needs_gcp_private_network());
         assert!(sandbox_with(SandboxEgress::Deny, vec![8080]).needs_gcp_private_network());
-        assert!(!sandbox_with(SandboxEgress::Deny, vec![]).needs_gcp_private_network());
+        assert!(
+            sandbox_with(SandboxEgress::Deny, vec![]).needs_gcp_private_network(),
+            "a template that turns internet access off is refused without a network attachment"
+        );
         assert!(!sandbox_with(SandboxEgress::Allow, vec![]).needs_gcp_private_network());
     }
 
