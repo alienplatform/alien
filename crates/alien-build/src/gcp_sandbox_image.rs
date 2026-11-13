@@ -680,7 +680,7 @@ mod tests {
         assert_eq!(runtime["User"], "0:0");
         assert_eq!(
             runtime["ExposedPorts"],
-            serde_json::json!({ "8080/tcp": {} })
+            serde_json::json!({ format!("{}/tcp", alien_core::sandbox_image::AGENT_PORT): {} })
         );
         assert_eq!(runtime["Entrypoint"], serde_json::json!([AGENT_PATH]));
         let env: Vec<&str> = runtime["Env"]

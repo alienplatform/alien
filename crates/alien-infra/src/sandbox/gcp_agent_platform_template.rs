@@ -1630,7 +1630,7 @@ mod tests {
             .collect();
         assert_eq!(
             ports,
-            vec![8080, 8081, 8090],
+            vec![8080, 8081, 8090, 8971],
             "agent port once, then each preview port"
         );
         assert_eq!(

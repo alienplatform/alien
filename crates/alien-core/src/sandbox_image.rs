@@ -190,12 +190,14 @@ pub const AWS_MICROVM: SandboxImage = SandboxImage {
 /// GCP keeps a root supervisor separate from the non-root command identity.
 /// Live conformance must verify root execution and capability bounds because the
 /// provider's published custom-image requirements do not promise root support.
-/// Agent Platform serves the declared container port 8080.
+/// Agent Platform serves the port the template declares; the agent keeps the shared port so a
+/// workload that binds 8080 itself does not collide with it (measured live: with the agent on
+/// 8080 a root supervisor that also binds 8080 exits at startup).
 pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     exec_uid: 1000,
     exec_gid: 1000,
     session_root: "/sandbox",
-    port: 8080,
+    port: AGENT_PORT,
     authorization: Authorization::Transport,
     isolation: Isolation::UidSplit,
 };
@@ -553,6 +555,13 @@ CMD []
 mod tests {
     use super::*;
 
+    /// A root-supervisor workload commonly binds 8080 itself; the agent must not take it.
+    #[test]
+    fn the_gcp_agent_leaves_port_8080_to_the_workload() {
+        assert_ne!(GCP_AGENT_PLATFORM.port, 8080);
+        assert_eq!(GCP_AGENT_PLATFORM.port, AGENT_PORT);
+    }
+
     fn committed_path(relative: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -640,7 +649,7 @@ mod tests {
         assert_eq!(AWS_MICROVM.port, 8971);
         assert_eq!(AWS_MICROVM.exec_uid, 60000);
         assert_eq!(AWS_MICROVM.session_root, "/sandbox");
-        assert_eq!(GCP_AGENT_PLATFORM.port, 8080);
+        assert_eq!(GCP_AGENT_PLATFORM.port, 8971);
         assert_eq!(GCP_AGENT_PLATFORM.exec_uid, 1000);
         assert_eq!(GCP_AGENT_PLATFORM.session_root, "/sandbox");
         for image in [&AWS_MICROVM, &GCP_AGENT_PLATFORM] {
