@@ -3,7 +3,10 @@
 
 mod iam_policy;
 
-use alien_permissions::generators::{signing_limits::aws_verifier_policy, AwsIamStatement};
+use alien_permissions::generators::{
+    signing_limits::aws_verifier_policy,
+    AwsIamStatement,
+};
 use iam_policy::{evaluate, Decision, Request};
 use serde_json::Value;
 

@@ -125,9 +125,7 @@ pub fn key_access_plan(stack: &Stack, key_id: &str) -> crate::Result<KeyAccessPl
     let remote_access = stack
         .resources()
         .find(|(id, _)| id.as_str() == key_id)
-        .is_some_and(|(_, entry)| {
-            alien_core::remote_bindings::remote_binding_for_entry(entry).is_some()
-        });
+        .is_some_and(|(_, entry)| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some());
     Ok(KeyAccessPlan {
         native_service_use: crate::aws_key_policy::key_has_native_service_use(stack, key_id),
         availability_probe: management.iter().any(|id| id == "key/availability"),
@@ -135,9 +133,7 @@ pub fn key_access_plan(stack: &Stack, key_id: &str) -> crate::Result<KeyAccessPl
         management,
         remote_bindings: remote_access && has_resource(alien_core::RemoteBindings::RESOURCE_TYPE),
         runtime_cryptography: cryptography_service_accounts(stack, key_id),
-        policy_runtime_accounts: crate::aws_key_policy::key_runtime_service_accounts(
-            stack, key_id,
-        )?,
+        policy_runtime_accounts: crate::aws_key_policy::key_runtime_service_accounts(stack, key_id)?,
         native_storage_accounts: native_storage_service_accounts(stack, key_id),
         remote_storage_access: has_resource(alien_core::RemoteBindings::RESOURCE_TYPE)
             && stack.resources().any(|(_, entry)| {
@@ -167,8 +163,7 @@ pub fn aws_key_grants(plan: &KeyAccessPlan, key_arn: &str) -> crate::Result<AwsK
     use crate::{generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext};
     use alien_error::AlienError;
 
-    let invalid =
-        |message: String| AlienError::new(crate::ErrorData::InvalidPermissionSet { message });
+    let invalid = |message: String| AlienError::new(crate::ErrorData::InvalidPermissionSet { message });
     let context = PermissionContext::new().with_resource_name(key_arn.to_string());
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut management = Vec::new();
@@ -232,8 +227,7 @@ pub struct GcpKeyRoles {
 /// both bind these roles, so they agree on who may do what with the key.
 pub fn gcp_key_roles(plan: &KeyAccessPlan) -> crate::Result<GcpKeyRoles> {
     use alien_error::AlienError;
-    let invalid =
-        |message: String| AlienError::new(crate::ErrorData::InvalidPermissionSet { message });
+    let invalid = |message: String| AlienError::new(crate::ErrorData::InvalidPermissionSet { message });
     let cryptography = crate::get_permission_set(REMOTE_CRYPTOGRAPHY)
         .and_then(|set| set.platforms.gcp.as_ref())
         .and_then(|entries| entries.first())
@@ -368,15 +362,7 @@ mod tests {
                 )
                 .build()
         };
-        assert!(
-            key_access_plan(&build(true), "secrets")
-                .unwrap()
-                .remote_storage_access
-        );
-        assert!(
-            !key_access_plan(&build(false), "secrets")
-                .unwrap()
-                .remote_storage_access
-        );
+        assert!(key_access_plan(&build(true), "secrets").unwrap().remote_storage_access);
+        assert!(!key_access_plan(&build(false), "secrets").unwrap().remote_storage_access);
     }
 }

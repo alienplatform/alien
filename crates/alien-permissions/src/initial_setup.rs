@@ -218,8 +218,7 @@ mod tests {
             .expect("setup may create a key");
         let condition = serde_json::to_value(&create.condition).unwrap();
         assert_eq!(
-            condition["StringEquals"]
-                [format!("aws:RequestTag/{}", alien_core::ALIEN_STACK_TAG_KEY)],
+            condition["StringEquals"][format!("aws:RequestTag/{}", alien_core::ALIEN_STACK_TAG_KEY)],
             "deploy",
             "key creation is limited to this deployment's tags: {condition}"
         );
