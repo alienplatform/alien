@@ -2502,43 +2502,6 @@
         ]
       }
     },
-    "/v1/values/{scope}/move": {
-      "post": {
-        "tags": [
-          "values"
-        ],
-        "description": "Copies a setup link's values, or moves a registration's values, into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
-        "operationId": "move_values",
-        "parameters": [
-          {
-            "name": "scope",
-            "in": "path",
-            "description": "link:<setupLinkId> or reg:<registrationId>",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Metadata of the values now held by the deployment",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValueSlotsResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
     "/v1/values/{scope}/export": {
       "post": {
         "tags": [
@@ -2570,6 +2533,43 @@
         "responses": {
           "200": {
             "description": "The target's metadata of the stored values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSlotsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/values/{scope}/move": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "description": "Copies a setup link's values, or moves a registration's values, into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
+        "operationId": "move_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "link:<setupLinkId> or reg:<registrationId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata of the values now held by the deployment",
             "content": {
               "application/json": {
                 "schema": {
