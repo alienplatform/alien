@@ -54,6 +54,17 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
     AlienError::new(failed(reason))
 }
 
+/// True when the pod's NetworkPolicy, not this agent, enforces the egress limit (Kubernetes only).
+/// The agent then keeps no NET_ADMIN and installs no cgroup, BPF or iptables rules.
+pub fn network_enforced_externally() -> Result<bool> {
+    external_enforcement(
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER)
+            .ok()
+            .as_deref(),
+        std::env::var_os("KUBERNETES_SERVICE_HOST").is_some(),
+    )
+}
+
 /// Whether the egress limit is enforced outside the pod (Kubernetes NetworkPolicy plus the
 /// gateway). Only the operator's pod spec sets the variable. Anywhere else it refuses to start,
 /// so it can never downgrade the in-guest VM path.
@@ -148,13 +159,7 @@ impl GatewayEgress {
         let identity = std::env::var("ALIEN_SANDBOX_EGRESS_AUDIENCE")
             .ok()
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
-        let privileged = unsafe { libc::geteuid() } == 0
-            && !external_enforcement(
-                std::env::var(alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER)
-                    .ok()
-                    .as_deref(),
-                std::env::var_os("KUBERNETES_SERVICE_HOST").is_some(),
-            )?;
+        let privileged = unsafe { libc::geteuid() } == 0 && !network_enforced_externally()?;
         let defer_routing = crate::image_command::defer_to_run_hook()?;
         if defer_routing && !privileged {
             return Err(invalid("Run-hook firewall installation requires root"));

@@ -108,7 +108,8 @@ fn main() -> Result<()> {
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
     state.preview.set_own_ports(&[port]);
-    let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport;
+    let network_admin = (std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport)
+        && !alien_sandbox_agent::gateway_egress::network_enforced_externally()?;
     #[cfg(target_os = "linux")]
     if aws_image_transport && state.gateway_egress.is_none() {
         alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
