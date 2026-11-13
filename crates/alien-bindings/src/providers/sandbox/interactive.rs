@@ -493,6 +493,7 @@ mod tests {
             output_cap: 1 << 24,
             jobs: Default::default(),
             interactive: Default::default(),
+            preview: Default::default(),
             agent_binary: std::path::PathBuf::from("/bin/false"),
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

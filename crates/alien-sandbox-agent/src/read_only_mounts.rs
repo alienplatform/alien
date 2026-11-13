@@ -14,7 +14,9 @@ use std::{
 
 /// First argument that switches the binary into [`stage`] (run by the init container).
 pub use alien_core::sandbox_image::STAGE_PROTECTED_FILES_ARGUMENT as STAGE_ARGUMENT;
-use alien_core::sandbox_image::{STAGED_AGENT_NAME as STAGED_BINARY, STAGED_METADATA_NAME as STAGED_METADATA};
+use alien_core::sandbox_image::{
+    STAGED_AGENT_NAME as STAGED_BINARY, STAGED_METADATA_NAME as STAGED_METADATA,
+};
 
 /// Called while single-threaded, before the supervisor's capabilities are reduced.
 pub fn require(binary: &Path, metadata: &Path) -> io::Result<()> {
@@ -91,7 +93,9 @@ pub fn stage(destination: &Path, metadata: &Path) -> io::Result<()> {
 
 fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
     let entries: Vec<PathBuf> = match fs::read_dir(source) {
-        Ok(entries) => entries.map(|e| e.map(|e| e.path())).collect::<Result<_, _>>()?,
+        Ok(entries) => entries
+            .map(|e| e.map(|e| e.path()))
+            .collect::<Result<_, _>>()?,
         // An image without the directory has nothing to carry over.
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -141,10 +145,16 @@ mod tests {
     fn a_writable_mount_or_a_missing_mount_is_refused() {
         let agent = Path::new(AGENT);
         let meta = Path::new(META);
-        assert!(check(&table("rw", "ro"), agent, meta).unwrap_err().contains("writable"));
-        assert!(check(&table("ro", "rw"), agent, meta).unwrap_err().contains("writable"));
+        assert!(check(&table("rw", "ro"), agent, meta)
+            .unwrap_err()
+            .contains("writable"));
+        assert!(check(&table("ro", "rw"), agent, meta)
+            .unwrap_err()
+            .contains("writable"));
         let bare = "1 0 0:1 / / ro - overlay overlay ro\n";
-        assert!(check(bare, agent, meta).unwrap_err().contains("not a separate mount"));
+        assert!(check(bare, agent, meta)
+            .unwrap_err()
+            .contains("not a separate mount"));
     }
 
     #[test]
@@ -167,13 +177,20 @@ mod tests {
         fs::create_dir_all(meta.join("sub")).unwrap();
         fs::create_dir(&out).unwrap();
         fs::write(meta.join("image-command.json"), b"{}").unwrap();
-        fs::set_permissions(meta.join("image-command.json"), fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(
+            meta.join("image-command.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
         fs::write(meta.join("sub/x"), b"x").unwrap();
         stage(&out, &meta).unwrap();
         assert!(out.join(STAGED_BINARY).is_file());
         let staged = out.join(STAGED_METADATA).join("image-command.json");
         assert_eq!(fs::read(&staged).unwrap(), b"{}");
-        assert_eq!(fs::metadata(&staged).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&staged).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(fs::read(out.join("opt/sub/x")).unwrap(), b"x");
         std::os::unix::fs::symlink("/etc/passwd", meta.join("link")).unwrap();
         let out2 = temp.path().join("out2");

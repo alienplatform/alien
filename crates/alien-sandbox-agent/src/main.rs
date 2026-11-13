@@ -138,12 +138,12 @@ fn main() -> Result<()> {
                     alien_sandbox_agent::protected_files::protect
                 };
                 protect(&state.agent_binary, std::path::Path::new("/opt/alien"))
-                .into_alien_error()
-                .context(failed(
-                    "protect agent bootstrap files",
-                    "cannot make the agent binary and metadata read-only before image startup"
-                        .into(),
-                ))?;
+                    .into_alien_error()
+                    .context(failed(
+                        "protect agent bootstrap files",
+                        "cannot make the agent binary and metadata read-only before image startup"
+                            .into(),
+                    ))?;
             }
             alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()

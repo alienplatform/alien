@@ -246,12 +246,7 @@ pub(crate) fn sandbox_pod_with_labels(
                         },
                     ]
                     .into_iter()
-                    .chain(
-                        root_boot
-                            .then(protected_mounts)
-                            .into_iter()
-                            .flatten(),
-                    )
+                    .chain(root_boot.then(protected_mounts).into_iter().flatten())
                     .collect(),
                 ),
                 security_context: Some(container_security_context(root_boot)),

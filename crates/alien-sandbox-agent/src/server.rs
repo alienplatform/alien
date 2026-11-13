@@ -1100,15 +1100,33 @@ async fn preview(
             })
         }
     };
+    // The capability has its own header. `Authorization` belongs to the code inside the sandbox
+    // and is forwarded untouched, so it is never read here.
     let token = request
         .headers()
-        .get(axum::http::header::AUTHORIZATION)
+        .get(alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(|| ApiError {
             status: StatusCode::UNAUTHORIZED,
             message: "a valid preview capability is required".to_string(),
         })?;
+    // The port header is optional where the path already names the port, but it may not disagree.
+    if let Some(named) = request
+        .headers()
+        .get(alien_core::sandbox_image::PREVIEW_PORT_HEADER)
+    {
+        if named
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            != Some(port)
+        {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "this capability does not admit that port".to_string(),
+            });
+        }
+    }
     let claims = sandbox_capability_token::verify(
         token,
         public_key,
@@ -1140,7 +1158,7 @@ async fn preview(
         port,
         target,
         claims.expires_at,
-        crate::preview::CallerAuth::Drop,
+        crate::preview::CallerAuth::Authorization,
         &state.preview.own_ports(),
     )
     .await)
