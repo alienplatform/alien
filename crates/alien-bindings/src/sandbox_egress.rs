@@ -214,11 +214,7 @@ impl SandboxEgressManager {
         };
         // A replicated write counts only once every ready replica holds it. Rolling
         // updates briefly change the ready set, so those writes retry for longer.
-        let attempts = if self.config.replicas.is_some() {
-            10
-        } else {
-            3
-        };
+        let attempts = if self.config.replicas.is_some() { 10 } else { 3 };
         // Partial fan-out may already have applied this write. Retry the exact record;
         // allocating a newer version here could overwrite another writer's decision.
         for attempt in 0..attempts {
@@ -227,7 +223,8 @@ impl SandboxEgressManager {
                 Ok(targets) => targets,
                 Err(error) if last => return Err(error),
                 Err(_) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1)))
+                        .await;
                     continue;
                 }
             };
@@ -279,11 +276,7 @@ impl SandboxEgressManager {
     /// write, so no replica keeps serving a policy the caller believes was replaced.
     async fn write_targets(&self) -> Result<Vec<String>> {
         let Some(replicas) = &self.config.replicas else {
-            return Ok(vec![self
-                .admin_url
-                .as_str()
-                .trim_end_matches('/')
-                .to_string()]);
+            return Ok(vec![self.admin_url.as_str().trim_end_matches('/').to_string()]);
         };
         #[cfg(test)]
         let resolved = self.replica_addresses.clone();
